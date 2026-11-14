@@ -390,7 +390,7 @@ export type StreamEvent =
   | { readonly type: 'reasoning-delta'; readonly text: string }
   | { readonly type: 'tool-call-start'; readonly id: string; readonly name: string }
   | { readonly type: 'tool-call-delta'; readonly id: string; readonly argumentsDelta: string }
-  | { readonly type: 'finish'; readonly reason: FinishReason; readonly usage?: TokenUsage }
+  | { readonly type: 'finish'; readonly reason: FinishReason; readonly usage?: TokenUsage };
 ```
 
 在 `errors.ts` 定义 `LlmErrorCode` 和 `LlmError`，错误码必须与设计文档一致，`retryable` 为必填布尔值。

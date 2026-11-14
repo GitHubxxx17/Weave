@@ -13,11 +13,11 @@ remains a separate reference project and is not copied into this repository.
 
 ## Status
 
-The first Foundation vertical slice is implemented and validated locally:
-`@weave/protocol`, `@weave/llm`, `@weave/runtime`, and `@weave/server` form a
-working request-to-health path. The full Agent Loop, durable Session events,
-Tool Pipeline, Workspace/Sandbox, Plugin loading, and Studio UI remain later
-phases.
+The Foundation vertical slice and the first Session persistence slice are
+implemented and validated locally. `@weave/protocol`, `@weave/llm`,
+`@weave/session`, `@weave/runtime`, and `@weave/server` form the current
+architecture. The Agent Loop, Tool Pipeline, Workspace/Sandbox, Plugin
+loading, and Studio UI remain later phases.
 
 Start with the [Foundation architecture guide](docs/architecture/foundation.md)
 for the request path, package boundaries, and AI editing checklist. The
@@ -61,20 +61,53 @@ weave/
 ├── packages/
 │   ├── protocol/     # Shared data types and Zod schemas
 │   ├── llm/          # Model client interface and provider adapters
+│   ├── session/      # Append-only Session events and projections
 │   └── runtime/      # Service assembly and lifecycle
 ├── docs/              # Architecture, ADR, and learning material
 └── root tooling       # pnpm, Turbo, TypeScript, ESLint, Prettier, Vitest
 ```
 
-The package dependency direction is `protocol -> llm -> runtime -> server`.
-`protocol` owns stable public contracts, `llm` isolates provider differences,
-`runtime` assembles services and lifecycle state, and `server` exposes the
-control plane. ESLint rejects undeclared workspace dependencies, reverse layer
-imports, cross-package relative source imports, and HTTP/UI imports from
-`runtime`.
+The package dependency direction is
+`protocol -> {llm, session} -> runtime -> server`. `protocol` owns stable
+public contracts, `llm` isolates provider differences, `session` stores
+durable facts and rebuilds read models, `runtime` assembles services and
+lifecycle state, and `server` exposes the control plane. ESLint rejects
+undeclared workspace dependencies, reverse layer imports, cross-package
+relative source imports, and HTTP/UI imports from `runtime`.
 
 Server does not contain the Agent Loop because HTTP should remain a thin
 control-plane boundary while agent behavior belongs in the runtime.
+
+## Session Event Store
+
+`@weave/session` stores facts instead of repeatedly mutating a serialized
+Session object. A caller submits a `NewSessionEvent`; the Store assigns the
+event ID, per-Session sequence, and timestamp, then appends the event. The
+first slice supports both an In-Memory Store for fast tests and a SQLite Store
+for local persistence.
+
+```text
+NewSessionEvent[]
+  -> SessionEventStore.append()
+  -> durable SessionEvent[]
+  -> projectSession()
+  -> SessionProjection
+```
+
+`@weave/llm` `StreamEvent` values are temporary provider-stream transport
+events. They can contain multiple text deltas for one eventual message and
+must not be written directly as durable Session events. The Agent/Turn layer
+will later decide which completed facts become `message.created`,
+`turn.completed`, or other Session events.
+
+The SQLite recovery path can be checked with:
+
+```bash
+pnpm --filter @weave/session test -- sqlite-store
+```
+
+The test writes events to a temporary database, closes the Store, reopens the
+same file, and verifies that sequence order and payloads are still available.
 
 ## Development principle
 
@@ -89,3 +122,6 @@ consume the same runtime instead of implementing separate agent loops.
   consequences behind the first vertical slice.
 - [Foundation design](docs/superpowers/specs/2026-11-14-weave-foundation-design.md):
   detailed first-round contracts and exclusions.
+- [Session Event Store design](docs/superpowers/specs/2026-11-15-session-event-store-design.md):
+  durable event contracts, SQLite transactions, Projection rules, and the
+  reasons behind the Session boundary.

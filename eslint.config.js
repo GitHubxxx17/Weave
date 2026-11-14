@@ -7,6 +7,7 @@ import tseslint from 'typescript-eslint';
 const workspacePackageNames = new Set([
   '@weave/protocol',
   '@weave/llm',
+  '@weave/session',
   '@weave/runtime',
   '@weave/server',
 ]);
@@ -27,9 +28,16 @@ const packageLayers = new Map([
     },
   ],
   [
+    '@weave/session',
+    {
+      allowedDependencies: ['@weave/protocol'],
+      layer: 'session',
+    },
+  ],
+  [
     '@weave/runtime',
     {
-      allowedDependencies: ['@weave/protocol', '@weave/llm'],
+      allowedDependencies: ['@weave/protocol', '@weave/llm', '@weave/session'],
       layer: 'runtime',
     },
   ],

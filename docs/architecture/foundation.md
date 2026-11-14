@@ -42,8 +42,10 @@ without opening a network port.
 ## Layer Boundaries
 
 ```text
-@weave/protocol  ->  @weave/llm  ->  @weave/runtime  ->  @weave/server
- stable contracts     provider I/O     lifecycle         HTTP adapter
+                         ┌── @weave/llm ──┐
+@weave/protocol ──────────┤                ├── @weave/runtime -> @weave/server
+ stable contracts         └ @weave/session┘      lifecycle       HTTP adapter
+                            durable facts
 ```
 
 ### Why `protocol` Does Not Execute Behavior
@@ -55,6 +57,23 @@ start a service, run a tool, or decide when an agent step should happen.
 
 Keeping behavior out of this layer prevents a shared contract package from
 silently becoming a runtime dependency with side effects.
+
+### Why Session Is a Separate Package
+
+`@weave/session` owns durable Session events, Store implementations, and pure
+Projection logic. It depends on `@weave/protocol` for the message contract, but
+does not depend on Runtime, Hono, React, or a Provider SDK.
+
+The Store is append-only: it assigns each event an ID, an increasing sequence
+within its Session, and an ISO timestamp. The In-Memory implementation gives
+Agent and Projection tests a deterministic store; the SQLite implementation
+proves local persistence without adding a database dependency.
+
+The Store does not enforce Agent business order. `projectSession()` validates
+that the event list starts with `session.created`, that sequences are
+continuous, and that Turn and Step references exist. Keeping storage and
+interpretation separate allows future snapshots and alternate read models
+without changing the database boundary.
 
 ### Why Provider Types Stay in `llm`
 
@@ -84,8 +103,10 @@ failure.
 `@weave/runtime` owns service registration, startup, shutdown, status, and
 service lookup. It accepts an `AbortSignal` and configuration through
 `RuntimeContext`, but it does not know whether a caller is Hono, a CLI, a
-desktop process, or a test. HTTP framework imports, React imports, and Node HTTP
-server imports belong in `apps/server`; ESLint enforces this boundary.
+desktop process, or a test. It may later assemble a Session Store through its
+public interface, but it does not know SQLite table details. HTTP framework
+imports, React imports, and Node HTTP server imports belong in `apps/server`;
+ESLint enforces this boundary.
 
 Each startup attempt receives a fresh `AbortController`. If service creation
 fails, that attempt's signal is aborted before cleanup, and a later retry gets
@@ -108,11 +129,12 @@ binding as part of a deliberate operational configuration.
 
 ### Why There Is No `/run`
 
-`/run` would imply an Agent Loop, Session/Turn event model, Tool Pipeline,
-workspace and approval boundaries, cancellation semantics, and durable event
-handling. None of those contracts are stable in this Foundation slice. A
-health endpoint is enough to prove startup and status wiring without inventing
-an HTTP API that later layers would have to preserve.
+`/run` would imply an Agent Loop, Turn/Step orchestration, Tool Pipeline,
+workspace and approval boundaries, cancellation semantics, and a durable event
+mapping policy. The Session Event Store now provides persistence primitives, but
+the Agent Loop still does not exist. A health endpoint is still enough to prove
+startup and status wiring without inventing an HTTP API that later layers would
+have to preserve.
 
 ## AI Editing Checklist
 
@@ -138,6 +160,7 @@ The direction is easiest to explain as a one-way dependency gradient:
 
 - `protocol` is the vocabulary.
 - `llm` translates provider I/O into that vocabulary.
+- `session` stores durable facts and projects them into read models.
 - `runtime` assembles services and owns lifecycle.
 - `server` adapts HTTP requests to the Runtime.
 
