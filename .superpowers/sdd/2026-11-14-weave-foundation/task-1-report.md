@@ -152,3 +152,70 @@ Created local commit:
 ```text
 9f701d6 feat: establish weave root toolchain
 ```
+
+## Fix Report: TypeScript ESLint Compatibility
+
+### Review finding
+
+The original root configuration pinned `typescript@7.0.2`, while
+`typescript-eslint@8.72.2` rejects TypeScript 7 when loading its parser/plugin.
+This prevented future package-level ESLint checks from running.
+
+### Changes
+
+- Confirmed the compatible TypeScript 5 line with:
+
+  ```text
+  pnpm view typescript@5 version --json
+  ```
+
+  The latest returned version was `5.9.3`.
+- Changed the root TypeScript dependency from `7.0.2` to `5.9.3`.
+- Removed the unused direct `@typescript-eslint/eslint-plugin` and
+  `@typescript-eslint/parser` dependencies. The configured
+  `typescript-eslint@8.72.2` package provides the integration.
+- Regenerated `pnpm-lock.yaml`.
+
+### Covering verification
+
+Focused TypeScript ESLint check:
+
+```bash
+printf "const value: string = 'ok';\nexport { value };\n" \
+  | pnpm exec eslint --stdin --stdin-filename verify.ts
+```
+
+Result: exit code `0`, no TypeScript support error and no lint output.
+
+Additional direct config check:
+
+```bash
+pnpm exec eslint eslint.config.js package.json --no-warn-ignored
+```
+
+Result: exit code `0`.
+
+Full root verification:
+
+```bash
+pnpm check
+```
+
+Result: exit code `0`. Prettier passed, and Turbo lint/typecheck/test/build
+completed with the expected empty-workspace warnings:
+`Packages in scope:`, `Running <task> in 0 packages`, and
+`WARNING No tasks were executed as part of this run.`
+
+Diff hygiene:
+
+```bash
+git diff --check
+```
+
+Result: exit code `0` with no output.
+
+### Resolution
+
+The TypeScript ESLint compatibility concern is resolved for the current
+toolchain. The root workspace remains intentionally empty, so package behavior
+will be exercised when Task 2 adds the first package.
