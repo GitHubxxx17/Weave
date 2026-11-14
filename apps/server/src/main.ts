@@ -29,6 +29,16 @@ async function closeServer(server: ServerType): Promise<void> {
   });
 }
 
+/**
+ * Starts the local HTTP control plane and its Runtime.
+ *
+ * The function resolves only after the TCP server is listening. If binding
+ * fails, it closes any partially-created server and stops the Runtime before
+ * rethrowing the original error.
+ *
+ * @param portInput Port number or string value validated by the server boundary.
+ * @returns Server handles and a coordinated stop function.
+ */
 export async function startServer(portInput: string | number = process.env.PORT ?? defaultPort) {
   const port = portSchema.parse(portInput);
   const runtime = createServerRuntime();

@@ -10,6 +10,12 @@ const mockLlmService: RuntimeService<unknown> = {
   },
 };
 
+/**
+ * Assembles the services used by the local server entry point.
+ *
+ * The default server intentionally uses a Mock LLM so startup and health
+ * checks remain deterministic and do not require provider credentials.
+ */
 export function createServerRuntime(): Runtime {
   return createRuntime({ services: [mockLlmService] });
 }

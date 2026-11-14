@@ -24,6 +24,15 @@ function sanitizeMessage(message: string): string {
     .replace(/\bsk-[A-Za-z0-9_-]+\b/g, '[redacted]');
 }
 
+/**
+ * Creates a normalized LLM error and applies the default retry policy.
+ *
+ * Diagnostic messages are sanitized before returning so provider responses
+ * cannot accidentally expose authorization headers or API keys.
+ *
+ * @param input Provider-independent error data with an optional retry override.
+ * @returns A normalized, secret-sanitized LLM error.
+ */
 export function createLlmError(
   input: Omit<LlmError, 'retryable'> & { readonly retryable?: boolean },
 ): LlmError {

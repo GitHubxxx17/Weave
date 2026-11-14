@@ -7,6 +7,16 @@ const healthResponseSchema = z.object({
   runtime: z.enum(['created', 'starting', 'running', 'stopping', 'stopped']),
 });
 
+/**
+ * Creates the HTTP control-plane application around an existing Runtime.
+ *
+ * The app reads Runtime state but does not construct services or execute agent
+ * behavior. Keeping that boundary thin allows the same Runtime to be reused by
+ * CLI, desktop, and test entry points.
+ *
+ * @param runtime Runtime whose lifecycle is exposed by the health endpoint.
+ * @returns A Hono application that can be mounted on a server or tested in memory.
+ */
 export function createApp(runtime: Runtime): Hono {
   const app = new Hono();
 

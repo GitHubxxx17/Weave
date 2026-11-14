@@ -7,9 +7,13 @@ import { createSseParserState, flushSseParser, pushSseChunk } from './sse-parser
 import type { LlmStreamOptions } from './types.js';
 
 export interface OpenAiCompatibleClientOptions {
+  /** Base URL of the provider's OpenAI-compatible API. */
   readonly baseUrl: string;
+  /** Secret used for the provider Authorization header. */
   readonly apiKey: string;
+  /** Injectable fetch implementation for tests and alternate runtimes. */
   readonly fetch?: typeof globalThis.fetch;
+  /** Default timeout applied when a stream does not provide one. */
   readonly defaultTimeoutMs?: number;
 }
 
@@ -329,6 +333,8 @@ function parseProviderChunk(data: string, state: StreamParseState, apiKey: strin
     events.push({ type: 'reasoning-delta', text: delta.reasoning_content });
   }
 
+  // Provider tool calls arrive as indexed fragments. Keep one state object per
+  // index so an ID, name, and argument JSON can be assembled independently.
   for (const [position, toolCall] of (delta?.tool_calls ?? []).entries()) {
     const index = toolCall.index ?? position;
     const toolCallState = state.toolCalls.get(index) ?? {
@@ -418,6 +424,8 @@ function parseFrames(
   const events: StreamEvent[] = [];
   for (const frame of frames) {
     if (frame.data === '[DONE]') {
+      // [DONE] is the provider's terminal transport marker. Only here can the
+      // adapter accept a stream that did not include every optional field.
       events.push(...emitPendingFinish(state, true));
       return { events, done: true };
     }
@@ -427,6 +435,18 @@ function parseFrames(
   return { events, done: false };
 }
 
+/**
+ * Creates an LLM client for providers implementing the OpenAI chat-completion
+ * streaming shape.
+ *
+ * The adapter owns provider-specific request mapping, SSE decoding, response
+ * validation, timeout handling, tool-call fragment assembly, and error
+ * normalization. Callers only observe the provider-independent `LlmClient`
+ * contract.
+ *
+ * @param options Provider URL, credentials, and transport controls.
+ * @returns A provider-independent streaming client.
+ */
 export function createOpenAiCompatibleClient(options: OpenAiCompatibleClientOptions): LlmClient {
   validateTimeout(options.defaultTimeoutMs);
   const fetchImpl = options.fetch ?? globalThis.fetch;
@@ -608,7 +628,8 @@ export function createOpenAiCompatibleClient(options: OpenAiCompatibleClientOpti
             try {
               await reader.cancel();
             } catch {
-              // The stream may already be errored or closed.
+              // The stream may already be errored or closed; cleanup is best
+              // effort and must not hide the original provider error.
             }
             controller.abort();
           }
