@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createServer } from 'node:http';
 import { createRuntime } from '@weave/runtime';
 import { createApp } from '../src/app.js';
+import { createServerRuntime, sessionEventStoreService } from '../src/runtime.js';
 import { startServer } from '../src/main.js';
 
 describe('GET /health', () => {
@@ -18,6 +19,22 @@ describe('GET /health', () => {
     });
 
     await runtime.stop();
+  });
+
+  it('assembles a Session Event Store into the server Runtime', async () => {
+    const runtime = createServerRuntime();
+    await runtime.start();
+
+    const store = runtime.get(sessionEventStoreService);
+    await store.append('session-1', [{ type: 'session.created', payload: { title: 'Demo' } }]);
+
+    expect((await store.read('session-1')).map((event) => event.sequence)).toEqual([1]);
+
+    await runtime.stop();
+
+    await expect(store.read('session-1')).rejects.toMatchObject({
+      code: 'session-store-closed',
+    });
   });
 
   it('returns an unavailable response before runtime starts', async () => {

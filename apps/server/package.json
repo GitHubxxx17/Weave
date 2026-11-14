@@ -22,6 +22,7 @@
   "dependencies": {
     "@weave/llm": "workspace:*",
     "@weave/protocol": "workspace:*",
+    "@weave/session": "workspace:*",
     "@weave/runtime": "workspace:*",
     "@hono/node-server": "2.1.8",
     "hono": "4.13.18",

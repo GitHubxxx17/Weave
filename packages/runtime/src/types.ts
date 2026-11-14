@@ -14,6 +14,12 @@ export interface RuntimeContext {
   readonly config: Readonly<Record<string, unknown>>;
 }
 
+// Services are heterogeneous in RuntimeOptions; the method variance keeps
+// each service's disposer typed while allowing the container to hold them.
+type RuntimeDisposer<T> = {
+  bivarianceHack(value: T): void | Promise<void>;
+}['bivarianceHack'];
+
 /**
  * Typed service factory registered with a Runtime.
  *
@@ -26,7 +32,7 @@ export interface RuntimeService<T> {
   /** Creates the service during Runtime startup. */
   readonly create: (context: RuntimeContext) => T | Promise<T>;
   /** Releases resources held by the service during Runtime shutdown. */
-  readonly dispose?: (value: T) => void | Promise<void>;
+  readonly dispose?: RuntimeDisposer<T>;
 }
 
 /**

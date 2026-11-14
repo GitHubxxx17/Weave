@@ -44,6 +44,9 @@ importers:
       '@weave/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+      '@weave/session':
+        specifier: workspace:*
+        version: link:../../packages/session
       hono:
         specifier: 4.13.18
         version: 4.13.18
@@ -78,6 +81,9 @@ importers:
       '@weave/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@weave/session':
+        specifier: workspace:*
+        version: link:../session
 
   packages/session:
     dependencies:

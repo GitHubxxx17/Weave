@@ -44,7 +44,7 @@ const packageLayers = new Map([
   [
     '@weave/server',
     {
-      allowedDependencies: ['@weave/protocol', '@weave/llm', '@weave/runtime'],
+      allowedDependencies: ['@weave/protocol', '@weave/llm', '@weave/session', '@weave/runtime'],
       layer: 'server',
     },
   ],

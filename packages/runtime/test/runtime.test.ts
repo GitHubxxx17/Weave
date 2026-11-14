@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { createRuntime, type RuntimeService } from '../src/index.js';
+import type { SessionEventStore } from '@weave/session';
+import {
+  createRuntime,
+  createSessionEventStoreService,
+  type RuntimeService,
+} from '../src/index.js';
 
 describe('Runtime lifecycle', () => {
   it('starts services in declaration order and disposes them in reverse order', async () => {
@@ -306,5 +311,40 @@ describe('Runtime lifecycle', () => {
 
     expect(() => runtime.get(unregistered)).toThrow('Runtime service is not available');
     await runtime.stop();
+  });
+
+  it('creates and closes an injected Session Event Store with the Runtime lifecycle', async () => {
+    let receivedSignal: AbortSignal | undefined;
+    let receivedConfig: Readonly<Record<string, unknown>> | undefined;
+    let closed = false;
+    const store: SessionEventStore = {
+      append: async () => [],
+      read: async () => [],
+      close: async () => {
+        closed = true;
+      },
+    };
+    const sessionStoreService = createSessionEventStoreService({
+      create: (context) => {
+        receivedSignal = context.signal;
+        receivedConfig = context.config;
+        return store;
+      },
+    });
+    const runtime = createRuntime({
+      config: { storage: 'memory' },
+      services: [sessionStoreService],
+    });
+
+    await runtime.start();
+
+    expect(runtime.get(sessionStoreService)).toBe(store);
+    expect(receivedSignal).toBeInstanceOf(AbortSignal);
+    expect(receivedConfig).toEqual({ storage: 'memory' });
+
+    await runtime.stop();
+
+    expect(closed).toBe(true);
+    expect(receivedSignal?.aborted).toBe(true);
   });
 });
