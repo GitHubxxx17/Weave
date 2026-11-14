@@ -27,6 +27,41 @@ reviewed.
 - React and Vite
 - Vitest
 
+## Getting started
+
+Install Node.js `24.4.0` or newer and pnpm `10.13.1` or newer. Then install
+the pinned workspace dependencies:
+
+```bash
+pnpm install
+pnpm check
+```
+
+`pnpm check` runs formatting, linting, type checking, package tests, and
+package builds through the root toolchain. A package can be targeted directly,
+for example `pnpm --filter @weave/protocol test`.
+
+## First-round layout
+
+```text
+weave/
+├── apps/
+│   └── server/       # HTTP control-plane entry point
+├── packages/
+│   ├── protocol/     # Shared data types and Zod schemas
+│   ├── llm/          # Model client interface and provider adapters
+│   └── runtime/      # Service assembly and lifecycle
+├── docs/              # Architecture, ADR, and learning material
+└── root tooling       # pnpm, Turbo, TypeScript, ESLint, Prettier, Vitest
+```
+
+The package dependency direction is `protocol -> llm -> runtime -> server`.
+`protocol` owns stable public contracts, `llm` isolates provider differences,
+`runtime` assembles services, and `server` exposes the control plane.
+
+Server does not contain the Agent Loop because HTTP should remain a thin
+control-plane boundary while agent behavior belongs in the runtime.
+
 ## Development principle
 
 The runtime is the source of truth. Web, CLI, SDK, and Desktop surfaces should

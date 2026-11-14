@@ -26,10 +26,27 @@ the Session, Agent, Tool Pipeline, and Plugin boundaries defined for Weave.
 - Plugins must not bypass workspace, approval, or security boundaries.
 - Do not add dependencies without documenting why.
 - Write tests for behavior changes.
-- Do not commit or push unless explicitly requested.
+- Do not commit or push unless explicitly requested by the user or the task
+  workflow.
+
+## Root verification commands
+
+- `pnpm format:check` verifies repository formatting without changing files.
+- `pnpm lint` runs package lint tasks through Turborepo.
+- `pnpm typecheck` runs package TypeScript checks through Turborepo.
+- `pnpm test` runs package tests through Turborepo.
+- `pnpm build` runs package builds in dependency order.
+- `pnpm check` runs the complete verification chain.
+
+## Package boundaries
+
+Tests belong in each package's or app's `test/` directory, not in `src/`.
+Internal dependencies follow `protocol -> llm -> runtime -> server`; lower
+layers must not import higher layers. Any cross-package change must update the
+design document before implementation so the affected contracts are explicit.
 
 ## Before implementation
 
-Read the Weave architecture documents in the Feishu project folder. For a
-cross-package change, write down the affected contracts and update the design
-before editing implementation code.
+Read the Weave architecture documents in the project documentation before
+implementation. For a cross-package change, write down the affected contracts
+and update the design before editing implementation code.
