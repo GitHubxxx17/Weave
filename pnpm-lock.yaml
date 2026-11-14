@@ -45,6 +45,15 @@ importers:
         specifier: 4.6.7
         version: 4.6.7
 
+  packages/runtime:
+    dependencies:
+      '@weave/llm':
+        specifier: workspace:*
+        version: link:../llm
+      '@weave/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+
 packages:
 
   '@cacheable/memory@2.2.0':

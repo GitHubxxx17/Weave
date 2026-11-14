@@ -1,0 +1,192 @@
+import { describe, expect, it } from 'vitest';
+import { createRuntime, type RuntimeService } from '../src/index.js';
+
+describe('Runtime lifecycle', () => {
+  it('starts services in declaration order and disposes them in reverse order', async () => {
+    const calls: string[] = [];
+    const first: RuntimeService<string> = {
+      key: Symbol('first'),
+      create: () => {
+        calls.push('create:first');
+        return 'first';
+      },
+      dispose: () => {
+        calls.push('dispose:first');
+      },
+    };
+    const second: RuntimeService<string> = {
+      key: Symbol('second'),
+      create: () => {
+        calls.push('create:second');
+        return 'second';
+      },
+      dispose: () => {
+        calls.push('dispose:second');
+      },
+    };
+
+    const runtime = createRuntime({ services: [first, second] });
+    await runtime.start();
+    expect(runtime.status).toBe('running');
+    expect(runtime.get(first)).toBe('first');
+
+    await runtime.stop();
+    expect(runtime.status).toBe('stopped');
+    expect(calls).toEqual(['create:first', 'create:second', 'dispose:second', 'dispose:first']);
+  });
+
+  it('does not expose services before start or after stop', async () => {
+    const service: RuntimeService<string> = {
+      key: Symbol('service'),
+      create: () => 'value',
+    };
+    const runtime = createRuntime({ services: [service] });
+
+    expect(() => runtime.get(service)).toThrow('Runtime service is not available');
+    await runtime.start();
+    expect(runtime.get(service)).toBe('value');
+    await runtime.stop();
+    expect(() => runtime.get(service)).toThrow('Runtime service is not available');
+  });
+
+  it('passes the runtime signal and readonly config to services', async () => {
+    let signal: AbortSignal | undefined;
+    let config: Readonly<Record<string, unknown>> | undefined;
+    const service: RuntimeService<string> = {
+      key: Symbol('context'),
+      create: (context) => {
+        signal = context.signal;
+        config = context.config;
+        return 'value';
+      },
+      dispose: () => {
+        expect(signal?.aborted).toBe(true);
+      },
+    };
+    const runtime = createRuntime({
+      config: { environment: 'test' },
+      services: [service],
+    });
+
+    await runtime.start();
+
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(config).toEqual({ environment: 'test' });
+    await runtime.stop();
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it('makes duplicate start and stop calls idempotent', async () => {
+    const service: RuntimeService<string> = {
+      key: Symbol('service'),
+      create: () => 'value',
+    };
+    const runtime = createRuntime({ services: [service] });
+
+    await Promise.all([runtime.start(), runtime.start()]);
+    expect(runtime.status).toBe('running');
+    await Promise.all([runtime.stop(), runtime.stop()]);
+    expect(runtime.status).toBe('stopped');
+  });
+
+  it('cleans up created services in reverse order when startup fails', async () => {
+    const calls: string[] = [];
+    const first: RuntimeService<string> = {
+      key: Symbol('first'),
+      create: () => {
+        calls.push('create:first');
+        return 'first';
+      },
+      dispose: () => {
+        calls.push('dispose:first');
+      },
+    };
+    const failing: RuntimeService<string> = {
+      key: Symbol('failing'),
+      create: () => {
+        calls.push('create:failing');
+        throw new Error('startup failed');
+      },
+      dispose: () => {
+        calls.push('dispose:failing');
+      },
+    };
+    const second: RuntimeService<string> = {
+      key: Symbol('second'),
+      create: () => {
+        calls.push('create:second');
+        return 'second';
+      },
+      dispose: () => {
+        calls.push('dispose:second');
+      },
+    };
+    const neverCreated: RuntimeService<string> = {
+      key: Symbol('never-created'),
+      create: () => {
+        calls.push('create:never-created');
+        return 'never-created';
+      },
+    };
+    const runtime = createRuntime({ services: [first, second, failing, neverCreated] });
+
+    await expect(runtime.start()).rejects.toThrow('startup failed');
+    expect(runtime.status).toBe('stopped');
+    expect(calls).toEqual([
+      'create:first',
+      'create:second',
+      'create:failing',
+      'dispose:second',
+      'dispose:first',
+    ]);
+    expect(() => runtime.get(first)).toThrow('Runtime service is not available');
+  });
+
+  it('allows retrying after a failed startup', async () => {
+    let attempts = 0;
+    const service: RuntimeService<string> = {
+      key: Symbol('retryable'),
+      create: () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new Error('try again');
+        }
+        return 'value';
+      },
+    };
+    const runtime = createRuntime({ services: [service] });
+
+    await expect(runtime.start()).rejects.toThrow('try again');
+    await runtime.start();
+
+    expect(runtime.status).toBe('running');
+    expect(runtime.get(service)).toBe('value');
+    await runtime.stop();
+  });
+
+  it('rejects starting a runtime after it has stopped', async () => {
+    const runtime = createRuntime();
+
+    await runtime.stop();
+
+    await expect(runtime.start()).rejects.toThrow('Runtime cannot be started after it has stopped');
+    expect(runtime.status).toBe('stopped');
+  });
+
+  it('throws a stable error for an unregistered service', async () => {
+    const registered: RuntimeService<string> = {
+      key: Symbol('registered'),
+      create: () => 'value',
+    };
+    const unregistered: RuntimeService<string> = {
+      key: Symbol('unregistered'),
+      create: () => 'other',
+    };
+    const runtime = createRuntime({ services: [registered] });
+
+    await runtime.start();
+
+    expect(() => runtime.get(unregistered)).toThrow('Runtime service is not available');
+    await runtime.stop();
+  });
+});
