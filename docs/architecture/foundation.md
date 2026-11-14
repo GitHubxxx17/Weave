@@ -14,15 +14,16 @@ flowchart LR
     B --> C[createServerRuntime]
     C --> D[createRuntime]
     D --> E[Mock LLM service]
-    A --> F[Hono createApp]
-    F --> G[Read Runtime status]
-    G --> H[Zod health response]
-    H --> I[200 running or 503 unavailable]
+    D --> F[In-Memory Session Store]
+    A --> G[Hono createApp]
+    G --> H[Read Runtime status]
+    H --> I[Zod health response]
+    I --> J[200 running or 503 unavailable]
 ```
 
 At startup, `apps/server/src/main.ts` validates the port with Zod, creates the
 server Runtime, starts its services, and binds Hono to `127.0.0.1`. The
-Runtime currently assembles one Mock LLM service. A request enters
+Runtime assembles a Mock LLM service and an In-Memory Session Event Store. A request enters
 `apps/server/src/app.ts`, reads the Runtime status, validates the response
 shape, and returns `200` only when the Runtime is running; otherwise it returns
 `503`.
@@ -62,7 +63,9 @@ silently becoming a runtime dependency with side effects.
 
 `@weave/session` owns durable Session events, Store implementations, and pure
 Projection logic. It depends on `@weave/protocol` for the message contract, but
-does not depend on Runtime, Hono, React, or a Provider SDK.
+does not depend on Runtime, Hono, React, or a Provider SDK. The package exposes
+the `SessionEventStore` interface; Runtime consumes that interface instead of
+knowing which persistence implementation was selected.
 
 The Store is append-only: it assigns each event an ID, an increasing sequence
 within its Session, and an ISO timestamp. The In-Memory implementation gives
@@ -110,7 +113,10 @@ ESLint enforces this boundary.
 
 Each startup attempt receives a fresh `AbortController`. If service creation
 fails, that attempt's signal is aborted before cleanup, and a later retry gets
-a new non-aborted signal. An explicit stop remains terminal.
+a new non-aborted signal. An explicit stop remains terminal. Session Stores are
+registered through `createSessionEventStoreService()`: Runtime creates them from
+an injected factory and calls `close()` during reverse-order cleanup. This keeps
+storage selection in Server, CLI, desktop, or test composition roots.
 
 ### Why the First Round Uses a Mock Provider
 
@@ -119,6 +125,14 @@ depend on an API key, provider uptime, or network behavior. The Mock Provider
 proves the `LlmClient` contract and makes lifecycle and server tests
 deterministic. The OpenAI-compatible adapter is already isolated behind the
 same interface, but it is not used by the default server startup.
+
+### Why the Default Server Uses an In-Memory Session Store
+
+The server now proves that Session persistence participates in Runtime startup
+and shutdown without making health tests depend on a database file. The
+In-Memory implementation is a composition choice, not a limitation of the
+Runtime contract. A caller that needs local durability can pass
+`createSqliteSessionEventStore` to the same Runtime service adapter.
 
 ### Why the Server Binds to `127.0.0.1`
 

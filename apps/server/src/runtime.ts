@@ -1,6 +1,12 @@
 import { createMockLlmClient } from '@weave/llm';
 import type { StreamEvent } from '@weave/protocol';
-import { createRuntime, type Runtime, type RuntimeService } from '@weave/runtime';
+import { createInMemorySessionEventStore } from '@weave/session';
+import {
+  createRuntime,
+  createSessionEventStoreService,
+  type Runtime,
+  type RuntimeService,
+} from '@weave/runtime';
 
 const mockLlmService: RuntimeService<unknown> = {
   key: Symbol('weave.server.mock-llm'),
@@ -10,12 +16,17 @@ const mockLlmService: RuntimeService<unknown> = {
   },
 };
 
+/** Session Store selected by the local Server composition root. */
+export const sessionEventStoreService = createSessionEventStoreService({
+  create: () => createInMemorySessionEventStore(),
+});
+
 /**
  * Assembles the services used by the local server entry point.
  *
- * The default server intentionally uses a Mock LLM so startup and health
- * checks remain deterministic and do not require provider credentials.
+ * The default server intentionally uses a Mock LLM and an In-Memory Session
+ * Store so startup and health checks remain deterministic.
  */
 export function createServerRuntime(): Runtime {
-  return createRuntime({ services: [mockLlmService] });
+  return createRuntime({ services: [mockLlmService, sessionEventStoreService] });
 }
