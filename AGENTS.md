@@ -29,6 +29,23 @@ the Session, Agent, Tool Pipeline, and Plugin boundaries defined for Weave.
 - Do not commit or push unless explicitly requested by the user or the task
   workflow.
 
+## Branch and PR workflow
+
+- 每个功能、问题修复、文档主题或工程配置都必须使用独立分支。
+- 新分支必须从最新的 `origin/main` 创建，不要继续复用已经合并的功能分支。
+- 分支名使用清晰的 Conventional 前缀：
+  - `feat/<feature-name>`：新增功能；
+  - `fix/<bug-name>`：问题修复；
+  - `docs/<topic>`：文档变更；
+  - `chore/<topic>`：工程配置或维护工作。
+- 一个分支只解决一个主题，一个分支只对应一个 Pull Request；不要把多个无关功能
+  合并到同一个分支或 PR。
+- PR 合并前必须通过 CI，并确认 PR 描述、测试和架构文档已经同步。
+- 默认使用 squash merge 合入 `main`。合并后删除远程功能分支，下一项工作重新从
+  最新 `main` 创建分支。
+- 提交信息使用 Conventional Commits，描述使用中文，例如
+  `feat: 增加会话事件存储`、`fix: 修复工具审批状态`、`docs: 补充插件开发说明`。
+
 ## Root verification commands
 
 - `pnpm format` formats repository files with Prettier.
