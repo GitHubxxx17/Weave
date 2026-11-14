@@ -4,6 +4,7 @@ import { toolCallSchema } from './tools.js';
 
 const contentSchema = z.array(contentPartSchema).readonly();
 
+/** A system instruction message sent to the model. */
 export const systemMessageSchema = z
   .object({
     role: z.literal('system'),
@@ -11,6 +12,7 @@ export const systemMessageSchema = z
   })
   .passthrough();
 
+/** A user-authored message sent to the model. */
 export const userMessageSchema = z
   .object({
     role: z.literal('user'),
@@ -18,6 +20,7 @@ export const userMessageSchema = z
   })
   .passthrough();
 
+/** An assistant message, optionally containing complete tool calls. */
 export const assistantMessageSchema = z
   .object({
     role: z.literal('assistant'),
@@ -26,6 +29,7 @@ export const assistantMessageSchema = z
   })
   .passthrough();
 
+/** A tool result associated with a previous assistant tool call. */
 export const toolMessageSchema = z
   .object({
     role: z.literal('tool'),
@@ -34,12 +38,20 @@ export const toolMessageSchema = z
   })
   .passthrough();
 
+/** The inferred system message contract. */
 export type SystemMessage = z.infer<typeof systemMessageSchema>;
+/** The inferred user message contract. */
 export type UserMessage = z.infer<typeof userMessageSchema>;
+/** The inferred assistant message contract. */
 export type AssistantMessage = z.infer<typeof assistantMessageSchema>;
+/** The inferred tool result message contract. */
 export type ToolMessage = z.infer<typeof toolMessageSchema>;
+/** Any message accepted by the LLM boundary. */
 export type Message = z.infer<typeof messageSchema>;
 
+/**
+ * Validates messages accepted by the provider-independent LLM protocol.
+ */
 export const messageSchema = z.discriminatedUnion('role', [
   systemMessageSchema,
   userMessageSchema,

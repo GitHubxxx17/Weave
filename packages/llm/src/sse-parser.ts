@@ -2,6 +2,12 @@ import type { ParsedSseFrame, SseParserState } from './types.js';
 
 const frameBoundaryPattern = /\r\n\r\n|\n\n/;
 
+/**
+ * Extracts one complete SSE frame from a frame-sized string.
+ *
+ * SSE allows multiple `data:` lines and comment lines. The parser keeps only
+ * data lines and joins them with newlines according to the event-stream model.
+ */
 function parseFrame(frame: string): ParsedSseFrame | undefined {
   const dataLines = frame
     .split(/\r?\n/)
@@ -39,6 +45,16 @@ export function createSseParserState(): SseParserState {
   return { buffer: '' };
 }
 
+/**
+ * Pushes one arbitrary network chunk into the SSE parser.
+ *
+ * Chunks may split a frame at any byte boundary, so incomplete content is
+ * returned as the next parser state instead of being emitted prematurely.
+ *
+ * @param state State returned by the previous parser call.
+ * @param chunk Decoded text from the latest network chunk.
+ * @returns The new parser state and every complete frame found in the chunk.
+ */
 export function pushSseChunk(
   state: SseParserState,
   chunk: string,
@@ -53,6 +69,12 @@ export function pushSseChunk(
   };
 }
 
+/**
+ * Flushes the parser at stream end.
+ *
+ * This handles a final frame that has no trailing blank line while preserving
+ * the same frame parsing rules as `pushSseChunk`.
+ */
 export function flushSseParser(state: SseParserState): {
   readonly state: SseParserState;
   readonly frames: readonly ParsedSseFrame[];
@@ -64,6 +86,10 @@ export function flushSseParser(state: SseParserState): {
   };
 }
 
+/**
+ * Decodes UTF-8 chunks while preserving multi-byte characters split across
+ * chunk boundaries.
+ */
 export function decodeSseChunks(chunks: Iterable<Uint8Array>): string {
   const decoder = new TextDecoder();
   let decoded = '';

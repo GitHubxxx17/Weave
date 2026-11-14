@@ -62,6 +62,8 @@ class RuntimeImpl implements Runtime {
     }
 
     this.statusValue = 'starting';
+    // Every attempt gets a fresh signal. A failed attempt aborts its signal,
+    // so reusing it would make a later retry start in an already-cancelled state.
     this.abortController = new AbortController();
     const promise = this.startServices();
     this.startPromise = promise;
@@ -86,6 +88,7 @@ class RuntimeImpl implements Runtime {
 
     this.closed = true;
     this.statusValue = 'stopping';
+    // Notify long-running services before waiting for their disposal hooks.
     this.abortController?.abort();
     const promise = this.stopServices();
     this.stopPromise = promise;
@@ -124,6 +127,8 @@ class RuntimeImpl implements Runtime {
       }
       this.statusValue = 'running';
     } catch (error) {
+      // Abort first so services can stop in-flight work before their resources
+      // are released. Cleanup continues even when one disposer fails.
       abortController.abort();
       let cleanupDidThrow = false;
       let cleanupError: unknown;
@@ -159,6 +164,8 @@ class RuntimeImpl implements Runtime {
   private async disposeCreatedServices(): Promise<void> {
     const errors: unknown[] = [];
 
+    // Dispose in reverse creation order so dependents are released before the
+    // services they may have used.
     for (let index = this.createdServices.length - 1; index >= 0; index -= 1) {
       const service = this.createdServices[index];
       if (service === undefined) {
@@ -176,6 +183,8 @@ class RuntimeImpl implements Runtime {
     this.createdServices.length = 0;
     this.container.clear();
 
+    // Preserve every cleanup failure instead of letting the first one prevent
+    // later services from being released.
     if (errors.length === 1) {
       throw errors[0];
     }
@@ -185,6 +194,12 @@ class RuntimeImpl implements Runtime {
   }
 }
 
+/**
+ * Creates an isolated Runtime instance.
+ *
+ * @param options Service definitions and immutable Runtime configuration.
+ * @returns An unstarted Runtime with its own service container and lifecycle.
+ */
 export function createRuntime(options?: RuntimeOptions): Runtime {
   return new RuntimeImpl(options);
 }

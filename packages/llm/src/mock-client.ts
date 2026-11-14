@@ -35,6 +35,17 @@ function wait(delayMs: number, signal: AbortSignal | undefined): Promise<void> {
   });
 }
 
+/**
+ * Creates a deterministic LLM client for local development and tests.
+ *
+ * The client replays a validated event script instead of contacting a real
+ * provider. Optional delays make cancellation and streaming behavior
+ * observable without introducing network-dependent tests.
+ *
+ * @param script Normalized events to emit in order.
+ * @param options Optional delay between emitted events.
+ * @returns An LLM client that replays the supplied script.
+ */
 export function createMockLlmClient(
   script: readonly StreamEvent[],
   options?: { readonly delayMs?: number },
