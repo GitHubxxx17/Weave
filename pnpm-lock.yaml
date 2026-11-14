@@ -30,6 +30,12 @@ importers:
         specifier: 4.0.15
         version: 4.0.15
 
+  packages/llm:
+    dependencies:
+      '@weave/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+
   packages/protocol:
     dependencies:
       zod:
