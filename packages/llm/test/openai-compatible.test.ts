@@ -27,6 +27,13 @@ function streamingResponse(...frames: string[]): Response {
   });
 }
 
+function responseWithBody(body: ReadableStream<Uint8Array>, status = 200): Response {
+  return new Response(body, {
+    status,
+    headers: { 'content-type': 'text/event-stream' },
+  });
+}
+
 function createClient(fetchMock: typeof fetch, options?: { readonly defaultTimeoutMs?: number }) {
   return createOpenAiCompatibleClient({
     baseUrl: 'https://provider.test/v1/',
@@ -160,6 +167,42 @@ describe('OpenAI-compatible provider', () => {
     ]);
   });
 
+  it('preserves partial tool-call fragments and starts before deltas', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      streamingResponse(
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"q\\""}}]}}]}',
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1"}]}}]}',
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"lookup"}}]}}]}',
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":":\\"x\\"}"}}]}}]}',
+        'data: [DONE]',
+      ),
+    );
+
+    await expect(collectEvents(createClient(fetchMock))).resolves.toEqual([
+      { type: 'tool-call-start', id: 'call-1', name: 'lookup' },
+      { type: 'tool-call-delta', id: 'call-1', argumentsDelta: '{"q"' },
+      { type: 'tool-call-delta', id: 'call-1', argumentsDelta: ':"x"}' },
+    ]);
+  });
+
+  it('maps usage-only final chunks into the finish event', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      streamingResponse(
+        'data: {"choices":[{"finish_reason":"stop"}]}',
+        'data: {"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":6,"total_tokens":11}}',
+        'data: [DONE]',
+      ),
+    );
+
+    await expect(collectEvents(createClient(fetchMock))).resolves.toEqual([
+      {
+        type: 'finish',
+        reason: 'stop',
+        usage: { inputTokens: 5, outputTokens: 6, totalTokens: 11 },
+      },
+    ]);
+  });
+
   it.each([
     [401, 'authentication', false],
     [429, 'rate-limit', true],
@@ -181,13 +224,92 @@ describe('OpenAI-compatible provider', () => {
   });
 
   it('bounds and redacts HTTP diagnostics', async () => {
-    const diagnostic = `${'x'.repeat(20_000)} secret-for-test-only`;
+    const diagnostic = `secret-for-test-only ${'x'.repeat(20_000)}`;
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(diagnostic, { status: 500 }));
 
     await expect(collectEvents(createClient(fetchMock))).rejects.toSatisfy((error: unknown) => {
       const message = String((error as { message?: unknown }).message);
       return message.length <= 4_096 && !message.includes('secret-for-test-only');
     });
+  });
+
+  it('redacts the configured key from network, status, and reader errors', async () => {
+    const apiKey = 'configured-test-key';
+    const networkFetch = vi.fn<typeof fetch>(async () => {
+      throw new Error(`network failure ${apiKey}`);
+    });
+    const networkError = await collectEvents(
+      createOpenAiCompatibleClient({
+        baseUrl: 'https://provider.test/v1',
+        apiKey,
+        fetch: networkFetch,
+      }),
+    ).catch((error: unknown) => error);
+    expect(networkError).toMatchObject({ code: 'network' });
+    expect(String((networkError as { message?: unknown }).message)).not.toContain(apiKey);
+
+    const statusFetch = vi.fn<typeof fetch>(
+      async () =>
+        new Response(`body ${apiKey}`, {
+          status: 500,
+          statusText: `status ${apiKey}`,
+        }),
+    );
+    const statusError = await collectEvents(
+      createOpenAiCompatibleClient({
+        baseUrl: 'https://provider.test/v1',
+        apiKey,
+        fetch: statusFetch,
+      }),
+    ).catch((error: unknown) => error);
+    expect(statusError).toMatchObject({ code: 'provider' });
+    expect(String((statusError as { message?: unknown }).message)).not.toContain(apiKey);
+
+    const readerFetch = vi.fn<typeof fetch>(async () =>
+      responseWithBody(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.error(new Error(`reader failure ${apiKey}`));
+          },
+        }),
+      ),
+    );
+    const readerError = await collectEvents(
+      createOpenAiCompatibleClient({
+        baseUrl: 'https://provider.test/v1',
+        apiKey,
+        fetch: readerFetch,
+      }),
+    ).catch((error: unknown) => error);
+    expect(readerError).toMatchObject({ code: 'network' });
+    expect(String((readerError as { message?: unknown }).message)).not.toContain(apiKey);
+  });
+
+  it('cancels the response body when iteration ends early', async () => {
+    let cancelled = false;
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      responseWithBody(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode('data: {"choices":[{"delta":{"content":"first"}}]}\n\n'),
+            );
+          },
+          cancel() {
+            cancelled = true;
+          },
+        }),
+      ),
+    );
+
+    const iterator = createClient(fetchMock).stream(request)[Symbol.asyncIterator]();
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { type: 'text-delta', text: 'first' },
+    });
+    await iterator.return?.();
+
+    expect(cancelled).toBe(true);
   });
 
   it('forwards AbortSignal to fetch', async () => {
@@ -241,6 +363,48 @@ describe('OpenAI-compatible provider', () => {
       code: 'protocol',
       retryable: false,
     });
+  });
+
+  it('normalizes arbitrary thrown objects instead of trusting their shape', async () => {
+    const apiKey = 'configured-test-key';
+    const fetchMock = vi.fn<typeof fetch>(async () => {
+      throw { code: 'protocol', message: apiKey };
+    });
+
+    const error = await collectEvents(
+      createOpenAiCompatibleClient({
+        baseUrl: 'https://provider.test/v1',
+        apiKey,
+        fetch: fetchMock,
+      }),
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ code: 'network', retryable: true });
+    expect(String((error as { message?: unknown }).message)).not.toContain(apiKey);
+  });
+
+  it('normalizes arbitrary response-reader objects instead of trusting their shape', async () => {
+    const apiKey = 'configured-test-key';
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      responseWithBody(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.error({ code: 'protocol', message: apiKey });
+          },
+        }),
+      ),
+    );
+
+    const error = await collectEvents(
+      createOpenAiCompatibleClient({
+        baseUrl: 'https://provider.test/v1',
+        apiKey,
+        fetch: fetchMock,
+      }),
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ code: 'network', retryable: true });
+    expect(String((error as { message?: unknown }).message)).not.toContain(apiKey);
   });
 
   it('maps a missing response body to a protocol error', async () => {

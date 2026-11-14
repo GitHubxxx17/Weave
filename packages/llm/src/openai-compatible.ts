@@ -73,6 +73,25 @@ const providerChunkSchema = z
   .passthrough();
 
 const maxDiagnosticLength = 4_000;
+const adapterErrorMarker = Symbol('openai-compatible-adapter-error');
+
+interface AdapterLlmError extends LlmError {
+  readonly [adapterErrorMarker]: true;
+}
+
+interface ToolCallState {
+  id: string | undefined;
+  name: string | undefined;
+  readonly argumentDeltas: string[];
+  started: boolean;
+}
+
+interface StreamParseState {
+  readonly toolCalls: Map<number, ToolCallState>;
+  finishReason: FinishReason | undefined;
+  usage: TokenUsage | undefined;
+  finishEmitted: boolean;
+}
 
 function validateTimeout(timeoutMs: number | undefined): void {
   if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs < 0)) {
@@ -149,29 +168,35 @@ function createProviderError(
   message: string,
   status?: number,
   retryable?: boolean,
-): LlmError {
-  return createLlmError({
+  apiKey?: string,
+): AdapterLlmError {
+  const error = createLlmError({
     code,
-    message,
+    message: redactSecret(message, apiKey ?? ''),
     provider: 'openai-compatible',
     ...(status === undefined ? {} : { status }),
     ...(retryable === undefined ? {} : { retryable }),
   });
+  Object.defineProperty(error, adapterErrorMarker, { value: true });
+  return error as AdapterLlmError;
 }
 
-function isLlmError(error: unknown): error is LlmError {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    typeof error.code === 'string' &&
-    'message' in error &&
-    typeof error.message === 'string'
-  );
+function isAdapterError(error: unknown): error is AdapterLlmError {
+  return typeof error === 'object' && error !== null && adapterErrorMarker in error;
 }
 
 function redactSecret(message: string, secret: string): string {
   return secret.length === 0 ? message : message.split(secret).join('[redacted]');
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === 'string') {
+    return error;
+  }
+  return 'Provider request failed';
 }
 
 async function readDiagnosticBody(response: Response): Promise<string> {
@@ -244,6 +269,15 @@ function mapFinishReason(reason: string): FinishReason {
   }
 }
 
+function createStreamParseState(): StreamParseState {
+  return {
+    toolCalls: new Map(),
+    finishReason: undefined,
+    usage: undefined,
+    finishEmitted: false,
+  };
+}
+
 function toTokenUsage(usage: z.infer<typeof providerUsageSchema>): TokenUsage {
   return {
     ...(usage.prompt_tokens === undefined ? {} : { inputTokens: usage.prompt_tokens }),
@@ -252,22 +286,33 @@ function toTokenUsage(usage: z.infer<typeof providerUsageSchema>): TokenUsage {
   };
 }
 
-function parseProviderChunk(
-  data: string,
-  toolCallIds: Map<number, string>,
-  toolCallNames: Map<number, string>,
-  startedToolCalls: Set<number>,
-): StreamEvent[] {
+function parseProviderChunk(data: string, state: StreamParseState, apiKey: string): StreamEvent[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(data);
   } catch {
-    throw createProviderError('protocol', 'Provider returned invalid JSON');
+    throw createProviderError(
+      'protocol',
+      'Provider returned invalid JSON',
+      undefined,
+      undefined,
+      apiKey,
+    );
   }
 
   const result = providerChunkSchema.safeParse(parsed);
   if (!result.success) {
-    throw createProviderError('protocol', 'Provider returned an invalid response chunk');
+    throw createProviderError(
+      'protocol',
+      'Provider returned an invalid response chunk',
+      undefined,
+      undefined,
+      apiKey,
+    );
+  }
+
+  if (result.data.usage !== undefined) {
+    state.usage = toTokenUsage(result.data.usage);
   }
 
   const choice = result.data.choices?.[0];
@@ -286,50 +331,98 @@ function parseProviderChunk(
 
   for (const [position, toolCall] of (delta?.tool_calls ?? []).entries()) {
     const index = toolCall.index ?? position;
+    const toolCallState = state.toolCalls.get(index) ?? {
+      id: undefined,
+      name: undefined,
+      argumentDeltas: [],
+      started: false,
+    };
+    state.toolCalls.set(index, toolCallState);
+
     if (toolCall.id !== undefined) {
-      toolCallIds.set(index, toolCall.id);
+      toolCallState.id = toolCall.id;
     }
     const functionName = toolCall.function?.name;
     if (functionName !== undefined) {
-      toolCallNames.set(index, functionName);
+      toolCallState.name = functionName;
     }
 
-    const id = toolCallIds.get(index);
-    const name = toolCallNames.get(index);
-    if (id !== undefined && name !== undefined && !startedToolCalls.has(index)) {
-      startedToolCalls.add(index);
-      events.push({ type: 'tool-call-start', id, name });
+    if (
+      !toolCallState.started &&
+      toolCallState.id !== undefined &&
+      toolCallState.name !== undefined
+    ) {
+      toolCallState.started = true;
+      events.push({
+        type: 'tool-call-start',
+        id: toolCallState.id,
+        name: toolCallState.name,
+      });
+      for (const argumentsDelta of toolCallState.argumentDeltas) {
+        events.push({
+          type: 'tool-call-delta',
+          id: toolCallState.id,
+          argumentsDelta,
+        });
+      }
+      toolCallState.argumentDeltas.length = 0;
     }
+
     const argumentsDelta = toolCall.function?.arguments;
-    if (id !== undefined && argumentsDelta !== undefined) {
-      events.push({ type: 'tool-call-delta', id, argumentsDelta });
+    if (argumentsDelta !== undefined) {
+      if (toolCallState.started && toolCallState.id !== undefined) {
+        events.push({
+          type: 'tool-call-delta',
+          id: toolCallState.id,
+          argumentsDelta,
+        });
+      } else {
+        toolCallState.argumentDeltas.push(argumentsDelta);
+      }
     }
   }
 
   if (choice.finish_reason !== undefined && choice.finish_reason !== null) {
-    const usage = result.data.usage;
-    events.push({
-      type: 'finish',
-      reason: mapFinishReason(choice.finish_reason),
-      ...(usage === undefined ? {} : { usage: toTokenUsage(usage) }),
-    });
+    state.finishReason = mapFinishReason(choice.finish_reason);
   }
 
   return events;
 }
 
+function emitPendingFinish(state: StreamParseState, force: boolean): StreamEvent[] {
+  if (state.finishEmitted) {
+    return [];
+  }
+  if (state.finishReason === undefined && state.usage === undefined) {
+    return [];
+  }
+  if (!force && (state.finishReason === undefined || state.usage === undefined)) {
+    return [];
+  }
+
+  state.finishEmitted = true;
+  return [
+    {
+      type: 'finish',
+      reason: state.finishReason ?? 'unknown',
+      ...(state.usage === undefined ? {} : { usage: state.usage }),
+    },
+  ];
+}
+
 function parseFrames(
   frames: readonly { readonly data: string }[],
-  toolCallIds: Map<number, string>,
-  toolCallNames: Map<number, string>,
-  startedToolCalls: Set<number>,
+  state: StreamParseState,
+  apiKey: string,
 ): { readonly events: StreamEvent[]; readonly done: boolean } {
   const events: StreamEvent[] = [];
   for (const frame of frames) {
     if (frame.data === '[DONE]') {
+      events.push(...emitPendingFinish(state, true));
       return { events, done: true };
     }
-    events.push(...parseProviderChunk(frame.data, toolCallIds, toolCallNames, startedToolCalls));
+    events.push(...parseProviderChunk(frame.data, state, apiKey));
+    events.push(...emitPendingFinish(state, false));
   }
   return { events, done: false };
 }
@@ -381,22 +474,49 @@ export function createOpenAiCompatibleClient(options: OpenAiCompatibleClientOpti
           });
         } catch (error) {
           if (timedOut) {
-            throw createProviderError('timeout', 'Provider request timed out');
+            throw createProviderError(
+              'timeout',
+              'Provider request timed out',
+              undefined,
+              undefined,
+              options.apiKey,
+            );
           }
           if (externalSignal?.aborted) {
-            throw createProviderError('cancelled', 'Provider request was cancelled');
+            throw createProviderError(
+              'cancelled',
+              'Provider request was cancelled',
+              undefined,
+              undefined,
+              options.apiKey,
+            );
           }
           throw createProviderError(
             'network',
-            error instanceof Error ? error.message : 'Provider request failed',
+            errorMessage(error),
+            undefined,
+            undefined,
+            options.apiKey,
           );
         }
 
         if (timedOut) {
-          throw createProviderError('timeout', 'Provider request timed out');
+          throw createProviderError(
+            'timeout',
+            'Provider request timed out',
+            undefined,
+            undefined,
+            options.apiKey,
+          );
         }
         if (externalSignal?.aborted) {
-          throw createProviderError('cancelled', 'Provider request was cancelled');
+          throw createProviderError(
+            'cancelled',
+            'Provider request was cancelled',
+            undefined,
+            undefined,
+            options.apiKey,
+          );
         }
 
         if (!response.ok) {
@@ -415,19 +535,25 @@ export function createOpenAiCompatibleClient(options: OpenAiCompatibleClientOpti
             message,
             response.status,
             classification.retryable,
+            options.apiKey,
           );
         }
 
         if (response.body === null) {
-          throw createProviderError('protocol', 'Provider response did not include a body');
+          throw createProviderError(
+            'protocol',
+            'Provider response did not include a body',
+            undefined,
+            undefined,
+            options.apiKey,
+          );
         }
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let parserState = createSseParserState();
-        const toolCallIds = new Map<number, string>();
-        const toolCallNames = new Map<number, string>();
-        const startedToolCalls = new Set<number>();
+        const streamState = createStreamParseState();
+        let normalStreamCompletion = false;
 
         try {
           while (true) {
@@ -437,11 +563,12 @@ export function createOpenAiCompatibleClient(options: OpenAiCompatibleClientOpti
             }
             const pushed = pushSseChunk(parserState, decoder.decode(value, { stream: true }));
             parserState = pushed.state;
-            const parsed = parseFrames(pushed.frames, toolCallIds, toolCallNames, startedToolCalls);
+            const parsed = parseFrames(pushed.frames, streamState, options.apiKey);
             for (const event of parsed.events) {
               yield event;
             }
             if (parsed.done) {
+              normalStreamCompletion = true;
               return;
             }
           }
@@ -450,41 +577,70 @@ export function createOpenAiCompatibleClient(options: OpenAiCompatibleClientOpti
           if (decodedTail !== '') {
             const pushed = pushSseChunk(parserState, decodedTail);
             parserState = pushed.state;
-            const parsed = parseFrames(pushed.frames, toolCallIds, toolCallNames, startedToolCalls);
+            const parsed = parseFrames(pushed.frames, streamState, options.apiKey);
             for (const event of parsed.events) {
               yield event;
             }
             if (parsed.done) {
+              normalStreamCompletion = true;
               return;
             }
           }
 
           const flushed = flushSseParser(parserState);
-          const parsed = parseFrames(flushed.frames, toolCallIds, toolCallNames, startedToolCalls);
+          const parsed = parseFrames(flushed.frames, streamState, options.apiKey);
           for (const event of parsed.events) {
             yield event;
           }
+          for (const event of emitPendingFinish(streamState, true)) {
+            yield event;
+          }
+          normalStreamCompletion = true;
         } finally {
+          if (!normalStreamCompletion) {
+            try {
+              await reader.cancel();
+            } catch {
+              // The stream may already be errored or closed.
+            }
+            controller.abort();
+          }
           reader.releaseLock();
         }
       } catch (error) {
-        if (isLlmError(error)) {
+        if (isAdapterError(error)) {
           throw error;
         }
         if (timedOut) {
-          throw createProviderError('timeout', 'Provider request timed out');
+          throw createProviderError(
+            'timeout',
+            'Provider request timed out',
+            undefined,
+            undefined,
+            options.apiKey,
+          );
         }
         if (externalSignal?.aborted) {
-          throw createProviderError('cancelled', 'Provider request was cancelled');
+          throw createProviderError(
+            'cancelled',
+            'Provider request was cancelled',
+            undefined,
+            undefined,
+            options.apiKey,
+          );
         }
         throw createProviderError(
           'network',
-          error instanceof Error ? error.message : 'Provider stream failed',
+          errorMessage(error),
+          undefined,
+          undefined,
+          options.apiKey,
         );
       } finally {
         if (timer !== undefined) {
           clearTimeout(timer);
         }
+        controller.abort();
         externalSignal?.removeEventListener('abort', onAbort);
       }
     },
