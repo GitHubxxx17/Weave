@@ -282,3 +282,112 @@ Passed with no whitespace errors.
 - The worktree remains detached at the foundation task revision.
 - Turbo's missing test-output warning is pre-existing and does not affect
   verification success.
+
+## Review Fix Report: Round 2
+
+### Finding Fixed
+
+The startup failure cleanup path no longer uses `undefined` as the sentinel for
+“cleanup did not throw”. It now tracks `cleanupDidThrow` independently from
+the caught value, so a disposer that throws `undefined` is retained in the
+startup `AggregateError`.
+
+The existing behavior remains unchanged for all other cleanup cases:
+
+- Every created service is attempted in reverse declaration order.
+- The Runtime ends in `stopped` after startup failure.
+- The `AggregateError` contains the startup failure followed by cleanup
+  failure(s), including an `undefined` failure value.
+- Duplicate service key validation remains intact.
+
+### TDD Evidence
+
+#### RED
+
+Added a focused regression test where the first service disposer executes
+`throw undefined` and ran:
+
+```bash
+pnpm exec vitest run packages/runtime/test/runtime.test.ts --root . --config vitest.config.ts
+```
+
+Before the implementation fix:
+
+```text
+Test Files  1 failed (1)
+Tests       1 failed | 10 passed (11)
+```
+
+The test received only the startup `Error` instead of an `AggregateError`,
+demonstrating that the previous `cleanupError !== undefined` check discarded
+the cleanup failure.
+
+#### GREEN
+
+After changing the cleanup path to track whether the `catch` branch executed:
+
+```bash
+pnpm exec vitest run packages/runtime/test/runtime.test.ts --root . --config vitest.config.ts
+```
+
+Result:
+
+```text
+Test Files  1 passed (1)
+Tests       11 passed (11)
+```
+
+The regression asserts that `AggregateError.errors` has two entries, preserves
+the startup error as the first entry, preserves `undefined` as the second
+entry, attempts both created disposers, and leaves the Runtime stopped.
+
+### Files Changed
+
+- `packages/runtime/src/runtime.ts`
+- `packages/runtime/test/runtime.test.ts`
+- `.superpowers/sdd/2026-11-14-weave-foundation/task-6-report.md`
+
+The duplicate-key fix and its test remain unchanged. No package configuration,
+lockfile, protocol, LLM, or unrelated files were modified.
+
+### Fresh Verification
+
+```bash
+pnpm --filter @weave/runtime test
+```
+
+Passed: 5 test files, 57 tests.
+
+```bash
+pnpm --filter @weave/runtime lint
+pnpm --filter @weave/runtime typecheck
+pnpm --filter @weave/runtime build
+pnpm format:check
+```
+
+All commands passed with exit code 0.
+
+```bash
+pnpm check
+```
+
+Passed all root stages: format check, 3 lint tasks, 3 typecheck tasks, 3 test
+tasks, and 3 build tasks. The Runtime test task passed 57 tests. Turbo emitted
+the existing non-failing warning that `@weave/runtime#test` has no configured
+output files.
+
+```bash
+git diff --check
+```
+
+Passed with no whitespace errors.
+
+### Self-Review
+
+- `cleanupDidThrow` is set only inside the disposer-cleanup `catch` branch and
+  is independent of the caught value, covering `undefined`, `null`, and other
+  falsy thrown values.
+- Cleanup still aggregates multiple disposal failures and always clears the
+  created-service list and container after attempting every disposer.
+- Duplicate service key validation still runs before service creation and is
+  covered by the existing focused test.

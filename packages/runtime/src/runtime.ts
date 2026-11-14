@@ -118,16 +118,18 @@ class RuntimeImpl implements Runtime {
       }
       this.statusValue = 'running';
     } catch (error) {
+      let cleanupDidThrow = false;
       let cleanupError: unknown;
 
       try {
         await this.disposeCreatedServices();
       } catch (caughtError) {
+        cleanupDidThrow = true;
         cleanupError = caughtError;
       }
       this.statusValue = 'stopped';
 
-      if (cleanupError !== undefined) {
+      if (cleanupDidThrow) {
         throw new AggregateError(
           [error, ...flattenErrors(cleanupError)],
           'Runtime startup and cleanup failed',

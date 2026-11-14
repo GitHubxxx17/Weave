@@ -190,6 +190,55 @@ describe('Runtime lifecycle', () => {
     ]);
   });
 
+  it('preserves a cleanup failure that throws undefined', async () => {
+    const calls: string[] = [];
+    const startupError = new Error('startup failed');
+    const first: RuntimeService<string> = {
+      key: Symbol('first'),
+      create: () => {
+        calls.push('create:first');
+        return 'first';
+      },
+      dispose: () => {
+        calls.push('dispose:first');
+        throw undefined;
+      },
+    };
+    const second: RuntimeService<string> = {
+      key: Symbol('second'),
+      create: () => {
+        calls.push('create:second');
+        return 'second';
+      },
+      dispose: () => {
+        calls.push('dispose:second');
+      },
+    };
+    const failing: RuntimeService<string> = {
+      key: Symbol('failing'),
+      create: () => {
+        calls.push('create:failing');
+        throw startupError;
+      },
+    };
+    const runtime = createRuntime({ services: [first, second, failing] });
+
+    const error = await runtime.start().catch((caughtError: unknown) => caughtError);
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toHaveLength(2);
+    expect((error as AggregateError).errors[0]).toBe(startupError);
+    expect((error as AggregateError).errors[1]).toBeUndefined();
+    expect(runtime.status).toBe('stopped');
+    expect(calls).toEqual([
+      'create:first',
+      'create:second',
+      'create:failing',
+      'dispose:second',
+      'dispose:first',
+    ]);
+  });
+
   it('allows retrying after a failed startup', async () => {
     let attempts = 0;
     const service: RuntimeService<string> = {
