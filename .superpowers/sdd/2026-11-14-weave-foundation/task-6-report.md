@@ -167,3 +167,118 @@ Passed with no whitespace errors.
   behavior.
 - The worktree is detached at the foundation task revision, so the requested
   local commit is created on detached HEAD. No push was performed.
+
+## Review Fix Report
+
+### Findings Fixed
+
+1. Startup cleanup failures are now preserved with the original startup
+   failure in an `AggregateError`. Cleanup continues in reverse order for
+   every successfully-created service before the Runtime becomes `stopped`.
+   Multiple disposal failures are also aggregated by the common cleanup path.
+2. Duplicate service `symbol` keys are rejected during `createRuntime()` before
+   any service can be created, using the stable error message
+   `Runtime service keys must be unique`.
+
+### TDD Evidence
+
+#### RED
+
+Added two focused regression tests to
+`packages/runtime/test/runtime.test.ts` and ran:
+
+```bash
+pnpm exec vitest run packages/runtime/test/runtime.test.ts --root . --config vitest.config.ts
+```
+
+Result before the implementation fix:
+
+```text
+Test Files  1 failed (1)
+Tests       2 failed | 8 passed (10)
+```
+
+The cleanup-failure test received the original `startup failed` Error instead
+of an `AggregateError`, proving the cleanup error was still discarded. The
+duplicate-key test did not throw, proving descriptors with the same symbol
+were still accepted.
+
+#### GREEN
+
+After implementing both fixes:
+
+```bash
+pnpm exec vitest run packages/runtime/test/runtime.test.ts --root . --config vitest.config.ts
+```
+
+Result:
+
+```text
+Test Files  1 passed (1)
+Tests       10 passed (10)
+```
+
+The cleanup regression verifies both startup and cleanup errors are observable,
+the Runtime ends in `stopped`, and every created service is attempted in
+reverse order. The duplicate-key regression verifies rejection before service
+creation.
+
+### Files Changed
+
+- `packages/runtime/src/runtime.ts`
+- `packages/runtime/test/runtime.test.ts`
+- `.superpowers/sdd/2026-11-14-weave-foundation/task-6-report.md`
+
+No package configuration, lockfile, protocol, LLM, or unrelated files were
+changed.
+
+### Verification
+
+```bash
+pnpm --filter @weave/runtime test
+```
+
+Passed: 5 test files, 56 tests.
+
+```bash
+pnpm --filter @weave/runtime lint
+pnpm --filter @weave/runtime typecheck
+pnpm --filter @weave/runtime build
+pnpm format:check
+```
+
+All commands passed with exit code 0.
+
+```bash
+pnpm check
+```
+
+Passed all root stages: format check, 3 lint tasks, 3 typecheck tasks, 3 test
+tasks, and 3 build tasks. Runtime's full package test run passed 56 tests.
+Turbo retained its existing non-failing warning that
+`@weave/runtime#test` has no configured output files.
+
+```bash
+git diff --check
+```
+
+Passed with no whitespace errors.
+
+### Self-Review
+
+- Startup errors are never replaced by cleanup errors. When cleanup also
+  fails, the thrown `AggregateError.errors` begins with the original startup
+  error followed by cleanup errors.
+- Disposal still attempts every created service after one or more disposal
+  failures, then clears the creation list and service container.
+- Duplicate key validation runs before `start()`, so no service factory can
+  observe a partially constructed Runtime with an overwritten container entry.
+- Existing idempotent lifecycle behavior, retry-after-failed-start behavior,
+  abort ordering, access boundaries, and reverse disposal ordering remain
+  covered by the original tests and pass in the full suite.
+
+### Concerns
+
+- The worktree remains detached at the foundation task revision.
+- Turbo's missing test-output warning is pre-existing and does not affect
+  verification success.

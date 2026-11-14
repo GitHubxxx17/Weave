@@ -142,6 +142,54 @@ describe('Runtime lifecycle', () => {
     expect(() => runtime.get(first)).toThrow('Runtime service is not available');
   });
 
+  it('preserves startup and cleanup failures while attempting every created service', async () => {
+    const calls: string[] = [];
+    const startupError = new Error('startup failed');
+    const cleanupError = new Error('cleanup failed');
+    const first: RuntimeService<string> = {
+      key: Symbol('first'),
+      create: () => {
+        calls.push('create:first');
+        return 'first';
+      },
+      dispose: () => {
+        calls.push('dispose:first');
+        throw cleanupError;
+      },
+    };
+    const second: RuntimeService<string> = {
+      key: Symbol('second'),
+      create: () => {
+        calls.push('create:second');
+        return 'second';
+      },
+      dispose: () => {
+        calls.push('dispose:second');
+      },
+    };
+    const failing: RuntimeService<string> = {
+      key: Symbol('failing'),
+      create: () => {
+        calls.push('create:failing');
+        throw startupError;
+      },
+    };
+    const runtime = createRuntime({ services: [first, second, failing] });
+
+    const error = await runtime.start().catch((caughtError: unknown) => caughtError);
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toEqual([startupError, cleanupError]);
+    expect(runtime.status).toBe('stopped');
+    expect(calls).toEqual([
+      'create:first',
+      'create:second',
+      'create:failing',
+      'dispose:second',
+      'dispose:first',
+    ]);
+  });
+
   it('allows retrying after a failed startup', async () => {
     let attempts = 0;
     const service: RuntimeService<string> = {
@@ -162,6 +210,22 @@ describe('Runtime lifecycle', () => {
     expect(runtime.status).toBe('running');
     expect(runtime.get(service)).toBe('value');
     await runtime.stop();
+  });
+
+  it('rejects duplicate service keys before creating any service', () => {
+    const key = Symbol('duplicate');
+    const first: RuntimeService<string> = {
+      key,
+      create: () => 'first',
+    };
+    const second: RuntimeService<string> = {
+      key,
+      create: () => 'second',
+    };
+
+    expect(() => createRuntime({ services: [first, second] })).toThrow(
+      'Runtime service keys must be unique',
+    );
   });
 
   it('rejects starting a runtime after it has stopped', async () => {

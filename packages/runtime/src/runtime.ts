@@ -9,6 +9,22 @@ import type {
 
 const stoppedStartMessage = 'Runtime cannot be started after it has stopped';
 const startingStopMessage = 'Runtime cannot be stopped while it is starting';
+const duplicateServiceKeysMessage = 'Runtime service keys must be unique';
+
+function validateServiceKeys(services: readonly RuntimeService<unknown>[]): void {
+  const keys = new Set<symbol>();
+
+  for (const service of services) {
+    if (keys.has(service.key)) {
+      throw new Error(duplicateServiceKeysMessage);
+    }
+    keys.add(service.key);
+  }
+}
+
+function flattenErrors(error: unknown): unknown[] {
+  return error instanceof AggregateError ? [...error.errors] : [error];
+}
 
 class RuntimeImpl implements Runtime {
   private readonly abortController = new AbortController();
@@ -24,6 +40,7 @@ class RuntimeImpl implements Runtime {
   constructor(options?: RuntimeOptions) {
     this.config = options?.config ?? {};
     this.services = options?.services ?? [];
+    validateServiceKeys(this.services);
   }
 
   get status(): RuntimeStatus {
@@ -101,12 +118,23 @@ class RuntimeImpl implements Runtime {
       }
       this.statusValue = 'running';
     } catch (error) {
+      let cleanupError: unknown;
+
       try {
         await this.disposeCreatedServices();
-      } catch {
-        // Preserve the startup error while still completing all cleanup work.
+      } catch (caughtError) {
+        cleanupError = caughtError;
       }
       this.statusValue = 'stopped';
+
+      if (cleanupError !== undefined) {
+        throw new AggregateError(
+          [error, ...flattenErrors(cleanupError)],
+          'Runtime startup and cleanup failed',
+          { cause: error },
+        );
+      }
+
       throw error;
     }
   }
@@ -120,7 +148,7 @@ class RuntimeImpl implements Runtime {
   }
 
   private async disposeCreatedServices(): Promise<void> {
-    let firstError: unknown;
+    const errors: unknown[] = [];
 
     for (let index = this.createdServices.length - 1; index >= 0; index -= 1) {
       const service = this.createdServices[index];
@@ -132,15 +160,18 @@ class RuntimeImpl implements Runtime {
       try {
         await service.dispose?.(value);
       } catch (error) {
-        firstError ??= error;
+        errors.push(error);
       }
     }
 
     this.createdServices.length = 0;
     this.container.clear();
 
-    if (firstError !== undefined) {
-      throw firstError;
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, 'Runtime service disposal failed', { cause: errors[0] });
     }
   }
 }
@@ -149,4 +180,4 @@ export function createRuntime(options?: RuntimeOptions): Runtime {
   return new RuntimeImpl(options);
 }
 
-export { stoppedStartMessage };
+export { duplicateServiceKeysMessage, stoppedStartMessage };
