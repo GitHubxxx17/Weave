@@ -592,10 +592,17 @@ export function createOpenAiCompatibleClient(options: OpenAiCompatibleClientOpti
           for (const event of parsed.events) {
             yield event;
           }
-          for (const event of emitPendingFinish(streamState, true)) {
-            yield event;
+          if (parsed.done) {
+            normalStreamCompletion = true;
+            return;
           }
-          normalStreamCompletion = true;
+          throw createProviderError(
+            'protocol',
+            'Provider stream ended before [DONE]',
+            undefined,
+            undefined,
+            options.apiKey,
+          );
         } finally {
           if (!normalStreamCompletion) {
             try {

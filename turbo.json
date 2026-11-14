@@ -1,5 +1,6 @@
 {
   "$schema": "https://turborepo.com/schema.json",
+  "globalDependencies": ["eslint.config.js"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
@@ -11,7 +12,7 @@
     },
     "test": {
       "dependsOn": ["^test"],
-      "outputs": ["coverage/**"]
+      "outputs": []
     },
     "lint": {
       "dependsOn": ["^lint"],

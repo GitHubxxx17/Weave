@@ -27,6 +27,13 @@ function streamingResponse(...frames: string[]): Response {
   });
 }
 
+function responseWithoutTrailingBoundary(...frames: string[]): Response {
+  return new Response(frames.join('\n\n'), {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream' },
+  });
+}
+
 function responseWithBody(body: ReadableStream<Uint8Array>, status = 200): Response {
   return new Response(body, {
     status,
@@ -200,6 +207,32 @@ describe('OpenAI-compatible provider', () => {
         reason: 'stop',
         usage: { inputTokens: 5, outputTokens: 6, totalTokens: 11 },
       },
+    ]);
+  });
+
+  it('rejects a response that reaches EOF without [DONE]', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      streamingResponse(
+        'data: {"choices":[{"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}',
+      ),
+    );
+
+    await expect(collectEvents(createClient(fetchMock))).rejects.toMatchObject({
+      code: 'protocol',
+      retryable: false,
+    });
+  });
+
+  it('accepts a final [DONE] frame without a trailing boundary', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      responseWithoutTrailingBoundary(
+        'data: {"choices":[{"finish_reason":"stop"}]}',
+        'data: [DONE]',
+      ),
+    );
+
+    await expect(collectEvents(createClient(fetchMock))).resolves.toEqual([
+      { type: 'finish', reason: 'stop' },
     ]);
   });
 

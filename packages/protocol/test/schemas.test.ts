@@ -3,6 +3,7 @@ import {
   contentPartSchema,
   llmRequestSchema,
   messageSchema,
+  streamEventSchema,
   tokenUsageSchema,
   toolCallSchema,
 } from '../src/index.js';
@@ -49,5 +50,19 @@ describe('protocol schemas', () => {
 
   it('validates content parts', () => {
     expect(() => contentPartSchema.parse({ type: 'image', url: 'image.png' })).toThrow();
+  });
+
+  it('rejects error stream events because LLM failures reject the stream', () => {
+    expect(() =>
+      streamEventSchema.parse({
+        type: 'error',
+        error: {
+          code: 'network',
+          message: 'connection failed',
+          provider: 'test',
+          retryable: true,
+        },
+      }),
+    ).toThrow();
   });
 });

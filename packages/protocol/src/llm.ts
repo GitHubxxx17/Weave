@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { llmErrorSchema } from './errors.js';
 import { messageSchema } from './messages.js';
 import { toolDefinitionSchema } from './tools.js';
 
@@ -59,8 +58,7 @@ export type StreamEvent =
       readonly type: 'finish';
       readonly reason: FinishReason;
       readonly usage?: TokenUsage;
-    }
-  | { readonly type: 'error'; readonly error: z.infer<typeof llmErrorSchema> };
+    };
 
 const textDeltaSchema = z
   .object({
@@ -100,18 +98,10 @@ const finishSchema = z
   })
   .passthrough();
 
-const errorSchema = z
-  .object({
-    type: z.literal('error'),
-    error: llmErrorSchema,
-  })
-  .passthrough();
-
 export const streamEventSchema = z.discriminatedUnion('type', [
   textDeltaSchema,
   reasoningDeltaSchema,
   toolCallStartSchema,
   toolCallDeltaSchema,
   finishSchema,
-  errorSchema,
 ]);

@@ -27,7 +27,7 @@ function flattenErrors(error: unknown): unknown[] {
 }
 
 class RuntimeImpl implements Runtime {
-  private readonly abortController = new AbortController();
+  private abortController: AbortController | undefined;
   private readonly config: Readonly<Record<string, unknown>>;
   private readonly services: readonly RuntimeService<unknown>[];
   private readonly container = new ServiceContainer();
@@ -62,6 +62,7 @@ class RuntimeImpl implements Runtime {
     }
 
     this.statusValue = 'starting';
+    this.abortController = new AbortController();
     const promise = this.startServices();
     this.startPromise = promise;
 
@@ -85,7 +86,7 @@ class RuntimeImpl implements Runtime {
 
     this.closed = true;
     this.statusValue = 'stopping';
-    this.abortController.abort();
+    this.abortController?.abort();
     const promise = this.stopServices();
     this.stopPromise = promise;
 
@@ -105,8 +106,13 @@ class RuntimeImpl implements Runtime {
   }
 
   private async startServices(): Promise<void> {
+    const abortController = this.abortController;
+    if (abortController === undefined) {
+      throw new Error('Runtime startup signal is not available');
+    }
+
     const context: RuntimeContext = {
-      signal: this.abortController.signal,
+      signal: abortController.signal,
       config: this.config,
     };
 
@@ -118,6 +124,7 @@ class RuntimeImpl implements Runtime {
       }
       this.statusValue = 'running';
     } catch (error) {
+      abortController.abort();
       let cleanupDidThrow = false;
       let cleanupError: unknown;
 

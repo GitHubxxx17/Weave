@@ -1,6 +1,7 @@
-import { llmRequestSchema } from '@weave/protocol';
+import { llmRequestSchema, streamEventSchema } from '@weave/protocol';
 import type { LlmRequest, StreamEvent } from '@weave/protocol';
 import type { LlmClient } from './client.js';
+import { createLlmError } from './errors.js';
 import type { LlmStreamOptions } from './types.js';
 
 function abortError(): DOMException {
@@ -58,6 +59,14 @@ export function createMockLlmClient(
           await wait(delayMs, signal);
         }
         throwIfAborted(signal);
+        const result = streamEventSchema.safeParse(event);
+        if (!result.success) {
+          throw createLlmError({
+            code: 'protocol',
+            message: 'Mock provider script contains an invalid stream event',
+            provider: 'mock',
+          });
+        }
         yield event;
       }
     },

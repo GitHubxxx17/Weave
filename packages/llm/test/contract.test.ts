@@ -73,6 +73,31 @@ describe('LLM contract', () => {
 
     await expect(next).rejects.toMatchObject({ name: 'AbortError' });
   });
+
+  it('rejects legacy error events as protocol failures', async () => {
+    const client = createMockLlmClient([
+      {
+        type: 'error',
+        error: {
+          code: 'network',
+          message: 'connection failed',
+          provider: 'mock',
+          retryable: true,
+        },
+      } as never,
+    ]);
+
+    await expect(
+      (async () => {
+        for await (const event of client.stream(request)) {
+          expect(event).toBeDefined();
+        }
+      })(),
+    ).rejects.toMatchObject({
+      code: 'protocol',
+      provider: 'mock',
+    });
+  });
 });
 
 describe('LLM error classification', () => {

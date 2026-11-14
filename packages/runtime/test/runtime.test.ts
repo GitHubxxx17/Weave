@@ -241,10 +241,12 @@ describe('Runtime lifecycle', () => {
 
   it('allows retrying after a failed startup', async () => {
     let attempts = 0;
+    const signals: AbortSignal[] = [];
     const service: RuntimeService<string> = {
       key: Symbol('retryable'),
-      create: () => {
+      create: (context) => {
         attempts += 1;
+        signals.push(context.signal);
         if (attempts === 1) {
           throw new Error('try again');
         }
@@ -254,9 +256,12 @@ describe('Runtime lifecycle', () => {
     const runtime = createRuntime({ services: [service] });
 
     await expect(runtime.start()).rejects.toThrow('try again');
+    expect(signals[0]?.aborted).toBe(true);
     await runtime.start();
 
     expect(runtime.status).toBe('running');
+    expect(signals[1]).not.toBe(signals[0]);
+    expect(signals[1]?.aborted).toBe(false);
     expect(runtime.get(service)).toBe('value');
     await runtime.stop();
   });
