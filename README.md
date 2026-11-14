@@ -48,6 +48,10 @@ pnpm check
 package builds through the root toolchain. A package can be targeted directly,
 for example `pnpm --filter @weave/protocol test`.
 
+The Turbo typecheck and test tasks build their upstream workspace packages
+first. This keeps a clean checkout independent of ignored `dist/` artifacts
+and makes the same validation sequence work locally and in GitHub Actions.
+
 ## First-round layout
 
 ```text
