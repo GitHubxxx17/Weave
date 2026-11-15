@@ -1,16 +1,18 @@
-import { createMockLlmClient } from '@weave/llm';
+import { createMockLlmClient, type LlmClient } from '@weave/llm';
 import type { StreamEvent } from '@weave/protocol';
 import { createInMemorySessionEventStore } from '@weave/session';
 import {
   createApprovalBroker,
+  createAgentRunner,
   createRuntime,
   createSessionEventStoreService,
+  type AgentRunner,
   type ApprovalBroker,
   type Runtime,
   type RuntimeService,
 } from '@weave/runtime';
 
-const mockLlmService: RuntimeService<unknown> = {
+const mockLlmService: RuntimeService<LlmClient> = {
   key: Symbol('weave.server.mock-llm'),
   create: () => {
     const script: readonly StreamEvent[] = [];
@@ -38,5 +40,18 @@ export const sessionEventStoreService = createSessionEventStoreService({
 export function createServerRuntime(): Runtime {
   return createRuntime({
     services: [mockLlmService, approvalBrokerService, sessionEventStoreService],
+  });
+}
+
+/**
+ * Creates the Agent Runner after the Runtime has created its dependencies.
+ *
+ * The composition root owns this assembly because the current Runtime service
+ * factory does not declare dependencies between services.
+ */
+export function createServerAgentRunner(runtime: Runtime): AgentRunner {
+  return createAgentRunner({
+    llm: runtime.get(mockLlmService),
+    sessionStore: runtime.get(sessionEventStoreService),
   });
 }
