@@ -1064,7 +1064,7 @@ Session Projection
 
 把本计划中已经完成的 checkbox 逐项更新为 `[x]`，不要一次性提前标记。
 
-- [ ] **Step 4: 创建飞书学习文档**
+- [x] **Step 4: 创建飞书学习文档**
 
 在 Weave 飞书文件夹
 `IaaUfCD1klneledtbUycz7bLndh` 创建：
@@ -1090,7 +1090,7 @@ Session Projection
 13. 面试回答；
 14. 自测任务。
 
-- [ ] **Step 5: 更新飞书总计划**
+- [x] **Step 5: 更新飞书总计划**
 
 在 `Weave 全项目计划与前端验收路线`
 （token `KhEZdcTTSoi7fMxjpT4cxviRniT`）追加：
@@ -1101,7 +1101,7 @@ Session Projection
 - 下一阶段是 Tool Pipeline；
 - 新增 `06` 学习文档链接。
 
-- [ ] **Step 6: 运行完整仓库验证**
+- [x] **Step 6: 运行完整仓库验证**
 
 Run:
 
@@ -1128,7 +1128,7 @@ git add README.md docs/architecture/foundation.md docs/superpowers/specs/2026-11
 git commit -m "docs: 补充 Agent Loop 学习说明"
 ```
 
-- [ ] **Step 8: 准备 PR 前最终审查**
+- [x] **Step 8: 准备 PR 前最终审查**
 
 Run:
 
