@@ -124,21 +124,37 @@ it does not grant access to the host filesystem or network. Those capabilities
 will be added behind separate security boundaries.
 
 The first Workspace boundary is a lexical `WorkspacePolicy` in
-`@weave/runtime`:
+`@weave/runtime`, followed by protected UTF-8 file tools:
 
 ```text
 Tool Pipeline
   -> Workspace Path Policy
-    -> future File/Shell Executor
+    -> Workspace File Tools
       -> future Approval/Sandbox
 ```
 
 The policy requires an absolute Workspace root, accepts relative input paths,
 normalizes them with `node:path`, and rejects null bytes, absolute input paths,
 and paths that resolve outside the root. It returns normalized absolute and
-relative paths but performs no filesystem I/O. This distinction is deliberate:
-the later executor must repeat checks for symbolic links, file type, permissions,
-TOCTOU, and process-specific security before accessing the host.
+relative paths but performs no filesystem I/O. The file tools repeat the
+boundary at execution time: they resolve the real Workspace root and target,
+reject symlink targets outside the root, check file type and byte limits, and
+only then call `readFile` or `writeFile`.
+
+`createWorkspaceFileTools()` exposes `read_file` and `write_file` as ordinary
+`ToolDefinition` values. They are registered in the shared `ToolRegistry` and
+must be called through `ToolPipeline`, so JSON parsing, Zod validation,
+cancellation, timeout classification, and result serialization remain
+consistent with every other Runtime tool.
+
+The file tools deliberately do not create parent directories. New writes use
+the exclusive `wx` flag by default; an existing regular file is replaced only
+when the caller explicitly supplies `overwrite: true`. This combines a product
+level guard against accidental replacement with the filesystem's exclusive
+create operation. The implementation still has residual TOCTOU risk between
+metadata checks and the final filesystem call, so it is not yet a complete
+Sandbox or Approval boundary. A dangling symlink is rejected conservatively
+because its final target cannot be proven to remain inside the Workspace.
 
 HTTP and SSE are future adapters that will consume `AgentRuntimeEvent`; they
 must not reimplement the Agent Loop. The current Server contract remains
