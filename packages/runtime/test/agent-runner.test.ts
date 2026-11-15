@@ -62,9 +62,7 @@ interface RecordingStore {
   readonly batches: readonly (readonly NewSessionEvent[])[];
 }
 
-function recordingSessionEventStore(options?: {
-  readonly failedTerminalError?: unknown;
-}): RecordingStore {
+function recordingSessionEventStore(): RecordingStore {
   const store = createInMemorySessionEventStore();
   const batches: NewSessionEvent[][] = [];
 
@@ -72,13 +70,6 @@ function recordingSessionEventStore(options?: {
     store: {
       async append(sessionId, events) {
         batches.push(structuredClone(events));
-        if (
-          options?.failedTerminalError !== undefined &&
-          events[0]?.type === 'step.completed' &&
-          events[0].payload.status === 'failed'
-        ) {
-          throw options.failedTerminalError;
-        }
         return store.append(sessionId, events);
       },
       read: (sessionId, readOptions) => store.read(sessionId, readOptions),
@@ -473,6 +464,125 @@ describe('Agent Runner contracts', () => {
     });
 
     await store.close();
+  });
+
+  it('aborts the provider immediately when return interrupts an in-flight operation', async () => {
+    const store = createInMemorySessionEventStore();
+    let receivedSignal: AbortSignal | undefined;
+    let rejectPendingNext: ((error: unknown) => void) | undefined;
+    const llm: LlmClient = {
+      stream(_request, options): AsyncIterable<StreamEvent> {
+        receivedSignal = options?.signal;
+        let nextCount = 0;
+        return {
+          [Symbol.asyncIterator]() {
+            return {
+              async next(): Promise<IteratorResult<StreamEvent>> {
+                nextCount += 1;
+                if (nextCount === 1) {
+                  return { done: false, value: { type: 'text-delta', text: 'first' } };
+                }
+                await new Promise<void>((_resolve, reject) => {
+                  rejectPendingNext = reject;
+                  options?.signal?.addEventListener('abort', () => reject(abortError()), {
+                    once: true,
+                  });
+                });
+                return { done: true, value: undefined };
+              },
+            };
+          },
+        };
+      },
+    };
+    const runner = createAgentRunner({ llm, sessionStore: store });
+    const iterator = runner.run(validRequest)[Symbol.asyncIterator]();
+
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { type: 'text-delta', text: 'first' },
+    });
+    const pendingNext = iterator.next();
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+
+    const returnPromise = iterator.return?.();
+    expect(receivedSignal?.aborted).toBe(true);
+    await expect(returnPromise).resolves.toMatchObject({ done: true });
+    rejectPendingNext?.(abortError());
+    await expect(pendingNext).resolves.toMatchObject({ done: true });
+    expect(projectSession(await store.read('session-1')).turns[0]).toMatchObject({
+      status: 'cancelled',
+      steps: [{ status: 'cancelled' }],
+    });
+
+    await store.close();
+  });
+
+  it('aborts internal resources when cancelled terminal persistence fails', async () => {
+    const baseStore = createInMemorySessionEventStore();
+    const persistenceError = new Error('cancelled terminal append failed');
+    let receivedSignal: AbortSignal | undefined;
+    let appendCount = 0;
+    const store: SessionEventStore = {
+      read: (sessionId, options) => baseStore.read(sessionId, options),
+      close: () => baseStore.close(),
+      append: async (sessionId, events) => {
+        appendCount += 1;
+        if (appendCount === 3) {
+          throw persistenceError;
+        }
+        return baseStore.append(sessionId, events);
+      },
+    };
+    const llm: LlmClient = {
+      async *stream(_request, options): AsyncIterable<StreamEvent> {
+        receivedSignal = options?.signal;
+        yield { type: 'text-delta', text: 'partial' };
+        await new Promise<void>(() => undefined);
+      },
+    };
+    const runner = createAgentRunner({ llm, sessionStore: store });
+    const iterator = runner.run(validRequest)[Symbol.asyncIterator]();
+
+    await expect(iterator.next()).resolves.toMatchObject({
+      value: { type: 'text-delta', text: 'partial' },
+    });
+    const error = await iterator.return?.().catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors[1]).toBe(persistenceError);
+    expect(receivedSignal?.aborted).toBe(true);
+
+    await baseStore.close();
+  });
+
+  it('persists failure when the post-initialization Session read fails', async () => {
+    const baseStore = createInMemorySessionEventStore();
+    const readError = new Error('post-initialization read failed');
+    let readCount = 0;
+    const store: SessionEventStore = {
+      append: (sessionId, events) => baseStore.append(sessionId, events),
+      close: () => baseStore.close(),
+      read: async (sessionId, options) => {
+        readCount += 1;
+        if (readCount === 3) {
+          throw readError;
+        }
+        return baseStore.read(sessionId, options);
+      },
+    };
+    const runner = createAgentRunner({
+      llm: recordingClient([{ type: 'finish', reason: 'stop' }], []),
+      sessionStore: store,
+    });
+
+    await expect(collect(runner.run(validRequest))).rejects.toBe(readError);
+    expect(projectSession(await baseStore.read('session-1')).turns[0]).toMatchObject({
+      status: 'failed',
+      steps: [{ status: 'failed' }],
+    });
+
+    await baseStore.close();
   });
 
   it('preserves the model and terminal persistence errors', async () => {

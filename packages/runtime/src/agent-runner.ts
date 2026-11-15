@@ -17,12 +17,19 @@ function isCancellation(error: unknown, signal: AbortSignal): boolean {
   );
 }
 
-function throwTerminalPersistenceError(primaryError: unknown, persistenceError: unknown): never {
-  throw new AggregateError(
+function createTerminalPersistenceError(
+  primaryError: unknown,
+  persistenceError: unknown,
+): AggregateError {
+  return new AggregateError(
     [primaryError, persistenceError],
     'Agent run and terminal persistence failed',
     { cause: primaryError },
   );
+}
+
+function createAbortError(): DOMException {
+  return new DOMException('The operation was aborted', 'AbortError');
 }
 
 /**
@@ -30,112 +37,102 @@ function throwTerminalPersistenceError(primaryError: unknown, persistenceError: 
  */
 export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
   return {
-    async *run(requestInput): AsyncIterable<AgentRuntimeEvent> {
+    run(requestInput): AsyncIterable<AgentRuntimeEvent> {
       const requestResult = agentRunRequestSchema.safeParse(requestInput);
-      if (!requestResult.success) {
-        throw new AgentRunError('agent-invalid-input', 'Agent Run input is invalid');
-      }
-      const request = requestResult.data;
+      const request = requestResult.success ? requestResult.data : undefined;
       const internalController = new AbortController();
       const signal =
-        request.signal === undefined
+        request?.signal === undefined
           ? internalController.signal
           : AbortSignal.any([request.signal, internalController.signal]);
 
-      let storedEvents = await options.sessionStore.read(request.sessionId);
-      if (storedEvents.length === 0) {
-        await options.sessionStore.append(request.sessionId, [
-          {
-            type: 'session.created',
-            payload: {},
-          },
-        ]);
-        storedEvents = await options.sessionStore.read(request.sessionId);
-      }
-      projectSession(storedEvents);
-
-      const messageId = crypto.randomUUID();
-      const turnId = crypto.randomUUID();
-      const stepId = crypto.randomUUID();
-      const initializationEvents: readonly NewSessionEvent[] = [
-        {
-          type: 'message.created',
-          payload: {
-            messageId,
-            message: request.userMessage,
-          },
-        },
-        {
-          type: 'turn.started',
-          payload: { turnId },
-        },
-        {
-          type: 'step.started',
-          payload: {
-            turnId,
-            stepId,
-            kind: 'model',
-          },
-        },
-      ];
-      await options.sessionStore.append(request.sessionId, initializationEvents);
-      const lifecycleStarted = true;
+      const queuedEvents: AgentRuntimeEvent[] = [];
+      const pendingNext: Array<{
+        readonly reject: (error: unknown) => void;
+        readonly resolve: (result: IteratorResult<AgentRuntimeEvent>) => void;
+      }> = [];
+      let started = false;
+      let stopped = false;
+      let finished = false;
+      let executionError: unknown;
+      let executionPromise: Promise<void> | undefined;
+      let lifecycleStarted = false;
       let terminalPersisted = false;
       let terminalAppendStarted = false;
-      let completed = false;
+      let sessionId: string | undefined;
+      let turnId: string | undefined;
+      let stepId: string | undefined;
 
-      const projectedSession = projectSession(await options.sessionStore.read(request.sessionId));
-      const messages: readonly Message[] = projectedSession.messages.map(({ message }) => message);
-      const llmRequest: LlmRequest = {
-        provider: request.provider,
-        model: request.model,
-        messages,
-        ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
-        ...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
-        ...(request.reasoningEffort === undefined
-          ? {}
-          : { reasoningEffort: request.reasoningEffort }),
+      const settlePending = (): void => {
+        if (!finished) {
+          return;
+        }
+        while (pendingNext.length > 0) {
+          const pending = pendingNext.shift();
+          if (pending === undefined) {
+            continue;
+          }
+          if (executionError !== undefined && !stopped) {
+            pending.reject(executionError);
+          } else {
+            pending.resolve({ done: true, value: undefined });
+          }
+        }
       };
 
-      let assistantText = '';
-      let finishSeen = false;
-      try {
-        signal.throwIfAborted();
-        for await (const event of options.llm.stream(llmRequest, { signal })) {
-          if (finishSeen) {
-            throw new AgentRunError(
-              'agent-stream-protocol',
-              'Agent stream emitted events after finish',
-            );
-          }
-
-          if (event.type === 'text-delta') {
-            assistantText += event.text;
-            yield event;
-          } else if (event.type === 'reasoning-delta') {
-            yield event;
-          } else if (event.type === 'tool-call-start' || event.type === 'tool-call-delta') {
-            throw new AgentRunError(
-              'agent-tool-call-unsupported',
-              'Agent tool calls are not supported',
-            );
-          } else if (event.type === 'finish') {
-            if (event.reason === 'tool-call') {
-              throw new AgentRunError(
-                'agent-tool-call-unsupported',
-                'Agent tool calls are not supported',
-              );
-            }
-            finishSeen = true;
-          }
+      const finish = (error?: unknown): void => {
+        if (finished) {
+          return;
         }
+        executionError = error;
+        finished = true;
+        settlePending();
+      };
 
-        if (!finishSeen) {
-          throw new AgentRunError('agent-stream-protocol', 'Agent stream did not finish');
+      const emit = (event: AgentRuntimeEvent): void => {
+        if (stopped || finished) {
+          return;
         }
-        const completionEvents: NewSessionEvent[] = [];
-        if (assistantText.length > 0) {
-          completionEvents.push({
+        const pending = pendingNext.shift();
+        if (pending !== undefined) {
+          pending.resolve({ done: false, value: event });
+        } else {
+          queuedEvents.push(event);
+        }
+      };
+
+      const appendTerminal = async (
+        events: readonly NewSessionEvent[],
+        primaryError?: unknown,
+      ): Promise<void> => {
+        if (
+          !lifecycleStarted ||
+          terminalPersisted ||
+          terminalAppendStarted ||
+          sessionId === undefined
+        ) {
+          return;
+        }
+        terminalAppendStarted = true;
+        try {
+          await options.sessionStore.append(sessionId, events);
+          terminalPersisted = true;
+        } catch (persistenceError: unknown) {
+          if (primaryError !== undefined) {
+            throw createTerminalPersistenceError(primaryError, persistenceError);
+          }
+          throw persistenceError;
+        }
+      };
+
+      const terminalEvents = (
+        status: 'completed' | 'failed' | 'cancelled',
+        reason?: string,
+        assistantText?: string,
+      ): NewSessionEvent[] => {
+        const events: NewSessionEvent[] = [];
+        if (assistantText !== undefined && assistantText.length > 0) {
+          events.push({
             type: 'message.created',
             payload: {
               messageId: crypto.randomUUID(),
@@ -146,92 +143,196 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
             },
           });
         }
-        completionEvents.push(
+        events.push(
           {
             type: 'step.completed',
             payload: {
-              turnId,
-              stepId,
-              status: 'completed',
+              turnId: turnId as string,
+              stepId: stepId as string,
+              status,
             },
           },
           {
             type: 'turn.completed',
             payload: {
-              turnId,
-              status: 'completed',
+              turnId: turnId as string,
+              status,
+              ...(reason === undefined ? {} : { reason }),
             },
           },
         );
-        terminalAppendStarted = true;
-        await options.sessionStore.append(request.sessionId, completionEvents);
-        terminalPersisted = true;
-        completed = true;
+        return events;
+      };
 
-        yield { type: 'completed', turnId };
-      } catch (primaryError: unknown) {
-        if (lifecycleStarted && !terminalPersisted && !terminalAppendStarted) {
-          const cancelled = isCancellation(primaryError, signal);
-          const terminalStatus = cancelled ? 'cancelled' : 'failed';
-          const terminalReason = cancelled
-            ? 'cancelled'
-            : primaryError instanceof AgentRunError
-              ? primaryError.code
-              : typeof primaryError === 'object' &&
-                  primaryError !== null &&
-                  'code' in primaryError &&
-                  typeof primaryError.code === 'string'
-                ? primaryError.code
-                : undefined;
-          terminalAppendStarted = true;
-          try {
-            await options.sessionStore.append(request.sessionId, [
-              {
-                type: 'step.completed',
-                payload: {
-                  turnId,
-                  stepId,
-                  status: terminalStatus,
-                },
-              },
-              {
-                type: 'turn.completed',
-                payload: {
-                  turnId,
-                  status: terminalStatus,
-                  ...(terminalReason === undefined ? {} : { reason: terminalReason }),
-                },
-              },
-            ]);
-            terminalPersisted = true;
-          } catch (persistenceError: unknown) {
-            throwTerminalPersistenceError(primaryError, persistenceError);
+      const execute = async (): Promise<void> => {
+        let assistantText = '';
+        let finishSeen = false;
+        try {
+          if (!requestResult.success) {
+            throw new AgentRunError('agent-invalid-input', 'Agent Run input is invalid');
           }
-        }
-        throw primaryError;
-      } finally {
-        if (lifecycleStarted && !terminalPersisted && !terminalAppendStarted && !completed) {
-          await options.sessionStore.append(request.sessionId, [
+          const validRequest = requestResult.data;
+          sessionId = validRequest.sessionId;
+          let storedEvents = await options.sessionStore.read(validRequest.sessionId);
+          if (storedEvents.length === 0) {
+            await options.sessionStore.append(validRequest.sessionId, [
+              { type: 'session.created', payload: {} },
+            ]);
+            storedEvents = await options.sessionStore.read(validRequest.sessionId);
+          }
+          projectSession(storedEvents);
+
+          const messageId = crypto.randomUUID();
+          turnId = crypto.randomUUID();
+          stepId = crypto.randomUUID();
+          await options.sessionStore.append(validRequest.sessionId, [
             {
-              type: 'step.completed',
-              payload: {
-                turnId,
-                stepId,
-                status: 'cancelled',
-              },
+              type: 'message.created',
+              payload: { messageId, message: validRequest.userMessage },
             },
+            { type: 'turn.started', payload: { turnId } },
             {
-              type: 'turn.completed',
-              payload: {
-                turnId,
-                status: 'cancelled',
-                reason: 'cancelled',
-              },
+              type: 'step.started',
+              payload: { turnId, stepId, kind: 'model' },
             },
           ]);
+          lifecycleStarted = true;
+
+          const projectedSession = projectSession(
+            await options.sessionStore.read(validRequest.sessionId),
+          );
+          const messages: readonly Message[] = projectedSession.messages.map(
+            ({ message }) => message,
+          );
+          const llmRequest: LlmRequest = {
+            provider: validRequest.provider,
+            model: validRequest.model,
+            messages,
+            ...(validRequest.temperature === undefined
+              ? {}
+              : { temperature: validRequest.temperature }),
+            ...(validRequest.maxTokens === undefined ? {} : { maxTokens: validRequest.maxTokens }),
+            ...(validRequest.reasoningEffort === undefined
+              ? {}
+              : { reasoningEffort: validRequest.reasoningEffort }),
+          };
+
+          signal.throwIfAborted();
+          for await (const event of options.llm.stream(llmRequest, { signal })) {
+            if (finishSeen) {
+              throw new AgentRunError(
+                'agent-stream-protocol',
+                'Agent stream emitted events after finish',
+              );
+            }
+            if (event.type === 'text-delta') {
+              assistantText += event.text;
+              emit(event);
+            } else if (event.type === 'reasoning-delta') {
+              emit(event);
+            } else if (event.type === 'tool-call-start' || event.type === 'tool-call-delta') {
+              throw new AgentRunError(
+                'agent-tool-call-unsupported',
+                'Agent tool calls are not supported',
+              );
+            } else if (event.type === 'finish') {
+              if (event.reason === 'tool-call') {
+                throw new AgentRunError(
+                  'agent-tool-call-unsupported',
+                  'Agent tool calls are not supported',
+                );
+              }
+              finishSeen = true;
+            }
+          }
+          if (!finishSeen) {
+            throw new AgentRunError('agent-stream-protocol', 'Agent stream did not finish');
+          }
+
+          await appendTerminal(terminalEvents('completed', undefined, assistantText));
+          emit({ type: 'completed', turnId });
+          finish();
+        } catch (primaryError: unknown) {
+          if (lifecycleStarted && !terminalPersisted && !terminalAppendStarted) {
+            const cancelled = isCancellation(primaryError, signal);
+            try {
+              await appendTerminal(
+                terminalEvents(
+                  cancelled ? 'cancelled' : 'failed',
+                  cancelled
+                    ? 'cancelled'
+                    : primaryError instanceof AgentRunError
+                      ? primaryError.code
+                      : typeof primaryError === 'object' &&
+                          primaryError !== null &&
+                          'code' in primaryError &&
+                          typeof primaryError.code === 'string'
+                        ? primaryError.code
+                        : undefined,
+                ),
+                primaryError,
+              );
+            } catch (persistenceError: unknown) {
+              finish(persistenceError);
+              return;
+            }
+          }
+          finish(primaryError);
+        } finally {
+          internalController.abort();
         }
-        internalController.abort();
-      }
+      };
+
+      const start = (): void => {
+        if (started) {
+          return;
+        }
+        started = true;
+        executionPromise = execute();
+        void executionPromise;
+      };
+
+      const iterator: AsyncIterator<AgentRuntimeEvent> = {
+        next(): Promise<IteratorResult<AgentRuntimeEvent>> {
+          start();
+          const event = queuedEvents.shift();
+          if (event !== undefined) {
+            return Promise.resolve({ done: false, value: event });
+          }
+          if (finished) {
+            if (executionError !== undefined && !stopped) {
+              return Promise.reject(executionError);
+            }
+            return Promise.resolve({ done: true, value: undefined });
+          }
+          return new Promise<IteratorResult<AgentRuntimeEvent>>((resolve, reject) => {
+            pendingNext.push({ resolve, reject });
+          });
+        },
+        async return(): Promise<IteratorResult<AgentRuntimeEvent>> {
+          if (finished) {
+            return { done: true, value: undefined };
+          }
+          stopped = true;
+          internalController.abort(createAbortError());
+          if (lifecycleStarted && !terminalPersisted && !terminalAppendStarted) {
+            try {
+              await appendTerminal(terminalEvents('cancelled', 'cancelled'), createAbortError());
+            } catch (error: unknown) {
+              finish(error);
+              throw error;
+            }
+          }
+          finish();
+          return { done: true, value: undefined };
+        },
+      };
+
+      return {
+        [Symbol.asyncIterator](): AsyncIterator<AgentRuntimeEvent> {
+          return iterator;
+        },
+      };
     },
   };
 }
