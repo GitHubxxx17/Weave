@@ -764,6 +764,131 @@ describe('Agent Runner contracts', () => {
     await baseStore.close();
   });
 
+  it('retries a failed completion append as a failed terminal state', async () => {
+    const baseStore = createInMemorySessionEventStore();
+    const completionPersistenceError = new Error('completion append failed');
+    let appendCount = 0;
+    const store: SessionEventStore = {
+      read: (sessionId, options) => baseStore.read(sessionId, options),
+      close: () => baseStore.close(),
+      append: async (sessionId, events) => {
+        appendCount += 1;
+        if (appendCount === 3) {
+          throw completionPersistenceError;
+        }
+        return baseStore.append(sessionId, events);
+      },
+    };
+    const runner = createAgentRunner({
+      llm: recordingClient([{ type: 'finish', reason: 'stop' }], []),
+      sessionStore: store,
+    });
+
+    await expect(collect(runner.run(validRequest))).rejects.toBe(completionPersistenceError);
+    expect(appendCount).toBe(4);
+    expect(projectSession(await baseStore.read('session-1')).turns[0]).toMatchObject({
+      status: 'failed',
+      steps: [{ status: 'failed' }],
+    });
+
+    await baseStore.close();
+  });
+
+  it('aggregates completion and failed-terminal persistence errors', async () => {
+    const baseStore = createInMemorySessionEventStore();
+    const completionPersistenceError = new Error('completion append failed');
+    const failedTerminalPersistenceError = new Error('failed terminal append failed');
+    let appendCount = 0;
+    const store: SessionEventStore = {
+      read: (sessionId, options) => baseStore.read(sessionId, options),
+      close: () => baseStore.close(),
+      append: async (sessionId, events) => {
+        appendCount += 1;
+        if (appendCount === 3) {
+          throw completionPersistenceError;
+        }
+        if (appendCount === 4) {
+          throw failedTerminalPersistenceError;
+        }
+        return baseStore.append(sessionId, events);
+      },
+    };
+    const runner = createAgentRunner({
+      llm: recordingClient([{ type: 'finish', reason: 'stop' }], []),
+      sessionStore: store,
+    });
+
+    const error = await collect(runner.run(validRequest)).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toEqual([
+      completionPersistenceError,
+      failedTerminalPersistenceError,
+    ]);
+    expect((error as AggregateError).cause).toBe(completionPersistenceError);
+    expect(appendCount).toBe(4);
+    expect(projectSession(await baseStore.read('session-1')).turns[0]).toMatchObject({
+      status: 'running',
+      steps: [{ status: 'running' }],
+    });
+
+    await baseStore.close();
+  });
+
+  it('propagates a terminal failure when return races completion persistence', async () => {
+    const baseStore = createInMemorySessionEventStore();
+    const completionPersistenceError = new Error('completion append failed');
+    const failedTerminalPersistenceError = new Error('failed terminal append failed');
+    let appendCount = 0;
+    let completionAppendStarted: (() => void) | undefined;
+    const completionAppendReady = new Promise<void>((resolve) => {
+      completionAppendStarted = resolve;
+    });
+    let releaseCompletionAppend: (() => void) | undefined;
+    const completionAppendRelease = new Promise<void>((resolve) => {
+      releaseCompletionAppend = resolve;
+    });
+    const store: SessionEventStore = {
+      read: (sessionId, options) => baseStore.read(sessionId, options),
+      close: () => baseStore.close(),
+      append: async (sessionId, events) => {
+        appendCount += 1;
+        if (appendCount === 3) {
+          completionAppendStarted?.();
+          await completionAppendRelease;
+          throw completionPersistenceError;
+        }
+        if (appendCount === 4) {
+          throw failedTerminalPersistenceError;
+        }
+        return baseStore.append(sessionId, events);
+      },
+    };
+    const runner = createAgentRunner({
+      llm: recordingClient([{ type: 'finish', reason: 'stop' }], []),
+      sessionStore: store,
+    });
+    const iterator = runner.run(validRequest)[Symbol.asyncIterator]();
+    const pendingNext = iterator.next();
+    await completionAppendReady;
+
+    const returnPromise = iterator.return?.();
+    releaseCompletionAppend?.();
+
+    await expect(pendingNext).resolves.toMatchObject({ done: true });
+    await expect(returnPromise).rejects.toEqual(
+      expect.objectContaining({
+        errors: [completionPersistenceError, failedTerminalPersistenceError],
+      }),
+    );
+    expect(projectSession(await baseStore.read('session-1')).turns[0]).toMatchObject({
+      status: 'running',
+      steps: [{ status: 'running' }],
+    });
+
+    await baseStore.close();
+  });
+
   it('preserves failed terminal events as one ordered batch without an assistant message', async () => {
     const recordingStore = recordingSessionEventStore();
     const runner = createAgentRunner({
@@ -851,6 +976,285 @@ describe('Agent Runner contracts', () => {
     await expect(collect(runner.run(validRequest))).rejects.toMatchObject({
       code: 'agent-stream-protocol',
     });
+
+    await store.close();
+  });
+
+  it('serializes concurrent empty-Session runs within one Runner', async () => {
+    const baseStore = createInMemorySessionEventStore();
+    let readCount = 0;
+    let releaseFirstRead: (() => void) | undefined;
+    let firstReadStarted: (() => void) | undefined;
+    const firstReadStartedPromise = new Promise<void>((resolve) => {
+      firstReadStarted = resolve;
+    });
+    const firstReadRelease = new Promise<void>((resolve) => {
+      releaseFirstRead = resolve;
+    });
+    const store: SessionEventStore = {
+      append: (sessionId, events) => baseStore.append(sessionId, events),
+      close: () => baseStore.close(),
+      read: async (sessionId, options) => {
+        readCount += 1;
+        if (readCount === 1) {
+          firstReadStarted?.();
+          await firstReadRelease;
+        }
+        return baseStore.read(sessionId, options);
+      },
+    };
+    const requests: LlmRequest[] = [];
+    let releaseFirst: (() => void) | undefined;
+    let firstStarted: (() => void) | undefined;
+    const firstStartedPromise = new Promise<void>((resolve) => {
+      firstStarted = resolve;
+    });
+    const firstRelease = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const runner = createAgentRunner({
+      llm: {
+        async *stream(request): AsyncIterable<StreamEvent> {
+          requests.push(structuredClone(request));
+          if (requests.length === 1) {
+            firstStarted?.();
+            await firstRelease;
+          }
+          yield { type: 'finish', reason: 'stop' };
+        },
+      },
+      sessionStore: store,
+    });
+
+    const firstRun = collect(
+      runner.run({
+        ...validRequest,
+        userMessage: {
+          role: 'user',
+          content: [{ type: 'text', text: '第一条消息' }],
+        },
+      }),
+    );
+    await firstReadStartedPromise;
+    const secondRun = collect(
+      runner.run({
+        ...validRequest,
+        userMessage: {
+          role: 'user',
+          content: [{ type: 'text', text: '第二条消息' }],
+        },
+      }),
+    );
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    expect(readCount).toBe(1);
+    expect(requests).toHaveLength(0);
+
+    releaseFirstRead?.();
+    await firstStartedPromise;
+    expect(requests).toHaveLength(1);
+    releaseFirst?.();
+    await expect(Promise.all([firstRun, secondRun])).resolves.toHaveLength(2);
+
+    const events = await baseStore.read('session-1');
+    expect(events.filter(({ type }) => type === 'session.created')).toHaveLength(1);
+    expect(requests.map(({ messages }) => messages)).toEqual([
+      [
+        {
+          role: 'user',
+          content: [{ type: 'text', text: '第一条消息' }],
+        },
+      ],
+      [
+        {
+          role: 'user',
+          content: [{ type: 'text', text: '第一条消息' }],
+        },
+        {
+          role: 'user',
+          content: [{ type: 'text', text: '第二条消息' }],
+        },
+      ],
+    ]);
+
+    await baseStore.close();
+  });
+
+  it('serializes concurrent existing-Session runs without cross-request messages', async () => {
+    const baseStore = createInMemorySessionEventStore();
+    await baseStore.append('session-1', [
+      { type: 'session.created', payload: { title: 'Existing' } },
+      {
+        type: 'message.created',
+        payload: {
+          messageId: 'existing-message',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: '已有上下文' }],
+          },
+        },
+      },
+    ]);
+    let readCount = 0;
+    let releaseFirstRead: (() => void) | undefined;
+    let firstReadStarted: (() => void) | undefined;
+    const firstReadStartedPromise = new Promise<void>((resolve) => {
+      firstReadStarted = resolve;
+    });
+    const firstReadRelease = new Promise<void>((resolve) => {
+      releaseFirstRead = resolve;
+    });
+    const store: SessionEventStore = {
+      append: (sessionId, events) => baseStore.append(sessionId, events),
+      close: () => baseStore.close(),
+      read: async (sessionId, options) => {
+        readCount += 1;
+        if (readCount === 1) {
+          firstReadStarted?.();
+          await firstReadRelease;
+        }
+        return baseStore.read(sessionId, options);
+      },
+    };
+    const requests: LlmRequest[] = [];
+    let releaseFirst: (() => void) | undefined;
+    let firstStarted: (() => void) | undefined;
+    const firstStartedPromise = new Promise<void>((resolve) => {
+      firstStarted = resolve;
+    });
+    const firstRelease = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const runner = createAgentRunner({
+      llm: {
+        async *stream(request): AsyncIterable<StreamEvent> {
+          requests.push(structuredClone(request));
+          if (requests.length === 1) {
+            firstStarted?.();
+            await firstRelease;
+          }
+          yield { type: 'finish', reason: 'stop' };
+        },
+      },
+      sessionStore: store,
+    });
+
+    const firstRun = collect(
+      runner.run({
+        ...validRequest,
+        userMessage: {
+          role: 'user',
+          content: [{ type: 'text', text: '已有会话第一条' }],
+        },
+      }),
+    );
+    await firstReadStartedPromise;
+    const secondRun = collect(
+      runner.run({
+        ...validRequest,
+        userMessage: {
+          role: 'user',
+          content: [{ type: 'text', text: '已有会话第二条' }],
+        },
+      }),
+    );
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    expect(readCount).toBe(1);
+    expect(requests).toHaveLength(0);
+
+    releaseFirstRead?.();
+    await firstStartedPromise;
+    expect(requests).toHaveLength(1);
+    releaseFirst?.();
+    await expect(Promise.all([firstRun, secondRun])).resolves.toHaveLength(2);
+
+    const events = await baseStore.read('session-1');
+    expect(events.filter(({ type }) => type === 'session.created')).toHaveLength(1);
+    expect(requests.map(({ messages }) => messages)).toEqual([
+      [
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: '已有上下文' }],
+        },
+        {
+          role: 'user',
+          content: [{ type: 'text', text: '已有会话第一条' }],
+        },
+      ],
+      [
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: '已有上下文' }],
+        },
+        {
+          role: 'user',
+          content: [{ type: 'text', text: '已有会话第一条' }],
+        },
+        {
+          role: 'user',
+          content: [{ type: 'text', text: '已有会话第二条' }],
+        },
+      ],
+    ]);
+
+    await baseStore.close();
+  });
+
+  it('cancels a run waiting in the Session queue without invoking the model', async () => {
+    const store = createInMemorySessionEventStore();
+    let releaseFirst: (() => void) | undefined;
+    let firstStarted: (() => void) | undefined;
+    const firstStartedPromise = new Promise<void>((resolve) => {
+      firstStarted = resolve;
+    });
+    const firstRelease = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let streamCalls = 0;
+    const runner = createAgentRunner({
+      llm: {
+        async *stream(): AsyncIterable<StreamEvent> {
+          streamCalls += 1;
+          if (streamCalls === 1) {
+            firstStarted?.();
+            await firstRelease;
+          }
+          yield { type: 'finish', reason: 'stop' };
+        },
+      },
+      sessionStore: store,
+    });
+    const firstRun = collect(runner.run(validRequest));
+    await firstStartedPromise;
+
+    const queuedStream = runner.run({
+      ...validRequest,
+      userMessage: {
+        role: 'user',
+        content: [{ type: 'text', text: '不应执行' }],
+      },
+    });
+    const queuedIterator = queuedStream[Symbol.asyncIterator]();
+    const queuedNext = queuedIterator.next();
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    expect(streamCalls).toBe(1);
+
+    const queuedReturn = queuedIterator.return?.();
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    releaseFirst?.();
+
+    await expect(firstRun).resolves.toEqual([{ type: 'completed', turnId: expect.any(String) }]);
+    await expect(queuedNext).resolves.toMatchObject({ done: true });
+    await expect(queuedReturn).resolves.toEqual({ done: true, value: undefined });
+    expect(streamCalls).toBe(1);
+    expect(
+      (await store.read('session-1')).filter(
+        ({ type, payload }) =>
+          type === 'message.created' &&
+          payload.message.role === 'user' &&
+          payload.message.content[0]?.type === 'text' &&
+          payload.message.content[0].text === '不应执行',
+      ),
+    ).toHaveLength(0);
 
     await store.close();
   });

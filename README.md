@@ -85,6 +85,11 @@ currently exposes only `GET /health`; there is no HTTP `/run` or SSE adapter.
 validates the request, recovers the Session through `projectSession()`, calls
 `LlmClient.stream()`, yields transient `AgentRuntimeEvent` values, and appends
 durable Session events for the completed, failed, or cancelled lifecycle.
+Runs for the same Session are serialized within one `AgentRunner` instance so
+Session reads, appends, and model context construction do not interleave.
+Separate Runner instances and processes are not coordinated by the current
+`SessionEventStore` contract; cross-instance leasing or compare-and-swap
+belongs to a future Session concurrency slice.
 
 ```ts
 import { createMockLlmClient } from '@weave/llm';

@@ -67,6 +67,14 @@ messages directly from raw events. An existing Session is continued without
 adding another `session.created`; its projected messages, followed by the new
 user message, become the next LLM request.
 
+Within one `AgentRunner` instance, executions for the same Session use a
+small in-memory queue. This keeps the Session read, initialization append,
+model context construction, stream, and terminal append for one run together,
+so concurrent calls cannot duplicate `session.created` or mix messages. The
+current `SessionEventStore` contract has no CAS or lease operation, so separate
+Runner instances and processes are not coordinated; that belongs to a future
+Session concurrency slice.
+
 Runtime events are not durable Session events. Deltas are for live consumers
 and are never appended individually. Durable events describe the completed
 assistant message and lifecycle state used for recovery, timelines, and

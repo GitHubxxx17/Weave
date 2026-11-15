@@ -34,8 +34,40 @@ function createAbortError(): DOMException {
 
 /**
  * Creates a Runner for normal, no-tool model turns.
+ *
+ * The queue is intentionally local to this Runner. The current
+ * SessionEventStore contract has no cross-process lease or CAS primitive.
  */
 export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
+  const sessionQueues = new Map<string, Promise<void>>();
+
+  const enqueueSessionExecution = (
+    sessionId: string,
+    shouldRun: () => boolean,
+    task: () => Promise<void>,
+  ): Promise<void> => {
+    const previous = sessionQueues.get(sessionId) ?? Promise.resolve();
+    const execution = previous.then(async () => {
+      if (shouldRun()) {
+        await task();
+      }
+    });
+    const tracked = execution.then(
+      () => {
+        if (sessionQueues.get(sessionId) === tracked) {
+          sessionQueues.delete(sessionId);
+        }
+      },
+      () => {
+        if (sessionQueues.get(sessionId) === tracked) {
+          sessionQueues.delete(sessionId);
+        }
+      },
+    );
+    sessionQueues.set(sessionId, tracked);
+    return execution;
+  };
+
   return {
     run(requestInput): AsyncIterable<AgentRuntimeEvent> {
       const requestResult = agentRunRequestSchema.safeParse(requestInput);
@@ -59,7 +91,8 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
       let executionPromise: Promise<void> | undefined;
       let lifecycleStarted = false;
       let terminalPersisted = false;
-      let terminalAppendStarted = false;
+      let terminalAppendPromise: Promise<void> | undefined;
+      let terminalOutcome: 'completed' | 'failed' | 'cancelled' | undefined;
       let sessionId: string | undefined;
       let turnId: string | undefined;
       let stepId: string | undefined;
@@ -107,24 +140,36 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
         events: readonly NewSessionEvent[],
         primaryError?: unknown,
         hasPrimaryError = false,
+        outcome: 'completed' | 'failed' | 'cancelled' = 'failed',
       ): Promise<void> => {
-        if (
-          !lifecycleStarted ||
-          terminalPersisted ||
-          terminalAppendStarted ||
-          sessionId === undefined
-        ) {
+        if (!lifecycleStarted || terminalPersisted || sessionId === undefined) {
           return;
         }
-        terminalAppendStarted = true;
+        if (terminalAppendPromise !== undefined) {
+          return terminalAppendPromise;
+        }
+        if (terminalOutcome !== undefined) {
+          return;
+        }
+        const activeSessionId = sessionId;
+        terminalOutcome = outcome;
+        const appendPromise = Promise.resolve()
+          .then(() => options.sessionStore.append(activeSessionId, events))
+          .then(() => {
+            terminalPersisted = true;
+          });
+        terminalAppendPromise = appendPromise;
         try {
-          await options.sessionStore.append(sessionId, events);
-          terminalPersisted = true;
+          await appendPromise;
         } catch (persistenceError: unknown) {
           if (hasPrimaryError) {
             throw createTerminalPersistenceError(primaryError, persistenceError);
           }
           throw persistenceError;
+        } finally {
+          if (terminalAppendPromise === appendPromise) {
+            terminalAppendPromise = undefined;
+          }
         }
       };
 
@@ -252,12 +297,21 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
             throw new AgentRunError('agent-stream-protocol', 'Agent stream did not finish');
           }
 
-          await appendTerminal(terminalEvents('completed', undefined, assistantText));
+          await appendTerminal(
+            terminalEvents('completed', undefined, assistantText),
+            undefined,
+            false,
+            'completed',
+          );
           emit({ type: 'completed', turnId });
           finish();
         } catch (primaryError: unknown) {
-          if (lifecycleStarted && !terminalPersisted && !terminalAppendStarted) {
-            const cancelled = isCancellation(primaryError, signal);
+          const completionPersistenceFailed = terminalOutcome === 'completed';
+          if (completionPersistenceFailed) {
+            terminalOutcome = undefined;
+          }
+          if (lifecycleStarted && !terminalPersisted && terminalOutcome === undefined) {
+            const cancelled = !completionPersistenceFailed && isCancellation(primaryError, signal);
             try {
               await appendTerminal(
                 terminalEvents(
@@ -275,6 +329,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
                 ),
                 primaryError,
                 true,
+                cancelled ? 'cancelled' : 'failed',
               );
             } catch (persistenceError: unknown) {
               finish(persistenceError, true);
@@ -292,7 +347,10 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
           return;
         }
         started = true;
-        executionPromise = execute();
+        executionPromise =
+          request === undefined
+            ? execute()
+            : enqueueSessionExecution(request.sessionId, () => !stopped, execute);
         void executionPromise;
       };
 
@@ -323,15 +381,22 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
             return { done: true, value: undefined };
           }
           stopped = true;
+          queuedEvents.length = 0;
           internalController.abort(createAbortError());
           let returnError: unknown;
           let hasReturnError = false;
-          if (lifecycleStarted && !terminalPersisted && !terminalAppendStarted) {
+          if (
+            lifecycleStarted &&
+            !terminalPersisted &&
+            terminalAppendPromise === undefined &&
+            terminalOutcome === undefined
+          ) {
             try {
               await appendTerminal(
                 terminalEvents('cancelled', 'cancelled'),
                 createAbortError(),
                 true,
+                'cancelled',
               );
             } catch (error: unknown) {
               returnError = error;
@@ -344,6 +409,9 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
           if (hasReturnError) {
             finish(returnError, true);
             throw returnError;
+          }
+          if (hasExecutionError && !terminalPersisted) {
+            throw executionError;
           }
           finish();
           return { done: true, value: undefined };

@@ -47,6 +47,13 @@ Weave 已经具备三项可以组合的基础能力：
 8. 不依赖 HTTP、Hono、React、SQLite 具体 API 或 Provider SDK；
 9. 通过 In-Memory LLM 和 Session Store 完成确定性测试。
 
+同一个 `AgentRunner` 实例会按 `sessionId` 串行执行 Agent Run，覆盖
+Session 读取、初始化事件追加、模型上下文构造、模型流和终态追加。这样同一
+Session 的并发调用不会重复 `session.created`，也不会把一个请求的消息混入
+另一个请求。当前 `SessionEventStore` 没有 CAS 或 lease 接口，因此不同
+Runner 实例或不同进程之间不提供并发协调；跨实例协调属于后续 Session
+并发切片，不在本轮扩展公共 API。
+
 ## 3. 非目标
 
 本轮明确不实现：
