@@ -55,7 +55,7 @@ git commit -m "docs: 设计 Agent Tool Loop"
 - Produces: `tool-call.created`, `tool-result.created`,
   `SessionToolCall`, `SessionToolResult`, and projected Turn collections.
 
-- [ ] **Step 1: Write failing schema and projection tests**
+- [x] **Step 1: Write failing schema and projection tests**
 
 Test that a valid tool call/result event parses, an invalid reference fails,
 and a complete sequence projects:
@@ -114,7 +114,7 @@ expect(projectSession(events).turns[0]).toMatchObject({
 });
 ```
 
-- [ ] **Step 2: Run the focused tests and verify failure**
+- [x] **Step 2: Run the focused tests and verify failure**
 
 ```bash
 pnpm exec vitest run packages/session/test/schemas.test.ts packages/session/test/projection.test.ts --config vitest.config.ts
@@ -123,13 +123,13 @@ pnpm exec vitest run packages/session/test/schemas.test.ts packages/session/test
 Expected: TypeScript or assertion failures because the new event types do not
 exist yet.
 
-- [ ] **Step 3: Implement schemas and projection**
+- [x] **Step 3: Implement schemas and projection**
 
 Add Zod payload schemas, persisted event variants, projection collections, and
 reference/order checks. Keep tool messages as ordinary protocol messages so
 the next LLM request can be rebuilt from `projectSession().messages`.
 
-- [ ] **Step 4: Run Session tests**
+- [x] **Step 4: Run Session tests**
 
 ```bash
 pnpm exec vitest run packages/session/test/schemas.test.ts packages/session/test/projection.test.ts --config vitest.config.ts
@@ -137,7 +137,7 @@ pnpm exec vitest run packages/session/test/schemas.test.ts packages/session/test
 
 Expected: focused Session tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/session/src packages/session/test
@@ -156,7 +156,7 @@ git commit -m "feat: 增加工具调用 Session 事件"
   `ToolExecutionResult`.
 - Produces: tool runtime events, `maxSteps`, and new stable error codes.
 
-- [ ] **Step 1: Write failing contract tests**
+- [x] **Step 1: Write failing contract tests**
 
 Add tests that expect:
 
@@ -170,19 +170,19 @@ expect(agentRuntimeEventSchema.parse({
 Also test that a runner configured with only `toolRegistry` or only
 `toolPipeline` rejects its configuration.
 
-- [ ] **Step 2: Run tests and verify failure**
+- [x] **Step 2: Run tests and verify failure**
 
 ```bash
 pnpm exec vitest run packages/runtime/test/agent-runner.test.ts --config vitest.config.ts
 ```
 
-- [ ] **Step 3: Add contract types and validation**
+- [x] **Step 3: Add contract types and validation**
 
 Add `tool-call`, `tool-executing`, and `tool-result` runtime events; add
 `agent-step-limit` and `agent-tool-call-invalid`; add `maxSteps` to the
 validated request/options boundary. Export the types from Runtime.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 ```bash
 pnpm exec vitest run packages/runtime/test/agent-runner.test.ts --config vitest.config.ts
@@ -201,7 +201,7 @@ pnpm exec vitest run packages/runtime/test/agent-runner.test.ts --config vitest.
 - Produces: multi-round model requests, durable tool events, and transient
   tool lifecycle events.
 
-- [ ] **Step 1: Write failing end-to-end Runner tests**
+- [x] **Step 1: Write failing end-to-end Runner tests**
 
 Use a fake LLM that records requests and returns:
 
@@ -220,7 +220,7 @@ Assert that the pipeline ran once, the second request contains an assistant
 tool-call message and a tool message, and the final projection contains the
 tool call/result events.
 
-- [ ] **Step 2: Verify the expected failure**
+- [x] **Step 2: Verify the expected failure**
 
 ```bash
 pnpm exec vitest run packages/runtime/test/agent-runner.test.ts --config vitest.config.ts
@@ -228,7 +228,7 @@ pnpm exec vitest run packages/runtime/test/agent-runner.test.ts --config vitest.
 
 Expected: the current Runner returns `agent-tool-call-unsupported`.
 
-- [ ] **Step 3: Implement minimal round execution**
+- [x] **Step 3: Implement minimal round execution**
 
 Create focused local helpers for:
 
@@ -242,12 +242,12 @@ Execute tool calls sequentially through `toolPipeline.execute()`. On a
 Pipeline error, persist failed tool result/Step and failed Turn, then rethrow
 the original `ToolExecutionError`.
 
-- [ ] **Step 4: Add loop safety and cancellation**
+- [x] **Step 4: Add loop safety and cancellation**
 
 Enforce `maxSteps`, propagate the combined AbortSignal into both LLM and
 Pipeline requests, and preserve iterator `return()` behavior.
 
-- [ ] **Step 5: Run all Runtime tests**
+- [x] **Step 5: Run all Runtime tests**
 
 ```bash
 pnpm exec vitest run packages/runtime/test --config vitest.config.ts
@@ -255,7 +255,7 @@ pnpm exec vitest run packages/runtime/test --config vitest.config.ts
 
 Expected: existing no-tool tests and new Tool Loop tests pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add packages/runtime/src packages/runtime/test
@@ -268,17 +268,17 @@ git commit -m "feat: 增加 Agent 多步工具循环"
 - Modify: `docs/architecture/foundation.md`
 - Modify: `README.md`
 
-- [ ] **Step 1: Update architecture**
+- [x] **Step 1: Update architecture**
 
 Document the Session tool events, Runner loop, Pipeline boundary, sequential
 execution, and max step safety limit.
 
-- [ ] **Step 2: Update README**
+- [x] **Step 2: Update README**
 
 Add a concise Tool Loop section and clarify that Agent `/run` and Agent SSE
 remain future HTTP adapters.
 
-- [ ] **Step 3: Format and commit**
+- [x] **Step 3: Format and commit**
 
 ```bash
 pnpm exec prettier --write README.md docs/architecture/foundation.md
@@ -291,9 +291,9 @@ git commit -m "docs: 补充 Agent Tool Loop 架构说明"
 **Files:**
 - Modify: `docs/superpowers/plans/2026-11-15-agent-tool-loop.md`
 
-- [ ] **Step 1: Mark verified plan steps**
+- [x] **Step 1: Mark verified plan steps**
 
-- [ ] **Step 2: Run focused and complete verification**
+- [x] **Step 2: Run focused and complete verification**
 
 ```bash
 pnpm format:check
@@ -301,13 +301,13 @@ pnpm check
 git diff --check
 ```
 
-- [ ] **Step 3: Create Feishu learning document**
+- [x] **Step 3: Create Feishu learning document**
 
 Create `13 Weave Agent Tool Loop：从模型工具调用到安全执行` in folder
 `IaaUfCD1klneledtbUycz7bLndh`, then append the progress to the Feishu total
 plan.
 
-- [ ] **Step 4: Commit plan record**
+- [x] **Step 4: Commit plan record**
 
 ```bash
 git add docs/superpowers/plans/2026-11-15-agent-tool-loop.md
