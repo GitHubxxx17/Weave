@@ -189,10 +189,7 @@ describe('Approval Broker', () => {
       status: 'approved',
       reason: '用户确认',
     });
-    expect(events.map((event) => event.type)).toEqual([
-      'approval.created',
-      'approval.resolved',
-    ]);
+    expect(events.map((event) => event.type)).toEqual(['approval.created', 'approval.resolved']);
     expect(events[0]?.request.status).toBe('pending');
     expect(events[1]?.request.status).toBe('approved');
   });
@@ -249,10 +246,7 @@ describe('Approval Broker', () => {
     broker.approve(pending.approvalId);
 
     await expect(decisionPromise).resolves.toMatchObject({ status: 'approved' });
-    expect(events.map((event) => event.type)).toEqual([
-      'approval.created',
-      'approval.resolved',
-    ]);
+    expect(events.map((event) => event.type)).toEqual(['approval.created', 'approval.resolved']);
   });
 
   it('publishes immutable snapshots and preserves event order for zero timeout', async () => {

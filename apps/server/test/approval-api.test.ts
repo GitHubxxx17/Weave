@@ -33,9 +33,7 @@ function createPendingApproval(broker: ApprovalBroker): {
   return { approvalId: request.approvalId, decision };
 }
 
-async function readStreamChunk(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-): Promise<string> {
+async function readStreamChunk(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> {
   const result = await reader.read();
   if (result.done || result.value === undefined) {
     throw new Error('Expected an SSE chunk');
@@ -226,9 +224,9 @@ describe('Approval HTTP API', () => {
       );
 
       const pending = createPendingApproval(broker);
-      await expect(
-        readUntil(reader, `"approvalId":"${pending.approvalId}"`),
-      ).resolves.toContain('event: approval.created');
+      await expect(readUntil(reader, `"approvalId":"${pending.approvalId}"`)).resolves.toContain(
+        'event: approval.created',
+      );
 
       broker.approve(pending.approvalId, '实时批准');
       await expect(pending.decision).resolves.toMatchObject({ status: 'approved' });

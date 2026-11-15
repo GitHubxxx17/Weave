@@ -105,11 +105,7 @@ function mapUnexpectedError(context: Context): Response {
   return jsonError(context, 500, 'approval-internal-error', 'Approval request failed');
 }
 
-function encodeSseEvent(
-  encoder: TextEncoder,
-  event: string,
-  data: unknown,
-): Uint8Array {
+function encodeSseEvent(encoder: TextEncoder, event: string, data: unknown): Uint8Array {
   return encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
