@@ -1,7 +1,7 @@
 import { serve, type ServerType } from '@hono/node-server';
 import { z } from 'zod';
 import { createApp } from './app.js';
-import { approvalBrokerService, createServerRuntime } from './runtime.js';
+import { approvalBrokerService, createServerAgentRunner, createServerRuntime } from './runtime.js';
 
 const portSchema = z.coerce.number().int().min(1).max(65535);
 const defaultPort = 4317;
@@ -43,6 +43,13 @@ export async function startServer(portInput: string | number = process.env.PORT 
   const port = portSchema.parse(portInput);
   const runtime = createServerRuntime();
   await runtime.start();
+  let agentRunner;
+  try {
+    agentRunner = createServerAgentRunner(runtime);
+  } catch (error) {
+    await runtime.stop();
+    throw error;
+  }
 
   let resolveListening!: () => void;
   let rejectListening!: (error: unknown) => void;
@@ -52,7 +59,7 @@ export async function startServer(portInput: string | number = process.env.PORT 
   });
   const server = serve(
     {
-      fetch: createApp(runtime, { approvalBrokerService }).fetch,
+      fetch: createApp(runtime, { approvalBrokerService, agentRunner }).fetch,
       hostname: '127.0.0.1',
       port,
     },

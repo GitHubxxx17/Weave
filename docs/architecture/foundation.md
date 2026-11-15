@@ -6,10 +6,10 @@ maintenance guide, not a replacement for the package APIs or tests.
 
 ## The Request Path
 
-The Server exposes a health check and a thin Approval control plane with REST
-and SSE adapters. The Agent Runner is still a Runtime API used directly by
-tests, CLI, or desktop callers; it is not exposed through an HTTP `/run`
-endpoint yet.
+The Server exposes a health check, a thin Approval control plane with REST and
+SSE adapters, and a thin Agent POST + SSE adapter. The Agent Runner remains a
+Runtime API used directly by tests, CLI, desktop callers, and the Server
+composition root; Server only transports its transient events.
 
 ```mermaid
 flowchart LR
@@ -23,6 +23,26 @@ flowchart LR
     H --> I[Zod health response]
     I --> J[200 running or 503 unavailable]
 ```
+
+Agent execution follows a separate adapter path:
+
+```mermaid
+flowchart LR
+    A[HTTP POST /agent/runs/stream] --> B[Zod body validation]
+    B --> C[Injected AgentRunner]
+    C --> D[Runtime LlmClient]
+    C --> E[Runtime ToolPipeline]
+    C --> F[SessionEventStore]
+    C --> G[AgentRuntimeEvent]
+    G --> H[SSE event/data frame]
+    H --> I[Browser fetch ReadableStream]
+```
+
+The Server does not create a model client per request or invoke a tool
+definition directly. `main.ts` starts the Runtime, resolves its LLM and
+Session Store services, creates one `AgentRunner` in the composition root, and
+injects it into `createApp()`. Tests can inject a fake Runner without a real
+provider or TCP socket.
 
 Approval control requests follow a separate path:
 
@@ -233,8 +253,12 @@ The Broker subscription is deliberately a transient, single-process contract.
 The SSE adapter removes its listener when the request aborts, the stream is
 cancelled, or writing fails. The snapshot is a connection initialization view,
 not a durable event; disconnected clients cannot replay missed events through
-this interface. HTTP and SSE for Agent execution are future adapters that will
-consume `AgentRuntimeEvent`; they must not reimplement the Agent Loop.
+this interface. Agent execution uses the same transient-event principle
+through `POST /agent/runs/stream`: the adapter maps each
+`AgentRuntimeEvent.type` to the SSE `event` field and serializes the complete
+event as JSON in `data`. A cancelled stream invokes the current AsyncIterator's
+`return()` and removes the request listener; it does not create a second
+cancellation state machine.
 
 ## Layer Boundaries
 
@@ -337,14 +361,20 @@ keeps the development endpoint off the network by default and makes the
 security intent explicit. A later deployment surface can choose a different
 binding as part of a deliberate operational configuration.
 
-### Why There Is No HTTP `/run`
+### Why Agent HTTP Uses POST + SSE
 
-The Agent Loop now exists behind `createAgentRunner()`, but `/run` would still
-be an HTTP adapter contract with request streaming, response framing,
-cancellation, and eventual SSE policy. Keeping it out of Server preserves a
-thin control plane. A later HTTP/SSE adapter can consume the Runtime's
-`AgentRuntimeEvent` values without duplicating Session recovery or model-loop
-behavior.
+`POST /agent/runs/stream` is the smallest browser-facing adapter for the
+current Runtime contract. The request needs a JSON body containing the Session,
+user message, provider, and model, so `fetch()` is a better fit than
+`EventSource`, whose standard contract is a GET subscription without a JSON
+body. The response is still a normal SSE stream, so text deltas, reasoning,
+Tool Calls, tool results, completion, and errors can arrive incrementally.
+
+The adapter does not introduce a Run Registry, `runId`, Last-Event-ID, replay,
+or a separate durable run state. Those features are necessary for background
+tasks and page refresh recovery, but adding them now would duplicate transient
+Runtime state before Weave has a recovery contract for it. A later registry can
+subscribe to the same Runner events without changing the Runtime Agent Loop.
 
 ## AI Editing Checklist
 

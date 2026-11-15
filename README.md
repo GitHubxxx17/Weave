@@ -14,12 +14,12 @@ remains a separate reference project and is not copied into this repository.
 ## Status
 
 The Foundation vertical slice, Session persistence, the headless Agent Tool
-Loop, the shared Tool Pipeline, and the Approval HTTP control plane are
-implemented. `@weave/protocol`, `@weave/llm`, `@weave/session`,
-`@weave/runtime`, and `@weave/server` form the current architecture. Agent
-HTTP/SSE adapters, Shell/Sandbox hardening, Plugin loading, and Studio UI
-remain later phases. The first protected Workspace file tools are now
-available in `@weave/runtime`.
+Loop, the shared Tool Pipeline, the Approval HTTP control plane, and the Agent
+HTTP/SSE adapter are implemented. `@weave/protocol`, `@weave/llm`,
+`@weave/session`, `@weave/runtime`, and `@weave/server` form the current
+architecture. Shell/Sandbox hardening, Plugin loading, and Studio UI remain
+later phases. The first protected Workspace file tools are now available in
+`@weave/runtime`.
 
 Start with the [Foundation architecture guide](docs/architecture/foundation.md)
 for the request path, package boundaries, and AI editing checklist. The
@@ -79,8 +79,9 @@ relative source imports, and HTTP/UI imports from `runtime`.
 
 Server does not contain the Agent Loop because HTTP should remain a thin
 control-plane boundary while agent behavior belongs in the runtime. Server
-exposes `GET /health` and the Approval REST/SSE control plane; there is still
-no HTTP `/run` or Agent execution SSE adapter.
+exposes `GET /health`, the Approval REST/SSE control plane, and a POST + SSE
+adapter for one Agent turn. The adapter consumes the same Runtime event stream
+used by CLI and tests; it does not implement model calls or tool execution.
 
 ## Agent Runner
 
@@ -125,10 +126,53 @@ for await (const event of runner.run({
 }
 ```
 
-The Runner still does not expose HTTP `/run`. Without a paired Registry and
-Pipeline, Tool Calls return `agent-tool-call-unsupported`; malformed Tool Call
-streams return `agent-tool-call-invalid`. Agent execution HTTP/SSE will be a
-later adapter over the Runtime event stream.
+Without a paired Registry and Pipeline, Tool Calls return
+`agent-tool-call-unsupported`; malformed Tool Call streams return
+`agent-tool-call-invalid`. The Server exposes the Runner through the following
+thin HTTP adapter:
+
+```text
+POST /agent/runs/stream
+Content-Type: application/json
+Accept: text/event-stream
+```
+
+The request contains the same Agent fields as the Runtime contract, except the
+HTTP caller cannot provide an `AbortSignal`:
+
+```json
+{
+  "sessionId": "session-1",
+  "userMessage": {
+    "role": "user",
+    "content": [{ "type": "text", "text": "Say hello" }]
+  },
+  "provider": "mock",
+  "model": "test-model"
+}
+```
+
+The response uses one SSE event for each `AgentRuntimeEvent`:
+
+```text
+event: text-delta
+data: {"type":"text-delta","text":"Hello"}
+
+event: completed
+data: {"type":"completed","turnId":"..."}
+```
+
+Before the stream is created, invalid JSON or invalid fields return `400`, and
+an App without an injected Runner returns `503`. After the SSE response has
+started, Runtime failures become one `error` event and then close the stream.
+When the browser cancels the response or disconnects, the adapter calls the
+current Agent iterator's `return()` so the Runtime can persist its existing
+cancellation outcome.
+
+This phase intentionally uses `fetch()` rather than `EventSource`: the client
+must send a JSON body, while `EventSource` only supports GET and cannot set
+this request contract. It also does not add a `runId`, replay, or reconnection
+registry. Those belong to a later background-run design.
 
 Run the focused Agent Runner tests with:
 
@@ -426,6 +470,9 @@ consume the same runtime instead of implementing separate agent loops.
 
 - [Foundation architecture](docs/architecture/foundation.md): request flow,
   boundaries, examples, and interview explanation.
+- [Agent HTTP/SSE learning guide](docs/learning/2026-11-15-agent-http-sse.md):
+  request validation, SSE framing, cancellation, frontend consumption, and
+  interview explanation.
 - [ADR 0001](docs/adr/0001-foundation-vertical-slice.md): the decision and
   consequences behind the first vertical slice.
 - [Foundation design](docs/superpowers/specs/2026-11-14-weave-foundation-design.md):

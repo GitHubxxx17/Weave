@@ -4,6 +4,7 @@ import { createRuntime } from '@weave/runtime';
 import { createApp } from '../src/app.js';
 import {
   approvalBrokerService,
+  createServerAgentRunner,
   createServerRuntime,
   sessionEventStoreService,
 } from '../src/runtime.js';
@@ -66,6 +67,17 @@ describe('GET /health', () => {
     await expect(decision).rejects.toMatchObject({ code: 'approval-cancelled' });
     await first.stop();
     await second.stop();
+  });
+
+  it('assembles an Agent Runner from the running Runtime services', async () => {
+    const runtime = createServerRuntime();
+    await runtime.start();
+
+    expect(createServerAgentRunner(runtime)).toMatchObject({
+      run: expect.any(Function),
+    });
+
+    await runtime.stop();
   });
 
   it('returns an unavailable response before runtime starts', async () => {
