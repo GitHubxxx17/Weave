@@ -137,10 +137,16 @@ export async function streamAgentRun(
         const delimiterLength = buffer.startsWith('\r\n', delimiterIndex) ? 4 : 2;
         const frame = buffer.slice(0, delimiterIndex);
         buffer = buffer.slice(delimiterIndex + delimiterLength);
-        dispatchFrame(frame, handlers);
+        if (dispatchFrame(frame, handlers)) {
+          await cancelReader(reader);
+          return;
+        }
         delimiterIndex = findFrameDelimiter(buffer);
       }
     }
+  } catch (error: unknown) {
+    await cancelReader(reader);
+    throw error;
   } finally {
     reader.releaseLock();
   }
@@ -158,15 +164,25 @@ function findFrameDelimiter(buffer: string): number {
   return Math.min(lfIndex, crlfIndex);
 }
 
-function dispatchFrame(frame: string, handlers: AgentStreamHandlers): void {
+function dispatchFrame(frame: string, handlers: AgentStreamHandlers): boolean {
   const parsedFrame = parseSseFrame(frame);
   if (parsedFrame === null) {
-    return;
+    return false;
   }
 
   const event = parseAgentEvent(parsedFrame.event, parsedFrame.data);
   if (event !== null) {
     handlers.onEvent(event);
+    return event.type === 'completed';
+  }
+  return false;
+}
+
+async function cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
+  try {
+    await reader.cancel();
+  } catch {
+    // Preserve the original stream or protocol error if cancellation fails.
   }
 }
 

@@ -18,13 +18,15 @@ const request: AgentRunRequestInput = {
   model: 'demo',
 };
 
-function responseFromChunks(chunks: readonly Uint8Array[], status = 200): Response {
+function responseFromChunks(chunks: readonly Uint8Array[], status = 200, close = true): Response {
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
       for (const chunk of chunks) {
         controller.enqueue(chunk);
       }
-      controller.close();
+      if (close) {
+        controller.close();
+      }
     },
   });
 
@@ -40,6 +42,35 @@ function utf8(value: string): Uint8Array {
 
 function eventFrame(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+function crlfEventFrame(event: string, data: unknown): string {
+  return `event: ${event}\r\ndata: ${JSON.stringify(data)}\r\n\r\n`;
+}
+
+function responseWithCancelTracking(chunks: readonly Uint8Array[]): {
+  readonly response: Response;
+  readonly wasCancelled: () => boolean;
+} {
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(chunk);
+      }
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+
+  return {
+    response: new Response(body, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }),
+    wasCancelled: () => cancelled,
+  };
 }
 
 function collectEvents(): {
@@ -76,6 +107,52 @@ describe('SSE frame parsing', () => {
       text: 'ok',
     });
     expect(parseAgentEvent('future-event', '{}')).toBeNull();
+  });
+
+  it('validates every known event payload at the browser boundary', () => {
+    expect(
+      parseAgentEvent(
+        'tool-call',
+        '{"type":"tool-call","toolCall":{"id":"call-1","name":"echo","arguments":"{}"}}',
+      ),
+    ).toEqual({
+      type: 'tool-call',
+      toolCall: { id: 'call-1', name: 'echo', arguments: '{}' },
+    });
+    expect(
+      parseAgentEvent(
+        'tool-executing',
+        '{"type":"tool-executing","toolCall":{"id":"call-1","name":"echo","arguments":"{}"}}',
+      ),
+    ).toEqual({
+      type: 'tool-executing',
+      toolCall: { id: 'call-1', name: 'echo', arguments: '{}' },
+    });
+    expect(
+      parseAgentEvent(
+        'tool-result',
+        '{"type":"tool-result","result":{"toolCallId":"call-1","name":"echo","content":"ok","truncated":false}}',
+      ),
+    ).toEqual({
+      type: 'tool-result',
+      result: { toolCallId: 'call-1', name: 'echo', content: 'ok', truncated: false },
+    });
+    expect(parseAgentEvent('reasoning-delta', '{"type":"reasoning-delta","text":"分析"}')).toEqual({
+      type: 'reasoning-delta',
+      text: '分析',
+    });
+    expect(() => parseAgentEvent('tool-result', '{"type":"tool-result"}')).toThrowError(
+      'agent-stream-protocol: Agent stream event is invalid',
+    );
+    expect(() =>
+      parseAgentEvent('text-delta', '{"type":"reasoning-delta","text":"错位"}'),
+    ).toThrowError('agent-stream-protocol: Agent stream event is invalid');
+    expect(() => parseAgentEvent('text-delta', 'not-json')).toThrowError(
+      'agent-stream-protocol: Agent stream data is invalid',
+    );
+    expect(() => parseAgentEvent('error', '{"error":{"code":"x"}}')).toThrowError(
+      'agent-stream-protocol: Agent stream error is invalid',
+    );
   });
 });
 
@@ -120,6 +197,33 @@ describe('streamAgentRun', () => {
     expect(result.events).toEqual([{ type: 'completed', turnId: 'turn-1' }]);
   });
 
+  it('consumes CRLF frames from the actual response stream', async () => {
+    const response = responseFromChunks([
+      utf8(crlfEventFrame('text-delta', { type: 'text-delta', text: 'crlf' })),
+      utf8(crlfEventFrame('completed', { type: 'completed', turnId: 'turn-1' })),
+    ]);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(response);
+    const result = collectEvents();
+
+    await streamAgentRun(request, result);
+
+    expect(result.events).toEqual([
+      { type: 'text-delta', text: 'crlf' },
+      { type: 'completed', turnId: 'turn-1' },
+    ]);
+  });
+
+  it('cancels an open response after completed', async () => {
+    const tracked = responseWithCancelTracking([
+      utf8(eventFrame('completed', { type: 'completed', turnId: 'turn-1' })),
+    ]);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(tracked.response);
+
+    await streamAgentRun(request, collectEvents());
+
+    expect(tracked.wasCancelled()).toBe(true);
+  });
+
   it('preserves event order and stops after an SSE error', async () => {
     const response = responseFromChunks([
       utf8(eventFrame('text-delta', { type: 'text-delta', text: 'before' })),
@@ -139,6 +243,18 @@ describe('streamAgentRun', () => {
       message: 'agent-step-limit: Agent run failed',
     });
     expect(result.events).toEqual([{ type: 'text-delta', text: 'before' }]);
+  });
+
+  it('cancels an open response when the stream contains an invalid event', async () => {
+    const tracked = responseWithCancelTracking([
+      utf8('event: text-delta\ndata: {"type":"text-delta"}\n\n'),
+    ]);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(tracked.response);
+
+    await expect(streamAgentRun(request, collectEvents())).rejects.toThrowError(
+      'agent-stream-protocol: Agent stream event is invalid',
+    );
+    expect(tracked.wasCancelled()).toBe(true);
   });
 
   it('ignores unknown events while consuming known events', async () => {
