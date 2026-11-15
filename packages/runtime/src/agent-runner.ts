@@ -318,6 +318,8 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
         },
         async return(): Promise<IteratorResult<AgentRuntimeEvent>> {
           if (finished) {
+            stopped = true;
+            queuedEvents.length = 0;
             return { done: true, value: undefined };
           }
           stopped = true;

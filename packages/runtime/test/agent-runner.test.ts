@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { LlmClient } from '@weave/llm';
 import type { LlmRequest, StreamEvent } from '@weave/protocol';
 import {
@@ -464,6 +464,42 @@ describe('Agent Runner contracts', () => {
     });
 
     await store.close();
+  });
+
+  it('closes after execution finishes with a queued completion event', async () => {
+    const recordingStore = recordingSessionEventStore();
+    const runner = createAgentRunner({
+      llm: recordingClient(
+        [
+          { type: 'text-delta', text: '完成' },
+          { type: 'finish', reason: 'stop' },
+        ],
+        [],
+      ),
+      sessionStore: recordingStore.store,
+    });
+    const iterator = runner.run(validRequest)[Symbol.asyncIterator]();
+
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { type: 'text-delta', text: '完成' },
+    });
+    await vi.waitFor(async () => {
+      expect(projectSession(await recordingStore.store.read('session-1')).turns[0]).toMatchObject({
+        status: 'completed',
+        steps: [{ status: 'completed' }],
+      });
+    });
+
+    await expect(iterator.return?.()).resolves.toEqual({ done: true, value: undefined });
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+    expect(recordingStore.batches.map((batch) => batch.map(({ type }) => type))).toEqual([
+      ['session.created'],
+      ['message.created', 'turn.started', 'step.started'],
+      ['message.created', 'step.completed', 'turn.completed'],
+    ]);
+
+    await recordingStore.store.close();
   });
 
   it('does not start execution when next follows return before iteration starts', async () => {
