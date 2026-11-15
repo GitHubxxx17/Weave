@@ -2,7 +2,7 @@
 
 **日期：** 2026-11-15
 
-**状态：** 待审阅
+**状态：** 已确认，进入实施计划
 
 **目标阶段：** Weave Studio 的 Headless Agent 基础
 
@@ -111,7 +111,7 @@ Service Container 重构。
 ```ts
 interface AgentRunRequest {
   readonly sessionId: string;
-  readonly userMessage: Message;
+  readonly userMessage: UserMessage;
   readonly provider: string;
   readonly model: string;
   readonly temperature?: number;
