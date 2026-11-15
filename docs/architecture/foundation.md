@@ -118,10 +118,34 @@ UTF-8 byte limits. Callers must submit a normalized Tool Call to the Pipeline;
 they must not invoke a registered tool's `execute` function directly.
 
 The Pipeline deliberately does not provide file access, Shell execution,
-Workspace/Sandbox boundaries, Approval, Session persistence, HTTP, or SSE. A
-tool being registered means only that it can pass through this common lifecycle;
-it does not grant access to the host filesystem or network. Those capabilities
-will be added behind separate security boundaries.
+Workspace/Sandbox boundaries, Session persistence, HTTP, or SSE. It does,
+however, provide the shared Approval gate for tools that explicitly declare
+one. A tool being registered means only that it can pass through this common
+lifecycle; it does not grant access to the host filesystem or network. Resource
+access remains behind separate Workspace and future Sandbox boundaries.
+
+Approval is modeled as Runtime-owned transient live-control state:
+
+```text
+Tool Pipeline
+  -> Approval Broker
+    -> pending decision
+      -> approved / rejected / cancelled / expired
+  -> Tool Execute
+```
+
+The Pipeline validates tool input first, creates an Approval request from the
+tool's redacted summary, and invokes `execute` only after an `approved`
+decision. A protected tool without a configured Broker fails closed with
+`tool-approval-required`; it is never silently executed. Rejection, caller
+cancellation, and expiry happen before the tool implementation and therefore
+must not produce the tool's side effect.
+
+The Broker is currently an in-memory single-process service. It retains
+terminal snapshots for inspection, but it does not provide restart recovery,
+cross-process coordination, identity or role permissions, or durable audit
+events. Those concerns belong to a later Server/Studio control plane and must
+not be simulated by the first Runtime slice.
 
 The first Workspace boundary is a lexical `WorkspacePolicy` in
 `@weave/runtime`, followed by protected UTF-8 file tools:
@@ -130,7 +154,8 @@ The first Workspace boundary is a lexical `WorkspacePolicy` in
 Tool Pipeline
   -> Workspace Path Policy
     -> Workspace File Tools
-      -> future Approval/Sandbox
+        -> Approval gate
+          -> future Sandbox
 ```
 
 The policy requires an absolute Workspace root, accepts relative input paths,
@@ -144,8 +169,17 @@ only then call `readFile` or `writeFile`.
 `createWorkspaceFileTools()` exposes `read_file` and `write_file` as ordinary
 `ToolDefinition` values. They are registered in the shared `ToolRegistry` and
 must be called through `ToolPipeline`, so JSON parsing, Zod validation,
-cancellation, timeout classification, and result serialization remain
-consistent with every other Runtime tool.
+Approval, cancellation, timeout classification, and result serialization
+remain consistent with every other Runtime tool. `read_file` is not protected
+in this phase. `write_file` declares a high-risk `workspace.write_file`
+Approval requirement whose summary includes only path, byte count, and
+overwrite state, never the complete content.
+
+Approval does not replace Workspace policy or filesystem validation. The file
+tool still resolves the real root and target after approval, so a stale or
+unsafe path cannot become valid merely because a caller approved it. There is
+still residual TOCTOU risk between metadata checks and the final filesystem
+call; this is not yet a complete Sandbox.
 
 The file tools deliberately do not create parent directories. New writes use
 the exclusive `wx` flag by default; an existing regular file is replaced only

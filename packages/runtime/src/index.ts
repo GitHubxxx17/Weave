@@ -27,6 +27,7 @@ export {
 } from './tool-types.js';
 export type {
   ToolDefinition,
+  ToolApprovalRequirement,
   RegisteredToolDefinition,
   ToolExecutionContext,
   ToolExecutionErrorCode,
@@ -64,3 +65,19 @@ export type {
   WorkspaceFileTools,
 } from './workspace-file-types.js';
 export { createWorkspaceFileTools } from './workspace-file-tools.js';
+export {
+  ApprovalError,
+  approvalDecisionSchema,
+  approvalRequestSchema,
+  createApprovalRequestInputSchema,
+} from './approval-types.js';
+export type {
+  ApprovalBroker,
+  ApprovalDecision,
+  ApprovalErrorCode,
+  ApprovalRequest,
+  ApprovalRisk,
+  ApprovalStatus,
+  CreateApprovalRequestInput,
+} from './approval-types.js';
+export { createApprovalBroker } from './approval-broker.js';

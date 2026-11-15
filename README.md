@@ -135,12 +135,14 @@ pnpm exec vitest run packages/runtime/test/agent-runner.test.ts --config vitest.
 `createToolRegistry()` stores executable definitions by stable name, while
 `createToolPipeline()` is the only boundary allowed to invoke them. The
 Pipeline parses JSON arguments, validates them with the tool's Zod schema,
-passes a cooperative `AbortSignal`, maps cancellation and timeout failures to
-stable error codes, and limits returned content by UTF-8 byte length.
+pauses protected tools at an Approval gate, passes a cooperative `AbortSignal`,
+maps cancellation, timeout, and Approval failures to stable error codes, and
+limits returned content by UTF-8 byte length.
 
-The Pipeline does not itself access files, run Shell commands, request
-approval, or write Session events. File access belongs to Workspace-aware
-tools, while the Pipeline remains the shared lifecycle boundary around them.
+The Pipeline does not itself access files, run Shell commands, or write Session
+events. Approval is supplied by the Runtime's transient `ApprovalBroker`, while
+file access belongs to Workspace-aware tools. The Pipeline remains the shared
+lifecycle boundary around all of them.
 
 ```ts
 import { z } from 'zod';
@@ -162,6 +164,67 @@ const result = await pipeline.execute({
   arguments: '{"text":"hello"}',
 });
 ```
+
+Tools that can cause an external side effect declare an Approval requirement.
+The declaration must provide a stable operation name, a risk level, and a
+redacted summary function. The Pipeline creates a pending request after input
+validation and before `execute`; the tool cannot run until the caller approves
+the request.
+
+```ts
+import { createApprovalBroker, createToolPipeline, createToolRegistry } from '@weave/runtime';
+
+const registry = createToolRegistry();
+registry.register({
+  name: 'protected_echo',
+  description: 'Example protected operation',
+  parameters: { type: 'object', properties: { value: { type: 'string' } } },
+  inputSchema: z.object({ value: z.string() }),
+  approval: {
+    operation: 'example.protected_echo',
+    risk: 'medium',
+    summarize: ({ value }) => ({
+      summary: `执行受保护操作 ${value}`,
+      inputSummary: { value },
+    }),
+  },
+  execute: ({ value }) => value,
+});
+
+const approvalBroker = createApprovalBroker();
+const pipeline = createToolPipeline({ registry, approvalBroker });
+const execution = pipeline.execute({
+  toolCallId: 'call-approval-1',
+  name: 'protected_echo',
+  arguments: '{"value":"hello"}',
+});
+
+const pending = approvalBroker.list()[0];
+if (pending?.status === 'pending') {
+  approvalBroker.approve(pending.approvalId, '用户确认');
+}
+
+const result = await execution;
+```
+
+Approval has four terminal outcomes: `approved` continues to the tool,
+`rejected` returns `tool-approval-rejected`, and `cancelled` or `expired`
+return their corresponding stable errors. A request cancellation also cancels
+the pending Approval, so the protected tool is never invoked.
+
+`ApprovalBroker` is intentionally in-memory transient control state in this
+phase. It coordinates a live decision in one Runtime process, but it is not a
+durable audit log and does not recover pending requests after a restart. Session
+events remain append-only durable facts. A later Server/Studio layer can add
+durable approval audit events without making the Tool Pipeline depend on HTTP,
+SSE, or a particular UI.
+
+Approval also does not replace `WorkspacePolicy`, filesystem checks, or a
+future Sandbox. Approval answers “did the caller allow this operation?”;
+Workspace and Sandbox boundaries answer “is this operation allowed to touch
+this resource at all?”. For example, `write_file` requires high-risk Approval,
+but it still rejects traversal, external symlinks, directories, and byte-limit
+violations after approval.
 
 Run the focused Tool Pipeline tests with:
 
@@ -201,6 +264,11 @@ const result = await pipeline.execute({
   arguments: JSON.stringify({ path: 'README.md' }),
 });
 ```
+
+`read_file` remains unprotected, while `write_file` declares
+`workspace.write_file` as a high-risk operation. Its Approval summary contains
+only the relative path, UTF-8 byte count, and overwrite flag; it never includes
+the complete file content.
 
 The tools currently support UTF-8 text only. Each operation can provide a
 smaller `maxBytes` limit; otherwise the factory default is used. `write_file`

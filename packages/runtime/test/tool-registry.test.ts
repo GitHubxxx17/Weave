@@ -37,4 +37,23 @@ describe('Tool Registry', () => {
     expect(() => (listed as ToolDefinition[]).push(echoTool)).toThrow();
     expect(registry.list()).toHaveLength(1);
   });
+
+  it('rejects malformed approval requirements', () => {
+    const registry = createToolRegistry();
+
+    expect(() =>
+      registry.register({
+        ...echoTool,
+        name: 'protected',
+        approval: {
+          operation: '',
+          risk: 'high',
+          summarize: () => ({
+            summary: 'protected operation',
+            inputSummary: {},
+          }),
+        },
+      }),
+    ).toThrow('Invalid tool definition');
+  });
 });
