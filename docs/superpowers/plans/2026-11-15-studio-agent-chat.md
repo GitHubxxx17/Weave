@@ -431,14 +431,15 @@ Add:
 ```json
 {
   "scripts": {
-    "dev": "node --experimental-strip-types src/main.ts"
+    "dev": "pnpm build && node dist/main.js"
   }
 }
 ```
 
-Node `24.4.0` is already the repository minimum and supports the development
-entrypoint's type erasure. Do not add a runtime transpiler dependency only for
-this local script.
+The repository uses `.js` specifiers for TypeScript source imports, so direct
+`node --experimental-strip-types src/main.ts` cannot resolve local modules.
+Build the Server first and run the emitted JavaScript instead. Do not add a
+runtime transpiler dependency only for this local script.
 Run:
 
 ```bash
