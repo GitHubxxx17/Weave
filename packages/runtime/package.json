@@ -20,5 +20,8 @@
     "@weave/protocol": "workspace:*",
     "@weave/session": "workspace:*",
     "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1"
   }
 }
