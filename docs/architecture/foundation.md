@@ -76,18 +76,22 @@ completes the Step and Turn without creating an empty assistant message.
 
 The model stream must contain exactly one `finish`, and it must be last.
 Missing, repeated, or followed-by-more-output finishes produce
-`agent-stream-protocol`. `tool-call-start`, `tool-call-delta`, and
-`finish.reason = 'tool-call'` produce `agent-tool-call-unsupported`; no tool
-is executed because the Tool Pipeline does not exist yet.
+`agent-stream-protocol`. Before `finish`, `tool-call-start` and
+`tool-call-delta` produce `agent-tool-call-unsupported`, as does
+`finish.reason = 'tool-call'`; no tool is executed because the Tool Pipeline
+does not exist yet. After `finish`, any event, including a tool event, produces
+`agent-stream-protocol`.
 
 Model and Store errors retain their original types. Once the lifecycle has
 started, a model/protocol/tool failure appends failed Step/Turn events and is
 then rethrown. An aborted request appends cancelled Step/Turn events and
-rethrows the original cancellation/provider error. An async iterator `return()` treats consumer
-early-stop as cancellation, aborts the internal signal, waits for in-flight
-execution to settle, and persists the cancelled terminal state. If terminal
-persistence also fails, the original and persistence errors are exposed in an
-`AggregateError`.
+rethrows the original cancellation/provider error. An async iterator `return()`
+during in-flight execution treats consumer early-stop as cancellation, aborts
+the internal signal, waits for execution to settle, and persists the cancelled
+terminal state. If execution has already completed, `return()` closes the
+iterator and discards queued transient events without appending cancellation.
+If terminal persistence also fails, the original and persistence errors are
+exposed in an `AggregateError`.
 
 HTTP and SSE are future adapters that will consume `AgentRuntimeEvent`; they
 must not reimplement the Agent Loop. The current Server contract remains

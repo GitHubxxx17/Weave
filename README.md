@@ -112,9 +112,11 @@ for await (const event of runner.run({
 }
 ```
 
-The current Runner does not execute tools or expose HTTP `/run`. Tool events
-return `agent-tool-call-unsupported`; HTTP/SSE will be a later adapter over the
-Runtime event stream.
+The current Runner does not execute tools or expose HTTP `/run`. Before
+`finish`, `tool-call-start` and `tool-call-delta` return
+`agent-tool-call-unsupported`; after `finish`, any event, including a tool
+event, returns `agent-stream-protocol`. HTTP/SSE will be a later adapter over
+the Runtime event stream.
 
 Run the focused Agent Runner tests with:
 
