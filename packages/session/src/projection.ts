@@ -1,4 +1,5 @@
 import type { Message } from '@weave/protocol';
+import type { ToolCall } from '@weave/protocol';
 import { sessionEventSchema, type SessionEvent } from './events.js';
 
 /**
@@ -38,6 +39,25 @@ export interface SessionStep {
   readonly status: 'running' | 'completed' | 'failed' | 'cancelled';
 }
 
+/** A durable Tool Call associated with a projected Turn and Step. */
+export interface SessionToolCall {
+  readonly turnId: string;
+  readonly stepId: string;
+  readonly toolCall: ToolCall;
+}
+
+/** A durable Tool result associated with a projected Tool Call. */
+export interface SessionToolResult {
+  readonly turnId: string;
+  readonly stepId: string;
+  readonly toolCallId: string;
+  readonly name: string;
+  readonly content: string;
+  readonly truncated: boolean;
+  readonly status: 'completed' | 'failed';
+  readonly errorCode?: string | undefined;
+}
+
 /**
  * A Turn and its projected Step states.
  */
@@ -45,6 +65,8 @@ export interface SessionTurn {
   readonly turnId: string;
   readonly status: 'running' | 'completed' | 'failed' | 'cancelled';
   readonly steps: readonly SessionStep[];
+  readonly toolCalls: readonly SessionToolCall[];
+  readonly toolResults: readonly SessionToolResult[];
 }
 
 /**
@@ -68,6 +90,8 @@ interface MutableTurn {
   turnId: string;
   status: SessionTurn['status'];
   steps: MutableStep[];
+  toolCalls: SessionToolCall[];
+  toolResults: SessionToolResult[];
 }
 
 function invalidOrder(message: string): SessionProjectionError {
@@ -134,6 +158,8 @@ export function projectSession(events: readonly SessionEvent[]): SessionProjecti
         turnId: event.payload.turnId,
         status: 'running',
         steps: [],
+        toolCalls: [],
+        toolResults: [],
       };
       turns.push(turn);
       turnById.set(turn.turnId, turn);
@@ -175,6 +201,59 @@ export function projectSession(events: readonly SessionEvent[]): SessionProjecti
         throw invalidOrder(`Step ${event.payload.stepId} was already completed`);
       }
       step.status = event.payload.status;
+    } else if (event.type === 'tool-call.created') {
+      const turn = turnById.get(event.payload.turnId);
+      if (turn === undefined) {
+        throw missingReference(`Turn ${event.payload.turnId} does not exist`);
+      }
+      const step = turn.steps.find((candidate) => candidate.stepId === event.payload.stepId);
+      if (step === undefined) {
+        throw missingReference(`Step ${event.payload.stepId} does not exist`);
+      }
+      if (step.kind !== 'tool') {
+        throw invalidOrder(`Step ${event.payload.stepId} is not a tool step`);
+      }
+      if (turn.toolCalls.some((call) => call.toolCall.id === event.payload.toolCall.id)) {
+        throw invalidOrder(`Tool call ${event.payload.toolCall.id} was created more than once`);
+      }
+      turn.toolCalls.push({
+        turnId: event.payload.turnId,
+        stepId: event.payload.stepId,
+        toolCall: { ...event.payload.toolCall },
+      });
+    } else if (event.type === 'tool-result.created') {
+      const turn = turnById.get(event.payload.turnId);
+      if (turn === undefined) {
+        throw missingReference(`Turn ${event.payload.turnId} does not exist`);
+      }
+      const step = turn.steps.find((candidate) => candidate.stepId === event.payload.stepId);
+      if (step === undefined) {
+        throw missingReference(`Step ${event.payload.stepId} does not exist`);
+      }
+      const toolCall = turn.toolCalls.find(
+        (candidate) => candidate.toolCall.id === event.payload.toolCallId,
+      );
+      if (toolCall === undefined) {
+        throw missingReference(`Tool call ${event.payload.toolCallId} does not exist`);
+      }
+      if (toolCall.stepId !== event.payload.stepId) {
+        throw invalidOrder(
+          `Tool result ${event.payload.toolCallId} does not belong to step ${event.payload.stepId}`,
+        );
+      }
+      if (turn.toolResults.some((result) => result.toolCallId === event.payload.toolCallId)) {
+        throw invalidOrder(`Tool result ${event.payload.toolCallId} was created more than once`);
+      }
+      turn.toolResults.push({
+        turnId: event.payload.turnId,
+        stepId: event.payload.stepId,
+        toolCallId: event.payload.toolCallId,
+        name: event.payload.name,
+        content: event.payload.content,
+        truncated: event.payload.truncated,
+        status: event.payload.status,
+        ...(event.payload.errorCode === undefined ? {} : { errorCode: event.payload.errorCode }),
+      });
     }
     lastSequence = event.sequence;
   }
@@ -187,6 +266,11 @@ export function projectSession(events: readonly SessionEvent[]): SessionProjecti
       turnId: turn.turnId,
       status: turn.status,
       steps: turn.steps.map((step) => ({ ...step })),
+      toolCalls: turn.toolCalls.map((toolCall) => ({
+        ...toolCall,
+        toolCall: { ...toolCall.toolCall },
+      })),
+      toolResults: turn.toolResults.map((toolResult) => ({ ...toolResult })),
     })),
     lastSequence,
   };
