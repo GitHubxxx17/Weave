@@ -19,3 +19,4 @@ export type {
   AgentRunRequest,
   AgentRuntimeEvent,
 } from './agent-types.js';
+export { createAgentRunner } from './agent-runner.js';
