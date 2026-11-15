@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  createApprovalBroker,
   createToolPipeline,
   createToolRegistry,
   createWorkspaceFileTools,
@@ -32,6 +33,7 @@ async function createWorkspace(): Promise<string> {
 }
 
 function createPipeline(root: string, options?: { maxReadBytes?: number; maxWriteBytes?: number }) {
+  const approvalBroker = createApprovalBroker();
   const registry = createToolRegistry();
   const tools = createWorkspaceFileTools({
     workspace: createWorkspacePolicy({ root }),
@@ -41,9 +43,25 @@ function createPipeline(root: string, options?: { maxReadBytes?: number; maxWrit
   registry.register(tools.writeFile);
 
   return {
-    pipeline: createToolPipeline({ registry }),
+    approvalBroker,
+    pipeline: createToolPipeline({ registry, approvalBroker }),
     tools,
   };
+}
+
+async function approveWrite(
+  pipeline: ReturnType<typeof createPipeline>['pipeline'],
+  approvalBroker: ReturnType<typeof createApprovalBroker>,
+  request: Parameters<ReturnType<typeof createPipeline>['pipeline']['execute']>[0],
+) {
+  const execution = pipeline.execute(request);
+  await Promise.resolve();
+  const pending = approvalBroker.list().find(({ toolCallId }) => toolCallId === request.toolCallId);
+  if (pending === undefined) {
+    throw new Error(`No pending approval for ${request.toolCallId}`);
+  }
+  approvalBroker.approve(pending.approvalId, '测试批准');
+  return execution;
 }
 
 describe('Workspace File contracts', () => {
@@ -113,13 +131,32 @@ describe('Workspace File Tools', () => {
 
   it('writes a new UTF-8 file through the Tool Pipeline', async () => {
     const root = await createWorkspace();
-    const { pipeline } = createPipeline(root);
+    const { approvalBroker, pipeline } = createPipeline(root);
 
-    const result = await pipeline.execute({
+    const execution = pipeline.execute({
       toolCallId: 'write-1',
       name: 'write_file',
       arguments: JSON.stringify({ path: 'src/new.txt', content: '你好 Weave' }),
     });
+    await Promise.resolve();
+
+    const pending = approvalBroker.list()[0]!;
+    expect(pending).toMatchObject({
+      toolCallId: 'write-1',
+      toolName: 'write_file',
+      operation: 'workspace.write_file',
+      risk: 'high',
+      summary: '写入 Workspace 文件 src/new.txt',
+      inputSummary: {
+        path: 'src/new.txt',
+        bytes: 12,
+        overwrite: false,
+      },
+    });
+    expect(JSON.stringify(pending.inputSummary)).not.toContain('你好 Weave');
+
+    approvalBroker.approve(pending.approvalId, '测试批准');
+    const result = await execution;
 
     expect(JSON.parse(result.content)).toEqual({
       path: 'src/new.txt',
@@ -131,10 +168,10 @@ describe('Workspace File Tools', () => {
 
   it('rejects writes when the parent directory does not exist', async () => {
     const root = await createWorkspace();
-    const { pipeline } = createPipeline(root);
+    const { approvalBroker, pipeline } = createPipeline(root);
 
     await expect(
-      pipeline.execute({
+      approveWrite(pipeline, approvalBroker, {
         toolCallId: 'write-1',
         name: 'write_file',
         arguments: JSON.stringify({ path: 'missing/new.txt', content: '内容' }),
@@ -147,10 +184,10 @@ describe('Workspace File Tools', () => {
 
   it('does not overwrite an existing file unless explicitly requested', async () => {
     const root = await createWorkspace();
-    const { pipeline } = createPipeline(root);
+    const { approvalBroker, pipeline } = createPipeline(root);
 
     await expect(
-      pipeline.execute({
+      approveWrite(pipeline, approvalBroker, {
         toolCallId: 'write-1',
         name: 'write_file',
         arguments: JSON.stringify({ path: 'README.md', content: 'Changed' }),
@@ -161,7 +198,7 @@ describe('Workspace File Tools', () => {
     });
     await expect(readFile(join(root, 'README.md'), 'utf8')).resolves.toBe('Hello Weave');
 
-    const result = await pipeline.execute({
+    const result = await approveWrite(pipeline, approvalBroker, {
       toolCallId: 'write-2',
       name: 'write_file',
       arguments: JSON.stringify({
@@ -260,10 +297,10 @@ describe('Workspace File Tools', () => {
     await writeFile(join(outside, 'secret.txt'), 'secret', 'utf8');
     await symlink(join(outside, 'secret.txt'), join(root, 'external-link.txt'));
     await symlink(join(outside, 'missing.txt'), join(root, 'dangling-link.txt'));
-    const { pipeline } = createPipeline(root);
+    const { approvalBroker, pipeline } = createPipeline(root);
 
     await expect(
-      pipeline.execute({
+      approveWrite(pipeline, approvalBroker, {
         toolCallId: 'write-1',
         name: 'write_file',
         arguments: JSON.stringify({
@@ -279,7 +316,7 @@ describe('Workspace File Tools', () => {
     await expect(readFile(join(outside, 'secret.txt'), 'utf8')).resolves.toBe('secret');
 
     await expect(
-      pipeline.execute({
+      approveWrite(pipeline, approvalBroker, {
         toolCallId: 'write-2',
         name: 'write_file',
         arguments: JSON.stringify({
@@ -299,10 +336,10 @@ describe('Workspace File Tools', () => {
 
   it('rejects writing to a directory', async () => {
     const root = await createWorkspace();
-    const { pipeline } = createPipeline(root);
+    const { approvalBroker, pipeline } = createPipeline(root);
 
     await expect(
-      pipeline.execute({
+      approveWrite(pipeline, approvalBroker, {
         toolCallId: 'write-1',
         name: 'write_file',
         arguments: JSON.stringify({ path: 'src', content: 'not a directory' }),
@@ -329,7 +366,7 @@ describe('Workspace File Tools', () => {
 
   it('enforces read and write byte limits', async () => {
     const root = await createWorkspace();
-    const { pipeline } = createPipeline(root, {
+    const { approvalBroker, pipeline } = createPipeline(root, {
       maxReadBytes: 5,
       maxWriteBytes: 5,
     });
@@ -346,7 +383,7 @@ describe('Workspace File Tools', () => {
     });
 
     await expect(
-      pipeline.execute({
+      approveWrite(pipeline, approvalBroker, {
         toolCallId: 'write-1',
         name: 'write_file',
         arguments: JSON.stringify({ path: 'new.txt', content: '超过限制' }),

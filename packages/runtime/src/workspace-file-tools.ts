@@ -365,6 +365,18 @@ export function createWorkspaceFileTools(options: WorkspaceFileToolOptions): Wor
       additionalProperties: false,
     },
     inputSchema: writeFileInputSchema,
+    approval: {
+      operation: 'workspace.write_file',
+      risk: 'high',
+      summarize: (input) => ({
+        summary: `写入 Workspace 文件 ${input.path}`,
+        inputSummary: {
+          path: input.path,
+          bytes: Buffer.byteLength(input.content, 'utf8'),
+          overwrite: input.overwrite === true,
+        },
+      }),
+    },
     execute: (input, context) => writeWorkspaceFile(input, context, normalizedOptions),
   };
 
