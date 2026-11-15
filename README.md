@@ -13,11 +13,11 @@ remains a separate reference project and is not copied into this repository.
 
 ## Status
 
-The Foundation vertical slice and the first Session persistence slice are
-implemented and validated locally. `@weave/protocol`, `@weave/llm`,
+The Foundation vertical slice, Session persistence, and the first headless
+Agent Loop are implemented. `@weave/protocol`, `@weave/llm`,
 `@weave/session`, `@weave/runtime`, and `@weave/server` form the current
-architecture. The Agent Loop, Tool Pipeline, Workspace/Sandbox, Plugin
-loading, and Studio UI remain later phases.
+architecture. Tool Pipeline, Workspace/Sandbox, Plugin loading, and Studio UI
+remain later phases.
 
 Start with the [Foundation architecture guide](docs/architecture/foundation.md)
 for the request path, package boundaries, and AI editing checklist. The
@@ -76,7 +76,58 @@ undeclared workspace dependencies, reverse layer imports, cross-package
 relative source imports, and HTTP/UI imports from `runtime`.
 
 Server does not contain the Agent Loop because HTTP should remain a thin
-control-plane boundary while agent behavior belongs in the runtime.
+control-plane boundary while agent behavior belongs in the runtime. Server
+currently exposes only `GET /health`; there is no HTTP `/run` or SSE adapter.
+
+## Agent Runner
+
+`createAgentRunner()` is the Runtime boundary for one no-tool model turn. It
+validates the request, recovers the Session through `projectSession()`, calls
+`LlmClient.stream()`, yields transient `AgentRuntimeEvent` values, and appends
+durable Session events for the completed, failed, or cancelled lifecycle.
+Runs for the same Session are serialized within one `AgentRunner` instance so
+Session reads, appends, and model context construction do not interleave.
+Separate Runner instances and processes are not coordinated by the current
+`SessionEventStore` contract; cross-instance leasing or compare-and-swap
+belongs to a future Session concurrency slice.
+
+```ts
+import { createMockLlmClient } from '@weave/llm';
+import { createInMemorySessionEventStore } from '@weave/session';
+import { createAgentRunner } from '@weave/runtime';
+
+const runner = createAgentRunner({
+  llm: createMockLlmClient([
+    { type: 'text-delta', text: 'Hello' },
+    { type: 'finish', reason: 'stop' },
+  ]),
+  sessionStore: createInMemorySessionEventStore(),
+});
+
+for await (const event of runner.run({
+  sessionId: 'session-1',
+  userMessage: {
+    role: 'user',
+    content: [{ type: 'text', text: 'Say hello' }],
+  },
+  provider: 'mock',
+  model: 'test-model',
+})) {
+  console.log(event);
+}
+```
+
+The current Runner does not execute tools or expose HTTP `/run`. Before
+`finish`, `tool-call-start` and `tool-call-delta` return
+`agent-tool-call-unsupported`; after `finish`, any event, including a tool
+event, returns `agent-stream-protocol`. HTTP/SSE will be a later adapter over
+the Runtime event stream.
+
+Run the focused Agent Runner tests with:
+
+```bash
+pnpm exec vitest run packages/runtime/test/agent-runner.test.ts --config vitest.config.ts
+```
 
 ## Session Event Store
 
@@ -125,3 +176,6 @@ consume the same runtime instead of implementing separate agent loops.
 - [Session Event Store design](docs/superpowers/specs/2026-11-15-session-event-store-design.md):
   durable event contracts, SQLite transactions, Projection rules, and the
   reasons behind the Session boundary.
+- [Agent Loop design](docs/superpowers/specs/2026-11-15-agent-loop-design.md):
+  Agent Runner API, Session recovery, transient versus durable events, and
+  failure/cancellation semantics.
