@@ -74,7 +74,9 @@ export {
 export type {
   ApprovalBroker,
   ApprovalDecision,
+  ApprovalEvent,
   ApprovalErrorCode,
+  ApprovalListener,
   ApprovalRequest,
   ApprovalRisk,
   ApprovalStatus,

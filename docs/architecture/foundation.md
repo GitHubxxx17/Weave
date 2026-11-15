@@ -6,9 +6,10 @@ maintenance guide, not a replacement for the package APIs or tests.
 
 ## The Request Path
 
-The Server exposes a health check and a thin REST Approval control plane. The
-Agent Runner is still a Runtime API used directly by tests, CLI, or desktop
-callers; it is not exposed through an HTTP `/run` endpoint yet.
+The Server exposes a health check and a thin Approval control plane with REST
+and SSE adapters. The Agent Runner is still a Runtime API used directly by
+tests, CLI, or desktop callers; it is not exposed through an HTTP `/run`
+endpoint yet.
 
 ```mermaid
 flowchart LR
@@ -32,6 +33,8 @@ flowchart LR
     C --> D[In-Memory Approval State]
     D --> E[Waiting Tool Pipeline]
     E --> F[Approved Tool Execution]
+    D --> G[Broker Subscription]
+    G --> H[SSE Approval Stream]
 ```
 
 At startup, `apps/server/src/main.ts` validates the port with Zod, creates the
@@ -201,17 +204,20 @@ metadata checks and the final filesystem call, so it is not yet a complete
 Sandbox or Approval boundary. A dangling symlink is rejected conservatively
 because its final target cannot be proven to remain inside the Workspace.
 
-The Server currently exposes Approval REST routes for polling and decisions:
+The Server exposes Approval REST routes for polling and decisions:
 `GET /approvals`, `GET /approvals/:approvalId`, and POST routes for approve,
-reject, and cancel. These handlers validate JSON with Zod, delegate to the
-Runtime-owned Broker, and return stable error codes. They do not execute tools,
-write Session events, or keep a second approval state.
+reject, and cancel. It also exposes `GET /approvals/stream`, which sends an
+initial `approval.snapshot` followed by `approval.created` and
+`approval.resolved` events. These handlers validate HTTP input with Zod,
+delegate to the Runtime-owned Broker, and return stable error codes. They do
+not execute tools, write Session events, or keep a second approval state.
 
-The first Approval control plane intentionally uses polling. SSE requires a
-Broker subscription contract and connection lifecycle semantics, so it will be
-a separate feature slice. HTTP and SSE for Agent execution are future adapters
-that will consume `AgentRuntimeEvent`; they must not reimplement the Agent
-Loop.
+The Broker subscription is deliberately a transient, single-process contract.
+The SSE adapter removes its listener when the request aborts, the stream is
+cancelled, or writing fails. The snapshot is a connection initialization view,
+not a durable event; disconnected clients cannot replay missed events through
+this interface. HTTP and SSE for Agent execution are future adapters that will
+consume `AgentRuntimeEvent`; they must not reimplement the Agent Loop.
 
 ## Layer Boundaries
 

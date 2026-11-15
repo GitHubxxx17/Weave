@@ -26,6 +26,15 @@ export interface ApprovalRequest {
   readonly decisionReason?: string | undefined;
 }
 
+/** A live Approval Broker event carrying an immutable request snapshot. */
+export interface ApprovalEvent {
+  readonly type: 'approval.created' | 'approval.resolved';
+  readonly request: ApprovalRequest;
+}
+
+/** Receives live Approval Broker events within the current Runtime process. */
+export type ApprovalListener = (event: ApprovalEvent) => void;
+
 /** Input used to create one pending Approval request. */
 export interface CreateApprovalRequestInput {
   readonly toolCallId: string;
@@ -72,6 +81,8 @@ export interface ApprovalBroker {
   get(approvalId: string): ApprovalRequest | undefined;
   /** Returns immutable snapshots in request creation order. */
   list(): readonly ApprovalRequest[];
+  /** Subscribes to live request creation and terminal-state events. */
+  subscribe(listener: ApprovalListener): () => void;
   /** Approves a pending request. */
   approve(approvalId: string, reason?: string): ApprovalRequest;
   /** Rejects a pending request without executing the protected tool. */

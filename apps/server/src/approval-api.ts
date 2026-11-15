@@ -105,6 +105,10 @@ function mapUnexpectedError(context: Context): Response {
   return jsonError(context, 500, 'approval-internal-error', 'Approval request failed');
 }
 
+function encodeSseEvent(encoder: TextEncoder, event: string, data: unknown): Uint8Array {
+  return encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
 /** Mounts the HTTP routes that control the Runtime Approval Broker. */
 export function registerApprovalRoutes(
   app: Hono,
@@ -117,6 +121,84 @@ export function registerApprovalRoutes(
       return broker;
     }
     return context.json({ approvals: broker.list() }, 200);
+  });
+
+  app.get('/approvals/stream', (context: Context) => {
+    const broker = getApprovalBroker(context, runtime, options.approvalBrokerService);
+    if (broker instanceof Response) {
+      return broker;
+    }
+
+    const encoder = new TextEncoder();
+    const requestSignal = context.req.raw.signal;
+    let unsubscribe = (): void => undefined;
+    let abortHandler: (() => void) | undefined;
+    let cleanedUp = false;
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+
+    const cleanup = (): void => {
+      if (cleanedUp) {
+        return;
+      }
+      cleanedUp = true;
+      unsubscribe();
+      unsubscribe = (): void => undefined;
+      if (abortHandler !== undefined) {
+        requestSignal.removeEventListener('abort', abortHandler);
+        abortHandler = undefined;
+      }
+    };
+
+    const close = (): void => {
+      cleanup();
+      try {
+        streamController?.close();
+      } catch {
+        // The client may have already cancelled or closed the stream.
+      }
+    };
+
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        streamController = controller;
+        unsubscribe = broker.subscribe((event) => {
+          if (cleanedUp) {
+            return;
+          }
+          try {
+            controller.enqueue(encodeSseEvent(encoder, event.type, event.request));
+          } catch {
+            close();
+          }
+        });
+
+        abortHandler = () => {
+          close();
+        };
+        requestSignal.addEventListener('abort', abortHandler, { once: true });
+
+        try {
+          controller.enqueue(
+            encodeSseEvent(encoder, 'approval.snapshot', {
+              approvals: broker.list(),
+            }),
+          );
+        } catch {
+          close();
+        }
+      },
+      cancel(): void {
+        cleanup();
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        'Content-Type': 'text/event-stream',
+      },
+    });
   });
 
   app.get('/approvals/:approvalId', (context: Context) => {
