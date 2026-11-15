@@ -123,6 +123,23 @@ tool being registered means only that it can pass through this common lifecycle;
 it does not grant access to the host filesystem or network. Those capabilities
 will be added behind separate security boundaries.
 
+The first Workspace boundary is a lexical `WorkspacePolicy` in
+`@weave/runtime`:
+
+```text
+Tool Pipeline
+  -> Workspace Path Policy
+    -> future File/Shell Executor
+      -> future Approval/Sandbox
+```
+
+The policy requires an absolute Workspace root, accepts relative input paths,
+normalizes them with `node:path`, and rejects null bytes, absolute input paths,
+and paths that resolve outside the root. It returns normalized absolute and
+relative paths but performs no filesystem I/O. This distinction is deliberate:
+the later executor must repeat checks for symbolic links, file type, permissions,
+TOCTOU, and process-specific security before accessing the host.
+
 HTTP and SSE are future adapters that will consume `AgentRuntimeEvent`; they
 must not reimplement the Agent Loop. The current Server contract remains
 `GET /health` only.

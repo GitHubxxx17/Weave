@@ -37,3 +37,16 @@ export { createToolRegistry } from './tool-registry.js';
 export type { ToolRegistry } from './tool-registry.js';
 export { createToolPipeline } from './tool-pipeline.js';
 export type { ToolPipeline, ToolPipelineOptions } from './tool-pipeline.js';
+export {
+  WorkspacePolicyError,
+  workspacePathRequestSchema,
+  workspacePolicyOptionsSchema,
+} from './workspace-types.js';
+export type {
+  WorkspaceOperation,
+  WorkspacePath,
+  WorkspacePolicyErrorCode,
+  WorkspacePolicyOptions,
+} from './workspace-types.js';
+export { createWorkspacePolicy } from './workspace-policy.js';
+export type { WorkspacePolicy } from './workspace-policy.js';
