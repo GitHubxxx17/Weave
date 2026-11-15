@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { createServer } from 'node:http';
 import { createRuntime } from '@weave/runtime';
 import { createApp } from '../src/app.js';
-import { createServerRuntime, sessionEventStoreService } from '../src/runtime.js';
+import {
+  approvalBrokerService,
+  createServerRuntime,
+  sessionEventStoreService,
+} from '../src/runtime.js';
 import { startServer } from '../src/main.js';
 
 describe('GET /health', () => {
@@ -37,6 +41,33 @@ describe('GET /health', () => {
     });
   });
 
+  it('creates an isolated Approval Broker for each server Runtime', async () => {
+    const first = createServerRuntime();
+    const second = createServerRuntime();
+    await first.start();
+    await second.start();
+
+    const firstBroker = first.get(approvalBrokerService);
+    const secondBroker = second.get(approvalBrokerService);
+    const decision = firstBroker.request({
+      toolCallId: 'call-1',
+      toolName: 'write_file',
+      operation: 'workspace.write_file',
+      summary: '写入测试文件',
+      risk: 'high',
+      inputSummary: { path: 'test.txt', bytes: 1, overwrite: false },
+    });
+
+    expect(firstBroker).not.toBe(secondBroker);
+    expect(firstBroker.list()).toHaveLength(1);
+    expect(secondBroker.list()).toHaveLength(0);
+
+    firstBroker.cancel(firstBroker.list()[0]!.approvalId);
+    await expect(decision).rejects.toMatchObject({ code: 'approval-cancelled' });
+    await first.stop();
+    await second.stop();
+  });
+
   it('returns an unavailable response before runtime starts', async () => {
     const runtime = createRuntime();
     const response = await createApp(runtime).request('/health');
@@ -68,6 +99,9 @@ describe('startServer', () => {
 
     expect(result.server.listening).toBe(true);
     expect(result.runtime.status).toBe('running');
+    const approvalsResponse = await fetch(`http://127.0.0.1:${address.port}/approvals`);
+    expect(approvalsResponse.status).toBe(200);
+    expect(await approvalsResponse.json()).toEqual({ approvals: [] });
 
     await result.stop();
 

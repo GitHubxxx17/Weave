@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { Runtime } from '@weave/runtime';
+import { registerApprovalRoutes, type ApprovalAppOptions } from './approval-api.js';
 
 const healthResponseSchema = z.object({
   status: z.enum(['ok', 'unavailable']),
@@ -17,7 +18,7 @@ const healthResponseSchema = z.object({
  * @param runtime Runtime whose lifecycle is exposed by the health endpoint.
  * @returns A Hono application that can be mounted on a server or tested in memory.
  */
-export function createApp(runtime: Runtime): Hono {
+export function createApp(runtime: Runtime, options?: ApprovalAppOptions): Hono {
   const app = new Hono();
 
   app.get('/health', (context) => {
@@ -30,5 +31,9 @@ export function createApp(runtime: Runtime): Hono {
     return context.json(body, running ? 200 : 503);
   });
 
+  registerApprovalRoutes(app, runtime, options ?? {});
+
   return app;
 }
+
+export type { ApprovalAppOptions } from './approval-api.js';
