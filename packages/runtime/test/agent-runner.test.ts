@@ -246,4 +246,96 @@ describe('Agent Runner contracts', () => {
 
     await store.close();
   });
+
+  it.each([
+    ['missing finish', [{ type: 'text-delta', text: 'partial' }] as const],
+    [
+      'duplicate finish',
+      [
+        { type: 'finish', reason: 'stop' },
+        { type: 'finish', reason: 'stop' },
+      ] as const,
+    ],
+    [
+      'event after finish',
+      [
+        { type: 'finish', reason: 'stop' },
+        { type: 'text-delta', text: 'late' },
+      ] as const,
+    ],
+  ])('rejects %s as an Agent stream protocol error', async (_name, script) => {
+    const store = createInMemorySessionEventStore();
+    const runner = createAgentRunner({
+      llm: recordingClient(script, []),
+      sessionStore: store,
+    });
+
+    await expect(collect(runner.run(validRequest))).rejects.toMatchObject({
+      code: 'agent-stream-protocol',
+    });
+    const projection = projectSession(await store.read('session-1'));
+    expect(projection.messages.map(({ message }) => message)).toEqual([validRequest.userMessage]);
+    expect(projection.turns[0]).toMatchObject({
+      status: 'failed',
+      steps: [{ status: 'failed' }],
+    });
+
+    await store.close();
+  });
+
+  it.each([
+    [
+      'tool-call-start',
+      [
+        { type: 'tool-call-start', id: 'call-1', name: 'read_file' },
+        { type: 'finish', reason: 'tool-call' },
+      ] as const,
+    ],
+    [
+      'tool-call-delta',
+      [
+        {
+          type: 'tool-call-delta',
+          id: 'call-1',
+          argumentsDelta: '{"path":',
+        },
+        { type: 'finish', reason: 'tool-call' },
+      ] as const,
+    ],
+    ['tool finish', [{ type: 'finish', reason: 'tool-call' }] as const],
+  ])('rejects %s before a Tool Pipeline exists', async (_name, script) => {
+    const store = createInMemorySessionEventStore();
+    const runner = createAgentRunner({
+      llm: recordingClient(script, []),
+      sessionStore: store,
+    });
+
+    await expect(collect(runner.run(validRequest))).rejects.toMatchObject({
+      code: 'agent-tool-call-unsupported',
+    });
+    expect(projectSession(await store.read('session-1')).turns[0]).toMatchObject({
+      status: 'failed',
+      steps: [{ status: 'failed' }],
+    });
+
+    await store.close();
+  });
+
+  it.each(['stop', 'length', 'content-filter', 'unknown'] as const)(
+    'accepts the %s finish reason',
+    async (reason) => {
+      const store = createInMemorySessionEventStore();
+      const runner = createAgentRunner({
+        llm: recordingClient([{ type: 'finish', reason }], []),
+        sessionStore: store,
+      });
+
+      await expect(collect(runner.run(validRequest))).resolves.toEqual([
+        { type: 'completed', turnId: expect.any(String) },
+      ]);
+      expect(projectSession(await store.read('session-1')).turns[0]?.status).toBe('completed');
+
+      await store.close();
+    },
+  );
 });

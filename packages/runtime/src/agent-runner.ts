@@ -74,40 +74,64 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
 
       let assistantText = '';
       let finishSeen = false;
-      for await (const event of options.llm.stream(
-        llmRequest,
-        request.signal === undefined ? {} : { signal: request.signal },
-      )) {
-        if (finishSeen) {
-          throw new AgentRunError(
-            'agent-stream-protocol',
-            'Agent stream emitted events after finish',
-          );
-        }
+      try {
+        for await (const event of options.llm.stream(
+          llmRequest,
+          request.signal === undefined ? {} : { signal: request.signal },
+        )) {
+          if (finishSeen) {
+            throw new AgentRunError(
+              'agent-stream-protocol',
+              'Agent stream emitted events after finish',
+            );
+          }
 
-        if (event.type === 'text-delta') {
-          assistantText += event.text;
-          yield event;
-        } else if (event.type === 'reasoning-delta') {
-          yield event;
-        } else if (event.type === 'tool-call-start' || event.type === 'tool-call-delta') {
-          throw new AgentRunError(
-            'agent-tool-call-unsupported',
-            'Agent tool calls are not supported',
-          );
-        } else if (event.type === 'finish') {
-          if (event.reason === 'tool-call') {
+          if (event.type === 'text-delta') {
+            assistantText += event.text;
+            yield event;
+          } else if (event.type === 'reasoning-delta') {
+            yield event;
+          } else if (event.type === 'tool-call-start' || event.type === 'tool-call-delta') {
             throw new AgentRunError(
               'agent-tool-call-unsupported',
               'Agent tool calls are not supported',
             );
+          } else if (event.type === 'finish') {
+            if (event.reason === 'tool-call') {
+              throw new AgentRunError(
+                'agent-tool-call-unsupported',
+                'Agent tool calls are not supported',
+              );
+            }
+            finishSeen = true;
           }
-          finishSeen = true;
         }
-      }
 
-      if (!finishSeen) {
-        throw new AgentRunError('agent-stream-protocol', 'Agent stream did not finish');
+        if (!finishSeen) {
+          throw new AgentRunError('agent-stream-protocol', 'Agent stream did not finish');
+        }
+      } catch (error: unknown) {
+        if (error instanceof AgentRunError) {
+          await options.sessionStore.append(request.sessionId, [
+            {
+              type: 'step.completed',
+              payload: {
+                turnId,
+                stepId,
+                status: 'failed',
+              },
+            },
+            {
+              type: 'turn.completed',
+              payload: {
+                turnId,
+                status: 'failed',
+                reason: error.code,
+              },
+            },
+          ]);
+        }
+        throw error;
       }
 
       const completionEvents: NewSessionEvent[] = [];
