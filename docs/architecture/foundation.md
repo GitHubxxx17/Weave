@@ -62,8 +62,9 @@ The implemented Agent Loop is a separate Runtime path:
 Session Projection
   -> Agent Runner
   -> LlmClient.stream()
+  -> Tool Pipeline (when the model requests a tool)
+  -> next model step
   -> AgentRuntimeEvent
-  -> complete assistant message
   -> SessionEventStore.append()
 ```
 
@@ -72,9 +73,25 @@ Session Projection
 stored Session events, and appends the current user message plus a `Turn` and
 `model` `Step`. It then builds an `LlmRequest` from the projected messages and
 streams the model response. Text and reasoning deltas are yielded as transient
-`AgentRuntimeEvent` values. After one valid terminal `finish`, the Runner
-appends the complete text-only assistant message (when non-empty), the
-completed Step, and the completed Turn in one batch, then yields `completed`.
+`AgentRuntimeEvent` values.
+
+When `toolRegistry` and `toolPipeline` are supplied together, the Runner also
+passes model-visible tool definitions to every request. A `tool-call-start`
+plus its argument deltas becomes a complete `ToolCall`. After a
+`finish.reason = 'tool-call'`, the Runner persists the assistant tool-call
+message, completes the model Step, and executes each call in order through the
+shared Tool Pipeline. Each call gets a `tool` Step, a durable
+`tool-call.created` event, and then a `tool-result.created` event plus a
+`role: 'tool'` message. The projected messages are then sent to the next model
+step. The default limit is eight model steps; `maxSteps` protects against an
+unbounded model/tool cycle.
+
+After a valid text terminal `finish`, the Runner appends the complete assistant
+message (when non-empty), the completed Step, and the completed Turn in one
+batch, then yields `completed`. Tool execution failures persist a failed Tool
+Result and failed Step/Turn, then rethrow the original Pipeline error. The
+first Tool Loop slice does not send failed tool results back to the model for
+recovery.
 
 The Runner uses `projectSession()` for recovery rather than extracting
 messages directly from raw events. An existing Session is continued without
@@ -98,12 +115,12 @@ completes the Step and Turn without creating an empty assistant message.
 
 The model stream must contain exactly one `finish`, and it must be last.
 Missing, repeated, or followed-by-more-output finishes produce
-`agent-stream-protocol`. Before `finish`, `tool-call-start` and
-`tool-call-delta` produce `agent-tool-call-unsupported`, as does
-`finish.reason = 'tool-call'`; the current Agent Runner still does not invoke
-the Tool Pipeline because multi-step tool turns and Session tool events are
-outside this slice. After `finish`, any event, including a tool event, produces
-`agent-stream-protocol`.
+`agent-stream-protocol`. A Tool Call without the matching start event, a
+duplicate start, or a tool finish without a complete call produces
+`agent-tool-call-invalid`. If a model requests a tool without both
+`toolRegistry` and `toolPipeline`, the Runner returns
+`agent-tool-call-unsupported`. After `finish`, any event, including a tool
+event, produces `agent-stream-protocol`.
 
 Model and Store errors retain their original types. Once the lifecycle has
 started, a model/protocol/tool failure appends failed Step/Turn events and is
