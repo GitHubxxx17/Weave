@@ -532,19 +532,19 @@ git commit -m "docs: 补充 Studio Agent Chat 学习说明"
 **Files:**
 - Modify: `docs/superpowers/plans/2026-11-15-studio-agent-chat.md`
 
-- [ ] **Step 1: Publish the Feishu learning document**
+- [x] **Step 1: Publish the Feishu learning document**
 
 Read `/Users/mi/.codex/skills/feishu/reference/extended-markdown.md`, inspect
 folder `IaaUfCD1klneledtbUycz7bLndh`, confirm the next document number, create
 the next `Weave Studio Agent Chat` learning document in that folder, and fetch
 it back to verify the outline.
 
-- [ ] **Step 2: Append progress to the Feishu total plan**
+- [x] **Step 2: Append progress to the Feishu total plan**
 
 Append the Studio milestone, frontend verification scope, repository commands,
 and next step to `Weave 全项目计划与前端验收路线`; fetch the outline again.
 
-- [ ] **Step 3: Run the final verification and mark the plan**
+- [x] **Step 3: Run the final verification and mark the plan**
 
 Mark implementation and documentation steps complete. Leave the PR step
 unchecked until GitHub reports the PR merged.
