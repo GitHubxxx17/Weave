@@ -1,12 +1,14 @@
 # Weave Foundation Architecture
 
-This document explains the first runnable Weave slice. It is a learning and
-maintenance guide, not a replacement for the package APIs or tests.
+This document explains the first runnable Weave slice and the implemented
+headless Agent Loop. It is a learning and maintenance guide, not a replacement
+for the package APIs or tests.
 
 ## The Request Path
 
-The first round exposes a health check that proves Runtime assembly and HTTP
-control-plane wiring without pretending that the Agent Loop already exists.
+The Server still exposes only a health check. The Agent Runner is a Runtime
+API used directly by tests, CLI, or desktop callers; it is not exposed through
+an HTTP `/run` endpoint yet.
 
 ```mermaid
 flowchart LR
@@ -39,6 +41,57 @@ const app = createApp(runtime);
 `createApp` receives the Runtime interface rather than constructing services
 itself. That keeps the HTTP handler thin and makes the health behavior testable
 without opening a network port.
+
+The implemented Agent Loop is a separate Runtime path:
+
+```text
+Session Projection
+  -> Agent Runner
+  -> LlmClient.stream()
+  -> AgentRuntimeEvent
+  -> complete assistant message
+  -> SessionEventStore.append()
+```
+
+`createAgentRunner({ llm, sessionStore })` validates an
+`AgentRunRequest`, creates a missing `session.created` event, projects the
+stored Session events, and appends the current user message plus a `Turn` and
+`model` `Step`. It then builds an `LlmRequest` from the projected messages and
+streams the model response. Text and reasoning deltas are yielded as transient
+`AgentRuntimeEvent` values. After one valid terminal `finish`, the Runner
+appends the complete text-only assistant message (when non-empty), the
+completed Step, and the completed Turn in one batch, then yields `completed`.
+
+The Runner uses `projectSession()` for recovery rather than extracting
+messages directly from raw events. An existing Session is continued without
+adding another `session.created`; its projected messages, followed by the new
+user message, become the next LLM request.
+
+Runtime events are not durable Session events. Deltas are for live consumers
+and are never appended individually. Durable events describe the completed
+assistant message and lifecycle state used for recovery, timelines, and
+projection. Reasoning is streamed but is not persisted because the current
+Session Message schema has no reasoning field. A reasoning-only response still
+completes the Step and Turn without creating an empty assistant message.
+
+The model stream must contain exactly one `finish`, and it must be last.
+Missing, repeated, or followed-by-more-output finishes produce
+`agent-stream-protocol`. `tool-call-start`, `tool-call-delta`, and
+`finish.reason = 'tool-call'` produce `agent-tool-call-unsupported`; no tool
+is executed because the Tool Pipeline does not exist yet.
+
+Model and Store errors retain their original types. Once the lifecycle has
+started, a model/protocol/tool failure appends failed Step/Turn events and is
+then rethrown. An aborted request appends cancelled Step/Turn events and
+rethrows the original cancellation/provider error. An async iterator `return()` treats consumer
+early-stop as cancellation, aborts the internal signal, waits for in-flight
+execution to settle, and persists the cancelled terminal state. If terminal
+persistence also fails, the original and persistence errors are exposed in an
+`AggregateError`.
+
+HTTP and SSE are future adapters that will consume `AgentRuntimeEvent`; they
+must not reimplement the Agent Loop. The current Server contract remains
+`GET /health` only.
 
 ## Layer Boundaries
 
@@ -141,14 +194,14 @@ keeps the development endpoint off the network by default and makes the
 security intent explicit. A later deployment surface can choose a different
 binding as part of a deliberate operational configuration.
 
-### Why There Is No `/run`
+### Why There Is No HTTP `/run`
 
-`/run` would imply an Agent Loop, Turn/Step orchestration, Tool Pipeline,
-workspace and approval boundaries, cancellation semantics, and a durable event
-mapping policy. The Session Event Store now provides persistence primitives, but
-the Agent Loop still does not exist. A health endpoint is still enough to prove
-startup and status wiring without inventing an HTTP API that later layers would
-have to preserve.
+The Agent Loop now exists behind `createAgentRunner()`, but `/run` would still
+be an HTTP adapter contract with request streaming, response framing,
+cancellation, and eventual SSE policy. Keeping it out of Server preserves a
+thin control plane. A later HTTP/SSE adapter can consume the Runtime's
+`AgentRuntimeEvent` values without duplicating Session recovery or model-loop
+behavior.
 
 ## AI Editing Checklist
 

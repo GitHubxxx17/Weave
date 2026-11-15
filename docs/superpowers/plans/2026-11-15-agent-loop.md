@@ -73,7 +73,7 @@
 ### 文档
 
 - Modify: `docs/superpowers/specs/2026-11-15-agent-loop-design.md`
-  - 状态更新为已确认；
+  - 状态更新为已实施；
   - 公共输入类型使用 `UserMessage`。
 - Modify: `docs/architecture/foundation.md`
   - 增加 Agent Runner 层、执行链路和边界说明。
@@ -139,7 +139,7 @@ export interface AgentRunnerOptions {
 }
 ```
 
-- [ ] **Step 1: 创建契约失败测试**
+- [x] **Step 1: 创建契约失败测试**
 
 在 `packages/runtime/test/agent-runner.test.ts` 写入最小测试和收集助手：
 
@@ -206,7 +206,7 @@ describe('Agent Runner contracts', () => {
 });
 ```
 
-- [ ] **Step 2: 运行测试确认 RED**
+- [x] **Step 2: 运行测试确认 RED**
 
 Run:
 
@@ -216,7 +216,7 @@ pnpm exec vitest run packages/runtime/test/agent-runner.test.ts --config vitest.
 
 Expected: FAIL，因为 `AgentRunError`、两个 Schema 和公共类型尚未导出。
 
-- [ ] **Step 3: 实现最小公共契约**
+- [x] **Step 3: 实现最小公共契约**
 
 在 `agent-types.ts` 中使用：
 
@@ -282,7 +282,7 @@ export interface AgentRunnerOptions {
 在 `packages/runtime/src/index.ts` 导出这些值和类型。此 Task 不创建
 `createAgentRunner()` 的空占位实现。
 
-- [ ] **Step 4: 运行契约测试和静态检查**
+- [x] **Step 4: 运行契约测试和静态检查**
 
 Run:
 
@@ -294,7 +294,7 @@ pnpm --filter @weave/runtime typecheck
 
 Expected: 契约测试、lint 和 typecheck 全部 PASS。
 
-- [ ] **Step 5: 提交公共契约**
+- [x] **Step 5: 提交公共契约**
 
 ```bash
 git add packages/runtime/src/agent-types.ts packages/runtime/src/index.ts packages/runtime/test/agent-runner.test.ts
@@ -322,7 +322,7 @@ git commit -m "feat: 定义 Agent Runner 公共契约"
 export function createAgentRunner(options: AgentRunnerOptions): AgentRunner;
 ```
 
-- [ ] **Step 1: 增加测试助手和正常完成失败测试**
+- [x] **Step 1: 增加测试助手和正常完成失败测试**
 
 在测试文件增加：
 
@@ -408,7 +408,7 @@ it('streams a model response and persists a completed Turn', async () => {
 });
 ```
 
-- [ ] **Step 2: 增加 Runner 输入校验失败测试**
+- [x] **Step 2: 增加 Runner 输入校验失败测试**
 
 ```ts
 it('rejects invalid input before reading or writing the Session', async () => {
@@ -436,7 +436,7 @@ it('rejects invalid input before reading or writing the Session', async () => {
 });
 ```
 
-- [ ] **Step 3: 增加已有 Session 和纯 reasoning 失败测试**
+- [x] **Step 3: 增加已有 Session 和纯 reasoning 失败测试**
 
 ```ts
 it('continues an existing Session without duplicating session.created', async () => {
@@ -502,7 +502,7 @@ it('does not persist an empty assistant message for reasoning-only output', asyn
 });
 ```
 
-- [ ] **Step 4: 运行测试确认 RED**
+- [x] **Step 4: 运行测试确认 RED**
 
 Run:
 
@@ -512,7 +512,7 @@ pnpm exec vitest run packages/runtime/test/agent-runner.test.ts --config vitest.
 
 Expected: FAIL，因为 `createAgentRunner` 尚不存在。
 
-- [ ] **Step 5: 实现 Session 初始化和正常模型流**
+- [x] **Step 5: 实现 Session 初始化和正常模型流**
 
 在 `agent-runner.ts`：
 
@@ -550,7 +550,7 @@ const llmRequest: LlmRequest = {
 本 Task 暂时只支持恰好一个位于末尾的 `finish(reason !== 'tool-call')`；
 协议和错误清理在后续 Task 补齐。
 
-- [ ] **Step 6: 运行正常路径测试**
+- [x] **Step 6: 运行正常路径测试**
 
 Run:
 
@@ -561,7 +561,7 @@ pnpm --filter @weave/runtime typecheck
 
 Expected: 正常完成、已有 Session 和 reasoning-only 测试 PASS。
 
-- [ ] **Step 7: 提交正常执行路径**
+- [x] **Step 7: 提交正常执行路径**
 
 ```bash
 git add packages/runtime/src/agent-runner.ts packages/runtime/src/index.ts packages/runtime/test/agent-runner.test.ts
@@ -583,7 +583,7 @@ git commit -m "feat: 实现 Agent Runner 正常执行"
   - `agent-tool-call-unsupported`
   - 失败的 durable Step/Turn
 
-- [ ] **Step 1: 写流协议失败测试**
+- [x] **Step 1: 写流协议失败测试**
 
 ```ts
 it.each([
@@ -625,7 +625,7 @@ it.each([
 });
 ```
 
-- [ ] **Step 2: 写工具调用失败测试**
+- [x] **Step 2: 写工具调用失败测试**
 
 ```ts
 it.each([
@@ -667,7 +667,7 @@ it.each([
 });
 ```
 
-- [ ] **Step 3: 写非工具 finish reason 正常完成测试**
+- [x] **Step 3: 写非工具 finish reason 正常完成测试**
 
 ```ts
 it.each(['stop', 'length', 'content-filter', 'unknown'] as const)(
@@ -691,7 +691,7 @@ it.each(['stop', 'length', 'content-filter', 'unknown'] as const)(
 );
 ```
 
-- [ ] **Step 4: 运行测试确认 RED**
+- [x] **Step 4: 运行测试确认 RED**
 
 Run:
 
@@ -701,7 +701,7 @@ pnpm exec vitest run packages/runtime/test/agent-runner.test.ts --config vitest.
 
 Expected: FAIL，因为当前实现尚未稳定分类所有协议和工具错误。
 
-- [ ] **Step 5: 实现 finish 状态机**
+- [x] **Step 5: 实现 finish 状态机**
 
 在消费模型流时维护 `finishSeen`：
 
@@ -748,7 +748,7 @@ if (!finishSeen) {
 发生 Agent 错误后，单次批量追加 failed Step/Turn，不写 assistant message，
 然后重新抛出同一个 `AgentRunError`。
 
-- [ ] **Step 6: 运行协议测试和 Runtime 检查**
+- [x] **Step 6: 运行协议测试和 Runtime 检查**
 
 Run:
 
@@ -760,7 +760,7 @@ pnpm --filter @weave/runtime typecheck
 
 Expected: 协议和工具调用测试 PASS，已有正常测试继续 PASS。
 
-- [ ] **Step 7: 提交协议边界**
+- [x] **Step 7: 提交协议边界**
 
 ```bash
 git add packages/runtime/src/agent-runner.ts packages/runtime/test/agent-runner.test.ts
@@ -784,7 +784,7 @@ git commit -m "feat: 增加 Agent 模型流协议校验"
   - failed 或 cancelled durable Step/Turn
   - `AggregateError([primaryError, persistenceError])`
 
-- [ ] **Step 1: 写模型失败测试**
+- [x] **Step 1: 写模型失败测试**
 
 ```ts
 it('persists failure and rethrows the original model error', async () => {
@@ -811,7 +811,7 @@ it('persists failure and rethrows the original model error', async () => {
 });
 ```
 
-- [ ] **Step 2: 写 AbortSignal 取消测试**
+- [x] **Step 2: 写 AbortSignal 取消测试**
 
 ```ts
 it('persists cancellation when the request signal aborts', async () => {
@@ -852,7 +852,7 @@ it('persists cancellation when the request signal aborts', async () => {
 });
 ```
 
-- [ ] **Step 3: 写消费者提前停止测试**
+- [x] **Step 3: 写消费者提前停止测试**
 
 ```ts
 it('cancels the Turn when a consumer stops reading early', async () => {
@@ -885,7 +885,7 @@ it('cancels the Turn when a consumer stops reading early', async () => {
 });
 ```
 
-- [ ] **Step 4: 写清理持久化失败测试**
+- [x] **Step 4: 写清理持久化失败测试**
 
 ```ts
 it('preserves the model and terminal persistence errors', async () => {
@@ -925,7 +925,7 @@ it('preserves the model and terminal persistence errors', async () => {
 });
 ```
 
-- [ ] **Step 5: 运行测试确认 RED**
+- [x] **Step 5: 运行测试确认 RED**
 
 Run:
 
@@ -935,7 +935,7 @@ pnpm exec vitest run packages/runtime/test/agent-runner.test.ts --config vitest.
 
 Expected: FAIL，因为取消分类、内部取消信号、iterator return 清理和聚合错误尚未完整实现。
 
-- [ ] **Step 6: 实现统一终态清理**
+- [x] **Step 6: 实现统一终态清理**
 
 实现要点：
 
@@ -983,7 +983,7 @@ throw new AggregateError(
 11. 无论哪条路径都 abort 内部 controller，释放 Provider 资源；
 12. 已经成功完成或 catch 已经持久化终态时，finally 不重复追加。
 
-- [ ] **Step 7: 运行 Agent Runner 和 Runtime 全包测试**
+- [x] **Step 7: 运行 Agent Runner 和 Runtime 全包测试**
 
 Run:
 
@@ -997,7 +997,7 @@ pnpm --filter @weave/runtime build
 
 Expected: 所有 Agent Runner 和既有 Runtime 测试 PASS。
 
-- [ ] **Step 8: 提交错误和取消语义**
+- [x] **Step 8: 提交错误和取消语义**
 
 ```bash
 git add packages/runtime/src/agent-runner.ts packages/runtime/test/agent-runner.test.ts
@@ -1023,7 +1023,7 @@ git commit -m "feat: 完善 Agent 失败和取消语义"
   - 飞书中的学习和面试说明；
   - 完整验证结果。
 
-- [ ] **Step 1: 更新 Foundation 执行链路**
+- [x] **Step 1: 更新 Foundation 执行链路**
 
 在 `docs/architecture/foundation.md` 增加：
 
@@ -1044,7 +1044,7 @@ Session Projection
 - Server 仍然只有 health endpoint；
 - HTTP/SSE 将作为后续 Adapter 消费 Agent Runner。
 
-- [ ] **Step 2: 更新 README**
+- [x] **Step 2: 更新 README**
 
 增加：
 
@@ -1054,7 +1054,7 @@ Session Projection
 - 当前不支持工具执行和 HTTP `/run`；
 - Agent Loop 设计文档链接。
 
-- [ ] **Step 3: 更新设计与计划状态**
+- [x] **Step 3: 更新设计与计划状态**
 
 将设计文档状态改为：
 
@@ -1121,7 +1121,7 @@ Expected:
 - `git diff --check` 无输出；
 - 工作区只包含本 Task 的文档改动。
 
-- [ ] **Step 7: 提交文档同步**
+- [x] **Step 7: 提交文档同步**
 
 ```bash
 git add README.md docs/architecture/foundation.md docs/superpowers/specs/2026-11-15-agent-loop-design.md docs/superpowers/plans/2026-11-15-agent-loop.md

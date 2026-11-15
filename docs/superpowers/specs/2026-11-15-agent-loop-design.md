@@ -2,7 +2,7 @@
 
 **日期：** 2026-11-15
 
-**状态：** 已确认，进入实施计划
+**状态：** 已实施
 
 **目标阶段：** Weave Studio 的 Headless Agent 基础
 
@@ -18,8 +18,8 @@ Weave 已经具备三项可以组合的基础能力：
 目前缺少的是 Agent 行为边界：如何从 Session 事件恢复上下文，调用模型，
 把流式输出转换为可观察结果，并在完成、失败或取消时记录 durable facts。
 
-本轮只实现一个最小、无工具的 Agent Loop。它的目标是证明一条完整的
-headless 执行链路，而不是一次实现 Agent 平台的所有能力。
+本轮已经实现一个最小、无工具的 Agent Loop。它证明一条完整的 headless
+执行链路，而不是一次实现 Agent 平台的所有能力。
 
 ## 2. 目标
 
@@ -159,6 +159,11 @@ for await (const event of runner.run(request)) {
 如果消费者提前调用 iterator 的 `return()`，Runner 将把本轮视为取消，执行
 与 AbortSignal 相同的 cancelled 持久化。
 
+`return()` 会先中止 Runner 内部的 AbortSignal，再等待正在进行的模型读取和
+终态持久化完成；它返回 `{ done: true, value: undefined }`。如果终态持久化
+失败，则 `return()` 抛出包含持久化错误的 `AggregateError`。如果执行已经完成
+但消费者仍有排队事件，`return()` 会丢弃剩余 transient events，直接结束迭代器。
+
 ### 5.3 Agent 错误
 
 Runner 暴露稳定错误类型：
@@ -246,7 +251,7 @@ llm.stream(
 
 - `text-delta`：追加到 assistant text buffer，并立即 yield；
 - `reasoning-delta`：追加到 reasoning buffer，并立即 yield；
-- `finish`：记录 finish reason 和 usage，等待最终持久化；
+- `finish`：标记模型流终止，等待最终持久化；
 - `tool-call-start` 或 `tool-call-delta`：抛出稳定的未支持工具错误。
 
 模型流必须且只能包含一个 `finish`，并且 `finish` 必须是最后一个事件。流结束时
@@ -332,15 +337,19 @@ cancelled，而不是模糊的 failed。
 ## 8. Durable Event 与 Runtime Event 的边界
 
 ```text
-Runtime Event                         Durable Session Event
+LLM StreamEvent / Runtime Event       Durable Session Event
 -------------------------------------------------------------
 text-delta("你好")                    message.created(完整消息)
 reasoning-delta("分析中")             当前不持久化
-completed                             step.completed + turn.completed
+finish(reason, usage)                 step.completed + turn.completed
+completed                             仅用于实时运行通知
 ```
 
-Runtime Event 用于实时 UI、CLI 和未来 SSE。Session Event 用于重启恢复、时间线、
-Projection 和审计。两个模型不能互相替代。
+`LlmClient.stream()` 产生 Provider 无关的 transient `StreamEvent`。Runner
+筛选并转发其中的文本和 reasoning 作为 `AgentRuntimeEvent`，供实时 UI、CLI
+和未来 SSE 使用。Session Event 是 append-only durable fact，用于重启恢复、
+时间线、Projection 和审计。Runner 当前不持久化 finish reason、usage 或
+reasoning；两个事件模型不能互相替代。
 
 ## 9. 测试策略
 
