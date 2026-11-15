@@ -55,6 +55,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
       let stopped = false;
       let finished = false;
       let executionError: unknown;
+      let hasExecutionError = false;
       let executionPromise: Promise<void> | undefined;
       let lifecycleStarted = false;
       let terminalPersisted = false;
@@ -72,7 +73,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
           if (pending === undefined) {
             continue;
           }
-          if (executionError !== undefined && !stopped) {
+          if (hasExecutionError && !stopped) {
             pending.reject(executionError);
           } else {
             pending.resolve({ done: true, value: undefined });
@@ -80,11 +81,12 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
         }
       };
 
-      const finish = (error?: unknown): void => {
+      const finish = (error?: unknown, hasError = false): void => {
         if (finished) {
           return;
         }
         executionError = error;
+        hasExecutionError = hasError;
         finished = true;
         settlePending();
       };
@@ -104,6 +106,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
       const appendTerminal = async (
         events: readonly NewSessionEvent[],
         primaryError?: unknown,
+        hasPrimaryError = false,
       ): Promise<void> => {
         if (
           !lifecycleStarted ||
@@ -118,7 +121,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
           await options.sessionStore.append(sessionId, events);
           terminalPersisted = true;
         } catch (persistenceError: unknown) {
-          if (primaryError !== undefined) {
+          if (hasPrimaryError) {
             throw createTerminalPersistenceError(primaryError, persistenceError);
           }
           throw persistenceError;
@@ -271,13 +274,14 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
                         : undefined,
                 ),
                 primaryError,
+                true,
               );
             } catch (persistenceError: unknown) {
-              finish(persistenceError);
+              finish(persistenceError, true);
               return;
             }
           }
-          finish(primaryError);
+          finish(primaryError, true);
         } finally {
           internalController.abort();
         }
@@ -294,13 +298,16 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
 
       const iterator: AsyncIterator<AgentRuntimeEvent> = {
         next(): Promise<IteratorResult<AgentRuntimeEvent>> {
+          if (stopped) {
+            return Promise.resolve({ done: true, value: undefined });
+          }
           start();
           const event = queuedEvents.shift();
           if (event !== undefined) {
             return Promise.resolve({ done: false, value: event });
           }
           if (finished) {
-            if (executionError !== undefined && !stopped) {
+            if (hasExecutionError && !stopped) {
               return Promise.reject(executionError);
             }
             return Promise.resolve({ done: true, value: undefined });
@@ -315,13 +322,26 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
           }
           stopped = true;
           internalController.abort(createAbortError());
+          let returnError: unknown;
+          let hasReturnError = false;
           if (lifecycleStarted && !terminalPersisted && !terminalAppendStarted) {
             try {
-              await appendTerminal(terminalEvents('cancelled', 'cancelled'), createAbortError());
+              await appendTerminal(
+                terminalEvents('cancelled', 'cancelled'),
+                createAbortError(),
+                true,
+              );
             } catch (error: unknown) {
-              finish(error);
-              throw error;
+              returnError = error;
+              hasReturnError = true;
             }
+          }
+          if (executionPromise !== undefined) {
+            await executionPromise;
+          }
+          if (hasReturnError) {
+            finish(returnError, true);
+            throw returnError;
           }
           finish();
           return { done: true, value: undefined };

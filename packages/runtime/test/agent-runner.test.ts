@@ -466,6 +466,28 @@ describe('Agent Runner contracts', () => {
     await store.close();
   });
 
+  it('does not start execution when next follows return before iteration starts', async () => {
+    const store = createInMemorySessionEventStore();
+    let streamCalled = false;
+    const runner = createAgentRunner({
+      llm: {
+        async *stream(): AsyncIterable<StreamEvent> {
+          streamCalled = true;
+          yield { type: 'finish', reason: 'stop' };
+        },
+      },
+      sessionStore: store,
+    });
+    const iterator = runner.run(validRequest)[Symbol.asyncIterator]();
+
+    await expect(iterator.return?.()).resolves.toEqual({ done: true, value: undefined });
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+
+    expect(streamCalled).toBe(false);
+    expect(await store.read('session-1')).toEqual([]);
+    await store.close();
+  });
+
   it('aborts the provider immediately when return interrupts an in-flight operation', async () => {
     const store = createInMemorySessionEventStore();
     let receivedSignal: AbortSignal | undefined;
@@ -505,17 +527,76 @@ describe('Agent Runner contracts', () => {
     const pendingNext = iterator.next();
     await new Promise<void>((resolve) => queueMicrotask(resolve));
 
-    const returnPromise = iterator.return?.();
+    let returnResolved = false;
+    const returnPromise = iterator.return?.().then((result) => {
+      returnResolved = true;
+      return result;
+    });
     expect(receivedSignal?.aborted).toBe(true);
-    await expect(returnPromise).resolves.toMatchObject({ done: true });
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    expect(returnResolved).toBe(false);
     rejectPendingNext?.(abortError());
     await expect(pendingNext).resolves.toMatchObject({ done: true });
+    await expect(returnPromise).resolves.toMatchObject({ done: true });
     expect(projectSession(await store.read('session-1')).turns[0]).toMatchObject({
       status: 'cancelled',
       steps: [{ status: 'cancelled' }],
     });
 
     await store.close();
+  });
+
+  it('waits for initialization cleanup when return races the initial append', async () => {
+    const baseStore = createInMemorySessionEventStore();
+    let releaseInitialization: (() => void) | undefined;
+    let initializationStarted: (() => void) | undefined;
+    const initializationReady = new Promise<void>((resolve) => {
+      initializationStarted = resolve;
+    });
+    const initializationRelease = new Promise<void>((resolve) => {
+      releaseInitialization = resolve;
+    });
+    let appendCount = 0;
+    const store: SessionEventStore = {
+      read: (sessionId, options) => baseStore.read(sessionId, options),
+      close: () => baseStore.close(),
+      append: async (sessionId, events) => {
+        appendCount += 1;
+        if (appendCount === 2) {
+          initializationStarted?.();
+          await initializationRelease;
+        }
+        return baseStore.append(sessionId, events);
+      },
+    };
+    const runner = createAgentRunner({
+      llm: {
+        async *stream(): AsyncIterable<StreamEvent> {
+          yield { type: 'finish', reason: 'stop' };
+        },
+      },
+      sessionStore: store,
+    });
+    const iterator = runner.run(validRequest)[Symbol.asyncIterator]();
+    const firstNext = iterator.next();
+    await initializationReady;
+
+    let returnResolved = false;
+    const returnPromise = iterator.return?.().then((result) => {
+      returnResolved = true;
+      return result;
+    });
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    expect(returnResolved).toBe(false);
+    releaseInitialization?.();
+    await expect(returnPromise).resolves.toMatchObject({ done: true });
+    await expect(firstNext).resolves.toMatchObject({ done: true });
+    expect(projectSession(await baseStore.read('session-1')).turns[0]).toMatchObject({
+      status: 'cancelled',
+      steps: [{ status: 'cancelled' }],
+    });
+
+    await baseStore.close();
   });
 
   it('aborts internal resources when cancelled terminal persistence fails', async () => {
@@ -538,7 +619,9 @@ describe('Agent Runner contracts', () => {
       async *stream(_request, options): AsyncIterable<StreamEvent> {
         receivedSignal = options?.signal;
         yield { type: 'text-delta', text: 'partial' };
-        await new Promise<void>(() => undefined);
+        await new Promise<void>((_resolve, reject) => {
+          options?.signal?.addEventListener('abort', () => reject(abortError()), { once: true });
+        });
       },
     };
     const runner = createAgentRunner({ llm, sessionStore: store });
@@ -581,6 +664,34 @@ describe('Agent Runner contracts', () => {
       status: 'failed',
       steps: [{ status: 'failed' }],
     });
+
+    await baseStore.close();
+  });
+
+  it('preserves undefined as the primary provider error', async () => {
+    const baseStore = createInMemorySessionEventStore();
+    const persistenceError = new Error('terminal append failed');
+    let appendCount = 0;
+    const store: SessionEventStore = {
+      read: (sessionId, options) => baseStore.read(sessionId, options),
+      close: () => baseStore.close(),
+      append: async (sessionId, events) => {
+        appendCount += 1;
+        if (appendCount === 3) {
+          throw persistenceError;
+        }
+        return baseStore.append(sessionId, events);
+      },
+    };
+    const runner = createAgentRunner({
+      llm: throwingClient(undefined),
+      sessionStore: store,
+    });
+
+    const error = await collect(runner.run(validRequest)).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toEqual([undefined, persistenceError]);
 
     await baseStore.close();
   });
