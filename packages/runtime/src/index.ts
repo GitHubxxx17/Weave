@@ -20,3 +20,15 @@ export type {
   AgentRuntimeEvent,
 } from './agent-types.js';
 export { createAgentRunner } from './agent-runner.js';
+export {
+  ToolExecutionError,
+  toolDefinitionSchema,
+  toolExecutionRequestSchema,
+} from './tool-types.js';
+export type {
+  ToolDefinition,
+  ToolExecutionContext,
+  ToolExecutionErrorCode,
+  ToolExecutionRequest,
+  ToolExecutionResult,
+} from './tool-types.js';
