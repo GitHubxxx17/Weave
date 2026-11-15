@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { LlmClient } from '@weave/llm';
 import type { LlmRequest, StreamEvent } from '@weave/protocol';
+import { z } from 'zod';
 import {
   createInMemorySessionEventStore,
   projectSession,
@@ -12,6 +13,8 @@ import {
   agentRunRequestSchema,
   agentRuntimeEventSchema,
   createAgentRunner,
+  createToolPipeline,
+  createToolRegistry,
   type AgentRunRequest,
   type AgentRuntimeEvent,
 } from '../src/index.js';
@@ -33,6 +36,23 @@ function recordingClient(script: readonly StreamEvent[], requests: LlmRequest[])
       for (const event of script) {
         yield event;
       }
+    },
+  };
+}
+
+function sequenceClient(
+  scripts: readonly (readonly StreamEvent[])[],
+  requests: LlmRequest[],
+): LlmClient {
+  let index = 0;
+  return {
+    async *stream(request): AsyncIterable<StreamEvent> {
+      requests.push(structuredClone(request));
+      const script = scripts[index++];
+      if (script === undefined) {
+        throw new Error(`Unexpected model request ${index}`);
+      }
+      yield* script;
     },
   };
 }
@@ -159,7 +179,445 @@ describe('Agent Runner contracts', () => {
       type: 'completed',
       turnId: 'turn-1',
     });
+    expect(
+      agentRuntimeEventSchema.parse({
+        type: 'tool-call',
+        toolCall: { id: 'call-1', name: 'echo', arguments: '{}' },
+      }),
+    ).toEqual({
+      type: 'tool-call',
+      toolCall: { id: 'call-1', name: 'echo', arguments: '{}' },
+    });
+    expect(
+      agentRuntimeEventSchema.parse({
+        type: 'tool-executing',
+        toolCall: { id: 'call-1', name: 'echo', arguments: '{}' },
+      }),
+    ).toMatchObject({ type: 'tool-executing' });
+    expect(
+      agentRuntimeEventSchema.parse({
+        type: 'tool-result',
+        result: {
+          toolCallId: 'call-1',
+          name: 'echo',
+          content: 'ok',
+          truncated: false,
+        },
+      }),
+    ).toMatchObject({ type: 'tool-result' });
     expect(() => agentRuntimeEventSchema.parse({ type: 'completed', turnId: '' })).toThrow();
+  });
+
+  it('requires a registry and pipeline together for a tool-enabled runner', () => {
+    const registry = createToolRegistry();
+    const pipeline = createToolPipeline({ registry });
+
+    expect(() =>
+      createAgentRunner({
+        llm: recordingClient([], []),
+        sessionStore: createInMemorySessionEventStore(),
+        toolRegistry: registry,
+      }),
+    ).toThrowError(/toolRegistry and toolPipeline must be provided together/);
+    expect(() =>
+      createAgentRunner({
+        llm: recordingClient([], []),
+        sessionStore: createInMemorySessionEventStore(),
+        toolPipeline: pipeline,
+      }),
+    ).toThrowError(/toolRegistry and toolPipeline must be provided together/);
+  });
+
+  it('rejects an invalid maximum step count', () => {
+    expect(() =>
+      createAgentRunner({
+        llm: recordingClient([], []),
+        sessionStore: createInMemorySessionEventStore(),
+        maxSteps: 0,
+      }),
+    ).toThrowError(/maxSteps must be a positive integer/);
+  });
+
+  it('executes a tool call through the pipeline and continues the model loop', async () => {
+    const recording = recordingSessionEventStore();
+    const requests: LlmRequest[] = [];
+    const registry = createToolRegistry();
+    let executions = 0;
+    registry.register({
+      name: 'echo',
+      description: 'Returns the input value',
+      parameters: {
+        type: 'object',
+        properties: { value: { type: 'string' } },
+        required: ['value'],
+      },
+      inputSchema: z.object({ value: z.string() }),
+      execute: ({ value }) => {
+        executions += 1;
+        return value;
+      },
+    });
+    const runner = createAgentRunner({
+      llm: sequenceClient(
+        [
+          [
+            { type: 'tool-call-start', id: 'call-1', name: 'echo' },
+            { type: 'tool-call-delta', id: 'call-1', argumentsDelta: '{"value":"x"}' },
+            { type: 'finish', reason: 'tool-call' },
+          ],
+          [
+            { type: 'text-delta', text: '工具结果是 x' },
+            { type: 'finish', reason: 'stop' },
+          ],
+        ],
+        requests,
+      ),
+      sessionStore: recording.store,
+      toolRegistry: registry,
+      toolPipeline: createToolPipeline({ registry }),
+    });
+
+    const events = await collect(runner.run(validRequest));
+    expect(events.map((event) => event.type)).toEqual([
+      'tool-call',
+      'tool-executing',
+      'tool-result',
+      'text-delta',
+      'completed',
+    ]);
+    expect(executions).toBe(1);
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.tools).toEqual([
+      expect.objectContaining({
+        name: 'echo',
+        description: 'Returns the input value',
+      }),
+    ]);
+    expect(requests[1]?.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: 'assistant',
+          toolCalls: [{ id: 'call-1', name: 'echo', arguments: '{"value":"x"}' }],
+        }),
+        {
+          role: 'tool',
+          toolCallId: 'call-1',
+          content: [{ type: 'text', text: 'x' }],
+        },
+      ]),
+    );
+
+    const projection = projectSession(await recording.store.read(validRequest.sessionId));
+    expect(projection.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.objectContaining({
+            role: 'assistant',
+            toolCalls: [{ id: 'call-1', name: 'echo', arguments: '{"value":"x"}' }],
+          }),
+        }),
+        expect.objectContaining({
+          message: {
+            role: 'tool',
+            toolCallId: 'call-1',
+            content: [{ type: 'text', text: 'x' }],
+          },
+        }),
+      ]),
+    );
+    expect(projection.turns[0]?.toolCalls).toHaveLength(1);
+    expect(projection.turns[0]?.toolResults).toMatchObject([
+      {
+        toolCallId: 'call-1',
+        name: 'echo',
+        content: 'x',
+        status: 'completed',
+      },
+    ]);
+  });
+
+  it('persists a failed tool result and rethrows the pipeline error', async () => {
+    const store = createInMemorySessionEventStore();
+    const registry = createToolRegistry();
+    registry.register({
+      name: 'fail',
+      description: 'Always fails',
+      parameters: { type: 'object', properties: {} },
+      inputSchema: z.object({}),
+      execute: () => {
+        throw new Error('permission denied');
+      },
+    });
+    const runner = createAgentRunner({
+      llm: recordingClient(
+        [
+          { type: 'tool-call-start', id: 'call-1', name: 'fail' },
+          { type: 'tool-call-delta', id: 'call-1', argumentsDelta: '{}' },
+          { type: 'finish', reason: 'tool-call' },
+        ],
+        [],
+      ),
+      sessionStore: store,
+      toolRegistry: registry,
+      toolPipeline: createToolPipeline({ registry }),
+    });
+
+    await expect(collect(runner.run(validRequest))).rejects.toMatchObject({
+      code: 'tool-execution-failed',
+    });
+
+    const projection = projectSession(await store.read(validRequest.sessionId));
+    expect(projection.turns[0]).toMatchObject({
+      status: 'failed',
+      steps: [
+        { kind: 'model', status: 'completed' },
+        { kind: 'tool', status: 'failed' },
+      ],
+      toolResults: [
+        {
+          toolCallId: 'call-1',
+          status: 'failed',
+          errorCode: 'tool-execution-failed',
+        },
+      ],
+    });
+    expect(projection.messages).toHaveLength(2);
+    expect(projection.messages.at(-1)?.message.role).toBe('assistant');
+
+    await store.close();
+  });
+
+  it('persists a cancelled tool step and turn when the request aborts during execution', async () => {
+    const store = createInMemorySessionEventStore();
+    const registry = createToolRegistry();
+    let executionStarted: (() => void) | undefined;
+    const executionStartedPromise = new Promise<void>((resolve) => {
+      executionStarted = resolve;
+    });
+    registry.register({
+      name: 'wait',
+      description: 'Waits until cancellation',
+      parameters: { type: 'object', properties: {} },
+      inputSchema: z.object({}),
+      execute: async (_input, { signal }) => {
+        executionStarted?.();
+        await new Promise<void>((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(abortError()), { once: true });
+        });
+      },
+    });
+    const controller = new AbortController();
+    const runner = createAgentRunner({
+      llm: recordingClient(
+        [
+          { type: 'tool-call-start', id: 'call-1', name: 'wait' },
+          { type: 'tool-call-delta', id: 'call-1', argumentsDelta: '{}' },
+          { type: 'finish', reason: 'tool-call' },
+        ],
+        [],
+      ),
+      sessionStore: store,
+      toolRegistry: registry,
+      toolPipeline: createToolPipeline({ registry }),
+    });
+
+    const run = collect(runner.run({ ...validRequest, signal: controller.signal }));
+    await executionStartedPromise;
+    controller.abort();
+
+    await expect(run).rejects.toMatchObject({ code: 'tool-cancelled' });
+    expect(projectSession(await store.read(validRequest.sessionId)).turns[0]).toMatchObject({
+      status: 'cancelled',
+      steps: [
+        { kind: 'model', status: 'completed' },
+        { kind: 'tool', status: 'cancelled' },
+      ],
+      toolResults: [
+        {
+          toolCallId: 'call-1',
+          status: 'failed',
+          errorCode: 'tool-cancelled',
+        },
+      ],
+    });
+
+    await store.close();
+  });
+
+  it('fails the turn at the model step limit without duplicating completed tool steps', async () => {
+    const store = createInMemorySessionEventStore();
+    const requests: LlmRequest[] = [];
+    const registry = createToolRegistry();
+    registry.register({
+      name: 'echo',
+      description: 'Returns the input value',
+      parameters: {
+        type: 'object',
+        properties: { value: { type: 'string' } },
+        required: ['value'],
+      },
+      inputSchema: z.object({ value: z.string() }),
+      execute: ({ value }) => value,
+    });
+    const runner = createAgentRunner({
+      llm: sequenceClient(
+        [
+          [
+            { type: 'tool-call-start', id: 'call-1', name: 'echo' },
+            { type: 'tool-call-delta', id: 'call-1', argumentsDelta: '{"value":"x"}' },
+            { type: 'finish', reason: 'tool-call' },
+          ],
+        ],
+        requests,
+      ),
+      sessionStore: store,
+      toolRegistry: registry,
+      toolPipeline: createToolPipeline({ registry }),
+      maxSteps: 1,
+    });
+
+    await expect(collect(runner.run(validRequest))).rejects.toMatchObject({
+      code: 'agent-step-limit',
+    });
+
+    const projection = projectSession(await store.read(validRequest.sessionId));
+    expect(requests).toHaveLength(1);
+    expect(projection.turns[0]).toMatchObject({
+      status: 'failed',
+      steps: [
+        { kind: 'model', status: 'completed' },
+        { kind: 'tool', status: 'completed' },
+      ],
+    });
+    expect(projection.turns[0]?.steps).toHaveLength(2);
+
+    await store.close();
+  });
+
+  it('executes multiple tool calls in model order before the next model step', async () => {
+    const store = createInMemorySessionEventStore();
+    const executions: string[] = [];
+    const requests: LlmRequest[] = [];
+    const registry = createToolRegistry();
+    registry.register({
+      name: 'echo',
+      description: 'Returns the input value',
+      parameters: {
+        type: 'object',
+        properties: { value: { type: 'string' } },
+        required: ['value'],
+      },
+      inputSchema: z.object({ value: z.string() }),
+      execute: ({ value }) => {
+        executions.push(`echo:${value}`);
+        return value;
+      },
+    });
+    registry.register({
+      name: 'upper',
+      description: 'Uppercases the input value',
+      parameters: {
+        type: 'object',
+        properties: { value: { type: 'string' } },
+        required: ['value'],
+      },
+      inputSchema: z.object({ value: z.string() }),
+      execute: ({ value }) => {
+        executions.push(`upper:${value}`);
+        return value.toUpperCase();
+      },
+    });
+    const runner = createAgentRunner({
+      llm: sequenceClient(
+        [
+          [
+            { type: 'tool-call-start', id: 'call-1', name: 'echo' },
+            { type: 'tool-call-delta', id: 'call-1', argumentsDelta: '{"value":"x"}' },
+            { type: 'tool-call-start', id: 'call-2', name: 'upper' },
+            { type: 'tool-call-delta', id: 'call-2', argumentsDelta: '{"value":"y"}' },
+            { type: 'finish', reason: 'tool-call' },
+          ],
+          [
+            { type: 'text-delta', text: '完成' },
+            { type: 'finish', reason: 'stop' },
+          ],
+        ],
+        requests,
+      ),
+      sessionStore: store,
+      toolRegistry: registry,
+      toolPipeline: createToolPipeline({ registry }),
+    });
+
+    const events = await collect(runner.run(validRequest));
+
+    expect(executions).toEqual(['echo:x', 'upper:y']);
+    expect(events.map((event) => event.type)).toEqual([
+      'tool-call',
+      'tool-executing',
+      'tool-result',
+      'tool-call',
+      'tool-executing',
+      'tool-result',
+      'text-delta',
+      'completed',
+    ]);
+    expect(requests[1]?.messages).toEqual(
+      expect.arrayContaining([
+        {
+          role: 'tool',
+          toolCallId: 'call-1',
+          content: [{ type: 'text', text: 'x' }],
+        },
+        {
+          role: 'tool',
+          toolCallId: 'call-2',
+          content: [{ type: 'text', text: 'Y' }],
+        },
+      ]),
+    );
+
+    const projection = projectSession(await store.read(validRequest.sessionId));
+    expect(projection.turns[0]?.toolCalls.map(({ toolCall }) => toolCall.id)).toEqual([
+      'call-1',
+      'call-2',
+    ]);
+    expect(projection.turns[0]?.toolResults.map(({ toolCallId }) => toolCallId)).toEqual([
+      'call-1',
+      'call-2',
+    ]);
+
+    await store.close();
+  });
+
+  it('rejects duplicate tool-call starts in a tool-enabled model stream', async () => {
+    const store = createInMemorySessionEventStore();
+    const registry = createToolRegistry();
+    registry.register({
+      name: 'echo',
+      description: 'Returns the input value',
+      parameters: { type: 'object', properties: {} },
+      inputSchema: z.object({}),
+      execute: () => 'ok',
+    });
+    const runner = createAgentRunner({
+      llm: recordingClient(
+        [
+          { type: 'tool-call-start', id: 'call-1', name: 'echo' },
+          { type: 'tool-call-start', id: 'call-1', name: 'echo' },
+        ],
+        [],
+      ),
+      sessionStore: store,
+      toolRegistry: registry,
+      toolPipeline: createToolPipeline({ registry }),
+    });
+
+    await expect(collect(runner.run(validRequest))).rejects.toMatchObject({
+      code: 'agent-tool-call-invalid',
+    });
+
+    await store.close();
   });
 
   it('exposes stable Agent error codes', () => {

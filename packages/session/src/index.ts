@@ -25,5 +25,7 @@ export type {
   SessionProjection,
   SessionProjectionErrorCode,
   SessionStep,
+  SessionToolCall,
+  SessionToolResult,
   SessionTurn,
 } from './projection.js';

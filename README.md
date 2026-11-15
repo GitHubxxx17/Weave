@@ -13,7 +13,7 @@ remains a separate reference project and is not copied into this repository.
 
 ## Status
 
-The Foundation vertical slice, Session persistence, the first headless Agent
+The Foundation vertical slice, Session persistence, the headless Agent Tool
 Loop, the shared Tool Pipeline, and the Approval HTTP control plane are
 implemented. `@weave/protocol`, `@weave/llm`, `@weave/session`,
 `@weave/runtime`, and `@weave/server` form the current architecture. Agent
@@ -84,10 +84,15 @@ no HTTP `/run` or Agent execution SSE adapter.
 
 ## Agent Runner
 
-`createAgentRunner()` is the Runtime boundary for one no-tool model turn. It
+`createAgentRunner()` is the Runtime boundary for one Session turn. It
 validates the request, recovers the Session through `projectSession()`, calls
 `LlmClient.stream()`, yields transient `AgentRuntimeEvent` values, and appends
 durable Session events for the completed, failed, or cancelled lifecycle.
+When configured with a `ToolRegistry` and `ToolPipeline`, it assembles
+streamed Tool Calls, executes them sequentially through the shared Pipeline,
+persists tool messages and tool timeline events, and continues with the next
+model step. `maxSteps` defaults to eight to bound the loop.
+
 Runs for the same Session are serialized within one `AgentRunner` instance so
 Session reads, appends, and model context construction do not interleave.
 Separate Runner instances and processes are not coordinated by the current
@@ -120,10 +125,9 @@ for await (const event of runner.run({
 }
 ```
 
-The current Runner does not execute tools or expose HTTP `/run`. Before
-`finish`, `tool-call-start` and `tool-call-delta` return
-`agent-tool-call-unsupported`; after `finish`, any event, including a tool
-event, returns `agent-stream-protocol`. Agent execution HTTP/SSE will be a
+The Runner still does not expose HTTP `/run`. Without a paired Registry and
+Pipeline, Tool Calls return `agent-tool-call-unsupported`; malformed Tool Call
+streams return `agent-tool-call-invalid`. Agent execution HTTP/SSE will be a
 later adapter over the Runtime event stream.
 
 Run the focused Agent Runner tests with:

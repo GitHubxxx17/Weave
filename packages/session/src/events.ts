@@ -1,4 +1,4 @@
-import { messageSchema } from '@weave/protocol';
+import { messageSchema, toolCallSchema } from '@weave/protocol';
 import { z } from 'zod';
 
 const nonEmptyStringSchema = z.string().min(1);
@@ -48,6 +48,27 @@ const stepCompletedPayloadSchema = z
   })
   .passthrough();
 
+const toolCallCreatedPayloadSchema = z
+  .object({
+    turnId: nonEmptyStringSchema,
+    stepId: nonEmptyStringSchema,
+    toolCall: toolCallSchema,
+  })
+  .passthrough();
+
+const toolResultCreatedPayloadSchema = z
+  .object({
+    turnId: nonEmptyStringSchema,
+    stepId: nonEmptyStringSchema,
+    toolCallId: nonEmptyStringSchema,
+    name: nonEmptyStringSchema,
+    content: z.string(),
+    truncated: z.boolean(),
+    status: z.enum(['completed', 'failed']),
+    errorCode: nonEmptyStringSchema.optional(),
+  })
+  .passthrough();
+
 /**
  * The durable facts supported by the first Session Event Store slice.
  */
@@ -75,6 +96,14 @@ export const sessionEventPayloadSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('step.completed'),
     payload: stepCompletedPayloadSchema,
+  }),
+  z.object({
+    type: z.literal('tool-call.created'),
+    payload: toolCallCreatedPayloadSchema,
+  }),
+  z.object({
+    type: z.literal('tool-result.created'),
+    payload: toolResultCreatedPayloadSchema,
   }),
 ]);
 
@@ -144,6 +173,22 @@ const persistedEventSchemas = [
     occurredAt: z.iso.datetime(),
     type: z.literal('step.completed'),
     payload: stepCompletedPayloadSchema,
+  }),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('tool-call.created'),
+    payload: toolCallCreatedPayloadSchema,
+  }),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('tool-result.created'),
+    payload: toolResultCreatedPayloadSchema,
   }),
 ] as const;
 

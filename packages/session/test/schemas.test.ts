@@ -32,6 +32,51 @@ describe('session event schemas', () => {
     });
   });
 
+  it('accepts tool call and tool result events', () => {
+    expect(
+      newSessionEventSchema.parse({
+        type: 'tool-call.created',
+        payload: {
+          turnId: 'turn-1',
+          stepId: 'tool-step-1',
+          toolCall: {
+            id: 'call-1',
+            name: 'echo',
+            arguments: '{"value":"x"}',
+          },
+        },
+      }),
+    ).toMatchObject({
+      type: 'tool-call.created',
+      payload: {
+        turnId: 'turn-1',
+        stepId: 'tool-step-1',
+        toolCall: { id: 'call-1', name: 'echo' },
+      },
+    });
+
+    expect(
+      newSessionEventSchema.parse({
+        type: 'tool-result.created',
+        payload: {
+          turnId: 'turn-1',
+          stepId: 'tool-step-1',
+          toolCallId: 'call-1',
+          name: 'echo',
+          content: 'x',
+          truncated: false,
+          status: 'completed',
+        },
+      }),
+    ).toMatchObject({
+      type: 'tool-result.created',
+      payload: {
+        toolCallId: 'call-1',
+        status: 'completed',
+      },
+    });
+  });
+
   it('rejects an unknown event type', () => {
     expect(() =>
       newSessionEventSchema.parse({

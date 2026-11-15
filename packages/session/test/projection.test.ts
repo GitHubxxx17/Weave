@@ -16,7 +16,7 @@ function event<T extends SessionEventType>(
     eventId: `event-${sequence}`,
     sessionId,
     sequence,
-    occurredAt: `2026-11-15T00:00:0${sequence}.000Z`,
+    occurredAt: `2026-11-15T00:00:${String(sequence).padStart(2, '0')}.000Z`,
     type,
     payload,
   } as SessionEvent;
@@ -62,6 +62,85 @@ describe('Session Projection', () => {
       kind: 'model',
       status: 'completed',
     });
+  });
+
+  it('projects durable tool calls and tool results onto a Turn', () => {
+    const state = projectSession([
+      event(1, 'session.created', {}),
+      event(2, 'turn.started', { turnId: 'turn-1' }),
+      event(3, 'step.started', { turnId: 'turn-1', stepId: 'model-1', kind: 'model' }),
+      event(4, 'message.created', {
+        messageId: 'assistant-1',
+        message: {
+          role: 'assistant',
+          content: [],
+          toolCalls: [{ id: 'call-1', name: 'echo', arguments: '{"value":"x"}' }],
+        },
+      }),
+      event(5, 'step.completed', {
+        turnId: 'turn-1',
+        stepId: 'model-1',
+        status: 'completed',
+      }),
+      event(6, 'step.started', { turnId: 'turn-1', stepId: 'tool-1', kind: 'tool' }),
+      event(7, 'tool-call.created', {
+        turnId: 'turn-1',
+        stepId: 'tool-1',
+        toolCall: { id: 'call-1', name: 'echo', arguments: '{"value":"x"}' },
+      }),
+      event(8, 'tool-result.created', {
+        turnId: 'turn-1',
+        stepId: 'tool-1',
+        toolCallId: 'call-1',
+        name: 'echo',
+        content: 'x',
+        truncated: false,
+        status: 'completed',
+      }),
+      event(9, 'message.created', {
+        messageId: 'tool-message-1',
+        message: {
+          role: 'tool',
+          toolCallId: 'call-1',
+          content: [{ type: 'text', text: 'x' }],
+        },
+      }),
+      event(10, 'step.completed', {
+        turnId: 'turn-1',
+        stepId: 'tool-1',
+        status: 'completed',
+      }),
+    ]);
+
+    expect(state.turns[0]).toMatchObject({
+      toolCalls: [
+        {
+          stepId: 'tool-1',
+          toolCall: { id: 'call-1', name: 'echo' },
+        },
+      ],
+      toolResults: [
+        {
+          stepId: 'tool-1',
+          toolCallId: 'call-1',
+          content: 'x',
+          status: 'completed',
+        },
+      ],
+    });
+  });
+
+  it('rejects tool events that reference unknown turns or steps', () => {
+    expect(() =>
+      projectSession([
+        event(1, 'session.created', {}),
+        event(2, 'tool-call.created', {
+          turnId: 'missing-turn',
+          stepId: 'missing-step',
+          toolCall: { id: 'call-1', name: 'echo', arguments: '{}' },
+        }),
+      ]),
+    ).toThrow();
   });
 
   it('rejects invalid event ordering and references', () => {
