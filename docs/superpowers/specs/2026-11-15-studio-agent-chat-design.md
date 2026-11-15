@@ -242,10 +242,11 @@ Browser http://127.0.0.1:5173
 
 ```bash
 pnpm --filter @weave/server dev
-pnpm --filter @weave/studio dev
+pnpm --filter @weave/studio dev --host 127.0.0.1
 ```
 
-当前 Server 提供 `dev` script，执行 `pnpm build && node dist/main.js`。
+当前 Server 提供 `dev` script，执行 `pnpm --filter @weave/server... build && node dist/main.js`，
+会先构建 Server 及其 workspace 依赖，避免在全新 checkout 中因依赖包缺少 `dist` 文件而启动失败。
 它使用确定性的 Mock LLM composition root，不会启动真实 Provider。两个进程
 分开运行，便于前端热更新和后端调试。
 

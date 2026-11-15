@@ -497,7 +497,7 @@ Run the Server and Studio dev servers:
 
 ```bash
 pnpm --filter @weave/server dev
-pnpm --filter @weave/studio dev -- --host 127.0.0.1
+pnpm --filter @weave/studio dev --host 127.0.0.1
 ```
 
 Use a browser automation tool to verify `http://127.0.0.1:5173`:
