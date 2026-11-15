@@ -22,6 +22,7 @@
 - 不处理符号链接、文件类型、权限、TOCTOU 或 Approval。
 - 复用 `@weave/runtime` 现有包，不创建新的 Workspace 包。
 - 不增加外部依赖。
+- `@types/node` 仅作为 TypeScript 开发依赖，用于声明 `node:path`，不进入运行时产物。
 - 测试放在 `packages/runtime/test/`。
 - 每个行为先写失败测试，再实现最小代码。
 - 提交信息使用中文 Conventional Commits。
@@ -34,6 +35,10 @@
   - Workspace 根目录校验和相对路径解析算法。
 - Create: `packages/runtime/test/workspace-policy.test.ts`
   - 路径边界和错误行为测试。
+- Modify: `packages/runtime/package.json`
+  - 声明已有版本的 `@types/node` 开发依赖，用于 `node:path` 类型检查。
+- Modify: `packages/runtime/tsconfig.json`
+  - 显式加载 Node 类型声明。
 - Modify: `packages/runtime/src/index.ts`
   - 导出 Workspace 公共 API。
 - Modify: `README.md`
@@ -78,7 +83,7 @@ export class WorkspacePolicyError extends Error {
 }
 ```
 
-- [ ] **Step 1: Write failing contract tests**
+- [x] **Step 1: Write failing contract tests**
 
 Add tests that import the not-yet-existing exports and express these behaviors:
 
@@ -106,7 +111,7 @@ Add tests for valid resolution, safe normalization, root resolution, traversal
 rejection, empty input, null byte, frozen output, stable error code, and no
 file-system dependency. Keep all roots as strings; do not create files.
 
-- [ ] **Step 2: Run the focused test and verify the expected failure**
+- [x] **Step 2: Run the focused test and verify the expected failure**
 
 Run:
 
@@ -117,7 +122,7 @@ pnpm exec vitest run packages/runtime/test/workspace-policy.test.ts --config vit
 Expected: FAIL because `createWorkspacePolicy` and the Workspace types do not
 exist yet.
 
-- [ ] **Step 3: Implement the contract types**
+- [x] **Step 3: Implement the contract types**
 
 In `workspace-types.ts`:
 
@@ -138,12 +143,12 @@ Define the public inferred types and `WorkspacePolicyError`. The constructor
 must accept an optional `ErrorOptions` and preserve `cause`. Export the schemas
 only when they are useful to later adapters; keep internal helpers private.
 
-- [ ] **Step 4: Run the focused test and verify the contract behavior**
+- [x] **Step 4: Run the focused test and verify the contract behavior**
 
 Run the same Vitest command. The tests for schemas and error construction should
 pass; path-resolution tests may still fail until Task 2.
 
-- [ ] **Step 5: Commit the contract**
+- [x] **Step 5: Commit the contract**
 
 ```bash
 git add packages/runtime/src/workspace-types.ts packages/runtime/test/workspace-policy.test.ts
@@ -169,7 +174,7 @@ export interface WorkspacePolicy {
 export function createWorkspacePolicy(options: WorkspacePolicyOptions): WorkspacePolicy;
 ```
 
-- [ ] **Step 1: Add one failing traversal test**
+- [x] **Step 1: Add one failing traversal test**
 
 Add a test that proves this path must fail:
 
@@ -183,7 +188,7 @@ it('rejects a path that escapes the Workspace root after normalization', () => {
 });
 ```
 
-- [ ] **Step 2: Run the focused test and verify it fails for the missing policy**
+- [x] **Step 2: Run the focused test and verify it fails for the missing policy**
 
 Run:
 
@@ -193,7 +198,7 @@ pnpm exec vitest run packages/runtime/test/workspace-policy.test.ts --config vit
 
 Expected: FAIL because `workspace-policy.ts` has not been implemented.
 
-- [ ] **Step 3: Implement the minimal path algorithm**
+- [x] **Step 3: Implement the minimal path algorithm**
 
 Use `node:path`:
 
@@ -228,7 +233,7 @@ Validate the root with `workspacePolicyOptionsSchema`, then explicitly reject
 non-absolute roots with `workspace-invalid-root`. Do not call `stat`, `lstat`,
 `realpath`, `mkdir`, `readFile`, or `writeFile`.
 
-- [ ] **Step 4: Export the public API**
+- [x] **Step 4: Export the public API**
 
 Update `packages/runtime/src/index.ts`:
 
@@ -248,7 +253,7 @@ export { createWorkspacePolicy } from './workspace-policy.js';
 export type { WorkspacePolicy } from './workspace-policy.js';
 ```
 
-- [ ] **Step 5: Run the focused test and verify all path behaviors**
+- [x] **Step 5: Run the focused test and verify all path behaviors**
 
 Run:
 
@@ -258,7 +263,7 @@ pnpm exec vitest run packages/runtime/test/workspace-policy.test.ts --config vit
 
 Expected: all Workspace Policy tests pass.
 
-- [ ] **Step 6: Commit the implementation**
+- [x] **Step 6: Commit the implementation**
 
 ```bash
 git add packages/runtime/src/workspace-types.ts packages/runtime/src/workspace-policy.ts packages/runtime/src/index.ts packages/runtime/test/workspace-policy.test.ts
@@ -281,13 +286,13 @@ git commit -m "feat: 增加工作区路径解析策略"
 - Documentation must preserve the distinction between lexical path validation,
   real filesystem checks, and Approval.
 
-- [ ] **Step 1: Update README**
+- [x] **Step 1: Update README**
 
 Add a Workspace Policy section after Tool Pipeline. Explain that current
 `createWorkspacePolicy()` returns normalized paths and rejects traversal, while
 file tools, symlink checks, Shell, and Approval are not implemented yet.
 
-- [ ] **Step 2: Update the architecture guide**
+- [x] **Step 2: Update the architecture guide**
 
 Add a boundary paragraph and flow:
 
@@ -301,7 +306,7 @@ Tool Pipeline
 State that the policy does not perform I/O and that the executor must repeat
 security checks before touching the filesystem.
 
-- [ ] **Step 3: Record verification evidence**
+- [x] **Step 3: Record verification evidence**
 
 After implementation, append a short implementation note to the spec and mark
 the plan checkboxes completed only after the commands in Task 4 pass.
@@ -320,7 +325,7 @@ git commit -m "docs: 补充工作区路径策略说明"
 - No source changes expected unless verification exposes an implementation
   defect.
 
-- [ ] **Step 1: Run focused tests**
+- [x] **Step 1: Run focused tests**
 
 ```bash
 pnpm exec vitest run packages/runtime/test/workspace-policy.test.ts --config vitest.config.ts
@@ -328,7 +333,7 @@ pnpm exec vitest run packages/runtime/test/workspace-policy.test.ts --config vit
 
 Expected: all Workspace Policy tests pass.
 
-- [ ] **Step 2: Run package checks**
+- [x] **Step 2: Run package checks**
 
 ```bash
 pnpm --filter @weave/runtime lint
@@ -339,7 +344,7 @@ pnpm --filter @weave/runtime build
 
 Expected: lint, typecheck, tests, and build exit successfully.
 
-- [ ] **Step 3: Run the repository verification chain**
+- [x] **Step 3: Run the repository verification chain**
 
 ```bash
 pnpm check
@@ -349,7 +354,7 @@ git diff --check
 Expected: formatting, lint, typecheck, tests, build, and whitespace checks all
 pass with exit code 0.
 
-- [ ] **Step 4: Inspect the final diff**
+- [x] **Step 4: Inspect the final diff**
 
 ```bash
 git status --short

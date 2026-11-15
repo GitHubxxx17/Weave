@@ -168,6 +168,40 @@ Run the focused Tool Pipeline tests with:
 pnpm exec vitest run packages/runtime/test/tool-pipeline.test.ts --config vitest.config.ts
 ```
 
+## Workspace Path Policy
+
+`createWorkspacePolicy()` is the first Workspace security boundary. It
+normalizes a configured absolute root, resolves relative paths, and rejects
+absolute inputs, null bytes, and paths that escape the root after `..`
+normalization.
+
+```ts
+import { createWorkspacePolicy } from '@weave/runtime';
+
+const workspace = createWorkspacePolicy({ root: '/Users/mi/project' });
+const file = workspace.resolve('src/index.ts', 'read');
+// {
+//   absolutePath: '/Users/mi/project/src/index.ts',
+//   relativePath: 'src/index.ts',
+//   operation: 'read',
+// }
+```
+
+This is a lexical path policy, not a complete Sandbox. It does not check
+whether a file exists, follow or reject symbolic links, inspect permissions,
+perform I/O, or ask for Approval. Future file and Shell executors must call
+the policy before access and repeat filesystem-specific checks immediately
+before touching the host.
+
+The current path boundary is deliberately separate from the Tool Pipeline:
+
+```text
+Tool Pipeline
+  -> Workspace Path Policy
+    -> future File/Shell Executor
+      -> future Approval/Sandbox
+```
+
 ## Session Event Store
 
 `@weave/session` stores facts instead of repeatedly mutating a serialized
@@ -221,3 +255,6 @@ consume the same runtime instead of implementing separate agent loops.
 - [Tool Pipeline design](docs/superpowers/specs/2026-11-15-tool-pipeline-design.md):
   Tool Registry, Zod input validation, cancellation, timeout, error
   normalization, and result limits.
+- [Workspace Path Policy design](docs/superpowers/specs/2026-11-15-workspace-path-policy-design.md):
+  lexical path validation, Workspace root boundaries, and the separation from
+  filesystem execution and Approval.

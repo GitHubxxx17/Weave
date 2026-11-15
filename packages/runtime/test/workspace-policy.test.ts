@@ -38,9 +38,13 @@ describe('Workspace Policy contracts', () => {
 
   it('constructs a stable typed error with a cause', () => {
     const cause = new Error('invalid input');
-    const error = new WorkspacePolicyError('workspace-invalid-input', 'Workspace input is invalid', {
-      cause,
-    });
+    const error = new WorkspacePolicyError(
+      'workspace-invalid-input',
+      'Workspace input is invalid',
+      {
+        cause,
+      },
+    );
 
     expect(error).toMatchObject({
       name: 'WorkspacePolicyError',
@@ -125,9 +129,7 @@ describe('Workspace Policy path resolution', () => {
   it('rejects unknown operations before path resolution', () => {
     const policy = createWorkspacePolicy({ root: '/workspace/project' });
 
-    expect(() =>
-      policy.resolve('src/index.ts', 'invalid' as WorkspaceOperation),
-    ).toThrowError(
+    expect(() => policy.resolve('src/index.ts', 'invalid' as WorkspaceOperation)).toThrowError(
       expect.objectContaining({
         code: 'workspace-invalid-input',
       }),

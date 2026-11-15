@@ -71,6 +71,10 @@ Agent Runner
 模块只依赖 Node 内置的 `node:path` 和 Zod，不新增第三方依赖。策略构造
 和路径解析都可以在没有真实文件的测试环境中确定性运行。
 
+由于 TypeScript 需要 Node 内置模块的声明文件，`@weave/runtime` 增加
+`@types/node` 开发依赖。它只参与类型检查和编辑器提示，不会进入运行时
+产物，也不改变部署依赖。
+
 ## 4. 公共接口
 
 ```ts
@@ -200,3 +204,14 @@ validate root
 > 词法路径检查不能解决符号链接和 TOCTOU 问题，所以它不是完整 Sandbox。
 > 真正访问文件时还必须由执行器做 realpath、文件类型、权限和竞态检查。
 > 这是有意保留的边界，而不是遗漏。
+
+## 10. 实施结果
+
+本设计已在 `feat/workspace-path-policy` 分支落地：
+
+- 新增 `createWorkspacePolicy()`、Workspace 输入 Schema 和稳定错误类型；
+- 使用 `node:path` 完成词法路径规范化和根目录边界判断；
+- 增加 11 项 Workspace Policy 测试；
+- `@weave/runtime` 显式加载 `@types/node`，确保 `node:path` 在严格类型检查
+  下有稳定声明；
+- 未引入文件系统 I/O、符号链接解析、Shell 或 Approval 行为。
