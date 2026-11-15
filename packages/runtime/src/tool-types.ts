@@ -1,7 +1,9 @@
 import { z } from 'zod';
+import type { ApprovalRisk } from './approval-types.js';
 
 const nonEmptyStringSchema = z.string().min(1);
 const nonNegativeFiniteNumberSchema = z.number().finite().nonnegative();
+const approvalRiskSchema = z.enum(['low', 'medium', 'high']);
 
 /**
  * Context supplied to every tool implementation by the shared pipeline.
@@ -11,6 +13,19 @@ export interface ToolExecutionContext {
   readonly signal: AbortSignal;
   /** Session associated with the invocation, when one exists. */
   readonly sessionId?: string | undefined;
+}
+
+/** Metadata and redacted summary required before a tool can execute. */
+export interface ToolApprovalRequirement<TInput = unknown> {
+  /** Stable operation identifier used by the approval control plane. */
+  readonly operation: string;
+  /** Risk level shown to the caller before approval. */
+  readonly risk: ApprovalRisk;
+  /** Converts validated input into safe, user-facing approval metadata. */
+  readonly summarize: (input: TInput) => {
+    readonly summary: string;
+    readonly inputSummary: unknown;
+  };
 }
 
 /**
@@ -28,6 +43,8 @@ export interface ToolDefinition<TInput = unknown, TOutput = unknown> {
   readonly parameters: unknown;
   /** Runtime validator for parsed JSON arguments. */
   readonly inputSchema: z.ZodType<TInput>;
+  /** Optional approval gate evaluated before `execute` is called. */
+  readonly approval?: ToolApprovalRequirement<TInput> | undefined;
   /** Tool implementation invoked only by the Tool Pipeline. */
   readonly execute: (input: TInput, context: ToolExecutionContext) => Promise<TOutput> | TOutput;
 }
@@ -74,6 +91,13 @@ export const toolDefinitionSchema = z
     description: z.string(),
     parameters: z.unknown(),
     inputSchema: z.custom<z.ZodTypeAny>((value) => value instanceof z.ZodType),
+    approval: z
+      .object({
+        operation: nonEmptyStringSchema,
+        risk: approvalRiskSchema,
+        summarize: z.custom<(...args: never[]) => unknown>((value) => typeof value === 'function'),
+      })
+      .optional(),
     execute: z.custom<(...args: never[]) => unknown>((value) => typeof value === 'function'),
   })
   .passthrough();
@@ -86,6 +110,10 @@ export type ToolExecutionErrorCode =
   | 'tool-invalid-arguments'
   | 'tool-cancelled'
   | 'tool-timeout'
+  | 'tool-approval-required'
+  | 'tool-approval-rejected'
+  | 'tool-approval-cancelled'
+  | 'tool-approval-expired'
   | 'tool-execution-failed'
   | 'tool-result-serialization-failed';
 

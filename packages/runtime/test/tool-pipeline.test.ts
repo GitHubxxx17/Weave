@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { createToolPipeline, createToolRegistry, type ToolDefinition } from '../src/index.js';
+import {
+  createApprovalBroker,
+  createToolPipeline,
+  createToolRegistry,
+  type ToolDefinition,
+} from '../src/index.js';
 
 interface EchoInput {
   readonly text: string;
@@ -18,6 +23,33 @@ function createRegistry(
       properties: { text: { type: 'string' } },
     },
     inputSchema: z.object({ text: z.string() }),
+    execute,
+  });
+  return registry;
+}
+
+function createProtectedRegistry(
+  execute: ToolDefinition<{ value: string }, unknown>['execute'],
+  summarize: ToolDefinition<{ value: string }, unknown>['approval'] extends {
+    summarize: infer TSummarize;
+  }
+    ? TSummarize
+    : never = ({ value }) => ({
+    summary: `执行受保护操作 ${value}`,
+    inputSummary: { value },
+  }),
+) {
+  const registry = createToolRegistry();
+  registry.register({
+    name: 'protected',
+    description: 'Protected test tool',
+    parameters: { type: 'object' },
+    inputSchema: z.object({ value: z.string() }),
+    approval: {
+      operation: 'test.protected',
+      risk: 'high',
+      summarize,
+    },
     execute,
   });
   return registry;
@@ -196,5 +228,141 @@ describe('Tool Pipeline', () => {
         arguments: '{"text":"hello"}',
       }),
     ).rejects.toMatchObject({ code: 'tool-result-serialization-failed' });
+  });
+
+  it('does not execute a protected tool before approval', async () => {
+    const execute = vi.fn(() => 'done');
+    const broker = createApprovalBroker();
+    const pipeline = createToolPipeline({
+      registry: createProtectedRegistry(execute),
+      approvalBroker: broker,
+    });
+
+    const execution = pipeline.execute({
+      toolCallId: 'call-protected-1',
+      name: 'protected',
+      arguments: '{"value":"x"}',
+    });
+
+    await Promise.resolve();
+    expect(execute).not.toHaveBeenCalled();
+    expect(broker.list()).toHaveLength(1);
+    expect(broker.list()[0]).toMatchObject({
+      status: 'pending',
+      operation: 'test.protected',
+      summary: '执行受保护操作 x',
+      inputSummary: { value: 'x' },
+    });
+
+    broker.approve(broker.list()[0]!.approvalId, '用户确认');
+    await expect(execution).resolves.toMatchObject({ content: 'done' });
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a protected tool without invoking its implementation', async () => {
+    const execute = vi.fn(() => 'done');
+    const broker = createApprovalBroker();
+    const pipeline = createToolPipeline({
+      registry: createProtectedRegistry(execute),
+      approvalBroker: broker,
+    });
+
+    const execution = pipeline.execute({
+      toolCallId: 'call-protected-2',
+      name: 'protected',
+      arguments: '{"value":"x"}',
+    });
+    await Promise.resolve();
+    broker.reject(broker.list()[0]!.approvalId, '需要人工复核');
+
+    await expect(execution).rejects.toMatchObject({
+      code: 'tool-approval-rejected',
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('maps cancelled and expired approvals to stable pipeline errors', async () => {
+    const execute = vi.fn(() => 'done');
+    const broker = createApprovalBroker();
+    const pipeline = createToolPipeline({
+      registry: createProtectedRegistry(execute),
+      approvalBroker: broker,
+    });
+
+    const cancelledExecution = pipeline.execute({
+      toolCallId: 'call-protected-3',
+      name: 'protected',
+      arguments: '{"value":"cancelled"}',
+    });
+    await Promise.resolve();
+    broker.cancel(broker.list()[0]!.approvalId, '调用方取消');
+    await expect(cancelledExecution).rejects.toMatchObject({
+      code: 'tool-approval-cancelled',
+    });
+
+    const expiredExecution = pipeline.execute({
+      toolCallId: 'call-protected-4',
+      name: 'protected',
+      arguments: '{"value":"expired"}',
+    });
+    await Promise.resolve();
+    broker.expire(broker.list()[1]!.approvalId, '审批已过期');
+    await expect(expiredExecution).rejects.toMatchObject({
+      code: 'tool-approval-expired',
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('does not silently execute a protected tool without an Approval Broker', async () => {
+    const execute = vi.fn(() => 'done');
+    const pipeline = createToolPipeline({
+      registry: createProtectedRegistry(execute),
+    });
+
+    await expect(
+      pipeline.execute({
+        toolCallId: 'call-protected-5',
+        name: 'protected',
+        arguments: '{"value":"x"}',
+      }),
+    ).rejects.toMatchObject({ code: 'tool-approval-required' });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('passes the effective timeout and combined signal to Approval', async () => {
+    const summarize = vi.fn(({ value }: { value: string }) => ({
+      summary: `执行受保护操作 ${value}`,
+      inputSummary: { value },
+    }));
+    const broker = createApprovalBroker();
+    const pipeline = createToolPipeline({
+      registry: createProtectedRegistry(
+        vi.fn(() => 'done'),
+        summarize,
+      ),
+      approvalBroker: broker,
+      timeoutMs: 100,
+    });
+    const requestController = new AbortController();
+
+    const execution = pipeline.execute({
+      toolCallId: 'call-protected-6',
+      name: 'protected',
+      arguments: '{"value":"x"}',
+      signal: requestController.signal,
+      timeoutMs: 50,
+    });
+
+    await Promise.resolve();
+    expect(summarize).toHaveBeenCalledWith({ value: 'x' });
+    const pending = broker.list()[0]!;
+    expect(pending.expiresAt).toBeDefined();
+    expect(new Date(pending.expiresAt!).getTime() - new Date(pending.createdAt).getTime()).toBe(50);
+
+    requestController.abort();
+    await expect(execution).rejects.toMatchObject({
+      code: 'tool-approval-cancelled',
+    });
+    expect(broker.get(pending.approvalId)?.status).toBe('cancelled');
   });
 });

@@ -27,6 +27,7 @@ export {
 } from './tool-types.js';
 export type {
   ToolDefinition,
+  ToolApprovalRequirement,
   RegisteredToolDefinition,
   ToolExecutionContext,
   ToolExecutionErrorCode,

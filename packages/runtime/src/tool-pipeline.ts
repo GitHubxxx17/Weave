@@ -2,9 +2,11 @@ import {
   ToolExecutionError,
   toolExecutionRequestSchema,
   type RegisteredToolDefinition,
+  type ToolDefinition,
   type ToolExecutionRequest,
   type ToolExecutionResult,
 } from './tool-types.js';
+import { ApprovalError, type ApprovalDecision, type ApprovalBroker } from './approval-types.js';
 import type { ToolRegistry } from './tool-registry.js';
 
 const defaultMaxResultBytes = 32_000;
@@ -13,6 +15,8 @@ const defaultMaxResultBytes = 32_000;
 export interface ToolPipelineOptions {
   /** Registry containing executable tool definitions. */
   readonly registry: ToolRegistry;
+  /** Broker used to pause protected tools until an external decision arrives. */
+  readonly approvalBroker?: ApprovalBroker | undefined;
   /** Default timeout applied when a request does not specify one. */
   readonly timeoutMs?: number | undefined;
   /** Maximum UTF-8 byte length returned in tool content. */
@@ -31,6 +35,40 @@ function isAbortError(error: unknown): boolean {
 
 function createAbortError(): DOMException {
   return new DOMException('The operation was aborted', 'AbortError');
+}
+
+function mapApprovalError(toolName: string, error: ApprovalError): ToolExecutionError {
+  switch (error.code) {
+    case 'approval-cancelled':
+      return new ToolExecutionError(
+        'tool-approval-cancelled',
+        `Tool "${toolName}" approval was cancelled`,
+        { cause: error },
+      );
+    case 'approval-expired':
+      return new ToolExecutionError(
+        'tool-approval-expired',
+        `Tool "${toolName}" approval expired`,
+        { cause: error },
+      );
+    default:
+      return new ToolExecutionError('tool-execution-failed', `Tool "${toolName}" approval failed`, {
+        cause: error,
+      });
+  }
+}
+
+function createRejectedApprovalError(
+  toolName: string,
+  decision: Extract<ApprovalDecision, { status: 'rejected' }>,
+): ToolExecutionError {
+  return new ToolExecutionError(
+    'tool-approval-rejected',
+    `Tool "${toolName}" approval was rejected`,
+    {
+      cause: decision.reason === undefined ? undefined : new Error(decision.reason),
+    },
+  );
 }
 
 function parseArguments(toolName: string, argumentsText: string): unknown {
@@ -159,6 +197,53 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
         if (timedOut) {
           throw new ToolExecutionError('tool-timeout', `Tool "${request.name}" timed out`);
         }
+
+        const toolWithApproval = tool as unknown as ToolDefinition<unknown, unknown>;
+        if (toolWithApproval.approval !== undefined) {
+          const approval = toolWithApproval.approval;
+          const approvalBroker = options.approvalBroker;
+          if (approvalBroker === undefined) {
+            throw new ToolExecutionError(
+              'tool-approval-required',
+              `Tool "${request.name}" requires an Approval Broker`,
+            );
+          }
+
+          let decision: ApprovalDecision;
+          try {
+            const summary = approval.summarize(inputResult.data);
+            decision = await approvalBroker.request({
+              toolCallId: request.toolCallId,
+              toolName: request.name,
+              operation: approval.operation,
+              summary: summary.summary,
+              risk: approval.risk,
+              inputSummary: summary.inputSummary,
+              signal,
+              ...(effectiveTimeoutMs === undefined ? {} : { timeoutMs: effectiveTimeoutMs }),
+            });
+          } catch (error: unknown) {
+            if (error instanceof ApprovalError) {
+              throw mapApprovalError(request.name, error);
+            }
+            throw new ToolExecutionError(
+              'tool-execution-failed',
+              `Tool "${request.name}" approval could not be created`,
+              { cause: error },
+            );
+          }
+
+          if (decision.status === 'rejected') {
+            throw createRejectedApprovalError(request.name, decision);
+          }
+          if (decision.status !== 'approved') {
+            throw new ToolExecutionError(
+              'tool-execution-failed',
+              `Tool "${request.name}" approval ended with ${decision.status}`,
+            );
+          }
+        }
+
         let result: unknown;
         try {
           result = await (tool as RegisteredToolDefinition).execute(inputResult.data, {
