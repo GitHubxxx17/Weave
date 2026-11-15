@@ -98,10 +98,10 @@ apps/studio/
 │   ├── features/
 │   │   └── agent/
 │   │       ├── agent-stream.ts
-│   │       ├── agent-stream.test.ts
 │   │       └── agent-types.ts
 │   └── main.tsx
 └── test/
+    ├── agent-stream.test.ts
     └── App.test.tsx
 ```
 
@@ -111,8 +111,8 @@ apps/studio/
 - `agent-stream.ts`：HTTP 请求、增量 UTF-8 解码、SSE 分帧和事件分发；
 - `agent-types.ts`：前端可消费的 Agent 事件联合类型；
 - `app.css`：工作台布局和状态视觉；
-- `App.test.tsx`：用户输入、发送和事件渲染行为；
-- `agent-stream.test.ts`：纯 SSE parser 的边界测试。
+- `test/App.test.tsx`：用户输入、发送和事件渲染行为；
+- `test/agent-stream.test.ts`：纯 SSE parser 的边界测试。
 
 第一版不引入 Pinia、Redux、Zustand 或 React Router。页面只有一个工作台，
 组件数量和状态范围都很小，使用 React 本地状态可以更容易理解数据流。
