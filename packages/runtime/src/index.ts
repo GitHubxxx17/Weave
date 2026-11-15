@@ -35,3 +35,5 @@ export type {
 } from './tool-types.js';
 export { createToolRegistry } from './tool-registry.js';
 export type { ToolRegistry } from './tool-registry.js';
+export { createToolPipeline } from './tool-pipeline.js';
+export type { ToolPipeline, ToolPipelineOptions } from './tool-pipeline.js';
