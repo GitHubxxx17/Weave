@@ -18,6 +18,7 @@
   "dependencies": {
     "@weave/llm": "workspace:*",
     "@weave/protocol": "workspace:*",
-    "@weave/session": "workspace:*"
+    "@weave/session": "workspace:*",
+    "zod": "4.6.7"
   }
 }
