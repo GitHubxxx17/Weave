@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { LlmClient } from '@weave/llm';
 import type { LlmRequest, StreamEvent } from '@weave/protocol';
-import { createInMemorySessionEventStore, projectSession } from '@weave/session';
+import {
+  createInMemorySessionEventStore,
+  projectSession,
+  type NewSessionEvent,
+  type SessionEventStore,
+} from '@weave/session';
 import {
   AgentRunError,
   agentRunRequestSchema,
@@ -29,6 +34,53 @@ function recordingClient(script: readonly StreamEvent[], requests: LlmRequest[])
         yield event;
       }
     },
+  };
+}
+
+function throwingClient(error: unknown): LlmClient {
+  return {
+    stream(): AsyncIterable<StreamEvent> {
+      return {
+        [Symbol.asyncIterator]() {
+          return {
+            async next(): Promise<IteratorResult<StreamEvent>> {
+              throw error;
+            },
+          };
+        },
+      };
+    },
+  };
+}
+
+interface RecordingStore {
+  readonly store: SessionEventStore;
+  readonly batches: readonly (readonly NewSessionEvent[])[];
+}
+
+function recordingSessionEventStore(options?: {
+  readonly failedTerminalError?: unknown;
+}): RecordingStore {
+  const store = createInMemorySessionEventStore();
+  const batches: NewSessionEvent[][] = [];
+
+  return {
+    store: {
+      async append(sessionId, events) {
+        batches.push(structuredClone(events));
+        if (
+          options?.failedTerminalError !== undefined &&
+          events[0]?.type === 'step.completed' &&
+          events[0].payload.status === 'failed'
+        ) {
+          throw options.failedTerminalError;
+        }
+        return store.append(sessionId, events);
+      },
+      read: (sessionId, readOptions) => store.read(sessionId, readOptions),
+      close: () => store.close(),
+    },
+    batches,
   };
 }
 
@@ -163,6 +215,29 @@ describe('Agent Runner contracts', () => {
     await store.close();
   });
 
+  it('records initialization and completion events in append batches', async () => {
+    const recordingStore = recordingSessionEventStore();
+    const runner = createAgentRunner({
+      llm: recordingClient([{ type: 'finish', reason: 'stop' }], []),
+      sessionStore: recordingStore.store,
+    });
+
+    await collect(runner.run(validRequest));
+
+    expect(recordingStore.batches.map((batch) => batch.map(({ type }) => type))).toEqual([
+      ['session.created'],
+      ['message.created', 'turn.started', 'step.started'],
+      ['step.completed', 'turn.completed'],
+    ]);
+    expect(recordingStore.batches[1]).toMatchObject([
+      { type: 'message.created' },
+      { type: 'turn.started' },
+      { type: 'step.started' },
+    ]);
+
+    await recordingStore.store.close();
+  });
+
   it('rejects invalid input before reading or writing the Session', async () => {
     const store = createInMemorySessionEventStore();
     const requests: LlmRequest[] = [];
@@ -278,6 +353,74 @@ describe('Agent Runner contracts', () => {
     expect(projection.turns[0]).toMatchObject({
       status: 'failed',
       steps: [{ status: 'failed' }],
+    });
+
+    await store.close();
+  });
+
+  it('preserves the original AgentRunError when failed persistence rejects', async () => {
+    const originalError = new AgentRunError(
+      'agent-stream-protocol',
+      'The LLM raised this exact error',
+    );
+    const recordingStore = recordingSessionEventStore({
+      failedTerminalError: new Error('failed persistence'),
+    });
+    const runner = createAgentRunner({
+      llm: throwingClient(originalError),
+      sessionStore: recordingStore.store,
+    });
+
+    await expect(collect(runner.run(validRequest))).rejects.toBe(originalError);
+
+    await recordingStore.store.close();
+  });
+
+  it('preserves failed terminal events as one ordered batch without an assistant message', async () => {
+    const recordingStore = recordingSessionEventStore();
+    const runner = createAgentRunner({
+      llm: recordingClient(
+        [
+          { type: 'text-delta', text: 'partial' },
+          { type: 'finish', reason: 'tool-call' },
+        ],
+        [],
+      ),
+      sessionStore: recordingStore.store,
+    });
+
+    await expect(collect(runner.run(validRequest))).rejects.toMatchObject({
+      code: 'agent-tool-call-unsupported',
+    });
+
+    expect(recordingStore.batches.map((batch) => batch.map(({ type }) => type))).toEqual([
+      ['session.created'],
+      ['message.created', 'turn.started', 'step.started'],
+      ['step.completed', 'turn.completed'],
+    ]);
+    expect(recordingStore.batches[2]).not.toContainEqual(
+      expect.objectContaining({ type: 'message.created' }),
+    );
+    expect(projectSession(await recordingStore.store.read('session-1')).messages).toHaveLength(1);
+
+    await recordingStore.store.close();
+  });
+
+  it('prioritizes stream protocol errors for tool events after finish', async () => {
+    const store = createInMemorySessionEventStore();
+    const runner = createAgentRunner({
+      llm: recordingClient(
+        [
+          { type: 'finish', reason: 'stop' },
+          { type: 'tool-call-start', id: 'call-1', name: 'read_file' },
+        ],
+        [],
+      ),
+      sessionStore: store,
+    });
+
+    await expect(collect(runner.run(validRequest))).rejects.toMatchObject({
+      code: 'agent-stream-protocol',
     });
 
     await store.close();

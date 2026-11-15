@@ -112,24 +112,28 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
         }
       } catch (error: unknown) {
         if (error instanceof AgentRunError) {
-          await options.sessionStore.append(request.sessionId, [
-            {
-              type: 'step.completed',
-              payload: {
-                turnId,
-                stepId,
-                status: 'failed',
+          try {
+            await options.sessionStore.append(request.sessionId, [
+              {
+                type: 'step.completed',
+                payload: {
+                  turnId,
+                  stepId,
+                  status: 'failed',
+                },
               },
-            },
-            {
-              type: 'turn.completed',
-              payload: {
-                turnId,
-                status: 'failed',
-                reason: error.code,
+              {
+                type: 'turn.completed',
+                payload: {
+                  turnId,
+                  status: 'failed',
+                  reason: error.code,
+                },
               },
-            },
-          ]);
+            ]);
+          } catch {
+            // Preserve the original AgentRunError when failed persistence fails.
+          }
         }
         throw error;
       }
