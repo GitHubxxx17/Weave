@@ -37,7 +37,7 @@
 - Produces `toolExecutionRequestSchema` and `toolDefinitionSchema`.
 - Does not execute tools.
 
-- [ ] **Step 1: Write the failing contract tests**
+- [x] **Step 1: Write the failing contract tests**
 
 ```ts
 it('accepts a valid tool execution request', () => {
@@ -71,13 +71,13 @@ it('exposes a stable ToolExecutionError code and cause', () => {
 });
 ```
 
-- [ ] **Step 2: Run the focused test and verify it fails**
+- [x] **Step 2: Run the focused test and verify it fails**
 
 Run: `pnpm exec vitest run packages/runtime/test/tool-types.test.ts --config vitest.config.ts`
 
 Expected: FAIL because the Tool Pipeline contract exports do not exist yet.
 
-- [ ] **Step 3: Add the runtime Zod dependency and implement the contract**
+- [x] **Step 3: Add the runtime Zod dependency and implement the contract**
 
 Add `"zod": "4.6.7"` to `packages/runtime/package.json`. Define non-empty string
 validation, non-negative finite timeout validation, the execution context and
@@ -85,18 +85,18 @@ result types, and the typed error class in `tool-types.ts`. The request schema
 must validate `toolCallId`, `name`, `arguments`, optional `sessionId`,
 `timeoutMs`, and optional `AbortSignal`.
 
-- [ ] **Step 4: Export the public contract**
+- [x] **Step 4: Export the public contract**
 
 Export the new types, schemas and error class from `packages/runtime/src/index.ts`.
 Do not export implementation internals yet.
 
-- [ ] **Step 5: Run the focused test and verify it passes**
+- [x] **Step 5: Run the focused test and verify it passes**
 
 Run: `pnpm exec vitest run packages/runtime/test/tool-types.test.ts --config vitest.config.ts`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit the contract**
+- [x] **Step 6: Commit the contract**
 
 ```bash
 git add packages/runtime/package.json packages/runtime/src/tool-types.ts packages/runtime/src/index.ts packages/runtime/test/tool-types.test.ts pnpm-lock.yaml
@@ -117,7 +117,7 @@ git commit -m "feat: 定义工具管线公共契约"
 - `get()` returns the exact registered definition or `undefined`.
 - `list()` returns definitions in registration order.
 
-- [ ] **Step 1: Write the failing Registry tests**
+- [x] **Step 1: Write the failing Registry tests**
 
 ```ts
 const echoTool: ToolDefinition<{ text: string }, string> = {
@@ -153,29 +153,29 @@ it('returns a stable snapshot from list', () => {
 });
 ```
 
-- [ ] **Step 2: Run the focused tests and verify they fail**
+- [x] **Step 2: Run the focused tests and verify they fail**
 
 Run: `pnpm exec vitest run packages/runtime/test/tool-registry.test.ts --config vitest.config.ts`
 
 Expected: FAIL because `createToolRegistry` is not implemented.
 
-- [ ] **Step 3: Implement the registry**
+- [x] **Step 3: Implement the registry**
 
 Use a private `Map<string, ToolDefinition>` and a registration-order array or
 Map iteration. Validate the definition with the contract schema before storing
 it. Return a frozen list snapshot so callers cannot mutate Registry state.
 
-- [ ] **Step 4: Export the registry factory**
+- [x] **Step 4: Export the registry factory**
 
 Export `createToolRegistry` and `ToolRegistry` from `packages/runtime/src/index.ts`.
 
-- [ ] **Step 5: Run the focused tests and verify they pass**
+- [x] **Step 5: Run the focused tests and verify they pass**
 
 Run: `pnpm exec vitest run packages/runtime/test/tool-registry.test.ts --config vitest.config.ts`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit the Registry**
+- [x] **Step 6: Commit the Registry**
 
 ```bash
 git add packages/runtime/src/tool-registry.ts packages/runtime/test/tool-registry.test.ts packages/runtime/src/index.ts
@@ -195,7 +195,7 @@ git commit -m "feat: 增加工具注册表"
 - Produces `ToolPipeline.execute(request): Promise<ToolExecutionResult>`.
 - Does not write Session events or call Agent Runner.
 
-- [ ] **Step 1: Write the failing normal execution tests**
+- [x] **Step 1: Write the failing normal execution tests**
 
 ```ts
 it('parses and validates arguments before invoking the tool', async () => {
@@ -233,27 +233,27 @@ it('rejects unknown tools and invalid JSON without invoking a handler', async ()
 });
 ```
 
-- [ ] **Step 2: Run the focused tests and verify they fail**
+- [x] **Step 2: Run the focused tests and verify they fail**
 
 Run: `pnpm exec vitest run packages/runtime/test/tool-pipeline.test.ts --config vitest.config.ts`
 
 Expected: FAIL because `createToolPipeline` is not implemented.
 
-- [ ] **Step 3: Implement request validation and lookup**
+- [x] **Step 3: Implement request validation and lookup**
 
 Parse the request with `toolExecutionRequestSchema`, look up the name in the
 Registry, parse JSON arguments, and run the registered `inputSchema` before
 calling `execute`. Wrap each failure in its documented `ToolExecutionError`
 code and never invoke a handler on an earlier failure.
 
-- [ ] **Step 4: Implement cooperative cancellation and timeout**
+- [x] **Step 4: Implement cooperative cancellation and timeout**
 
 Create an internal `AbortController`, combine it with the request signal, and
 optionally start a timer. Before and after `execute`, check whether cancellation
 or timeout happened. Clear the timer and remove listeners in a `finally` block.
 If both timeout and a later AbortError occur, return `tool-timeout`.
 
-- [ ] **Step 5: Implement serialization and UTF-8 result limiting**
+- [x] **Step 5: Implement serialization and UTF-8 result limiting**
 
 Serialize strings directly and other JSON values with `JSON.stringify`; map
 `undefined` to an empty string. Use `TextEncoder` to enforce
@@ -261,7 +261,7 @@ Serialize strings directly and other JSON values with `JSON.stringify`; map
 `truncated: true`. Convert circular JSON failures to
 `tool-result-serialization-failed`.
 
-- [ ] **Step 6: Add cancellation, timeout, error and result-limit tests**
+- [x] **Step 6: Add cancellation, timeout, error and result-limit tests**
 
 ```ts
 it('maps an aborted request to tool-cancelled', async () => {
@@ -319,13 +319,13 @@ it('limits UTF-8 output without splitting a multibyte character', async () => {
 });
 ```
 
-- [ ] **Step 7: Run focused tests and verify they pass**
+- [x] **Step 7: Run focused tests and verify they pass**
 
 Run: `pnpm exec vitest run packages/runtime/test/tool-pipeline.test.ts --config vitest.config.ts`
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit the Pipeline**
+- [x] **Step 8: Commit the Pipeline**
 
 ```bash
 git add packages/runtime/src/tool-pipeline.ts packages/runtime/test/tool-pipeline.test.ts packages/runtime/src/index.ts
@@ -346,7 +346,7 @@ git commit -m "feat: 实现工具统一执行管线"
 - Documents the implemented contract only.
 - Does not add code behavior.
 
-- [ ] **Step 1: Update the architecture text**
+- [x] **Step 1: Update the architecture text**
 
 Add the completed Tool Pipeline boundary to `docs/architecture/foundation.md`:
 
@@ -357,18 +357,18 @@ Agent Runner -> Tool Registry -> Tool Pipeline -> Tool Result
 State explicitly that Pipeline does not provide Workspace, Approval, Session
 persistence, HTTP, or SSE.
 
-- [ ] **Step 2: Update README status**
+- [x] **Step 2: Update README status**
 
 Change the capability status so readers can see that Tool Registry and Pipeline
 are implemented, while Workspace/Sandbox, Approval, HTTP/SSE and Studio remain
 future work.
 
-- [ ] **Step 3: Mark the implementation plan complete**
+- [x] **Step 3: Mark the implementation plan complete**
 
 Mark all implementation steps as `[x]` only after the focused tests and full
 verification pass. Record the exact verification commands and test count.
 
-- [ ] **Step 4: Create the Feishu learning document**
+- [x] **Step 4: Create the Feishu learning document**
 
 Create `07 Weave Tool Pipeline：工具注册、校验与安全执行` in the Weave document
 folder. Include:
@@ -381,12 +381,12 @@ folder. Include:
 - 与 Agent Loop、Workspace、Approval、SSE 和前端的关系；
 - 前后端学习要点、面试回答和自测题。
 
-- [ ] **Step 5: Update the Feishu total plan**
+- [x] **Step 5: Update the Feishu total plan**
 
 Record the completed Tool Pipeline stage, link the learning document, and revise
 the next step to Workspace/Sandbox/Approval.
 
-- [ ] **Step 6: Run the complete verification**
+- [x] **Step 6: Run the complete verification**
 
 Run:
 
@@ -396,9 +396,9 @@ git diff --check
 ```
 
 Expected: all format, lint, typecheck, test and build tasks pass with no
-whitespace errors.
+whitespace errors. The final run passed 14 test files with 145 tests.
 
-- [ ] **Step 7: Commit the documentation**
+- [x] **Step 7: Commit the documentation**
 
 ```bash
 git add README.md docs/architecture/foundation.md docs/superpowers/specs/2026-11-15-tool-pipeline-design.md docs/superpowers/plans/2026-11-15-tool-pipeline.md
@@ -407,12 +407,14 @@ git commit -m "docs: 补充工具管线架构与学习说明"
 
 ## Completion Checklist
 
-- [ ] Tool contract tests pass.
-- [ ] Registry tests pass.
-- [ ] Pipeline tests pass.
-- [ ] `pnpm check` passes.
-- [ ] `git diff --check` passes.
-- [ ] Repository architecture and README reflect the implementation.
-- [ ] Feishu learning document is created and linked.
-- [ ] Feishu total plan is updated.
-- [ ] Branch contains only Tool Pipeline changes.
+- [x] Tool contract tests pass.
+- [x] Registry tests pass.
+- [x] Pipeline tests pass.
+- [x] `pnpm check` passes.
+- [x] Runtime focused tests pass: 16 tests across the Tool Pipeline contract,
+  Registry, and execution suites.
+- [x] `git diff --check` passes.
+- [x] Repository architecture and README reflect the implementation.
+- [x] Feishu learning document is created and linked.
+- [x] Feishu total plan is updated.
+- [x] Branch contains only Tool Pipeline changes.

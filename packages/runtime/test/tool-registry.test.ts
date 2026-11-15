@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import {
-  createToolRegistry,
-  type ToolDefinition,
-} from '@weave/runtime';
+import { createToolRegistry, type ToolDefinition } from '../src/index.js';
 
 const echoTool: ToolDefinition<{ text: string }, string> = {
   name: 'echo',

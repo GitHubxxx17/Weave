@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  ToolExecutionError,
-  toolExecutionRequestSchema,
-} from '@weave/runtime';
+import { ToolExecutionError, toolExecutionRequestSchema } from '../src/index.js';
 
 describe('Tool Pipeline contracts', () => {
   it('accepts a valid tool execution request', () => {

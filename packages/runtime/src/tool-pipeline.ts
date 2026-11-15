@@ -176,11 +176,9 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
               cause: error,
             });
           }
-          throw new ToolExecutionError(
-            'tool-execution-failed',
-            `Tool "${request.name}" failed`,
-            { cause: error },
-          );
+          throw new ToolExecutionError('tool-execution-failed', `Tool "${request.name}" failed`, {
+            cause: error,
+          });
         }
 
         if (timedOut) {

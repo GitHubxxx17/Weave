@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import {
-  createToolPipeline,
-  createToolRegistry,
-  type ToolDefinition,
-} from '@weave/runtime';
+import { createToolPipeline, createToolRegistry, type ToolDefinition } from '../src/index.js';
 
 interface EchoInput {
   readonly text: string;
@@ -98,11 +94,9 @@ describe('Tool Pipeline', () => {
       registry: createRegistry(
         (_input, { signal }) =>
           new Promise<string>((resolve, reject) => {
-            signal.addEventListener(
-              'abort',
-              () => reject(new DOMException('', 'AbortError')),
-              { once: true },
-            );
+            signal.addEventListener('abort', () => reject(new DOMException('', 'AbortError')), {
+              once: true,
+            });
           }),
       ),
       timeoutMs: 5,

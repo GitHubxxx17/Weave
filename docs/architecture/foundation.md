@@ -1,8 +1,8 @@
 # Weave Foundation Architecture
 
-This document explains the first runnable Weave slice and the implemented
-headless Agent Loop. It is a learning and maintenance guide, not a replacement
-for the package APIs or tests.
+This document explains the first runnable Weave slice, the implemented
+headless Agent Loop, and the shared Tool Pipeline. It is a learning and
+maintenance guide, not a replacement for the package APIs or tests.
 
 ## The Request Path
 
@@ -86,8 +86,9 @@ The model stream must contain exactly one `finish`, and it must be last.
 Missing, repeated, or followed-by-more-output finishes produce
 `agent-stream-protocol`. Before `finish`, `tool-call-start` and
 `tool-call-delta` produce `agent-tool-call-unsupported`, as does
-`finish.reason = 'tool-call'`; no tool is executed because the Tool Pipeline
-does not exist yet. After `finish`, any event, including a tool event, produces
+`finish.reason = 'tool-call'`; the current Agent Runner still does not invoke
+the Tool Pipeline because multi-step tool turns and Session tool events are
+outside this slice. After `finish`, any event, including a tool event, produces
 `agent-stream-protocol`.
 
 Model and Store errors retain their original types. Once the lifecycle has
@@ -100,6 +101,27 @@ terminal state. If execution has already completed, `return()` closes the
 iterator and discards queued transient events without appending cancellation.
 If terminal persistence also fails, the original and persistence errors are
 exposed in an `AggregateError`.
+
+The Runtime now also exposes a shared Tool Registry and Tool Pipeline:
+
+```text
+Agent Runner
+  -> Tool Registry
+  -> Tool Pipeline
+  -> Tool Result
+```
+
+The Registry owns stable tool names, model-facing descriptions, and executable
+definitions. The Pipeline owns JSON parsing, Zod argument validation,
+cooperative cancellation, timeout classification, result serialization, and
+UTF-8 byte limits. Callers must submit a normalized Tool Call to the Pipeline;
+they must not invoke a registered tool's `execute` function directly.
+
+The Pipeline deliberately does not provide file access, Shell execution,
+Workspace/Sandbox boundaries, Approval, Session persistence, HTTP, or SSE. A
+tool being registered means only that it can pass through this common lifecycle;
+it does not grant access to the host filesystem or network. Those capabilities
+will be added behind separate security boundaries.
 
 HTTP and SSE are future adapters that will consume `AgentRuntimeEvent`; they
 must not reimplement the Agent Loop. The current Server contract remains

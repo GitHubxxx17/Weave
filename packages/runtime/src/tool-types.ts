@@ -29,10 +29,7 @@ export interface ToolDefinition<TInput = unknown, TOutput = unknown> {
   /** Runtime validator for parsed JSON arguments. */
   readonly inputSchema: z.ZodType<TInput>;
   /** Tool implementation invoked only by the Tool Pipeline. */
-  readonly execute: (
-    input: TInput,
-    context: ToolExecutionContext,
-  ) => Promise<TOutput> | TOutput;
+  readonly execute: (input: TInput, context: ToolExecutionContext) => Promise<TOutput> | TOutput;
 }
 
 /** Type-erased definition used by registries that do not know tool input types. */
