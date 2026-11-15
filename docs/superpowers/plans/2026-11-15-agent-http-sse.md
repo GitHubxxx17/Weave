@@ -40,12 +40,12 @@
 **Interfaces:**
 - Produces the design and implementation plan used by later tasks.
 
-- [ ] **Step 1: Review the HTTP/SSE design**
+- [x] **Step 1: Review the HTTP/SSE design**
 
 Confirm that the adapter uses `POST /agent/runs/stream`, direct SSE response,
 runtime service injection, and request-signal cancellation.
 
-- [ ] **Step 2: Commit the design and plan**
+- [x] **Step 2: Commit the design and plan**
 
 ```bash
 git add docs/superpowers/specs/2026-11-15-agent-http-sse-design.md \
@@ -66,7 +66,7 @@ git commit -m "docs: 设计 Agent HTTP SSE 适配层"
 - Produces: `registerAgentRoutes(app, runtime, options)` and the
   `POST /agent/runs/stream` response contract.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Use a fake runner whose `run()` returns an async iterator over:
 
@@ -88,7 +88,7 @@ Assert status `200`, SSE headers, event names, JSON data, and event order.
 Add tests for invalid JSON, invalid body, missing service, runner error,
 reader cancellation, and iterator cleanup.
 
-- [ ] **Step 2: Run the new tests and verify the expected failure**
+- [x] **Step 2: Run the new tests and verify the expected failure**
 
 ```bash
 pnpm exec vitest run apps/server/test/agent-api.test.ts --config vitest.config.ts
@@ -96,7 +96,7 @@ pnpm exec vitest run apps/server/test/agent-api.test.ts --config vitest.config.t
 
 Expected: the new route and test helper imports do not exist yet.
 
-- [ ] **Step 3: Implement the minimum HTTP adapter**
+- [x] **Step 3: Implement the minimum HTTP adapter**
 
 Define:
 
@@ -137,7 +137,7 @@ data: {"error":{"code": stableCode, "message": stableMessage}}
 
 Do not serialize `Error.cause`.
 
-- [ ] **Step 4: Run the focused tests**
+- [x] **Step 4: Run the focused tests**
 
 ```bash
 pnpm exec vitest run apps/server/test/agent-api.test.ts --config vitest.config.ts
@@ -165,7 +165,7 @@ git commit -m "feat: 增加 Agent HTTP SSE 适配层"
 - Produces: exported `createServerAgentRunner(runtime)` and a production
   `createApp` configuration that receives the created runner.
 
-- [ ] **Step 1: Add a failing service-availability test**
+- [x] **Step 1: Add a failing service-availability test**
 
 Create a running server Runtime, call `createApp(runtime)` without Agent options,
 and assert:
@@ -180,7 +180,7 @@ expect(await response.json()).toEqual({
 });
 ```
 
-- [ ] **Step 2: Implement the default service**
+- [x] **Step 2: Implement the default service**
 
 Add:
 
@@ -203,7 +203,7 @@ Do not add a second Runtime service or change service creation order.
 Wire `createApp(runtime, { approvalBrokerService, agentRunnerService })` in
 `main.ts`.
 
-- [ ] **Step 3: Run Server tests and typecheck**
+- [x] **Step 3: Run Server tests and typecheck**
 
 ```bash
 pnpm exec vitest run apps/server/test --config vitest.config.ts
@@ -225,14 +225,14 @@ git commit -m "feat: 接入 Server Agent Runner 服务"
 - Modify: `docs/architecture/foundation.md`
 - Create: `docs/learning/2026-11-15-agent-http-sse.md`
 
-- [ ] **Step 1: Write the learning document**
+- [x] **Step 1: Write the learning document**
 
 Explain the difference between HTTP validation, Runtime execution, transient
 SSE events, and durable Session events. Include a browser `fetch` example that
 reads SSE frames and a section explaining why this phase does not use
 `EventSource` or Run IDs.
 
-- [ ] **Step 2: Update README and architecture**
+- [x] **Step 2: Update README and architecture**
 
 Document:
 
@@ -242,7 +242,7 @@ Document:
 - client disconnect cancellation;
 - the current non-goals around replay and Run Registry.
 
-- [ ] **Step 3: Format and run focused verification**
+- [x] **Step 3: Format and run focused verification**
 
 ```bash
 pnpm exec prettier --write README.md docs/architecture/foundation.md \
@@ -263,7 +263,7 @@ git commit -m "docs: 补充 Agent HTTP SSE 学习说明"
 **Files:**
 - Modify: `docs/superpowers/plans/2026-11-15-agent-http-sse.md`
 
-- [ ] **Step 1: Update the plan checkboxes**
+- [x] **Step 1: Update the plan checkboxes**
 
 Mark completed implementation and verification steps, but leave publish
 unchecked until the PR is actually merged.
