@@ -88,6 +88,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
       let finished = false;
       let executionError: unknown;
       let hasExecutionError = false;
+      let hasCompletionPersistenceError = false;
       let executionPromise: Promise<void> | undefined;
       let lifecycleStarted = false;
       let terminalPersisted = false;
@@ -308,6 +309,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
         } catch (primaryError: unknown) {
           const completionPersistenceFailed = terminalOutcome === 'completed';
           if (completionPersistenceFailed) {
+            hasCompletionPersistenceError = true;
             terminalOutcome = undefined;
           }
           if (lifecycleStarted && !terminalPersisted && terminalOutcome === undefined) {
@@ -410,7 +412,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
             finish(returnError, true);
             throw returnError;
           }
-          if (hasExecutionError && !terminalPersisted) {
+          if (hasExecutionError && (hasCompletionPersistenceError || !terminalPersisted)) {
             throw executionError;
           }
           finish();

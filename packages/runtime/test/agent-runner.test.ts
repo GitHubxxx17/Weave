@@ -889,6 +889,71 @@ describe('Agent Runner contracts', () => {
     await baseStore.close();
   });
 
+  it('returns the original completion persistence error after a successful failed-terminal retry', async () => {
+    const baseStore = createInMemorySessionEventStore();
+    const completionPersistenceError = new Error('completion append failed');
+    let appendCount = 0;
+    let completionAppendStarted: (() => void) | undefined;
+    const completionAppendReady = new Promise<void>((resolve) => {
+      completionAppendStarted = resolve;
+    });
+    let releaseCompletionAppend: (() => void) | undefined;
+    const completionAppendRelease = new Promise<void>((resolve) => {
+      releaseCompletionAppend = resolve;
+    });
+    const store: SessionEventStore = {
+      read: (sessionId, options) => baseStore.read(sessionId, options),
+      close: () => baseStore.close(),
+      append: async (sessionId, events) => {
+        appendCount += 1;
+        if (appendCount === 3) {
+          completionAppendStarted?.();
+          await completionAppendRelease;
+          throw completionPersistenceError;
+        }
+        return baseStore.append(sessionId, events);
+      },
+    };
+    const runner = createAgentRunner({
+      llm: recordingClient(
+        [
+          { type: 'text-delta', text: 'first' },
+          { type: 'text-delta', text: 'queued' },
+          { type: 'finish', reason: 'stop' },
+        ],
+        [],
+      ),
+      sessionStore: store,
+    });
+    const iterator = runner.run(validRequest)[Symbol.asyncIterator]();
+
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { type: 'text-delta', text: 'first' },
+    });
+    await completionAppendReady;
+    const returnPromise = iterator.return?.();
+    releaseCompletionAppend?.();
+
+    await expect(returnPromise).rejects.toBe(completionPersistenceError);
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+    expect(appendCount).toBe(4);
+    expect(projectSession(await baseStore.read('session-1')).turns[0]).toMatchObject({
+      status: 'failed',
+      steps: [{ status: 'failed' }],
+    });
+    const terminalEvents = (await baseStore.read('session-1')).filter(
+      ({ type }) => type === 'step.completed' || type === 'turn.completed',
+    );
+    expect(terminalEvents).toHaveLength(2);
+    expect(terminalEvents).toEqual([
+      expect.objectContaining({ type: 'step.completed' }),
+      expect.objectContaining({ type: 'turn.completed' }),
+    ]);
+
+    await baseStore.close();
+  });
+
   it('preserves failed terminal events as one ordered batch without an assistant message', async () => {
     const recordingStore = recordingSessionEventStore();
     const runner = createAgentRunner({
