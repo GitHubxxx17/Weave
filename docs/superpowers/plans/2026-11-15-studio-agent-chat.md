@@ -491,7 +491,7 @@ Document:
 - the browser acceptance flow;
 - current non-goals around persistence and reconnection.
 
-- [ ] **Step 3: Run browser verification**
+- [x] **Step 3: Run browser verification**
 
 Run the Server and Studio dev servers:
 
@@ -508,7 +508,7 @@ Use a browser automation tool to verify `http://127.0.0.1:5173`:
 - status changes to completed;
 - narrow viewport does not produce horizontal overflow.
 
-- [ ] **Step 4: Run the complete verification**
+- [x] **Step 4: Run the complete verification**
 
 ```bash
 pnpm check
