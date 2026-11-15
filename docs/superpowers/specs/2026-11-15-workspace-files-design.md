@@ -205,3 +205,25 @@ type WorkspaceFileErrorCode =
 > 写入默认使用 `wx`，先从产品语义上禁止意外覆盖，再用文件系统的独占
 > 创建标志减少检查和写入之间的竞态。只有调用方明确传入 `overwrite: true`
 > 才进入覆盖模式。
+
+## 9. 实施记录
+
+本阶段已实现：
+
+- `@weave/runtime` 导出 `read_file` 和 `write_file` 工具工厂；
+- 通过 `ToolRegistry` 注册并由 `ToolPipeline` 执行；
+- UTF-8 读写、调用级和工厂级字节限制；
+- 默认禁止覆盖，显式 `overwrite: true` 才允许覆盖；
+- 真实 Workspace 根目录、目标和父目录检查；
+- 外部符号链接拒绝、目录拒绝和稳定错误码；
+- 预取消请求和文件 API 取消信号传递；
+- 真实临时目录文件系统测试。
+
+实现验证记录：
+
+- 聚焦测试：15 个测试通过；
+- `@weave/runtime` lint：通过；
+- `@weave/runtime` typecheck：通过。
+
+尚未实现的边界仍与本设计一致：Approval、Shell、Diff、Session Tool
+Event、HTTP/SSE、Studio UI，以及更强的操作系统级 Sandbox。

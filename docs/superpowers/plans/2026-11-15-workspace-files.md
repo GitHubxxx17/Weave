@@ -86,13 +86,13 @@ export type WorkspaceFileErrorCode =
   | 'workspace-file-write-failed';
 ```
 
-- [ ] **Step 1: Write failing schema and error tests**
+- [x] **Step 1: Write failing schema and error tests**
 
 Add tests for valid `readFileInputSchema`, valid `writeFileInputSchema`,
 non-empty paths, non-negative finite `maxBytes`, the `overwrite` boolean, and
 the `WorkspaceFileError` name/code/cause contract.
 
-- [ ] **Step 2: Run the focused test and verify the expected failure**
+- [x] **Step 2: Run the focused test and verify the expected failure**
 
 ```bash
 pnpm exec vitest run packages/runtime/test/workspace-file-tools.test.ts --config vitest.config.ts
@@ -100,13 +100,13 @@ pnpm exec vitest run packages/runtime/test/workspace-file-tools.test.ts --config
 
 Expected: FAIL because the file tool contract exports do not exist.
 
-- [ ] **Step 3: Implement schemas and error class**
+- [x] **Step 3: Implement schemas and error class**
 
 Use Zod schemas with `z.string().min(1)`, finite non-negative numeric limits,
 and optional booleans. Export only public schemas, types, and the stable error
 class. Preserve Node errors through `ErrorOptions.cause`.
 
-- [ ] **Step 4: Run contract tests**
+- [x] **Step 4: Run contract tests**
 
 Run the focused Vitest command again. Contract tests must pass before adding
 filesystem behavior.
@@ -143,7 +143,7 @@ export interface WorkspaceFileTools {
 export function createWorkspaceFileTools(options: WorkspaceFileToolOptions): WorkspaceFileTools;
 ```
 
-- [ ] **Step 1: Add failing filesystem behavior tests**
+- [x] **Step 1: Add failing filesystem behavior tests**
 
 Use `mkdtemp` in the OS temp directory and clean it with `rm` in `afterEach`.
 Register both tools in a Tool Registry and execute through a Tool Pipeline.
@@ -170,7 +170,7 @@ Add cases for successful read/write, default overwrite rejection,
 absolute paths, external symlinks, internal symlinks, read and write limits,
 and cancellation.
 
-- [ ] **Step 2: Run the focused tests and verify the expected failures**
+- [x] **Step 2: Run the focused tests and verify the expected failures**
 
 ```bash
 pnpm exec vitest run packages/runtime/test/workspace-file-tools.test.ts --config vitest.config.ts
@@ -179,7 +179,7 @@ pnpm exec vitest run packages/runtime/test/workspace-file-tools.test.ts --config
 Expected: contract tests may pass, while filesystem tests fail because the
 factory is not implemented.
 
-- [ ] **Step 3: Implement real path helpers**
+- [x] **Step 3: Implement real path helpers**
 
 In `workspace-file-tools.ts`:
 
@@ -191,7 +191,7 @@ In `workspace-file-tools.ts`:
 6. Map `EISDIR` and existing target conditions to directory/overwrite errors.
 7. Preserve original Node errors as `cause`.
 
-- [ ] **Step 4: Implement `read_file`**
+- [x] **Step 4: Implement `read_file`**
 
 Before `readFile`:
 
@@ -205,7 +205,7 @@ Before `readFile`:
 - call `fs.readFile(realTarget, { encoding: 'utf8', signal })`;
 - check the UTF-8 byte length and return the text.
 
-- [ ] **Step 5: Implement `write_file`**
+- [x] **Step 5: Implement `write_file`**
 
 Before `writeFile`:
 
@@ -219,12 +219,12 @@ Before `writeFile`:
 - pass the Pipeline signal;
 - return relative path, bytes written, and overwritten status.
 
-- [ ] **Step 6: Export the API**
+- [x] **Step 6: Export the API**
 
 Update `packages/runtime/src/index.ts` with the schemas, error class, types,
 `createWorkspaceFileTools`, and `WorkspaceFileTools`.
 
-- [ ] **Step 7: Run focused tests**
+- [x] **Step 7: Run focused tests**
 
 ```bash
 pnpm exec vitest run packages/runtime/test/workspace-file-tools.test.ts --config vitest.config.ts
@@ -248,17 +248,17 @@ git commit -m "feat: 增加工作区文件读写工具"
 - Modify: `docs/superpowers/specs/2026-11-15-workspace-files-design.md`
 - Modify: `docs/superpowers/plans/2026-11-15-workspace-files.md`
 
-- [ ] **Step 1: Update README**
+- [x] **Step 1: Update README**
 
 Document the factory, Tool Pipeline registration, UTF-8 limits, overwrite
 behavior, and the fact that Approval is still not implemented.
 
-- [ ] **Step 2: Update the architecture guide**
+- [x] **Step 2: Update the architecture guide**
 
 Document the distinction between lexical Workspace policy and real filesystem
 checks, including symlink handling and the remaining TOCTOU limitation.
 
-- [ ] **Step 3: Record implementation evidence**
+- [x] **Step 3: Record implementation evidence**
 
 Append the actual test count and verification status to the design document.
 Mark plan steps only after the commands in Task 4 pass.
@@ -272,13 +272,13 @@ git commit -m "docs: 补充工作区文件工具说明"
 
 ### Task 4: Verify the Branch
 
-- [ ] **Step 1: Focused tests**
+- [x] **Step 1: Focused tests**
 
 ```bash
 pnpm exec vitest run packages/runtime/test/workspace-file-tools.test.ts --config vitest.config.ts
 ```
 
-- [ ] **Step 2: Package checks**
+- [x] **Step 2: Package checks**
 
 ```bash
 pnpm --filter @weave/runtime lint
@@ -287,14 +287,14 @@ pnpm --filter @weave/runtime test
 pnpm --filter @weave/runtime build
 ```
 
-- [ ] **Step 3: Full repository checks**
+- [x] **Step 3: Full repository checks**
 
 ```bash
 pnpm check
 git diff --check
 ```
 
-- [ ] **Step 4: Inspect final scope**
+- [x] **Step 4: Inspect final scope**
 
 ```bash
 git status --short

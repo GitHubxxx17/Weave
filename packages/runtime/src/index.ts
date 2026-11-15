@@ -50,3 +50,17 @@ export type {
 } from './workspace-types.js';
 export { createWorkspacePolicy } from './workspace-policy.js';
 export type { WorkspacePolicy } from './workspace-policy.js';
+export {
+  WorkspaceFileError,
+  readFileInputSchema,
+  writeFileInputSchema,
+} from './workspace-file-types.js';
+export type {
+  ReadFileInput,
+  WriteFileInput,
+  WriteFileResult,
+  WorkspaceFileErrorCode,
+  WorkspaceFileToolOptions,
+  WorkspaceFileTools,
+} from './workspace-file-types.js';
+export { createWorkspaceFileTools } from './workspace-file-tools.js';

@@ -16,8 +16,9 @@ remains a separate reference project and is not copied into this repository.
 The Foundation vertical slice, Session persistence, the first headless Agent
 Loop, and the shared Tool Pipeline are implemented. `@weave/protocol`,
 `@weave/llm`, `@weave/session`, `@weave/runtime`, and `@weave/server` form the
-current architecture. Workspace/Sandbox, Approval, HTTP/SSE adapters, Plugin
-loading, and Studio UI remain later phases.
+current architecture. Approval, Shell/Sandbox hardening, HTTP/SSE adapters,
+Plugin loading, and Studio UI remain later phases. The first protected
+Workspace file tools are now available in `@weave/runtime`.
 
 Start with the [Foundation architecture guide](docs/architecture/foundation.md)
 for the request path, package boundaries, and AI editing checklist. The
@@ -137,9 +138,9 @@ Pipeline parses JSON arguments, validates them with the tool's Zod schema,
 passes a cooperative `AbortSignal`, maps cancellation and timeout failures to
 stable error codes, and limits returned content by UTF-8 byte length.
 
-The Pipeline does not access files, run Shell commands, request approval, or
-write Session events. Those responsibilities belong to the later
-Workspace/Sandbox, Approval, and Agent Loop integration slices.
+The Pipeline does not itself access files, run Shell commands, request
+approval, or write Session events. File access belongs to Workspace-aware
+tools, while the Pipeline remains the shared lifecycle boundary around them.
 
 ```ts
 import { z } from 'zod';
@@ -167,6 +168,54 @@ Run the focused Tool Pipeline tests with:
 ```bash
 pnpm exec vitest run packages/runtime/test/tool-pipeline.test.ts --config vitest.config.ts
 ```
+
+## Workspace File Tools
+
+`createWorkspaceFileTools()` adds `read_file` and `write_file` definitions on
+top of the lexical Workspace path policy. They must be registered in the
+shared Tool Registry and invoked through the Tool Pipeline; callers must not
+call a tool's `execute` function directly.
+
+```ts
+import {
+  createToolPipeline,
+  createToolRegistry,
+  createWorkspaceFileTools,
+  createWorkspacePolicy,
+} from '@weave/runtime';
+
+const registry = createToolRegistry();
+const fileTools = createWorkspaceFileTools({
+  workspace: createWorkspacePolicy({ root: '/Users/mi/project' }),
+  maxReadBytes: 1_000_000,
+  maxWriteBytes: 1_000_000,
+});
+
+registry.register(fileTools.readFile);
+registry.register(fileTools.writeFile);
+
+const pipeline = createToolPipeline({ registry });
+const result = await pipeline.execute({
+  toolCallId: 'call-1',
+  name: 'read_file',
+  arguments: JSON.stringify({ path: 'README.md' }),
+});
+```
+
+The tools currently support UTF-8 text only. Each operation can provide a
+smaller `maxBytes` limit; otherwise the factory default is used. `write_file`
+does not create parent directories and refuses to overwrite an existing file
+unless `overwrite: true` is explicit. The tool checks the real Workspace root,
+the real target or parent directory, file type, and UTF-8 byte length before
+access. A symlink that resolves outside the Workspace is rejected.
+Dangling symlinks are also rejected because their final target cannot be
+verified safely.
+
+The stable error codes are exposed through `WorkspaceFileError`. Node errors
+remain available through `cause`, which preserves diagnostic details without
+making callers depend on platform-specific filesystem messages. This is still
+not a complete Sandbox: Approval, stronger OS-level isolation, and all
+TOCTOU-resistant operations are future work.
 
 ## Workspace Path Policy
 
@@ -198,7 +247,7 @@ The current path boundary is deliberately separate from the Tool Pipeline:
 ```text
 Tool Pipeline
   -> Workspace Path Policy
-    -> future File/Shell Executor
+    -> Workspace File Tools
       -> future Approval/Sandbox
 ```
 
@@ -258,3 +307,6 @@ consume the same runtime instead of implementing separate agent loops.
 - [Workspace Path Policy design](docs/superpowers/specs/2026-11-15-workspace-path-policy-design.md):
   lexical path validation, Workspace root boundaries, and the separation from
   filesystem execution and Approval.
+- [Workspace File Tools design](docs/superpowers/specs/2026-11-15-workspace-files-design.md):
+  UTF-8 file access, realpath checks, symlink boundaries, overwrite protection,
+  and stable file errors.
