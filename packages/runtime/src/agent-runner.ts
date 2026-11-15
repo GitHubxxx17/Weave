@@ -9,6 +9,22 @@ import {
   type AgentRuntimeEvent,
 } from './agent-types.js';
 
+function isCancellation(error: unknown, signal: AbortSignal): boolean {
+  return (
+    signal.aborted ||
+    (error instanceof DOMException && error.name === 'AbortError') ||
+    (typeof error === 'object' && error !== null && 'code' in error && error.code === 'cancelled')
+  );
+}
+
+function throwTerminalPersistenceError(primaryError: unknown, persistenceError: unknown): never {
+  throw new AggregateError(
+    [primaryError, persistenceError],
+    'Agent run and terminal persistence failed',
+    { cause: primaryError },
+  );
+}
+
 /**
  * Creates a Runner for normal, no-tool model turns.
  */
@@ -20,6 +36,11 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
         throw new AgentRunError('agent-invalid-input', 'Agent Run input is invalid');
       }
       const request = requestResult.data;
+      const internalController = new AbortController();
+      const signal =
+        request.signal === undefined
+          ? internalController.signal
+          : AbortSignal.any([request.signal, internalController.signal]);
 
       let storedEvents = await options.sessionStore.read(request.sessionId);
       if (storedEvents.length === 0) {
@@ -58,6 +79,10 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
         },
       ];
       await options.sessionStore.append(request.sessionId, initializationEvents);
+      const lifecycleStarted = true;
+      let terminalPersisted = false;
+      let terminalAppendStarted = false;
+      let completed = false;
 
       const projectedSession = projectSession(await options.sessionStore.read(request.sessionId));
       const messages: readonly Message[] = projectedSession.messages.map(({ message }) => message);
@@ -75,10 +100,8 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
       let assistantText = '';
       let finishSeen = false;
       try {
-        for await (const event of options.llm.stream(
-          llmRequest,
-          request.signal === undefined ? {} : { signal: request.signal },
-        )) {
+        signal.throwIfAborted();
+        for await (const event of options.llm.stream(llmRequest, { signal })) {
           if (finishSeen) {
             throw new AgentRunError(
               'agent-stream-protocol',
@@ -110,8 +133,57 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
         if (!finishSeen) {
           throw new AgentRunError('agent-stream-protocol', 'Agent stream did not finish');
         }
-      } catch (error: unknown) {
-        if (error instanceof AgentRunError) {
+        const completionEvents: NewSessionEvent[] = [];
+        if (assistantText.length > 0) {
+          completionEvents.push({
+            type: 'message.created',
+            payload: {
+              messageId: crypto.randomUUID(),
+              message: {
+                role: 'assistant',
+                content: [{ type: 'text', text: assistantText }],
+              },
+            },
+          });
+        }
+        completionEvents.push(
+          {
+            type: 'step.completed',
+            payload: {
+              turnId,
+              stepId,
+              status: 'completed',
+            },
+          },
+          {
+            type: 'turn.completed',
+            payload: {
+              turnId,
+              status: 'completed',
+            },
+          },
+        );
+        terminalAppendStarted = true;
+        await options.sessionStore.append(request.sessionId, completionEvents);
+        terminalPersisted = true;
+        completed = true;
+
+        yield { type: 'completed', turnId };
+      } catch (primaryError: unknown) {
+        if (lifecycleStarted && !terminalPersisted && !terminalAppendStarted) {
+          const cancelled = isCancellation(primaryError, signal);
+          const terminalStatus = cancelled ? 'cancelled' : 'failed';
+          const terminalReason = cancelled
+            ? 'cancelled'
+            : primaryError instanceof AgentRunError
+              ? primaryError.code
+              : typeof primaryError === 'object' &&
+                  primaryError !== null &&
+                  'code' in primaryError &&
+                  typeof primaryError.code === 'string'
+                ? primaryError.code
+                : undefined;
+          terminalAppendStarted = true;
           try {
             await options.sessionStore.append(request.sessionId, [
               {
@@ -119,58 +191,47 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
                 payload: {
                   turnId,
                   stepId,
-                  status: 'failed',
+                  status: terminalStatus,
                 },
               },
               {
                 type: 'turn.completed',
                 payload: {
                   turnId,
-                  status: 'failed',
-                  reason: error.code,
+                  status: terminalStatus,
+                  ...(terminalReason === undefined ? {} : { reason: terminalReason }),
                 },
               },
             ]);
-          } catch {
-            // Preserve the original AgentRunError when failed persistence fails.
+            terminalPersisted = true;
+          } catch (persistenceError: unknown) {
+            throwTerminalPersistenceError(primaryError, persistenceError);
           }
         }
-        throw error;
-      }
-
-      const completionEvents: NewSessionEvent[] = [];
-      if (assistantText.length > 0) {
-        completionEvents.push({
-          type: 'message.created',
-          payload: {
-            messageId: crypto.randomUUID(),
-            message: {
-              role: 'assistant',
-              content: [{ type: 'text', text: assistantText }],
+        throw primaryError;
+      } finally {
+        if (lifecycleStarted && !terminalPersisted && !terminalAppendStarted && !completed) {
+          await options.sessionStore.append(request.sessionId, [
+            {
+              type: 'step.completed',
+              payload: {
+                turnId,
+                stepId,
+                status: 'cancelled',
+              },
             },
-          },
-        });
+            {
+              type: 'turn.completed',
+              payload: {
+                turnId,
+                status: 'cancelled',
+                reason: 'cancelled',
+              },
+            },
+          ]);
+        }
+        internalController.abort();
       }
-      completionEvents.push(
-        {
-          type: 'step.completed',
-          payload: {
-            turnId,
-            stepId,
-            status: 'completed',
-          },
-        },
-        {
-          type: 'turn.completed',
-          payload: {
-            turnId,
-            status: 'completed',
-          },
-        },
-      );
-      await options.sessionStore.append(request.sessionId, completionEvents);
-
-      yield { type: 'completed', turnId };
     },
   };
 }

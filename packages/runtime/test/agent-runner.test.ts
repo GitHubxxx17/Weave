@@ -53,6 +53,10 @@ function throwingClient(error: unknown): LlmClient {
   };
 }
 
+function abortError(): DOMException {
+  return new DOMException('The operation was aborted', 'AbortError');
+}
+
 interface RecordingStore {
   readonly store: SessionEventStore;
   readonly batches: readonly (readonly NewSessionEvent[])[];
@@ -386,41 +390,121 @@ describe('Agent Runner contracts', () => {
     await store.close();
   });
 
-  it('preserves the original AgentRunError when failed persistence rejects', async () => {
+  it('persists failure and rethrows the original model error', async () => {
+    const store = createInMemorySessionEventStore();
+    const modelError = { code: 'network', message: 'offline', retryable: true };
+    const runner = createAgentRunner({
+      llm: throwingClient(modelError),
+      sessionStore: store,
+    });
+
+    await expect(collect(runner.run(validRequest))).rejects.toBe(modelError);
+    const projection = projectSession(await store.read('session-1'));
+    expect(projection.messages.map(({ message }) => message)).toEqual([validRequest.userMessage]);
+    expect(projection.turns[0]).toMatchObject({
+      status: 'failed',
+      steps: [{ status: 'failed' }],
+    });
+
+    await store.close();
+  });
+
+  it('persists cancellation when the request signal aborts', async () => {
+    const store = createInMemorySessionEventStore();
+    const controller = new AbortController();
+    const llm: LlmClient = {
+      async *stream(_request, options): AsyncIterable<StreamEvent> {
+        yield { type: 'text-delta', text: 'partial' };
+        await new Promise<void>((_resolve, reject) => {
+          const rejectAbort = (): void => reject(abortError());
+          if (options?.signal?.aborted) {
+            rejectAbort();
+            return;
+          }
+          options?.signal?.addEventListener('abort', rejectAbort, { once: true });
+        });
+      },
+    };
+    const runner = createAgentRunner({ llm, sessionStore: store });
+    const stream = runner.run({
+      ...validRequest,
+      signal: controller.signal,
+    });
+    const iterator = stream[Symbol.asyncIterator]();
+
+    expect((await iterator.next()).value).toEqual({
+      type: 'text-delta',
+      text: 'partial',
+    });
+    controller.abort();
+    await expect(iterator.next()).rejects.toMatchObject({ name: 'AbortError' });
+    expect(projectSession(await store.read('session-1')).turns[0]).toMatchObject({
+      status: 'cancelled',
+      steps: [{ status: 'cancelled' }],
+    });
+
+    await store.close();
+  });
+
+  it('cancels the Turn when a consumer stops reading early', async () => {
+    const store = createInMemorySessionEventStore();
+    let receivedSignal: AbortSignal | undefined;
+    const llm: LlmClient = {
+      async *stream(_request, options): AsyncIterable<StreamEvent> {
+        receivedSignal = options?.signal;
+        yield { type: 'text-delta', text: 'first' };
+        yield { type: 'text-delta', text: 'second' };
+        yield { type: 'finish', reason: 'stop' };
+      },
+    };
+    const runner = createAgentRunner({ llm, sessionStore: store });
+    const iterator = runner.run(validRequest)[Symbol.asyncIterator]();
+
+    expect((await iterator.next()).value).toEqual({
+      type: 'text-delta',
+      text: 'first',
+    });
+    await iterator.return?.();
+
+    expect(receivedSignal?.aborted).toBe(true);
+    expect(projectSession(await store.read('session-1')).turns[0]).toMatchObject({
+      status: 'cancelled',
+      steps: [{ status: 'cancelled' }],
+    });
+
+    await store.close();
+  });
+
+  it('preserves the model and terminal persistence errors', async () => {
+    const baseStore = createInMemorySessionEventStore();
     const originalError = new AgentRunError(
       'agent-stream-protocol',
       'The LLM raised this exact error',
     );
-    const recordingStore = recordingSessionEventStore({
-      failedTerminalError: new Error('failed persistence'),
-    });
+    const persistenceError = new Error('terminal append failed');
+    let appendCount = 0;
+    const store: SessionEventStore = {
+      read: (sessionId, options) => baseStore.read(sessionId, options),
+      close: () => baseStore.close(),
+      append: async (sessionId, events) => {
+        appendCount += 1;
+        if (appendCount === 3) {
+          throw persistenceError;
+        }
+        return baseStore.append(sessionId, events);
+      },
+    };
     const runner = createAgentRunner({
       llm: throwingClient(originalError),
-      sessionStore: recordingStore.store,
+      sessionStore: store,
     });
 
-    await expect(collect(runner.run(validRequest))).rejects.toBe(originalError);
-    expect(recordingStore.batches).toHaveLength(3);
-    expect(recordingStore.batches[2]).toEqual([
-      {
-        type: 'step.completed',
-        payload: {
-          turnId: expect.any(String),
-          stepId: expect.any(String),
-          status: 'failed',
-        },
-      },
-      {
-        type: 'turn.completed',
-        payload: {
-          turnId: expect.any(String),
-          status: 'failed',
-          reason: 'agent-stream-protocol',
-        },
-      },
-    ]);
+    const error = await collect(runner.run(validRequest)).catch((caught: unknown) => caught);
 
-    await recordingStore.store.close();
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toEqual([originalError, persistenceError]);
+
+    await baseStore.close();
   });
 
   it('preserves failed terminal events as one ordered batch without an assistant message', async () => {
