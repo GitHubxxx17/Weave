@@ -224,15 +224,43 @@ describe('Agent Runner contracts', () => {
 
     await collect(runner.run(validRequest));
 
+    const initializationBatch = recordingStore.batches[1];
+    if (
+      initializationBatch === undefined ||
+      initializationBatch[0]?.type !== 'message.created' ||
+      initializationBatch[1]?.type !== 'turn.started' ||
+      initializationBatch[2]?.type !== 'step.started'
+    ) {
+      throw new Error('Expected the initialization append batch');
+    }
+
     expect(recordingStore.batches.map((batch) => batch.map(({ type }) => type))).toEqual([
       ['session.created'],
       ['message.created', 'turn.started', 'step.started'],
       ['step.completed', 'turn.completed'],
     ]);
-    expect(recordingStore.batches[1]).toMatchObject([
-      { type: 'message.created' },
-      { type: 'turn.started' },
-      { type: 'step.started' },
+    expect(initializationBatch).toEqual([
+      {
+        type: 'message.created',
+        payload: {
+          messageId: expect.any(String),
+          message: validRequest.userMessage,
+        },
+      },
+      {
+        type: 'turn.started',
+        payload: {
+          turnId: initializationBatch[1].payload.turnId,
+        },
+      },
+      {
+        type: 'step.started',
+        payload: {
+          turnId: initializationBatch[1].payload.turnId,
+          stepId: initializationBatch[2].payload.stepId,
+          kind: 'model',
+        },
+      },
     ]);
 
     await recordingStore.store.close();
@@ -372,6 +400,25 @@ describe('Agent Runner contracts', () => {
     });
 
     await expect(collect(runner.run(validRequest))).rejects.toBe(originalError);
+    expect(recordingStore.batches).toHaveLength(3);
+    expect(recordingStore.batches[2]).toEqual([
+      {
+        type: 'step.completed',
+        payload: {
+          turnId: expect.any(String),
+          stepId: expect.any(String),
+          status: 'failed',
+        },
+      },
+      {
+        type: 'turn.completed',
+        payload: {
+          turnId: expect.any(String),
+          status: 'failed',
+          reason: 'agent-stream-protocol',
+        },
+      },
+    ]);
 
     await recordingStore.store.close();
   });
@@ -393,12 +440,53 @@ describe('Agent Runner contracts', () => {
       code: 'agent-tool-call-unsupported',
     });
 
+    const initializationBatch = recordingStore.batches[1];
+    const failedTerminalBatch = recordingStore.batches[2];
+    if (
+      initializationBatch === undefined ||
+      initializationBatch[1]?.type !== 'turn.started' ||
+      initializationBatch[2]?.type !== 'step.started' ||
+      failedTerminalBatch === undefined ||
+      failedTerminalBatch[0]?.type !== 'step.completed' ||
+      failedTerminalBatch[1]?.type !== 'turn.completed'
+    ) {
+      throw new Error('Expected initialization and failed terminal append batches');
+    }
+
+    const { turnId } = initializationBatch[1].payload;
+    const { stepId } = initializationBatch[2].payload;
     expect(recordingStore.batches.map((batch) => batch.map(({ type }) => type))).toEqual([
       ['session.created'],
       ['message.created', 'turn.started', 'step.started'],
       ['step.completed', 'turn.completed'],
     ]);
-    expect(recordingStore.batches[2]).not.toContainEqual(
+    expect(initializationBatch[2]).toEqual({
+      type: 'step.started',
+      payload: {
+        turnId,
+        stepId,
+        kind: 'model',
+      },
+    });
+    expect(failedTerminalBatch).toEqual([
+      {
+        type: 'step.completed',
+        payload: {
+          turnId,
+          stepId,
+          status: 'failed',
+        },
+      },
+      {
+        type: 'turn.completed',
+        payload: {
+          turnId,
+          status: 'failed',
+          reason: 'agent-tool-call-unsupported',
+        },
+      },
+    ]);
+    expect(failedTerminalBatch).not.toContainEqual(
       expect.objectContaining({ type: 'message.created' }),
     );
     expect(projectSession(await recordingStore.store.read('session-1')).messages).toHaveLength(1);
