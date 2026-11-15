@@ -35,6 +35,9 @@ export interface ToolDefinition<TInput = unknown, TOutput = unknown> {
   ) => Promise<TOutput> | TOutput;
 }
 
+/** Type-erased definition used by registries that do not know tool input types. */
+export type RegisteredToolDefinition = ToolDefinition<never, unknown>;
+
 /** Input accepted by one Tool Pipeline invocation. */
 export interface ToolExecutionRequest {
   /** Provider-generated id used to correlate the tool result. */

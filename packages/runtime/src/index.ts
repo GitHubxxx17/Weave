@@ -27,8 +27,11 @@ export {
 } from './tool-types.js';
 export type {
   ToolDefinition,
+  RegisteredToolDefinition,
   ToolExecutionContext,
   ToolExecutionErrorCode,
   ToolExecutionRequest,
   ToolExecutionResult,
 } from './tool-types.js';
+export { createToolRegistry } from './tool-registry.js';
+export type { ToolRegistry } from './tool-registry.js';
