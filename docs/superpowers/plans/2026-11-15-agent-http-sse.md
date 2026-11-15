@@ -268,7 +268,7 @@ git commit -m "docs: 补充 Agent HTTP SSE 学习说明"
 Mark completed implementation and verification steps, but leave publish
 unchecked until the PR is actually merged.
 
-- [ ] **Step 2: Create Feishu document**
+- [x] **Step 2: Create Feishu document**
 
 After reading `/Users/mi/.codex/skills/feishu/reference/extended-markdown.md`,
 confirm the next number in folder `IaaUfCD1klneledtbUycz7bLndh`, create:
@@ -280,14 +280,14 @@ confirm the next number in folder `IaaUfCD1klneledtbUycz7bLndh`, create:
 Then append a progress section to the Feishu total plan and fetch it back to
 verify the write.
 
-- [ ] **Step 3: Commit the plan record**
+- [x] **Step 3: Commit the plan record**
 
 ```bash
 git add docs/superpowers/plans/2026-11-15-agent-http-sse.md
 git commit -m "docs: 完善 Agent HTTP SSE 实施记录"
 ```
 
-- [ ] **Step 4: Run complete verification**
+- [x] **Step 4: Run complete verification**
 
 ```bash
 pnpm check
