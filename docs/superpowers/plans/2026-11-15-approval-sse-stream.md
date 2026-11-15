@@ -58,7 +58,7 @@ git commit -m "docs: 设计审批 SSE 实时推送"
 - Produces: `ApprovalEvent`, `ApprovalListener`, and
   `ApprovalBroker.subscribe(listener): () => void`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add focused tests with these names and expectations:
 
@@ -135,7 +135,7 @@ it('isolates listener failures', () => {
 Also cover `reject`, `cancel`, `expire`, timeout `0`, pre-aborted input, and
 the immutability of the event request snapshot.
 
-- [ ] **Step 2: Run the focused tests and verify the expected failure**
+- [x] **Step 2: Run the focused tests and verify the expected failure**
 
 Run:
 
@@ -146,14 +146,14 @@ pnpm exec vitest run packages/runtime/test/approval-broker.test.ts --config vite
 Expected: TypeScript/test failures because `ApprovalEvent` and `subscribe`
 do not exist yet.
 
-- [ ] **Step 3: Implement the minimum subscription contract**
+- [x] **Step 3: Implement the minimum subscription contract**
 
 Add the event types and `subscribe` method. Keep listeners in a local `Set`.
 Notify from the existing `request` and `transition` paths only after the
 immutable request snapshot is updated. Iterate over a copied listener array
 and catch each listener error independently.
 
-- [ ] **Step 4: Run Runtime tests**
+- [x] **Step 4: Run Runtime tests**
 
 Run:
 
@@ -163,7 +163,7 @@ pnpm exec vitest run packages/runtime/test/approval-broker.test.ts --config vite
 
 Expected: all Approval Broker tests pass with no unhandled listener errors.
 
-- [ ] **Step 5: Commit the Runtime event contract**
+- [x] **Step 5: Commit the Runtime event contract**
 
 ```bash
 git add packages/runtime/src/approval-types.ts \
@@ -183,7 +183,7 @@ git commit -m "feat: 增加 Approval Broker 事件订阅"
 - Produces: `GET /approvals/stream` with
   `approval.snapshot`, `approval.created`, and `approval.resolved` events.
 
-- [ ] **Step 1: Write the failing HTTP tests**
+- [x] **Step 1: Write the failing HTTP tests**
 
 Add tests that create a running Runtime with the real approval service and
 assert:
@@ -208,7 +208,7 @@ the snapshot contains it. Connect before creating a second request, then read
 the next chunk and assert `event: approval.created`; approve it and assert
 `event: approval.resolved`.
 
-- [ ] **Step 2: Run the focused HTTP tests and verify failure**
+- [x] **Step 2: Run the focused HTTP tests and verify failure**
 
 Run:
 
@@ -218,7 +218,7 @@ pnpm exec vitest run apps/server/test/approval-api.test.ts --config vitest.confi
 
 Expected: the new route returns 404 because it has not been registered.
 
-- [ ] **Step 3: Implement stream lifecycle helpers**
+- [x] **Step 3: Implement stream lifecycle helpers**
 
 In `apps/server/src/approval-api.ts`, add a small local encoder helper that
 produces:
@@ -241,7 +241,7 @@ remove the abort listener, and close the controller only when it is not already
 closed. A failed enqueue must be treated as a disconnect and must not escape
 the Broker listener.
 
-- [ ] **Step 4: Run Server tests**
+- [x] **Step 4: Run Server tests**
 
 Run:
 
@@ -251,7 +251,7 @@ pnpm exec vitest run apps/server/test/approval-api.test.ts --config vitest.confi
 
 Expected: SSE tests and all existing REST tests pass.
 
-- [ ] **Step 5: Commit the Server SSE adapter**
+- [x] **Step 5: Commit the Server SSE adapter**
 
 ```bash
 git add apps/server/src/approval-api.ts apps/server/test/approval-api.test.ts
@@ -269,19 +269,19 @@ git commit -m "feat: 增加审批 SSE 控制面"
 - Produces: Repository documentation that explains polling versus SSE, event
   lifecycle, and the current in-process limitation.
 
-- [ ] **Step 1: Update the architecture document**
+- [x] **Step 1: Update the architecture document**
 
 Document that the Approval control plane now has REST and SSE adapters, that
 the Broker remains the source of truth, and that live events are not durable
 Session events.
 
-- [ ] **Step 2: Update the README**
+- [x] **Step 2: Update the README**
 
 Add the SSE endpoint to the local API list and explain the three event names in
 one concise section. Keep detailed learning material in Feishu, not in the
 README.
 
-- [ ] **Step 3: Run documentation formatting**
+- [x] **Step 3: Run documentation formatting**
 
 Run:
 
@@ -290,7 +290,7 @@ pnpm exec prettier --write docs/architecture/foundation.md README.md
 pnpm format:check
 ```
 
-- [ ] **Step 4: Commit documentation**
+- [x] **Step 4: Commit documentation**
 
 ```bash
 git add docs/architecture/foundation.md README.md
@@ -302,19 +302,19 @@ git commit -m "docs: 补充审批 SSE 架构说明"
 **Files:**
 - Modify: `docs/superpowers/plans/2026-11-15-approval-sse-stream.md`
 
-- [ ] **Step 1: Mark completed plan steps**
+- [x] **Step 1: Mark completed plan steps**
 
 Update only the checklist markers after the corresponding commands have
 actually passed. Do not mark a step complete based on code inspection alone.
 
-- [ ] **Step 2: Run focused tests**
+- [x] **Step 2: Run focused tests**
 
 ```bash
 pnpm exec vitest run packages/runtime/test/approval-broker.test.ts --config vitest.config.ts
 pnpm exec vitest run apps/server/test/approval-api.test.ts --config vitest.config.ts
 ```
 
-- [ ] **Step 3: Run repository verification**
+- [x] **Step 3: Run repository verification**
 
 ```bash
 pnpm format:check
@@ -322,7 +322,7 @@ pnpm check
 git diff --check
 ```
 
-- [ ] **Step 4: Inspect the final branch**
+- [x] **Step 4: Inspect the final branch**
 
 ```bash
 git status --short --branch
