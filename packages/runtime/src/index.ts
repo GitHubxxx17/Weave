@@ -20,3 +20,20 @@ export type {
   AgentRuntimeEvent,
 } from './agent-types.js';
 export { createAgentRunner } from './agent-runner.js';
+export {
+  ToolExecutionError,
+  toolDefinitionSchema,
+  toolExecutionRequestSchema,
+} from './tool-types.js';
+export type {
+  ToolDefinition,
+  RegisteredToolDefinition,
+  ToolExecutionContext,
+  ToolExecutionErrorCode,
+  ToolExecutionRequest,
+  ToolExecutionResult,
+} from './tool-types.js';
+export { createToolRegistry } from './tool-registry.js';
+export type { ToolRegistry } from './tool-registry.js';
+export { createToolPipeline } from './tool-pipeline.js';
+export type { ToolPipeline, ToolPipelineOptions } from './tool-pipeline.js';
