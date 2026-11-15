@@ -14,10 +14,11 @@ remains a separate reference project and is not copied into this repository.
 ## Status
 
 The Foundation vertical slice, Session persistence, the headless Agent Tool
-Loop, the shared Tool Pipeline, the Approval HTTP control plane, and the Agent
-HTTP/SSE adapter are implemented. `@weave/protocol`, `@weave/llm`,
-`@weave/session`, `@weave/runtime`, and `@weave/server` form the current
-architecture. Shell/Sandbox hardening, Plugin loading, and Studio UI remain
+Loop, the shared Tool Pipeline, the Approval HTTP control plane, the Agent
+HTTP/SSE adapter, and the first Studio Agent Chat workspace are implemented.
+`@weave/protocol`, `@weave/llm`, `@weave/session`, `@weave/runtime`,
+`@weave/server`, and `@weave/studio` form the current architecture.
+Shell/Sandbox hardening, Plugin loading, and the broader Studio product remain
 later phases. The first protected Workspace file tools are now available in
 `@weave/runtime`.
 
@@ -59,7 +60,8 @@ and makes the same validation sequence work locally and in GitHub Actions.
 ```text
 weave/
 ├── apps/
-│   └── server/       # HTTP control-plane entry point
+│   ├── server/       # HTTP control-plane entry point
+│   └── studio/       # React + Vite Agent workspace
 ├── packages/
 │   ├── protocol/     # Shared data types and Zod schemas
 │   ├── llm/          # Model client interface and provider adapters
@@ -82,6 +84,35 @@ control-plane boundary while agent behavior belongs in the runtime. Server
 exposes `GET /health`, the Approval REST/SSE control plane, and a POST + SSE
 adapter for one Agent turn. The adapter consumes the same Runtime event stream
 used by CLI and tests; it does not implement model calls or tool execution.
+
+## Studio Agent Chat
+
+Start the local demo with two terminals:
+
+```bash
+pnpm --filter @weave/server dev
+pnpm --filter @weave/studio dev --host 127.0.0.1
+```
+
+Open `http://127.0.0.1:5173`. Vite serves the React Studio and proxies
+`/agent/*` to `http://127.0.0.1:4317`, so the browser can call the local Server
+without a separate CORS setup. The Server `dev` script builds the TypeScript
+packages first and then starts `dist/main.js`.
+
+Browser acceptance flow:
+
+1. Confirm the Studio workspace is visible in the first viewport.
+2. Enter a message and submit it.
+3. Observe the user message, streamed assistant text, and `Completed` status.
+4. Click `Cancel` during a run to verify the cancellation state.
+5. Resize to a narrow viewport and confirm the activity panel moves below the
+   conversation without horizontal overflow.
+
+This first Studio slice intentionally does not include Session history,
+Workspace editing, Plugin loading, Crew orchestration, Run Registry,
+reconnection or `Last-Event-ID`, login, or persistent browser state. The page is
+an HTTP/SSE acceptance surface for the existing Runtime, not a replacement for
+the Runtime.
 
 ## Agent Runner
 
@@ -473,6 +504,9 @@ consume the same runtime instead of implementing separate agent loops.
 - [Agent HTTP/SSE learning guide](docs/learning/2026-11-15-agent-http-sse.md):
   request validation, SSE framing, cancellation, frontend consumption, and
   interview explanation.
+- [Studio Agent Chat learning guide](docs/learning/2026-11-15-studio-agent-chat.md):
+  browser boundaries, stream parsing, React state mapping, cancellation races,
+  local composition, transient versus durable events, and interview practice.
 - [ADR 0001](docs/adr/0001-foundation-vertical-slice.md): the decision and
   consequences behind the first vertical slice.
 - [Foundation design](docs/superpowers/specs/2026-11-14-weave-foundation-design.md):
