@@ -245,9 +245,9 @@ pnpm --filter @weave/server dev
 pnpm --filter @weave/studio dev
 ```
 
-当前 Server 尚未提供 `dev` script，实施阶段需要补充一个不会自动启动
-真实 Provider 的本地启动命令，或直接复用已有 `startServer()` 入口。
-两个进程分开运行，便于前端热更新和后端调试。
+当前 Server 提供 `dev` script，执行 `pnpm build && node dist/main.js`。
+它使用确定性的 Mock LLM composition root，不会启动真实 Provider。两个进程
+分开运行，便于前端热更新和后端调试。
 
 ## 10. 测试策略
 

@@ -38,6 +38,39 @@ flowchart LR
     H --> I[Browser fetch ReadableStream]
 ```
 
+The first Studio surface makes the browser boundary explicit:
+
+```mermaid
+flowchart LR
+    A[Studio React App] -->|POST JSON| B[Vite /agent proxy]
+    B --> C[Server Agent HTTP adapter]
+    C -->|AsyncIterable events| D[Runtime AgentRunner]
+    D --> E[LlmClient]
+    D --> F[ToolPipeline]
+    D --> G[SessionEventStore]
+    C -->|SSE transient events| A
+    A -->|AbortController / disconnect| C
+    C -->|iterator.return()| D
+```
+
+`apps/studio` only consumes the HTTP/SSE contract. It does not import
+`@weave/runtime`, `@weave/session`, or Node-only modules, and it does not invoke
+tools or write Session events directly. The Vite `/agent` proxy is a local
+development convenience; it does not change the package boundary. Server
+validates the request and transports events, while Runtime remains the source
+of truth for Agent behavior.
+
+When the browser cancels a request, the cancellation travels through the HTTP
+response and Server request lifecycle to the current Agent iterator's
+`return()`. Runtime then owns model/tool cancellation and the cancelled
+Turn/Step persistence. The browser must not create a second cancellation state
+machine.
+
+The Studio slice is intentionally one request and one live stream. It has no
+Run Registry, background ownership, replay, `Last-Event-ID`, or reconnection
+protocol. A disconnected browser cannot use this endpoint to reconstruct
+missed transient events; durable Session facts remain the recovery boundary.
+
 The Server does not create a model client per request or invoke a tool
 definition directly. `main.ts` starts the Runtime, resolves its LLM and
 Session Store services, creates one `AgentRunner` in the composition root, and

@@ -59,7 +59,7 @@
 - Consumes: Root pnpm workspace and Vite/React toolchain.
 - Produces: `@weave/studio` scripts: `dev`, `build`, `lint`, `typecheck`, `test`.
 
-- [ ] **Step 1: Add package manifests and entry files**
+- [x] **Step 1: Add package manifests and entry files**
 
 Create a package with no workspace runtime dependencies:
 
@@ -84,7 +84,7 @@ implemented component tests. `vite.config.ts` must proxy `/agent` to
 `http://127.0.0.1:4317` and expose the existing root Vitest config through the
 package test script.
 
-- [ ] **Step 2: Install dependencies and inspect the lock diff**
+- [x] **Step 2: Install dependencies and inspect the lock diff**
 
 Run:
 
@@ -96,7 +96,7 @@ git diff --stat pnpm-lock.yaml apps/studio/package.json
 Expected: the lock file contains only the newly declared Studio dependencies;
 no existing package dependency is removed or upgraded unexpectedly.
 
-- [ ] **Step 3: Run the empty package checks**
+- [x] **Step 3: Run the empty package checks**
 
 Run:
 
@@ -110,7 +110,7 @@ Expected: the package compiles its entry point, Vite emits a bundle, and Vitest
 exits successfully with `--passWithNoTests` without loading Server or Runtime
 code.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add apps/studio pnpm-lock.yaml
@@ -172,7 +172,7 @@ export function streamAgentRun(
 ): Promise<void>;
 ```
 
-- [ ] **Step 1: Write parser and request tests first**
+- [x] **Step 1: Write parser and request tests first**
 
 Cover these concrete behaviors in `apps/studio/test/agent-stream.test.ts`:
 
@@ -209,7 +209,7 @@ it('ignores unknown events and stops after an error event', async () => {
 });
 ```
 
-- [ ] **Step 2: Run focused tests and verify the expected failure**
+- [x] **Step 2: Run focused tests and verify the expected failure**
 
 Run:
 
@@ -220,7 +220,7 @@ pnpm --filter @weave/studio test -- agent-stream
 Expected: the test file cannot import `agent-stream.ts` because the production
 parser has not been implemented yet.
 
-- [ ] **Step 3: Implement the minimal typed SSE client**
+- [x] **Step 3: Implement the minimal typed SSE client**
 
 Implement:
 
@@ -240,7 +240,7 @@ calling `onEvent`. Unknown event names return `null`. An SSE `error` payload
 throws `AgentStreamError` with the safe server code/message. Do not include raw
 response bodies or stack traces in user-facing errors.
 
-- [ ] **Step 4: Run focused tests and refactor only after green**
+- [x] **Step 4: Run focused tests and refactor only after green**
 
 Run:
 
@@ -252,7 +252,7 @@ pnpm --filter @weave/studio lint
 
 Expected: all parser/request tests pass with no lint or TypeScript errors.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/studio/src/features/agent apps/studio/test/agent-stream.test.ts
@@ -272,7 +272,7 @@ git commit -m "feat: 增加 Studio Agent SSE 客户端"
 - Produces: a page with Session rail, message timeline, reasoning/tool activity
   panel, composer, send/cancel controls, and explicit run status.
 
-- [ ] **Step 1: Write UI behavior tests first**
+- [x] **Step 1: Write UI behavior tests first**
 
 Cover these user-visible behaviors:
 
@@ -299,7 +299,7 @@ it('cancels an active stream and returns to idle controls', async () => {
 });
 ```
 
-- [ ] **Step 2: Run UI tests and verify the expected failure**
+- [x] **Step 2: Run UI tests and verify the expected failure**
 
 Run:
 
@@ -309,7 +309,7 @@ pnpm --filter @weave/studio test -- App
 
 Expected: the App import or component module is missing.
 
-- [ ] **Step 3: Implement the UI state machine**
+- [x] **Step 3: Implement the UI state machine**
 
 Keep state local to `App`:
 
@@ -343,7 +343,7 @@ working chat surface, not a marketing hero. Use lucide icons only if an icon
 dependency is already present; otherwise use text labels for the clear Send and
 Cancel commands.
 
-- [ ] **Step 4: Add responsive styling and run focused tests**
+- [x] **Step 4: Add responsive styling and run focused tests**
 
 Implement a restrained operational workspace layout:
 
@@ -362,7 +362,7 @@ pnpm --filter @weave/studio typecheck
 pnpm --filter @weave/studio build
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/studio/src/app apps/studio/src/main.tsx apps/studio/test/App.test.tsx
@@ -382,7 +382,7 @@ git commit -m "feat: 增加 Studio Agent Chat 工作台"
 - Produces: a local Server process whose default Agent endpoint emits a valid
   deterministic completed response.
 
-- [ ] **Step 1: Add a failing integration test**
+- [x] **Step 1: Add a failing integration test**
 
 Add a test using `createServerRuntime()` and `createServerAgentRunner()` that
 calls the App with the real default Runner and asserts the response includes:
@@ -398,7 +398,7 @@ data: {"type":"completed","turnId":"turn-1"}
 The test should read the complete response body and assert it ends with a
 `completed` event rather than an `error` event.
 
-- [ ] **Step 2: Run the integration test and verify it fails**
+- [x] **Step 2: Run the integration test and verify it fails**
 
 Run:
 
@@ -409,7 +409,7 @@ pnpm exec vitest run apps/server/test/agent-api.test.ts --config vitest.config.t
 Expected: the default empty Mock LLM script produces an Agent protocol error
 instead of `completed`.
 
-- [ ] **Step 3: Configure the fixed Mock LLM script**
+- [x] **Step 3: Configure the fixed Mock LLM script**
 
 Use a constant script in `apps/server/src/runtime.ts`:
 
@@ -424,7 +424,7 @@ const localDemoScript: readonly StreamEvent[] = [
 Keep the composition-root choice explicit. Do not modify Agent Runner logic or
 create a Server-specific Agent state machine.
 
-- [ ] **Step 4: Add the Server dev script and verify**
+- [x] **Step 4: Add the Server dev script and verify**
 
 Add:
 
@@ -448,7 +448,7 @@ pnpm --filter @weave/server typecheck
 pnpm --filter @weave/server build
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/server/src/runtime.ts apps/server/package.json apps/server/test
@@ -469,7 +469,7 @@ git commit -m "feat: 增加 Studio 本地 Agent 演示脚本"
 - Produces: understandable repository learning docs and a completed
   implementation record.
 
-- [ ] **Step 1: Write the learning document**
+- [x] **Step 1: Write the learning document**
 
 Explain:
 
@@ -480,7 +480,7 @@ Explain:
 - why AbortController is part of the cross-layer cancellation chain;
 - how to explain the architecture in an interview.
 
-- [ ] **Step 2: Update README and architecture**
+- [x] **Step 2: Update README and architecture**
 
 Document:
 
@@ -518,7 +518,7 @@ git status --short --branch
 
 Expected: all workspace checks pass, including Studio lint/typecheck/test/build.
 
-- [ ] **Step 5: Commit docs and plan record**
+- [x] **Step 5: Commit docs and plan record**
 
 ```bash
 git add README.md docs/architecture/foundation.md \
