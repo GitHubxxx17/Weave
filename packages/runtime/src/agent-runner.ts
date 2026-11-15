@@ -1,4 +1,4 @@
-import type { LlmRequest, Message } from '@weave/protocol';
+import type { FinishReason, LlmRequest, Message, ToolCall } from '@weave/protocol';
 import type { NewSessionEvent } from '@weave/session';
 import { projectSession } from '@weave/session';
 import {
@@ -8,6 +8,9 @@ import {
   type AgentRunnerOptions,
   type AgentRuntimeEvent,
 } from './agent-types.js';
+import { ToolExecutionError, type ToolExecutionResult } from './tool-types.js';
+
+const defaultMaxSteps = 8;
 
 function isCancellation(error: unknown, signal: AbortSignal): boolean {
   return (
@@ -32,13 +35,47 @@ function createAbortError(): DOMException {
   return new DOMException('The operation was aborted', 'AbortError');
 }
 
+function protocolToolDefinitions(
+  registry: NonNullable<AgentRunnerOptions['toolRegistry']>,
+): NonNullable<LlmRequest['tools']> {
+  return registry.list().map(({ name, description, parameters }) => ({
+    name,
+    description,
+    parameters,
+  }));
+}
+
+interface ToolCallState {
+  readonly id: string;
+  readonly name: string;
+  arguments: string;
+}
+
+function createToolMessage(result: ToolExecutionResult): Message {
+  return {
+    role: 'tool',
+    toolCallId: result.toolCallId,
+    content: [{ type: 'text', text: result.content }],
+  };
+}
+
 /**
- * Creates a Runner for normal, no-tool model turns.
+ * Creates a Runner for one Session turn, with optional sequential Tool Calls.
  *
  * The queue is intentionally local to this Runner. The current
  * SessionEventStore contract has no cross-process lease or CAS primitive.
  */
 export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
+  const hasToolRegistry = options.toolRegistry !== undefined;
+  const hasToolPipeline = options.toolPipeline !== undefined;
+  if (hasToolRegistry !== hasToolPipeline) {
+    throw new Error('toolRegistry and toolPipeline must be provided together');
+  }
+  const maxSteps = options.maxSteps ?? defaultMaxSteps;
+  if (!Number.isInteger(maxSteps) || maxSteps <= 0) {
+    throw new RangeError('maxSteps must be a positive integer');
+  }
+
   const sessionQueues = new Map<string, Promise<void>>();
 
   const enqueueSessionExecution = (
@@ -97,6 +134,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
       let sessionId: string | undefined;
       let turnId: string | undefined;
       let stepId: string | undefined;
+      let activeStepStatus: 'running' | 'completed' = 'running';
 
       const settlePending = (): void => {
         if (!finished) {
@@ -192,30 +230,29 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
             },
           });
         }
-        events.push(
-          {
+        if (activeStepStatus === 'running') {
+          events.push({
             type: 'step.completed',
             payload: {
               turnId: turnId as string,
               stepId: stepId as string,
               status,
             },
+          });
+        }
+        events.push({
+          type: 'turn.completed',
+          payload: {
+            turnId: turnId as string,
+            status,
+            ...(reason === undefined ? {} : { reason }),
           },
-          {
-            type: 'turn.completed',
-            payload: {
-              turnId: turnId as string,
-              status,
-              ...(reason === undefined ? {} : { reason }),
-            },
-          },
-        );
+        });
         return events;
       };
 
       const execute = async (): Promise<void> => {
-        let assistantText = '';
-        let finishSeen = false;
+        let modelSteps = 0;
         try {
           if (!requestResult.success) {
             throw new AgentRunError('agent-invalid-input', 'Agent Run input is invalid');
@@ -247,65 +284,280 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
           ]);
           lifecycleStarted = true;
 
-          const projectedSession = projectSession(
+          let projectedSession = projectSession(
             await options.sessionStore.read(validRequest.sessionId),
           );
-          const messages: readonly Message[] = projectedSession.messages.map(
+          let messages: readonly Message[] = projectedSession.messages.map(
             ({ message }) => message,
           );
-          const llmRequest: LlmRequest = {
-            provider: validRequest.provider,
-            model: validRequest.model,
-            messages,
-            ...(validRequest.temperature === undefined
-              ? {}
-              : { temperature: validRequest.temperature }),
-            ...(validRequest.maxTokens === undefined ? {} : { maxTokens: validRequest.maxTokens }),
-            ...(validRequest.reasoningEffort === undefined
-              ? {}
-              : { reasoningEffort: validRequest.reasoningEffort }),
-          };
+          const tools =
+            options.toolRegistry === undefined
+              ? undefined
+              : protocolToolDefinitions(options.toolRegistry);
 
-          signal.throwIfAborted();
-          for await (const event of options.llm.stream(llmRequest, { signal })) {
-            if (finishSeen) {
+          while (true) {
+            if (modelSteps >= maxSteps) {
               throw new AgentRunError(
-                'agent-stream-protocol',
-                'Agent stream emitted events after finish',
+                'agent-step-limit',
+                `Agent reached the maximum of ${maxSteps} model steps`,
               );
             }
-            if (event.type === 'text-delta') {
-              assistantText += event.text;
-              emit(event);
-            } else if (event.type === 'reasoning-delta') {
-              emit(event);
-            } else if (event.type === 'tool-call-start' || event.type === 'tool-call-delta') {
+            modelSteps += 1;
+
+            if (modelSteps > 1) {
+              stepId = crypto.randomUUID();
+              activeStepStatus = 'running';
+              await options.sessionStore.append(validRequest.sessionId, [
+                {
+                  type: 'step.started',
+                  payload: { turnId, stepId, kind: 'model' },
+                },
+              ]);
+            }
+
+            let assistantText = '';
+            let finishSeen = false;
+            let finishReason: FinishReason | undefined;
+            const toolCalls = new Map<string, ToolCallState>();
+            const llmRequest: LlmRequest = {
+              provider: validRequest.provider,
+              model: validRequest.model,
+              messages,
+              ...(tools === undefined ? {} : { tools }),
+              ...(validRequest.temperature === undefined
+                ? {}
+                : { temperature: validRequest.temperature }),
+              ...(validRequest.maxTokens === undefined
+                ? {}
+                : { maxTokens: validRequest.maxTokens }),
+              ...(validRequest.reasoningEffort === undefined
+                ? {}
+                : { reasoningEffort: validRequest.reasoningEffort }),
+            };
+
+            signal.throwIfAborted();
+            for await (const event of options.llm.stream(llmRequest, { signal })) {
+              if (finishSeen) {
+                throw new AgentRunError(
+                  'agent-stream-protocol',
+                  'Agent stream emitted events after finish',
+                );
+              }
+              if (event.type === 'text-delta') {
+                assistantText += event.text;
+                emit(event);
+              } else if (event.type === 'reasoning-delta') {
+                emit(event);
+              } else if (event.type === 'tool-call-start') {
+                if (options.toolPipeline === undefined || options.toolRegistry === undefined) {
+                  throw new AgentRunError(
+                    'agent-tool-call-unsupported',
+                    'Agent tool calls are not supported',
+                  );
+                }
+                if (toolCalls.has(event.id)) {
+                  throw new AgentRunError(
+                    'agent-tool-call-invalid',
+                    `Tool call "${event.id}" was started more than once`,
+                  );
+                }
+                toolCalls.set(event.id, {
+                  id: event.id,
+                  name: event.name,
+                  arguments: '',
+                });
+              } else if (event.type === 'tool-call-delta') {
+                if (options.toolPipeline === undefined || options.toolRegistry === undefined) {
+                  throw new AgentRunError(
+                    'agent-tool-call-unsupported',
+                    'Agent tool calls are not supported',
+                  );
+                }
+                const toolCall = toolCalls.get(event.id);
+                if (toolCall === undefined) {
+                  throw new AgentRunError(
+                    'agent-tool-call-invalid',
+                    `Tool call "${event.id}" received a delta before start`,
+                  );
+                }
+                toolCall.arguments += event.argumentsDelta;
+              } else if (event.type === 'finish') {
+                finishSeen = true;
+                finishReason = event.reason;
+              }
+            }
+            if (!finishSeen) {
+              throw new AgentRunError('agent-stream-protocol', 'Agent stream did not finish');
+            }
+
+            const completeToolCalls: ToolCall[] = [...toolCalls.values()].map((toolCall) => ({
+              id: toolCall.id,
+              name: toolCall.name,
+              arguments: toolCall.arguments,
+            }));
+            if (completeToolCalls.length > 0 && finishReason !== 'tool-call') {
+              throw new AgentRunError(
+                'agent-tool-call-invalid',
+                'Agent stream emitted tool calls with a non-tool finish reason',
+              );
+            }
+
+            if (finishReason !== 'tool-call') {
+              await appendTerminal(
+                terminalEvents('completed', undefined, assistantText),
+                undefined,
+                false,
+                'completed',
+              );
+              activeStepStatus = 'completed';
+              emit({ type: 'completed', turnId });
+              finish();
+              return;
+            }
+
+            if (options.toolPipeline === undefined || options.toolRegistry === undefined) {
               throw new AgentRunError(
                 'agent-tool-call-unsupported',
                 'Agent tool calls are not supported',
               );
-            } else if (event.type === 'finish') {
-              if (event.reason === 'tool-call') {
-                throw new AgentRunError(
-                  'agent-tool-call-unsupported',
-                  'Agent tool calls are not supported',
-                );
-              }
-              finishSeen = true;
             }
-          }
-          if (!finishSeen) {
-            throw new AgentRunError('agent-stream-protocol', 'Agent stream did not finish');
-          }
+            if (completeToolCalls.length === 0) {
+              throw new AgentRunError(
+                'agent-tool-call-invalid',
+                'Agent tool-call finish did not contain a tool call',
+              );
+            }
 
-          await appendTerminal(
-            terminalEvents('completed', undefined, assistantText),
-            undefined,
-            false,
-            'completed',
-          );
-          emit({ type: 'completed', turnId });
-          finish();
+            const assistantMessage: Message = {
+              role: 'assistant',
+              content: assistantText.length === 0 ? [] : [{ type: 'text', text: assistantText }],
+              toolCalls: completeToolCalls.map(({ id, name, arguments: toolArguments }) => ({
+                id,
+                name,
+                arguments: toolArguments,
+              })),
+            };
+            await options.sessionStore.append(validRequest.sessionId, [
+              {
+                type: 'message.created',
+                payload: {
+                  messageId: crypto.randomUUID(),
+                  message: assistantMessage,
+                },
+              },
+              {
+                type: 'step.completed',
+                payload: {
+                  turnId,
+                  stepId,
+                  status: 'completed',
+                },
+              },
+            ]);
+            activeStepStatus = 'completed';
+
+            for (const toolCall of completeToolCalls) {
+              const toolStepId = crypto.randomUUID();
+              stepId = toolStepId;
+              activeStepStatus = 'running';
+              await options.sessionStore.append(validRequest.sessionId, [
+                {
+                  type: 'step.started',
+                  payload: { turnId, stepId: toolStepId, kind: 'tool' },
+                },
+                {
+                  type: 'tool-call.created',
+                  payload: {
+                    turnId,
+                    stepId: toolStepId,
+                    toolCall: {
+                      id: toolCall.id,
+                      name: toolCall.name,
+                      arguments: toolCall.arguments,
+                    },
+                  },
+                },
+              ]);
+              emit({ type: 'tool-call', toolCall });
+              emit({ type: 'tool-executing', toolCall });
+
+              let result: ToolExecutionResult;
+              try {
+                result = await options.toolPipeline.execute({
+                  toolCallId: toolCall.id,
+                  name: toolCall.name,
+                  arguments: toolCall.arguments,
+                  sessionId: validRequest.sessionId,
+                  signal,
+                });
+              } catch (error: unknown) {
+                const cancelled = isCancellation(error, signal);
+                const errorCode =
+                  error instanceof ToolExecutionError ? error.code : 'tool-execution-failed';
+                const errorContent =
+                  error instanceof ToolExecutionError ? error.message : 'Tool execution failed';
+                await appendTerminal(
+                  [
+                    {
+                      type: 'tool-result.created',
+                      payload: {
+                        turnId,
+                        stepId: toolStepId,
+                        toolCallId: toolCall.id,
+                        name: toolCall.name,
+                        content: errorContent,
+                        truncated: false,
+                        status: 'failed',
+                        errorCode,
+                      },
+                    },
+                    ...terminalEvents(cancelled ? 'cancelled' : 'failed', errorCode),
+                  ],
+                  error,
+                  true,
+                  cancelled ? 'cancelled' : 'failed',
+                );
+                throw error;
+              }
+
+              await options.sessionStore.append(validRequest.sessionId, [
+                {
+                  type: 'tool-result.created',
+                  payload: {
+                    turnId,
+                    stepId: toolStepId,
+                    toolCallId: result.toolCallId,
+                    name: result.name,
+                    content: result.content,
+                    truncated: result.truncated,
+                    status: 'completed',
+                  },
+                },
+                {
+                  type: 'message.created',
+                  payload: {
+                    messageId: crypto.randomUUID(),
+                    message: createToolMessage(result),
+                  },
+                },
+                {
+                  type: 'step.completed',
+                  payload: {
+                    turnId,
+                    stepId: toolStepId,
+                    status: 'completed',
+                  },
+                },
+              ]);
+              activeStepStatus = 'completed';
+              emit({ type: 'tool-result', result });
+            }
+
+            projectedSession = projectSession(
+              await options.sessionStore.read(validRequest.sessionId),
+            );
+            messages = projectedSession.messages.map(({ message }) => message);
+          }
         } catch (primaryError: unknown) {
           const completionPersistenceFailed = terminalOutcome === 'completed';
           if (completionPersistenceFailed) {
