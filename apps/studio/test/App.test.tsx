@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AgentStreamError, streamAgentRun } from '../src/features/agent/agent-stream.js';
 import { App } from '../src/app/App.js';
+import type { AgentStreamHandlers } from '../src/features/agent/agent-types.js';
 
 vi.mock('../src/features/agent/agent-stream.js', async () => {
   const actual = await vi.importActual<typeof import('../src/features/agent/agent-stream.js')>(
@@ -27,6 +28,7 @@ afterEach(() => {
 describe('Studio Agent Chat', () => {
   it('submits a message and renders streamed assistant text', async () => {
     streamAgentRunMock.mockImplementation(async (_request, handlers) => {
+      handlers.onEvent({ type: 'reasoning-delta', text: '先分析。' });
       handlers.onEvent({ type: 'text-delta', text: '你好，' });
       handlers.onEvent({ type: 'text-delta', text: '这是 Weave。' });
       handlers.onEvent({ type: 'completed', turnId: 'turn-1' });
@@ -40,6 +42,7 @@ describe('Studio Agent Chat', () => {
 
     expect(await screen.findByText('介绍一下 Weave')).toBeTruthy();
     expect(await screen.findByText('你好，这是 Weave。')).toBeTruthy();
+    expect(screen.getByText('先分析。')).toBeTruthy();
     expect(screen.getByText('Completed', { selector: '.run-status' })).toBeTruthy();
     expect(streamAgentRunMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -147,6 +150,7 @@ describe('Studio Agent Chat', () => {
       false,
     );
     expect(screen.getByText('Cancelled')).toBeTruthy();
+    expect(screen.getByText('Run cancelled')).toBeTruthy();
   });
 
   it('does not submit a second message while streaming', () => {
@@ -162,8 +166,51 @@ describe('Studio Agent Chat', () => {
       target: { value: '只发送一次' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.submit(screen.getByLabelText('Message').closest('form') as HTMLFormElement);
 
     expect(streamAgentRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores late events and errors from a cancelled run', async () => {
+    type PendingRun = {
+      readonly handlers: AgentStreamHandlers;
+      readonly reject: (error: unknown) => void;
+    };
+    const runs: PendingRun[] = [];
+
+    streamAgentRunMock.mockImplementation((_request, handlers) => {
+      return new Promise<void>((_resolve, reject) => {
+        runs.push({
+          handlers,
+          reject,
+        });
+      });
+    });
+
+    render(<App />);
+    fireEvent.change(screen.getByLabelText('Message'), {
+      target: { value: '第一轮' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.change(screen.getByLabelText('Message'), {
+      target: { value: '第二轮' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(runs).toHaveLength(2);
+
+    act(() => {
+      runs[0]?.handlers.onEvent({ type: 'text-delta', text: '旧响应' });
+      runs[0]?.reject(new DOMException('The operation was aborted.', 'AbortError'));
+      runs[1]?.handlers.onEvent({ type: 'text-delta', text: '新响应' });
+      runs[1]?.handlers.onEvent({ type: 'completed', turnId: 'turn-2' });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('新响应')).toBeTruthy();
+      expect(screen.queryByText('旧响应')).toBeNull();
+      expect(screen.getByText('Completed', { selector: '.run-status' })).toBeTruthy();
+    });
   });
 });

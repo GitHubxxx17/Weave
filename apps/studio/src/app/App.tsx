@@ -58,6 +58,25 @@ function updateToolActivity(
   return activities.map((activity) => (activity.toolCallId === toolCallId ? updated : activity));
 }
 
+function getAssistantPlaceholder(status: RunStatus, isLatest: boolean): string {
+  if (!isLatest) {
+    return 'No response';
+  }
+
+  switch (status) {
+    case 'streaming':
+      return 'Thinking...';
+    case 'cancelled':
+      return 'Run cancelled';
+    case 'error':
+      return 'No response';
+    case 'completed':
+      return 'Agent returned no text';
+    case 'idle':
+      return 'No response';
+  }
+}
+
 /** Studio's first local Agent workspace, combining chat state and stream events. */
 export function App() {
   const [messageInput, setMessageInput] = useState('');
@@ -66,21 +85,22 @@ export function App() {
   const [reasoning, setReasoning] = useState('');
   const [status, setStatus] = useState<RunStatus>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const assistantMessageId = useRef<string | null>(null);
+  const latestAssistantMessageId = useRef<string | null>(null);
   const controller = useRef<AbortController | null>(null);
+  const activeRunId = useRef<string | null>(null);
 
-  function handleEvent(event: AgentRuntimeEvent): void {
+  function handleEvent(event: AgentRuntimeEvent, runId: string, assistantId: string): void {
+    if (activeRunId.current !== runId) {
+      return;
+    }
+
     switch (event.type) {
       case 'text-delta':
-        if (assistantMessageId.current !== null) {
-          setMessages((current) =>
-            current.map((message) =>
-              message.id === assistantMessageId.current
-                ? { ...message, text: message.text + event.text }
-                : message,
-            ),
-          );
-        }
+        setMessages((current) =>
+          current.map((message) =>
+            message.id === assistantId ? { ...message, text: message.text + event.text } : message,
+          ),
+        );
         break;
       case 'reasoning-delta':
         setReasoning((current) => current + event.text);
@@ -135,9 +155,11 @@ export function App() {
 
     const userMessageId = createId('user');
     const assistantId = createId('assistant');
+    const runId = createId('run');
     const requestController = new AbortController();
 
-    assistantMessageId.current = assistantId;
+    latestAssistantMessageId.current = assistantId;
+    activeRunId.current = runId;
     controller.current = requestController;
     setMessages((current) => [
       ...current,
@@ -161,10 +183,14 @@ export function App() {
           provider: 'mock',
           model: 'weave-local-demo',
         },
-        { onEvent: handleEvent },
+        { onEvent: (event) => handleEvent(event, runId, assistantId) },
         { signal: requestController.signal },
       );
     } catch (error: unknown) {
+      if (activeRunId.current !== runId) {
+        return;
+      }
+
       if (error instanceof DOMException && error.name === 'AbortError') {
         setStatus('cancelled');
       } else {
@@ -172,7 +198,8 @@ export function App() {
         setStatus('error');
       }
     } finally {
-      if (controller.current === requestController) {
+      if (activeRunId.current === runId) {
+        activeRunId.current = null;
         controller.current = null;
       }
     }
@@ -184,7 +211,14 @@ export function App() {
   }
 
   function cancelRun(): void {
-    controller.current?.abort();
+    const requestController = controller.current;
+    if (requestController === null) {
+      return;
+    }
+
+    activeRunId.current = null;
+    controller.current = null;
+    requestController.abort();
     setStatus('cancelled');
   }
 
@@ -239,7 +273,13 @@ export function App() {
             messages.map((message) => (
               <article className={`message message-${message.role}`} key={message.id}>
                 <div className="message-meta">{message.role === 'user' ? 'You' : 'Agent'}</div>
-                <p>{message.text || 'Thinking...'}</p>
+                <p>
+                  {message.text ||
+                    getAssistantPlaceholder(
+                      status,
+                      message.id === latestAssistantMessageId.current,
+                    )}
+                </p>
               </article>
             ))
           )}
