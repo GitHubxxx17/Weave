@@ -14,11 +14,12 @@ remains a separate reference project and is not copied into this repository.
 ## Status
 
 The Foundation vertical slice, Session persistence, the first headless Agent
-Loop, and the shared Tool Pipeline are implemented. `@weave/protocol`,
-`@weave/llm`, `@weave/session`, `@weave/runtime`, and `@weave/server` form the
-current architecture. Approval, Shell/Sandbox hardening, HTTP/SSE adapters,
-Plugin loading, and Studio UI remain later phases. The first protected
-Workspace file tools are now available in `@weave/runtime`.
+Loop, the shared Tool Pipeline, and the Approval HTTP control plane are
+implemented. `@weave/protocol`, `@weave/llm`, `@weave/session`,
+`@weave/runtime`, and `@weave/server` form the current architecture. Agent
+HTTP/SSE adapters, Shell/Sandbox hardening, Plugin loading, and Studio UI
+remain later phases. The first protected Workspace file tools are now
+available in `@weave/runtime`.
 
 Start with the [Foundation architecture guide](docs/architecture/foundation.md)
 for the request path, package boundaries, and AI editing checklist. The
@@ -78,7 +79,8 @@ relative source imports, and HTTP/UI imports from `runtime`.
 
 Server does not contain the Agent Loop because HTTP should remain a thin
 control-plane boundary while agent behavior belongs in the runtime. Server
-currently exposes only `GET /health`; there is no HTTP `/run` or SSE adapter.
+exposes `GET /health` and the Approval REST/SSE control plane; there is still
+no HTTP `/run` or Agent execution SSE adapter.
 
 ## Agent Runner
 
@@ -281,9 +283,10 @@ verified safely.
 
 ## Approval HTTP Control Plane
 
-The local Server exposes a thin REST control plane for the Runtime's in-memory
-Approval Broker. A desktop or frontend client can poll pending requests and
-resolve them without duplicating Approval state or calling tools directly.
+The local Server exposes a thin REST/SSE control plane for the Runtime's
+in-memory Approval Broker. A desktop or frontend client can query pending
+requests, subscribe to live state changes, and resolve them without
+duplicating Approval state or calling tools directly.
 
 ```text
 GET  /approvals
@@ -291,6 +294,7 @@ GET  /approvals/:approvalId
 POST /approvals/:approvalId/approve
 POST /approvals/:approvalId/reject
 POST /approvals/:approvalId/cancel
+GET  /approvals/stream
 ```
 
 Decision endpoints accept an optional JSON body:
@@ -313,12 +317,30 @@ returns stable error responses:
 }
 ```
 
-The first control-plane version uses polling. A frontend can request
-`GET /approvals`, render the redacted summary and risk level, then call one of
-the decision endpoints. The HTTP layer only delegates to the Runtime Broker;
+For real-time updates, `GET /approvals/stream` returns an SSE stream. The
+connection first sends an `approval.snapshot` event containing the current
+Approval list, then sends `approval.created` when a request enters the Broker
+and `approval.resolved` when it reaches an approved, rejected, cancelled, or
+expired state:
+
+```text
+event: approval.snapshot
+data: {"approvals":[...]}
+
+event: approval.created
+data: {"approvalId":"...","status":"pending",...}
+
+event: approval.resolved
+data: {"approvalId":"...","status":"approved",...}
+```
+
+The frontend can use the snapshot as its initial view and keep it updated from
+the two lifecycle events. The HTTP layer only delegates to the Runtime Broker;
 the waiting Tool Pipeline remains the only code allowed to continue protected
-tool execution. Approval HTTP is not an authentication or authorization layer,
-and it does not make the in-memory Broker durable or multi-process.
+tool execution. Approval HTTP is not an authentication or authorization layer.
+The SSE subscription is an in-process live-control adapter, not a durable event
+log or cross-process replay mechanism. A disconnected client must use a later
+snapshot or REST query to rebuild its view.
 
 The stable error codes are exposed through `WorkspaceFileError`. Node errors
 remain available through `cause`, which preserves diagnostic details without
