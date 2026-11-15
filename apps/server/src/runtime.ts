@@ -2,8 +2,10 @@ import { createMockLlmClient } from '@weave/llm';
 import type { StreamEvent } from '@weave/protocol';
 import { createInMemorySessionEventStore } from '@weave/session';
 import {
+  createApprovalBroker,
   createRuntime,
   createSessionEventStoreService,
+  type ApprovalBroker,
   type Runtime,
   type RuntimeService,
 } from '@weave/runtime';
@@ -14,6 +16,12 @@ const mockLlmService: RuntimeService<unknown> = {
     const script: readonly StreamEvent[] = [];
     return createMockLlmClient(script);
   },
+};
+
+/** Approval Broker used by the local HTTP control plane. */
+export const approvalBrokerService: RuntimeService<ApprovalBroker> = {
+  key: Symbol('weave.server.approval-broker'),
+  create: () => createApprovalBroker(),
 };
 
 /** Session Store selected by the local Server composition root. */
@@ -28,5 +36,7 @@ export const sessionEventStoreService = createSessionEventStoreService({
  * Store so startup and health checks remain deterministic.
  */
 export function createServerRuntime(): Runtime {
-  return createRuntime({ services: [mockLlmService, sessionEventStoreService] });
+  return createRuntime({
+    services: [mockLlmService, approvalBrokerService, sessionEventStoreService],
+  });
 }
