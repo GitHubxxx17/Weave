@@ -6,6 +6,7 @@ import {
   type AgentRuntimeEvent,
 } from '@weave/runtime';
 import { createApp } from '../src/app.js';
+import { createServerAgentRunner, createServerRuntime } from '../src/runtime.js';
 
 const validRequest = {
   sessionId: 'session-http-1',
@@ -44,6 +45,37 @@ function createRunner(
 }
 
 describe('Agent HTTP/SSE API', () => {
+  it('streams the deterministic local demo with the default Agent Runner', async () => {
+    const runtime = createServerRuntime();
+    await runtime.start();
+
+    try {
+      const response = await createApp(runtime, {
+        agentRunner: createServerAgentRunner(runtime),
+      }).request('/agent/runs/stream', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(validRequest),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await readResponse(response);
+      const firstTextDelta =
+        'event: text-delta\n' +
+        'data: {"type":"text-delta","text":"这是 Weave 的本地 Agent 演示。"}';
+      const secondTextDelta =
+        'event: text-delta\n' + 'data: {"type":"text-delta","text":" 当前消息通过 SSE 增量传输。"}';
+
+      expect(body).toContain(firstTextDelta);
+      expect(body).toContain(secondTextDelta);
+      expect(body.indexOf(firstTextDelta)).toBeLessThan(body.indexOf(secondTextDelta));
+      expect(body).toMatch(/event: completed\ndata: \{"type":"completed","turnId":"[^"]+"\}\n\n$/);
+      expect(body).not.toContain('event: error');
+    } finally {
+      await runtime.stop();
+    }
+  });
+
   it('streams Runtime events in order with SSE headers', async () => {
     const runtime = createRuntime();
     await runtime.start();

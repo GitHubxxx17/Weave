@@ -12,12 +12,16 @@ import {
   type RuntimeService,
 } from '@weave/runtime';
 
+/** Fixed local script used to make the default Studio demo reproducible. */
+const localDemoScript: readonly StreamEvent[] = [
+  { type: 'text-delta', text: '这是 Weave 的本地 Agent 演示。' },
+  { type: 'text-delta', text: ' 当前消息通过 SSE 增量传输。' },
+  { type: 'finish', reason: 'stop' },
+];
+
 const mockLlmService: RuntimeService<LlmClient> = {
   key: Symbol('weave.server.mock-llm'),
-  create: () => {
-    const script: readonly StreamEvent[] = [];
-    return createMockLlmClient(script);
-  },
+  create: () => createMockLlmClient(localDemoScript),
 };
 
 /** Approval Broker used by the local HTTP control plane. */
