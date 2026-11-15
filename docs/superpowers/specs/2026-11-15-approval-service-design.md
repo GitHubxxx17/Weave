@@ -373,3 +373,34 @@ Approval Broker 保留 `ApprovalError`，Pipeline 将其包装为
 > 第一版 Approval 是 Runtime 内的 transient live-control state，因为当前
 > 还没有 HTTP/SSE 和审批事件持久化契约。它先稳定等待、终态和取消语义，
 > 后续再通过独立 Store 或 Session audit events 支持重启恢复和审计。
+
+## 15. 实施结果
+
+本轮已完成以下 Runtime 能力：
+
+- `ApprovalBroker` 提供 pending、approved、rejected、cancelled、expired
+  状态和稳定错误码；
+- `ToolDefinition.approval` 支持工具声明操作名、风险等级和脱敏摘要；
+- `ToolPipeline` 在工具执行前等待 Approval，并复用请求取消和超时信号；
+- 没有配置 Broker 时，受保护工具 fail closed，返回
+  `tool-approval-required`；
+- `write_file` 默认要求 high-risk Approval，摘要不包含完整文件内容；
+- 注册时校验 Approval 声明结构，防止非法 operation、risk 或 summarize
+  进入 Registry；
+- 拒绝、取消、过期时工具实现不会被调用，已有读文件和 Workspace 安全
+  检查保持不变。
+
+验证记录：
+
+```text
+pnpm format:check
+pnpm --filter @weave/runtime lint
+pnpm --filter @weave/runtime typecheck
+pnpm --filter @weave/runtime test
+pnpm --filter @weave/runtime build
+```
+
+以上命令均通过；Runtime 测试共 17 个测试文件、186 个测试用例通过。
+
+当前仍然明确不实现 HTTP/SSE 控制面、Studio 审批 UI、Session durable
+approval events、角色权限、多进程共享、进程重启恢复和完整 Sandbox。
