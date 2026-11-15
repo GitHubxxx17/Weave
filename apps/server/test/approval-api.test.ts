@@ -33,6 +33,27 @@ function createPendingApproval(broker: ApprovalBroker): {
   return { approvalId: request.approvalId, decision };
 }
 
+async function readStreamChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<string> {
+  const result = await reader.read();
+  if (result.done || result.value === undefined) {
+    throw new Error('Expected an SSE chunk');
+  }
+  return new TextDecoder().decode(result.value);
+}
+
+async function readUntil(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  marker: string,
+): Promise<string> {
+  let text = '';
+  while (!text.includes(marker)) {
+    text += await readStreamChunk(reader);
+  }
+  return text;
+}
+
 describe('Approval HTTP API', () => {
   it('lists pending and terminal Approval snapshots', async () => {
     const { app, broker, stop } = await createApprovalApp();
@@ -183,5 +204,108 @@ describe('Approval HTTP API', () => {
     } finally {
       await stop();
     }
+  });
+
+  it('streams an approval snapshot and live lifecycle events', async () => {
+    const { app, broker, stop } = await createApprovalApp();
+    try {
+      const response = await app.request('/approvals/stream');
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toContain('text/event-stream');
+      expect(response.headers.get('cache-control')).toBe('no-cache');
+      expect(response.headers.get('connection')).toBe('keep-alive');
+
+      const reader = response.body?.getReader();
+      if (reader === undefined) {
+        throw new Error('Expected an SSE response body');
+      }
+
+      await expect(readStreamChunk(reader)).resolves.toContain(
+        'event: approval.snapshot\ndata: {"approvals":[]}\n\n',
+      );
+
+      const pending = createPendingApproval(broker);
+      await expect(
+        readUntil(reader, `"approvalId":"${pending.approvalId}"`),
+      ).resolves.toContain('event: approval.created');
+
+      broker.approve(pending.approvalId, '实时批准');
+      await expect(pending.decision).resolves.toMatchObject({ status: 'approved' });
+      await expect(readUntil(reader, 'event: approval.resolved')).resolves.toContain(
+        `"approvalId":"${pending.approvalId}"`,
+      );
+
+      await reader.cancel();
+    } finally {
+      await stop();
+    }
+  });
+
+  it('includes existing approvals in the initial SSE snapshot', async () => {
+    const { app, broker, stop } = await createApprovalApp();
+    try {
+      const pending = createPendingApproval(broker);
+      const response = await app.request('/approvals/stream');
+      const reader = response.body?.getReader();
+      if (reader === undefined) {
+        throw new Error('Expected an SSE response body');
+      }
+
+      const chunk = await readStreamChunk(reader);
+      expect(chunk).toContain('event: approval.snapshot');
+      expect(chunk).toContain(`"approvalId":"${pending.approvalId}"`);
+      expect(chunk).toContain('"status":"pending"');
+
+      await reader.cancel();
+      broker.cancel(pending.approvalId);
+      await expect(pending.decision).rejects.toMatchObject({ code: 'approval-cancelled' });
+    } finally {
+      await stop();
+    }
+  });
+
+  it('ends an SSE stream when its reader is cancelled', async () => {
+    const { app, broker, stop } = await createApprovalApp();
+    try {
+      const response = await app.request('/approvals/stream');
+      const reader = response.body?.getReader();
+      if (reader === undefined) {
+        throw new Error('Expected an SSE response body');
+      }
+
+      await readStreamChunk(reader);
+      await reader.cancel();
+      const pending = broker.request({
+        toolCallId: 'call-after-cancel',
+        toolName: 'write_file',
+        operation: 'workspace.write_file',
+        summary: '写入 Workspace 文件 after-cancel.txt',
+        risk: 'high',
+        inputSummary: { path: 'after-cancel.txt' },
+      });
+      const result = await reader.read();
+
+      expect(result.done).toBe(true);
+      broker.cancel(broker.list()[0]!.approvalId);
+      await expect(pending).rejects.toMatchObject({ code: 'approval-cancelled' });
+    } finally {
+      await stop();
+    }
+  });
+
+  it('returns 503 when the Approval service is not available for SSE', async () => {
+    const runtime = createRuntime();
+    await runtime.start();
+    const response = await createApp(runtime).request('/approvals/stream');
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'approval-service-unavailable',
+        message: 'Approval service is not available',
+      },
+    });
+    await runtime.stop();
   });
 });
