@@ -1,0 +1,169 @@
+// @vitest-environment jsdom
+
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { AgentStreamError, streamAgentRun } from '../src/features/agent/agent-stream.js';
+import { App } from '../src/app/App.js';
+
+vi.mock('../src/features/agent/agent-stream.js', async () => {
+  const actual = await vi.importActual<typeof import('../src/features/agent/agent-stream.js')>(
+    '../src/features/agent/agent-stream.js',
+  );
+
+  return {
+    ...actual,
+    streamAgentRun: vi.fn(),
+  };
+});
+
+const streamAgentRunMock = vi.mocked(streamAgentRun);
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
+
+describe('Studio Agent Chat', () => {
+  it('submits a message and renders streamed assistant text', async () => {
+    streamAgentRunMock.mockImplementation(async (_request, handlers) => {
+      handlers.onEvent({ type: 'text-delta', text: '你好，' });
+      handlers.onEvent({ type: 'text-delta', text: '这是 Weave。' });
+      handlers.onEvent({ type: 'completed', turnId: 'turn-1' });
+    });
+
+    render(<App />);
+    fireEvent.change(screen.getByLabelText('Message'), {
+      target: { value: '介绍一下 Weave' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText('介绍一下 Weave')).toBeTruthy();
+    expect(await screen.findByText('你好，这是 Weave。')).toBeTruthy();
+    expect(screen.getByText('Completed', { selector: '.run-status' })).toBeTruthy();
+    expect(streamAgentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: 'session-local',
+        provider: 'mock',
+        model: 'weave-local-demo',
+      }),
+      expect.objectContaining({ onEvent: expect.any(Function) }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it('renders tool lifecycle state in order', async () => {
+    streamAgentRunMock.mockImplementation(async (_request, handlers) => {
+      handlers.onEvent({
+        type: 'tool-call',
+        toolCall: { id: 'call-1', name: 'workspace.search', arguments: '{"query":"SSE"}' },
+      });
+      handlers.onEvent({
+        type: 'tool-executing',
+        toolCall: { id: 'call-1', name: 'workspace.search', arguments: '{"query":"SSE"}' },
+      });
+      handlers.onEvent({
+        type: 'tool-result',
+        result: {
+          toolCallId: 'call-1',
+          name: 'workspace.search',
+          content: '2 matches',
+          truncated: false,
+        },
+      });
+      handlers.onEvent({ type: 'completed', turnId: 'turn-2' });
+    });
+
+    render(<App />);
+    fireEvent.change(screen.getByLabelText('Message'), {
+      target: { value: '搜索 SSE' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText('workspace.search')).toBeTruthy();
+    expect(
+      within(screen.getByRole('region', { name: 'Tools' })).getByText('Completed', {
+        selector: '.status-badge',
+      }),
+    ).toBeTruthy();
+    expect(screen.getByText('2 matches')).toBeTruthy();
+    expect(screen.getByText('{"query":"SSE"}')).toBeTruthy();
+  });
+
+  it('shows a safe error without leaking implementation details', async () => {
+    const error = new AgentStreamError('agent-step-limit', 'Agent run failed', {
+      cause: '/Users/mi/private/secret.ts',
+    });
+    streamAgentRunMock.mockRejectedValue(error);
+
+    render(<App />);
+    fireEvent.change(screen.getByLabelText('Message'), {
+      target: { value: '触发错误' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText('Agent run failed')).toBeTruthy();
+    expect(screen.queryByText(/secret\.ts|\/Users\/mi\/private/)).toBeNull();
+    expect(
+      within(screen.getByRole('region', { name: 'Run error' })).getByText('Error', {
+        selector: '.status-badge',
+      }),
+    ).toBeTruthy();
+  });
+
+  it('cancels an active stream and restores the send control', async () => {
+    let abortObserved = false;
+    streamAgentRunMock.mockImplementation(
+      (_request, _handlers, options) =>
+        new Promise<void>((_resolve, reject) => {
+          options?.signal?.addEventListener(
+            'abort',
+            () => {
+              abortObserved = true;
+              reject(new DOMException('The operation was aborted.', 'AbortError'));
+            },
+            { once: true },
+          );
+        }),
+    );
+
+    render(<App />);
+    fireEvent.change(screen.getByLabelText('Message'), {
+      target: { value: '取消这次运行' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    await waitFor(() => {
+      expect(abortObserved).toBe(true);
+      expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy();
+    });
+    fireEvent.change(screen.getByLabelText('Message'), {
+      target: { value: '取消后继续发送' },
+    });
+    expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    expect(screen.getByText('Cancelled')).toBeTruthy();
+  });
+
+  it('does not submit a second message while streaming', () => {
+    streamAgentRunMock.mockImplementation(
+      () =>
+        new Promise<void>(() => {
+          // Keep the first run active so the duplicate-submit guard is observable.
+        }),
+    );
+
+    render(<App />);
+    fireEvent.change(screen.getByLabelText('Message'), {
+      target: { value: '只发送一次' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(streamAgentRunMock).toHaveBeenCalledTimes(1);
+  });
+});
