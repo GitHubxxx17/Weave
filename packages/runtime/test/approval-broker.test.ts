@@ -3,6 +3,7 @@ import {
   ApprovalError,
   createApprovalBroker,
   type CreateApprovalRequestInput,
+  type ApprovalEvent,
 } from '../src/index.js';
 
 function createRequestInput(
@@ -173,5 +174,110 @@ describe('Approval Broker', () => {
         code: 'approval-invalid-input',
       }),
     );
+  });
+
+  it('publishes created and resolved snapshots', async () => {
+    const broker = createApprovalBroker();
+    const events: ApprovalEvent[] = [];
+    broker.subscribe((event) => events.push(event));
+
+    const decisionPromise = broker.request(createRequestInput());
+    const pending = broker.list()[0]!;
+    broker.approve(pending.approvalId, '用户确认');
+
+    await expect(decisionPromise).resolves.toEqual({
+      status: 'approved',
+      reason: '用户确认',
+    });
+    expect(events.map((event) => event.type)).toEqual([
+      'approval.created',
+      'approval.resolved',
+    ]);
+    expect(events[0]?.request.status).toBe('pending');
+    expect(events[1]?.request.status).toBe('approved');
+  });
+
+  it('publishes resolved events for rejection, cancellation, and expiry', async () => {
+    const broker = createApprovalBroker();
+    const events: ApprovalEvent[] = [];
+    broker.subscribe((event) => events.push(event));
+
+    const rejected = broker.request(createRequestInput({ toolCallId: 'reject' }));
+    broker.reject(broker.list()[0]!.approvalId);
+    await expect(rejected).resolves.toMatchObject({ status: 'rejected' });
+
+    const cancelled = broker.request(createRequestInput({ toolCallId: 'cancel' }));
+    broker.cancel(broker.list()[1]!.approvalId);
+    await expect(cancelled).rejects.toMatchObject({ code: 'approval-cancelled' });
+
+    const expired = broker.request(createRequestInput({ toolCallId: 'expire' }));
+    broker.expire(broker.list()[2]!.approvalId);
+    await expect(expired).rejects.toMatchObject({ code: 'approval-expired' });
+
+    expect(events.map((event) => event.request.status)).toEqual([
+      'pending',
+      'rejected',
+      'pending',
+      'cancelled',
+      'pending',
+      'expired',
+    ]);
+  });
+
+  it('stops publishing after unsubscribe and tolerates repeated unsubscribe', () => {
+    const broker = createApprovalBroker();
+    const events: ApprovalEvent[] = [];
+    const unsubscribe = broker.subscribe((event) => events.push(event));
+
+    unsubscribe();
+    unsubscribe();
+    broker.request(createRequestInput());
+
+    expect(events).toHaveLength(0);
+  });
+
+  it('isolates listener failures from other listeners and state transitions', async () => {
+    const broker = createApprovalBroker();
+    const events: ApprovalEvent[] = [];
+    broker.subscribe(() => {
+      throw new Error('listener failed');
+    });
+    broker.subscribe((event) => events.push(event));
+
+    const decisionPromise = broker.request(createRequestInput());
+    const pending = broker.list()[0]!;
+    broker.approve(pending.approvalId);
+
+    await expect(decisionPromise).resolves.toMatchObject({ status: 'approved' });
+    expect(events.map((event) => event.type)).toEqual([
+      'approval.created',
+      'approval.resolved',
+    ]);
+  });
+
+  it('publishes immutable snapshots and preserves event order for zero timeout', async () => {
+    const broker = createApprovalBroker();
+    const events: ApprovalEvent[] = [];
+
+    broker.subscribe((event) => events.push(event));
+    const decisionPromise = broker.request(createRequestInput({ timeoutMs: 0 }));
+
+    await expect(decisionPromise).rejects.toMatchObject({ code: 'approval-expired' });
+    expect(events.map((event) => event.request.status)).toEqual(['pending', 'expired']);
+    expect(Object.isFrozen(events[0]?.request)).toBe(true);
+    expect(events[0]?.request.status).toBe('pending');
+  });
+
+  it('does not publish an event for a pre-aborted request', async () => {
+    const broker = createApprovalBroker();
+    const controller = new AbortController();
+    const events: ApprovalEvent[] = [];
+    controller.abort();
+    broker.subscribe((event) => events.push(event));
+
+    await expect(
+      broker.request(createRequestInput({ signal: controller.signal })),
+    ).rejects.toMatchObject({ code: 'approval-cancelled' });
+    expect(events).toHaveLength(0);
   });
 });

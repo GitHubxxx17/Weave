@@ -4,6 +4,8 @@ import {
   createApprovalRequestInputSchema,
   type ApprovalBroker,
   type ApprovalDecision,
+  type ApprovalEvent,
+  type ApprovalListener,
   type ApprovalRequest,
   type ApprovalStatus,
   type CreateApprovalRequestInput,
@@ -48,6 +50,17 @@ function createResolvedMessage(status: Exclude<ApprovalStatus, 'pending'>): stri
 /** Creates an in-memory Approval Broker for one Runtime process. */
 export function createApprovalBroker(): ApprovalBroker {
   const requests = new Map<string, PendingApproval>();
+  const listeners = new Set<ApprovalListener>();
+
+  function notify(event: ApprovalEvent): void {
+    for (const listener of [...listeners]) {
+      try {
+        listener(event);
+      } catch {
+        // Listener failures must not break Approval state transitions.
+      }
+    }
+  }
 
   function getPending(approvalId: string): PendingApproval {
     const pending = requests.get(approvalId);
@@ -76,6 +89,8 @@ export function createApprovalBroker(): ApprovalBroker {
       resolvedAt,
       ...(reason === undefined ? {} : { decisionReason: reason }),
     });
+    const resolvedRequest = snapshot(pending.request);
+    notify({ type: 'approval.resolved', request: resolvedRequest });
     pending.cleanup();
 
     const decision = createTerminalDecision(status, reason);
@@ -148,6 +163,7 @@ export function createApprovalBroker(): ApprovalBroker {
         },
       };
       requests.set(approvalId, pending);
+      notify({ type: 'approval.created', request: snapshot(request) });
 
       if (parsedInput.signal !== undefined) {
         abortHandler = (): void => {
@@ -182,6 +198,13 @@ export function createApprovalBroker(): ApprovalBroker {
 
     list(): readonly ApprovalRequest[] {
       return Object.freeze([...requests.values()].map((pending) => snapshot(pending.request)));
+    },
+
+    subscribe(listener): () => void {
+      listeners.add(listener);
+      return (): void => {
+        listeners.delete(listener);
+      };
     },
 
     approve(approvalId, reason): ApprovalRequest {
