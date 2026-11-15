@@ -121,8 +121,8 @@ for await (const event of runner.run({
 The current Runner does not execute tools or expose HTTP `/run`. Before
 `finish`, `tool-call-start` and `tool-call-delta` return
 `agent-tool-call-unsupported`; after `finish`, any event, including a tool
-event, returns `agent-stream-protocol`. HTTP/SSE will be a later adapter over
-the Runtime event stream.
+event, returns `agent-stream-protocol`. Agent execution HTTP/SSE will be a
+later adapter over the Runtime event stream.
 
 Run the focused Agent Runner tests with:
 
@@ -278,6 +278,47 @@ the real target or parent directory, file type, and UTF-8 byte length before
 access. A symlink that resolves outside the Workspace is rejected.
 Dangling symlinks are also rejected because their final target cannot be
 verified safely.
+
+## Approval HTTP Control Plane
+
+The local Server exposes a thin REST control plane for the Runtime's in-memory
+Approval Broker. A desktop or frontend client can poll pending requests and
+resolve them without duplicating Approval state or calling tools directly.
+
+```text
+GET  /approvals
+GET  /approvals/:approvalId
+POST /approvals/:approvalId/approve
+POST /approvals/:approvalId/reject
+POST /approvals/:approvalId/cancel
+```
+
+Decision endpoints accept an optional JSON body:
+
+```json
+{
+  "reason": "用户确认"
+}
+```
+
+An empty body means no reason. The Server validates the body with Zod and
+returns stable error responses:
+
+```json
+{
+  "error": {
+    "code": "approval-already-resolved",
+    "message": "Approval request is already approved"
+  }
+}
+```
+
+The first control-plane version uses polling. A frontend can request
+`GET /approvals`, render the redacted summary and risk level, then call one of
+the decision endpoints. The HTTP layer only delegates to the Runtime Broker;
+the waiting Tool Pipeline remains the only code allowed to continue protected
+tool execution. Approval HTTP is not an authentication or authorization layer,
+and it does not make the in-memory Broker durable or multi-process.
 
 The stable error codes are exposed through `WorkspaceFileError`. Node errors
 remain available through `cause`, which preserves diagnostic details without
