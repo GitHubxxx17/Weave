@@ -45,7 +45,7 @@ export const approvalBrokerService: RuntimeService<ApprovalBroker>;
 和 `sessionEventStoreService`。每次调用 `createServerRuntime()` 都必须创建
 独立 Broker，不能使用模块级 Broker 实例。
 
-- [ ] **Step 1: Write the failing service-isolation test**
+- [x] **Step 1: Write the failing service-isolation test**
 
 在 `apps/server/test/health.test.ts` 增加：
 
@@ -78,7 +78,7 @@ it('creates an isolated Approval Broker for each server Runtime', async () => {
 });
 ```
 
-- [ ] **Step 2: Run the focused test and verify it fails**
+- [x] **Step 2: Run the focused test and verify it fails**
 
 Run:
 
@@ -89,7 +89,7 @@ pnpm exec vitest run apps/server/test/health.test.ts --config vitest.config.ts
 Expected failure: `approvalBrokerService` is not exported and the service is not
 registered in `createServerRuntime()`.
 
-- [ ] **Step 3: Add the Runtime service**
+- [x] **Step 3: Add the Runtime service**
 
 Modify `apps/server/src/runtime.ts`:
 
@@ -108,7 +108,7 @@ return createRuntime({
 });
 ```
 
-- [ ] **Step 4: Run service tests and existing server tests**
+- [x] **Step 4: Run service tests and existing server tests**
 
 Run:
 
@@ -119,7 +119,7 @@ pnpm exec vitest run apps/server/test/health.test.ts --config vitest.config.ts
 Expected: all server tests pass and every server Runtime receives a distinct
 Broker instance.
 
-- [ ] **Step 5: Commit the service wiring**
+- [x] **Step 5: Commit the service wiring**
 
 ```bash
 git add apps/server/src/runtime.ts apps/server/test/health.test.ts
@@ -172,7 +172,7 @@ Request body:
 `reason` 只能是 1 到 1000 个字符。空请求体按 `{}` 处理。未知字段、
 非法 JSON、非对象 JSON 和非法 reason 都返回 `400`。
 
-- [ ] **Step 1: Add failing route tests**
+- [x] **Step 1: Add failing route tests**
 
 创建 `apps/server/test/approval-api.test.ts`，先写以下公共测试辅助函数：
 
@@ -294,7 +294,7 @@ it('maps rejected, cancelled, unknown and repeated decisions', async () => {
 });
 ```
 
-- [ ] **Step 2: Add failing validation and unavailable-service tests**
+- [x] **Step 2: Add failing validation and unavailable-service tests**
 
 继续在 `approval-api.test.ts` 加入：
 
@@ -341,7 +341,7 @@ it('returns 503 when the Approval service is not available', async () => {
 });
 ```
 
-- [ ] **Step 3: Run the focused tests and verify the expected failures**
+- [x] **Step 3: Run the focused tests and verify the expected failures**
 
 Run:
 
@@ -352,7 +352,7 @@ pnpm exec vitest run apps/server/test/approval-api.test.ts --config vitest.confi
 Expected failures: `approval-api.test.ts` and its route helpers do not yet
 exist, and `createApp()` does not mount Approval routes.
 
-- [ ] **Step 4: Implement the HTTP contract helpers**
+- [x] **Step 4: Implement the HTTP contract helpers**
 
 Create `apps/server/src/approval-api.ts` with:
 
@@ -392,7 +392,7 @@ async function readDecisionReason(context: Context): Promise<
 becomes `{}`; non-empty body is parsed with `JSON.parse`, then validated by
 `decisionBodySchema`. Never pass an unvalidated body to Broker.
 
-- [ ] **Step 5: Implement thin routes**
+- [x] **Step 5: Implement thin routes**
 
 Mount the route functions in `createApp()`:
 
@@ -435,7 +435,7 @@ For unexpected internal errors, return `500` with
 `approval-internal-error` and a generic message. Do not include `cause`,
 stack traces, or raw exception messages.
 
-- [ ] **Step 6: Export the app options and run Server tests**
+- [x] **Step 6: Export the app options and run Server tests**
 
 Export `ApprovalAppOptions` from `apps/server/src/app.ts` or
 `apps/server/src/approval-api.ts`, update `createApp()` to accept the optional
@@ -451,7 +451,7 @@ pnpm exec vitest run apps/server/test/health.test.ts apps/server/test/approval-a
 
 Expected: all health and Approval API tests pass.
 
-- [ ] **Step 7: Commit the REST control plane**
+- [x] **Step 7: Commit the REST control plane**
 
 ```bash
 git add apps/server/src/app.ts apps/server/src/approval-api.ts apps/server/src/runtime.ts apps/server/test/health.test.ts apps/server/test/approval-api.test.ts
@@ -475,7 +475,7 @@ git commit -m "feat: 增加审批 HTTP 控制面"
 - 计划勾选已完成步骤并记录验证数字；
 - 不在代码或计划中伪造 SSE、认证或持久化能力。
 
-- [ ] **Step 1: Write the failing documentation checks**
+- [x] **Step 1: Write the failing documentation checks**
 
 在实现提交后检查：
 
@@ -486,7 +486,7 @@ rg -n "GET /approvals|approval-service-unavailable|approval-http-api" README.md 
 Expected before documentation edits: README 和 Foundation 尚未说明 REST
 Approval 控制面。
 
-- [ ] **Step 2: Update the documentation**
+- [x] **Step 2: Update the documentation**
 
 README 至少补充：
 
@@ -501,7 +501,7 @@ POST /approvals/:approvalId/cancel
 明确说明 REST 当前采用轮询，SSE 是后续独立分支；HTTP 不执行工具，所有
 工具行为仍由 Runtime Pipeline 控制。
 
-- [ ] **Step 3: Record implementation evidence**
+- [x] **Step 3: Record implementation evidence**
 
 在设计文档增加：
 
@@ -512,7 +512,7 @@ POST /approvals/:approvalId/cancel
 - `pnpm check` 验证结果；
 - 当前未实现 SSE、认证、持久化和多进程恢复。
 
-- [ ] **Step 4: Update plan checkboxes and run final verification**
+- [x] **Step 4: Update plan checkboxes and run final verification**
 
 运行：
 
@@ -524,7 +524,7 @@ git diff --check
 
 确认 `apps/server` 和 Runtime 的所有测试通过后，更新计划 checkbox。
 
-- [ ] **Step 5: Commit documentation**
+- [x] **Step 5: Commit documentation**
 
 ```bash
 git add README.md docs/architecture/foundation.md docs/superpowers/specs/2026-11-15-approval-http-api-design.md docs/superpowers/plans/2026-11-15-approval-http-api.md

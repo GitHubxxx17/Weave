@@ -252,3 +252,34 @@ Server 测试应覆盖：
 - 工具执行和 Agent Loop 的 HTTP 化。
 
 这些能力应在 REST 控制面稳定后，按独立功能分支继续增加。
+
+## 9. 实施结果
+
+本轮已完成：
+
+- Server Runtime 装配实例级 `approvalBrokerService`；
+- `GET /approvals` 列出 pending 和终态快照；
+- `GET /approvals/:approvalId` 查询单个请求；
+- `POST /approvals/:approvalId/approve` 批准；
+- `POST /approvals/:approvalId/reject` 拒绝；
+- `POST /approvals/:approvalId/cancel` 取消；
+- 空请求体、JSON 解析、未知字段和 `reason` 长度均由 Zod 边界处理；
+- `approval-not-found`、`approval-already-resolved` 等 Runtime 错误映射为
+  稳定 HTTP 状态码；
+- 未装配服务或 Runtime 未启动时返回
+  `approval-service-unavailable`，不创建隐式全局 Broker；
+- HTTP 响应不包含 `Error.cause`；
+- `startServer()` 已将 Server Runtime 中的 Broker 注入 HTTP App。
+
+验证记录：
+
+```text
+apps/server Approval API：2 个测试文件、16 个用例通过
+pnpm --filter @weave/server lint
+pnpm --filter @weave/server typecheck
+pnpm --filter @weave/server build
+```
+
+整仓 `pnpm check` 在文档提交前还会再次执行。当前仍然不实现 SSE、
+Broker 订阅、认证、角色权限、Session durable approval events、多进程
+共享和 Agent `/run` HTTP API。
