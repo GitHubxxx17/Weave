@@ -34,10 +34,53 @@ describe('Agent Runner contracts', () => {
     ).toThrow();
   });
 
-  it('validates transient Agent Runtime Events', () => {
+  it('rejects empty provider, model, and reasoning effort', () => {
+    for (const field of ['provider', 'model', 'reasoningEffort'] as const) {
+      expect(() =>
+        agentRunRequestSchema.parse({
+          ...validRequest,
+          [field]: '',
+        }),
+      ).toThrow();
+    }
+  });
+
+  it('rejects invalid numeric options and signals', () => {
+    for (const value of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() =>
+        agentRunRequestSchema.parse({
+          ...validRequest,
+          temperature: value,
+        }),
+      ).toThrow();
+      expect(() =>
+        agentRunRequestSchema.parse({
+          ...validRequest,
+          maxTokens: value,
+        }),
+      ).toThrow();
+    }
+
+    expect(() =>
+      agentRunRequestSchema.parse({
+        ...validRequest,
+        signal: {},
+      }),
+    ).toThrow();
+  });
+
+  it('validates all transient Agent Runtime Event branches', () => {
     expect(agentRuntimeEventSchema.parse({ type: 'text-delta', text: '内容' })).toEqual({
       type: 'text-delta',
       text: '内容',
+    });
+    expect(agentRuntimeEventSchema.parse({ type: 'reasoning-delta', text: '推理' })).toEqual({
+      type: 'reasoning-delta',
+      text: '推理',
+    });
+    expect(agentRuntimeEventSchema.parse({ type: 'completed', turnId: 'turn-1' })).toEqual({
+      type: 'completed',
+      turnId: 'turn-1',
     });
     expect(() => agentRuntimeEventSchema.parse({ type: 'completed', turnId: '' })).toThrow();
   });

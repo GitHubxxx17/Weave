@@ -1,14 +1,25 @@
 import type { LlmClient } from '@weave/llm';
-import { userMessageSchema } from '@weave/protocol';
+import { userMessageSchema, type UserMessage } from '@weave/protocol';
 import type { SessionEventStore } from '@weave/session';
 import { z } from 'zod';
 
 const nonEmptyStringSchema = z.string().min(1);
 
+export interface AgentRunRequest {
+  readonly sessionId: string;
+  readonly userMessage: UserMessage;
+  readonly provider: string;
+  readonly model: string;
+  readonly temperature?: number | undefined;
+  readonly maxTokens?: number | undefined;
+  readonly reasoningEffort?: string | undefined;
+  readonly signal?: AbortSignal | undefined;
+}
+
 /**
  * Input contract for one provider-independent Agent Runner execution.
  */
-export const agentRunRequestSchema = z
+export const agentRunRequestSchema: z.ZodType<AgentRunRequest> = z
   .object({
     sessionId: nonEmptyStringSchema,
     userMessage: userMessageSchema,
@@ -21,12 +32,15 @@ export const agentRunRequestSchema = z
   })
   .passthrough();
 
-export type AgentRunRequest = z.infer<typeof agentRunRequestSchema>;
-
 /**
  * Transient events emitted while an Agent Runner execution is in progress.
  */
-export const agentRuntimeEventSchema = z.discriminatedUnion('type', [
+export type AgentRuntimeEvent =
+  | { readonly type: 'text-delta'; readonly text: string }
+  | { readonly type: 'reasoning-delta'; readonly text: string }
+  | { readonly type: 'completed'; readonly turnId: string };
+
+export const agentRuntimeEventSchema: z.ZodType<AgentRuntimeEvent> = z.discriminatedUnion('type', [
   z.object({ type: z.literal('text-delta'), text: z.string() }),
   z.object({ type: z.literal('reasoning-delta'), text: z.string() }),
   z.object({
@@ -34,11 +48,6 @@ export const agentRuntimeEventSchema = z.discriminatedUnion('type', [
     turnId: nonEmptyStringSchema,
   }),
 ]);
-
-export type AgentRuntimeEvent =
-  | { readonly type: 'text-delta'; readonly text: string }
-  | { readonly type: 'reasoning-delta'; readonly text: string }
-  | { readonly type: 'completed'; readonly turnId: string };
 
 /** Stable failure categories exposed by the Agent Runner boundary. */
 export type AgentRunErrorCode =

@@ -93,4 +93,62 @@ pnpm exec prettier --check packages/runtime/src/agent-types.ts packages/runtime/
 ## Concerns
 
 - `AbortSignal` validation uses `z.instanceof(AbortSignal)`, matching the task brief and assuming a runtime with the standard global `AbortSignal`.
-- `AgentRunRequest` is inferred from the schema so its optional fields remain compatible with the repository's `exactOptionalPropertyTypes` setting.
+- `AgentRunRequest` explicitly allows `undefined` on optional fields so the
+  public interface remains compatible with the repository's
+  `exactOptionalPropertyTypes` setting.
+
+## Review Fix Report
+
+### Fixes
+
+- Defined `AgentRunRequest` before its schema and annotated
+  `agentRunRequestSchema` as `z.ZodType<AgentRunRequest>`.
+- Defined `AgentRuntimeEvent` before its schema and annotated
+  `agentRuntimeEventSchema` as `z.ZodType<AgentRuntimeEvent>`.
+- Kept optional request fields compatible with `exactOptionalPropertyTypes` by
+  explicitly allowing `undefined` in the public optional property types.
+- Added contract assertions for empty `provider`, `model`, and
+  `reasoningEffort`; negative, `NaN`, and infinite numeric values; invalid
+  signals; valid `reasoning-delta`; and valid `completed` events.
+
+### Verification
+
+Focused contract test:
+
+```bash
+pnpm exec vitest run packages/runtime/test/agent-runner.test.ts --config vitest.config.ts
+```
+
+Output:
+
+```text
+Test Files  1 passed (1)
+Tests       6 passed (6)
+```
+
+Runtime lint:
+
+```bash
+pnpm --filter @weave/runtime lint
+```
+
+Output: exit code `0`, no ESLint errors.
+
+Runtime typecheck:
+
+```bash
+pnpm --filter @weave/runtime typecheck
+```
+
+Output: exit code `0`, no TypeScript errors. This verifies both explicit
+`z.ZodType<...>` schema annotations under strict typing and the optional-field
+shape under `exactOptionalPropertyTypes`.
+
+Formatting and diff checks also passed:
+
+```bash
+pnpm exec prettier --check packages/runtime/src/agent-types.ts packages/runtime/test/agent-runner.test.ts
+git diff --check
+```
+
+No `createAgentRunner` implementation was added.
