@@ -11,6 +11,18 @@ const sessionCreatedPayloadSchema = z
   })
   .passthrough();
 
+const sessionRenamedPayloadSchema = z
+  .object({
+    title: nonEmptyStringSchema,
+  })
+  .passthrough();
+
+const sessionLifecyclePayloadSchema = z
+  .object({
+    reason: z.string().optional(),
+  })
+  .passthrough();
+
 const messageCreatedPayloadSchema = z
   .object({
     messageId: nonEmptyStringSchema,
@@ -78,6 +90,22 @@ export const sessionEventPayloadSchema = z.discriminatedUnion('type', [
     payload: sessionCreatedPayloadSchema,
   }),
   z.object({
+    type: z.literal('session.renamed'),
+    payload: sessionRenamedPayloadSchema,
+  }),
+  z.object({
+    type: z.literal('session.archived'),
+    payload: sessionLifecyclePayloadSchema,
+  }),
+  z.object({
+    type: z.literal('session.restored'),
+    payload: sessionLifecyclePayloadSchema,
+  }),
+  z.object({
+    type: z.literal('session.deleted'),
+    payload: sessionLifecyclePayloadSchema,
+  }),
+  z.object({
     type: z.literal('message.created'),
     payload: messageCreatedPayloadSchema,
   }),
@@ -133,6 +161,38 @@ const persistedEventSchemas = [
     occurredAt: z.iso.datetime(),
     type: z.literal('session.created'),
     payload: sessionCreatedPayloadSchema,
+  }),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('session.renamed'),
+    payload: sessionRenamedPayloadSchema,
+  }),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('session.archived'),
+    payload: sessionLifecyclePayloadSchema,
+  }),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('session.restored'),
+    payload: sessionLifecyclePayloadSchema,
+  }),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('session.deleted'),
+    payload: sessionLifecyclePayloadSchema,
   }),
   z.object({
     eventId: nonEmptyStringSchema,

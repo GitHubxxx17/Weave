@@ -1,8 +1,9 @@
 # Weave Foundation Architecture
 
 This document explains the first runnable Weave slice, the implemented
-headless Agent Loop, and the shared Tool Pipeline. It is a learning and
-maintenance guide, not a replacement for the package APIs or tests.
+headless Agent Loop, the shared Tool Pipeline, and the Project/Session
+persistence boundary. It is a learning and maintenance guide, not a
+replacement for the package APIs or tests.
 
 ## The Request Path
 
@@ -53,12 +54,27 @@ flowchart LR
     C -->|iterator.return()| D
 ```
 
+Project and Session management uses a separate request path:
+
+```mermaid
+flowchart LR
+    A[Studio React App] -->|GET /projects| B[Server Workspace API]
+    A -->|POST/PATCH/archive/restore/delete| B
+    B --> C[SessionService]
+    C --> D[Workspace ProjectStore]
+    C --> E[SessionEventStore]
+    E --> F[Session Projection]
+    F --> B
+    B -->|JSON summaries and details| A
+```
+
 `apps/studio` only consumes the HTTP/SSE contract. It does not import
 `@weave/runtime`, `@weave/session`, or Node-only modules, and it does not invoke
 tools or write Session events directly. The Vite `/agent` proxy is a local
-development convenience; it does not change the package boundary. Server
-validates the request and transports events, while Runtime remains the source
-of truth for Agent behavior.
+development convenience; `/projects` and `/sessions` use the same local Server
+target. The proxies do not change the package boundary. Server validates the
+request, applies SessionService lifecycle rules, and transports data, while
+Runtime remains the source of truth for Agent behavior.
 
 When the browser cancels a request, the cancellation travels through the HTTP
 response and Server request lifecycle to the current Agent iterator's
@@ -91,11 +107,28 @@ flowchart LR
 ```
 
 At startup, `apps/server/src/main.ts` validates the port with Zod, creates the
-server Runtime, starts its services, and binds Hono to `127.0.0.1`. The
-Runtime assembles a Mock LLM service and an In-Memory Session Event Store. A request enters
-`apps/server/src/app.ts`, reads the Runtime status, validates the response
-shape, and returns `200` only when the Runtime is running; otherwise it returns
-`503`.
+server Runtime, opens the default `.weave/weave.sqlite` Project Store and
+Session Event Store, starts its services, and binds Hono to `127.0.0.1`. Tests
+can still inject In-Memory stores. A request enters `apps/server/src/app.ts`,
+reads the Runtime status, validates the response shape, and returns `200` only
+when the Runtime is running; otherwise it returns `503`.
+
+The persistence path is:
+
+```text
+Studio
+  -> Project/Session HTTP API
+  -> Server SessionService
+  -> Workspace ProjectStore + SessionEventStore
+  -> SQLite (.weave/weave.sqlite)
+```
+
+Project metadata and Session events remain separate. The Project Store keeps
+Project rows and Project/Session references. The Session Event Store keeps
+append-only Session facts. `projectSession()` rebuilds the current title,
+messages, archive time, and deletion tombstone from those facts. The Server
+returns summaries for the project tree and loads full messages only for the
+selected Session.
 
 The path is intentionally small:
 

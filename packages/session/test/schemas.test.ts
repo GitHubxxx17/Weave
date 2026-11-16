@@ -77,10 +77,57 @@ describe('session event schemas', () => {
     });
   });
 
+  it('accepts Session lifecycle events', () => {
+    expect(
+      newSessionEventSchema.parse({
+        type: 'session.renamed',
+        payload: { title: '新的标题' },
+      }),
+    ).toEqual({
+      type: 'session.renamed',
+      payload: { title: '新的标题' },
+    });
+
+    expect(
+      newSessionEventSchema.parse({
+        type: 'session.archived',
+        payload: { reason: '用户归档' },
+      }),
+    ).toMatchObject({ type: 'session.archived', payload: { reason: '用户归档' } });
+
+    expect(newSessionEventSchema.parse({ type: 'session.restored', payload: {} })).toEqual({
+      type: 'session.restored',
+      payload: {},
+    });
+
+    expect(
+      newSessionEventSchema.parse({
+        type: 'session.deleted',
+        payload: { reason: '用户删除' },
+      }),
+    ).toMatchObject({ type: 'session.deleted', payload: { reason: '用户删除' } });
+  });
+
+  it('rejects invalid Session lifecycle payloads', () => {
+    expect(() =>
+      newSessionEventSchema.parse({
+        type: 'session.renamed',
+        payload: { title: '' },
+      }),
+    ).toThrow();
+
+    expect(() =>
+      newSessionEventSchema.parse({
+        type: 'session.archived',
+        payload: { reason: 1 },
+      }),
+    ).toThrow();
+  });
+
   it('rejects an unknown event type', () => {
     expect(() =>
       newSessionEventSchema.parse({
-        type: 'session.deleted',
+        type: 'session.unknown',
         payload: {},
       }),
     ).toThrow();

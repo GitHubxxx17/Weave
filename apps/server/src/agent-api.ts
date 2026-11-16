@@ -9,6 +9,7 @@ import {
   type AgentRuntimeEvent,
   type Runtime,
 } from '@weave/runtime';
+import { SessionServiceError, type SessionService } from './session-service.js';
 
 const agentHttpRequestSchema = z
   .object({
@@ -25,6 +26,7 @@ const agentHttpRequestSchema = z
 /** Runtime dependency injected into the Agent HTTP adapter. */
 export interface AgentAppOptions {
   readonly agentRunner?: AgentRunner | undefined;
+  readonly sessionService?: SessionService | undefined;
 }
 
 function jsonError(
@@ -68,6 +70,16 @@ function getAgentRunner(context: Context, options: AgentAppOptions): AgentRunner
     return jsonError(context, 503, 'agent-service-unavailable', 'Agent service is not available');
   }
   return options.agentRunner;
+}
+
+function sessionErrorStatus(code: SessionServiceError['code']): 404 | 409 | 410 | 422 {
+  if (code === 'session-not-found') {
+    return 404;
+  }
+  if (code === 'session-projection-invalid') {
+    return 422;
+  }
+  return code === 'session-deleted' ? 410 : 409;
 }
 
 function encodeSseEvent(encoder: TextEncoder, event: string, data: unknown): Uint8Array {
@@ -217,6 +229,22 @@ export function registerAgentRoutes(app: Hono, _runtime: Runtime, options: Agent
     const runner = getAgentRunner(context, options);
     if (runner instanceof Response) {
       return runner;
+    }
+    if (options.sessionService === undefined) {
+      return jsonError(
+        context,
+        503,
+        'session-service-unavailable',
+        'Session service is not available',
+      );
+    }
+    try {
+      await options.sessionService.assertRunnable(parsedBody.value.sessionId);
+    } catch (error) {
+      if (error instanceof SessionServiceError) {
+        return jsonError(context, sessionErrorStatus(error.code), error.code, error.message);
+      }
+      return jsonError(context, 500, 'server-internal-error', 'Agent request failed');
     }
 
     const stream = createAgentEventStream(runner, parsedBody.value, context.req.raw.signal);

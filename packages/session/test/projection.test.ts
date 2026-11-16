@@ -130,6 +130,56 @@ describe('Session Projection', () => {
     });
   });
 
+  it('projects Session title and lifecycle timestamps', () => {
+    const state = projectSession([
+      event(1, 'session.created', { title: '初始标题' }),
+      event(2, 'session.renamed', { title: '新标题' }),
+      event(3, 'session.archived', {}),
+      event(4, 'session.restored', {}),
+      event(5, 'session.archived', {}),
+      event(6, 'session.deleted', {}),
+    ]);
+
+    expect(state).toMatchObject({
+      title: '新标题',
+      archivedAt: '2026-11-15T00:00:05.000Z',
+      deletedAt: '2026-11-15T00:00:06.000Z',
+      lastSequence: 6,
+    });
+  });
+
+  it('rejects invalid Session lifecycle transitions', () => {
+    const invalidCases: readonly SessionEvent[][] = [
+      [event(1, 'session.created', {}), event(2, 'session.restored', {})],
+      [
+        event(1, 'session.created', {}),
+        event(2, 'session.archived', {}),
+        event(3, 'session.archived', {}),
+      ],
+      [
+        event(1, 'session.created', {}),
+        event(2, 'session.deleted', {}),
+        event(3, 'session.restored', {}),
+      ],
+      [
+        event(1, 'session.created', {}),
+        event(2, 'session.archived', {}),
+        event(3, 'turn.started', { turnId: 'turn-1' }),
+      ],
+      [
+        event(1, 'session.created', {}),
+        event(2, 'session.deleted', {}),
+        event(3, 'session.renamed', { title: '删除后修改' }),
+      ],
+    ];
+
+    for (const events of invalidCases) {
+      expect(() => projectSession(events)).toThrowError(
+        expect.objectContaining({ code: 'session-projection-invalid-order' }),
+      );
+    }
+  });
+
   it('rejects tool events that reference unknown turns or steps', () => {
     expect(() =>
       projectSession([

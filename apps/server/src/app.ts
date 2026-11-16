@@ -3,6 +3,8 @@ import { z } from 'zod';
 import type { Runtime } from '@weave/runtime';
 import { registerApprovalRoutes, type ApprovalAppOptions } from './approval-api.js';
 import { registerAgentRoutes, type AgentAppOptions } from './agent-api.js';
+import { registerSessionRoutes, type SessionAppOptions } from './session-api.js';
+import { registerWorkspaceRoutes, type WorkspaceAppOptions } from './workspace-api.js';
 
 const healthResponseSchema = z.object({
   status: z.enum(['ok', 'unavailable']),
@@ -19,7 +21,8 @@ const healthResponseSchema = z.object({
  * @param runtime Runtime whose lifecycle is exposed by the health endpoint.
  * @returns A Hono application that can be mounted on a server or tested in memory.
  */
-export interface AppOptions extends ApprovalAppOptions, AgentAppOptions {}
+export interface AppOptions
+  extends ApprovalAppOptions, AgentAppOptions, SessionAppOptions, WorkspaceAppOptions {}
 
 export function createApp(runtime: Runtime, options?: AppOptions): Hono {
   const app = new Hono();
@@ -35,6 +38,8 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
   });
 
   registerApprovalRoutes(app, runtime, options ?? {});
+  registerWorkspaceRoutes(app, options ?? {});
+  registerSessionRoutes(app, options ?? {});
   registerAgentRoutes(app, runtime, options ?? {});
 
   return app;

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AgentStreamError, streamAgentRun } from '../src/features/agent/agent-stream.js';
 import { App } from '../src/app/App.js';
@@ -20,15 +20,173 @@ vi.mock('../src/features/agent/agent-stream.js', async () => {
 
 const streamAgentRunMock = vi.mocked(streamAgentRun);
 
+const projectId = 'project-weave';
+const sessionIds = {
+  local: 'session-local',
+  eventStore: 'session-event-store',
+  foundation: 'session-foundation',
+};
+
+function sessionSummary(id: string, title: string, archivedAt?: string): Record<string, unknown> {
+  return {
+    id,
+    title,
+    ...(archivedAt === undefined ? {} : { archivedAt }),
+    lastSequence: 1,
+  };
+}
+
+function sessionDetail(
+  id: string,
+  title: string,
+  messages: readonly Record<string, unknown>[] = [],
+  archivedAt?: string,
+): Record<string, unknown> {
+  return {
+    ...sessionSummary(id, title, archivedAt),
+    messages,
+  };
+}
+
+function createWorkspaceFetchMock(): ReturnType<typeof vi.fn> {
+  const sessions = new Map<string, Record<string, unknown>>([
+    [sessionIds.local, sessionDetail(sessionIds.local, '本地 Agent 演示')],
+    [sessionIds.eventStore, sessionDetail(sessionIds.eventStore, 'Session event store')],
+    [
+      sessionIds.foundation,
+      sessionDetail(sessionIds.foundation, 'Foundation 设计', [
+        { role: 'user', content: [{ type: 'text', text: '历史项目问题' }] },
+        { role: 'assistant', content: [{ type: 'text', text: '历史项目回答' }] },
+      ]),
+    ],
+  ]);
+  const projects = [
+    {
+      id: projectId,
+      name: 'Weave',
+      folderName: 'weave',
+      createdAt: '2026-11-14T00:00:00.000Z',
+      updatedAt: '2026-11-14T00:00:00.000Z',
+      sessions: [
+        sessionSummary(sessionIds.local, '本地 Agent 演示'),
+        sessionSummary(sessionIds.eventStore, 'Session event store'),
+        sessionSummary(sessionIds.foundation, 'Foundation 设计'),
+      ],
+    },
+  ];
+  let nextProjectId = 0;
+  let nextSessionId = 0;
+
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? 'GET';
+    if (url === '/projects?includeArchived=true' || url === '/projects?includeArchived=false') {
+      return new Response(JSON.stringify({ projects, warnings: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (url === '/projects' && method === 'POST') {
+      const body = JSON.parse(String(init?.body)) as { name: string; folderName: string };
+      const project = {
+        id: `project-created-${++nextProjectId}`,
+        name: body.name,
+        folderName: body.folderName,
+        createdAt: '2026-11-16T00:00:00.000Z',
+        updatedAt: '2026-11-16T00:00:00.000Z',
+      };
+      projects.push({ ...project, sessions: [] });
+      return new Response(JSON.stringify(project), {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    const projectSessionMatch = url.match(/^\/projects\/([^/]+)\/sessions$/);
+    if (projectSessionMatch !== null && method === 'POST') {
+      const body = JSON.parse(String(init?.body)) as { title?: string };
+      const id = `session-created-${++nextSessionId}`;
+      const detail = sessionDetail(id, body.title ?? '未命名会话');
+      sessions.set(id, detail);
+      const project = projects.find((candidate) => candidate.id === projectSessionMatch[1]);
+      project?.sessions.unshift(sessionSummary(id, body.title ?? '未命名会话'));
+      return new Response(JSON.stringify(detail), {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    const sessionMatch = url.match(/^\/sessions\/([^/]+)(?:\/(archive|restore))?$/);
+    if (sessionMatch !== null) {
+      const id = decodeURIComponent(sessionMatch[1]!);
+      const current = sessions.get(id) ?? sessionDetail(id, '未命名会话');
+      if (method === 'GET') {
+        return new Response(JSON.stringify(current), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (method === 'PATCH') {
+        const body = JSON.parse(String(init?.body)) as { title: string };
+        const updated = { ...current, title: body.title };
+        sessions.set(id, updated);
+        return new Response(JSON.stringify(updated), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (method === 'POST' && sessionMatch[2] === 'archive') {
+        const updated = { ...current, archivedAt: '2026-11-16T01:00:00.000Z' };
+        sessions.set(id, updated);
+        return new Response(JSON.stringify(updated), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (method === 'POST' && sessionMatch[2] === 'restore') {
+        const updated = { ...current, archivedAt: undefined };
+        sessions.set(id, updated);
+        return new Response(JSON.stringify(updated), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (method === 'DELETE') {
+        const updated = { ...current, deletedAt: '2026-11-16T02:00:00.000Z' };
+        sessions.set(id, updated);
+        return new Response(JSON.stringify(updated), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+    }
+    return new Response(JSON.stringify({ error: { code: 'not-found', message: 'Not found' } }), {
+      status: 404,
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+}
+
+let fetchMock = createWorkspaceFetchMock();
+
+async function renderApp(): Promise<void> {
+  render(<App />);
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'Agent 工作台' })).toBeTruthy());
+}
+
+beforeEach(() => {
+  fetchMock = createWorkspaceFetchMock();
+  vi.stubGlobal('fetch', fetchMock);
+});
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  fetchMock.mockClear();
   Reflect.deleteProperty(window, 'showDirectoryPicker');
 });
 
 describe('Studio Agent Chat', () => {
-  it('renders the workspace with Chinese interface labels by default', () => {
-    render(<App />);
+  it('renders the workspace with Chinese interface labels by default', async () => {
+    await renderApp();
 
     expect(screen.getByLabelText('工作区导航')).toBeTruthy();
     expect(screen.getByLabelText('会话列表')).toBeTruthy();
@@ -55,7 +213,7 @@ describe('Studio Agent Chat', () => {
       value: vi.fn().mockResolvedValue({ name: 'demo-project' }),
     });
 
-    render(<App />);
+    await renderApp();
     fireEvent.click(screen.getByRole('button', { name: /Weave 项目/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: '创建项目' }));
 
@@ -73,10 +231,16 @@ describe('Studio Agent Chat', () => {
     fireEvent.change(projectNameInput, { target: { value: 'Demo 项目' } });
     fireEvent.click(within(dialog).getByRole('button', { name: '创建项目' }));
 
-    expect(screen.getByRole('button', { name: /Demo 项目 项目/ })).toBeTruthy();
-    expect(screen.getByText('demo-project', { selector: '.project-folder-name' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /未命名会话/ })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Session event store/ })).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '项目：Demo 项目' })).toBeTruthy();
+      expect(screen.getByText('demo-project', { selector: '.project-folder-name' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: /未命名会话/ })).toBeTruthy();
+    });
+    const projectTree = screen.getByRole('tree', { name: '项目树' });
+    const createdProject = within(projectTree).getByRole('treeitem', {
+      name: /Demo 项目/,
+    });
+    expect(within(createdProject).getByRole('button', { name: /未命名会话/ })).toBeTruthy();
   });
 
   it('keeps sessions scoped to their project when switching projects', async () => {
@@ -85,7 +249,7 @@ describe('Studio Agent Chat', () => {
       value: vi.fn().mockResolvedValue({ name: 'client-app' }),
     });
 
-    render(<App />);
+    await renderApp();
     fireEvent.click(screen.getByRole('button', { name: /Weave 项目/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: '创建项目' }));
     const dialog = screen.getByRole('dialog', { name: '创建项目' });
@@ -96,9 +260,14 @@ describe('Studio Agent Chat', () => {
       ).toBe('client-app');
     });
     fireEvent.click(within(dialog).getByRole('button', { name: '创建项目' }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /client-app 项目/ })).toBeTruthy();
+    });
     fireEvent.click(screen.getByRole('button', { name: '新建会话' }));
 
-    expect(screen.getAllByRole('button', { name: /未命名会话/ })).toHaveLength(2);
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: /未命名会话/ })).toHaveLength(2);
+    });
 
     fireEvent.click(screen.getByRole('button', { name: /client-app 项目/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: /Weave/ }));
@@ -127,7 +296,7 @@ describe('Studio Agent Chat', () => {
       value: vi.fn().mockResolvedValue({ name: 'client-app' }),
     });
 
-    render(<App />);
+    await renderApp();
     fireEvent.click(screen.getByRole('button', { name: /Weave 项目/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: '创建项目' }));
     const dialog = screen.getByRole('dialog', { name: '创建项目' });
@@ -140,10 +309,12 @@ describe('Studio Agent Chat', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: '创建项目' }));
 
     const projectTree = screen.getByRole('tree', { name: '项目树' });
-    expect(within(projectTree).getByRole('button', { name: '项目：Weave' })).toBeTruthy();
-    expect(within(projectTree).getByRole('button', { name: '项目：client-app' })).toBeTruthy();
-    expect(within(projectTree).getByRole('button', { name: /Session event store/ })).toBeTruthy();
-    expect(within(projectTree).getByRole('button', { name: /未命名会话/ })).toBeTruthy();
+    await waitFor(() => {
+      expect(within(projectTree).getByRole('button', { name: '项目：Weave' })).toBeTruthy();
+      expect(within(projectTree).getByRole('button', { name: '项目：client-app' })).toBeTruthy();
+      expect(within(projectTree).getByRole('button', { name: /Session event store/ })).toBeTruthy();
+      expect(within(projectTree).getByRole('button', { name: /未命名会话/ })).toBeTruthy();
+    });
 
     fireEvent.click(within(projectTree).getByRole('button', { name: '收起项目 Weave' }));
 
@@ -157,8 +328,8 @@ describe('Studio Agent Chat', () => {
     expect(screen.getByRole('button', { name: /Weave 项目/ })).toBeTruthy();
   });
 
-  it('does not show a selection state for project nodes', () => {
-    render(<App />);
+  it('does not show a selection state for project nodes', async () => {
+    await renderApp();
 
     const projectButton = screen.getByRole('button', { name: '项目：Weave' });
 
@@ -167,8 +338,8 @@ describe('Studio Agent Chat', () => {
     expect(screen.getByRole('button', { name: /本地 Agent 演示/ })).toBeTruthy();
   });
 
-  it('edits a session title from the session action buttons', () => {
-    render(<App />);
+  it('edits a session title from the session action buttons', async () => {
+    await renderApp();
 
     const sessionRow = screen
       .getByRole('button', { name: /Session event store/ })
@@ -188,12 +359,14 @@ describe('Studio Agent Chat', () => {
     fireEvent.change(titleInput, { target: { value: '会话事件存储' } });
     fireEvent.click(within(dialog).getByRole('button', { name: '保存标题' }));
 
-    expect(screen.getByRole('button', { name: /会话事件存储/ })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /Session event store/ })).toBeNull();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /会话事件存储/ })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /Session event store/ })).toBeNull();
+    });
   });
 
-  it('keeps session actions hidden until a session row is focused', () => {
-    render(<App />);
+  it('keeps session actions hidden until a session row is focused', async () => {
+    await renderApp();
 
     const sessionButton = screen.getByRole('button', { name: /本地 Agent 演示/ });
     const sessionRow = sessionButton.closest('.session-tree-item');
@@ -213,8 +386,8 @@ describe('Studio Agent Chat', () => {
     ).toBe(true);
   });
 
-  it('keeps the active session status dot beside, not inside, the session button', () => {
-    render(<App />);
+  it('keeps the active session status dot beside, not inside, the session button', async () => {
+    await renderApp();
 
     const sessionRow = screen
       .getByRole('button', { name: /本地 Agent 演示/ })
@@ -231,8 +404,8 @@ describe('Studio Agent Chat', () => {
     expect(actions?.parentElement).toBe(sessionRow);
   });
 
-  it('archives a session and exposes it in the archive area', () => {
-    render(<App />);
+  it('archives a session and exposes it in the archive area', async () => {
+    await renderApp();
 
     const sessionRow = screen
       .getByRole('button', { name: /Session event store/ })
@@ -245,21 +418,25 @@ describe('Studio Agent Chat', () => {
       }),
     );
 
-    expect(screen.queryByRole('button', { name: /Session event store/ })).toBeNull();
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /Session event store/ })).toBeNull();
+    });
     fireEvent.click(screen.getByRole('button', { name: '归档' }));
 
     const archiveView = screen.getByRole('region', { name: '归档' });
-    expect(within(archiveView).getByText('Session event store')).toBeTruthy();
-    expect(
-      within(archiveView).getByRole('button', { name: '恢复会话 Session event store' }),
-    ).toBeTruthy();
-    expect(
-      within(archiveView).getByRole('button', { name: '永久删除会话 Session event store' }),
-    ).toBeTruthy();
+    await waitFor(() => {
+      expect(within(archiveView).getByText('Session event store')).toBeTruthy();
+      expect(
+        within(archiveView).getByRole('button', { name: '恢复会话 Session event store' }),
+      ).toBeTruthy();
+      expect(
+        within(archiveView).getByRole('button', { name: '永久删除会话 Session event store' }),
+      ).toBeTruthy();
+    });
   });
 
-  it('restores an archived session back to its project', () => {
-    render(<App />);
+  it('restores an archived session back to its project', async () => {
+    await renderApp();
 
     const sessionRow = screen
       .getByRole('button', { name: /Session event store/ })
@@ -269,15 +446,20 @@ describe('Studio Agent Chat', () => {
         name: '归档会话',
       }),
     );
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /Session event store/ })).toBeNull();
+    });
     fireEvent.click(screen.getByRole('button', { name: '归档' }));
-    fireEvent.click(screen.getByRole('button', { name: '恢复会话 Session event store' }));
+    fireEvent.click(await screen.findByRole('button', { name: '恢复会话 Session event store' }));
 
-    expect(screen.getByRole('button', { name: /Session event store/ })).toBeTruthy();
-    expect(screen.getByRole('tree', { name: '项目树' })).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Session event store/ })).toBeTruthy();
+      expect(screen.getByRole('tree', { name: '项目树' })).toBeTruthy();
+    });
   });
 
-  it('permanently deletes a session only after it is archived', () => {
-    render(<App />);
+  it('permanently deletes a session only after it is archived', async () => {
+    await renderApp();
 
     const sessionRow = screen
       .getByRole('button', { name: /Session event store/ })
@@ -287,14 +469,21 @@ describe('Studio Agent Chat', () => {
         name: '归档会话',
       }),
     );
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /Session event store/ })).toBeNull();
+    });
     fireEvent.click(screen.getByRole('button', { name: '归档' }));
-    fireEvent.click(screen.getByRole('button', { name: '永久删除会话 Session event store' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: '永久删除会话 Session event store' }),
+    );
 
     const dialog = screen.getByRole('dialog', { name: '永久删除会话' });
     expect(within(dialog).getByText(/无法恢复/)).toBeTruthy();
     fireEvent.click(within(dialog).getByRole('button', { name: '确认永久删除' }));
 
-    expect(screen.queryByText('Session event store')).toBeNull();
+    await waitFor(() => {
+      expect(screen.queryByText('Session event store')).toBeNull();
+    });
   });
 
   it('submits a message and renders streamed assistant text', async () => {
@@ -305,7 +494,7 @@ describe('Studio Agent Chat', () => {
       handlers.onEvent({ type: 'completed', turnId: 'turn-1' });
     });
 
-    render(<App />);
+    await renderApp();
     fireEvent.change(screen.getByLabelText('发送消息'), {
       target: { value: '介绍一下 Weave' },
     });
@@ -326,14 +515,16 @@ describe('Studio Agent Chat', () => {
     );
   });
 
-  it('creates a local session and makes it the active conversation', () => {
-    render(<App />);
+  it('creates a local session and makes it the active conversation', async () => {
+    await renderApp();
 
     fireEvent.click(screen.getByRole('button', { name: '新建会话' }));
 
-    expect(screen.getByRole('button', { name: /未命名会话/ })).toBeTruthy();
-    expect(screen.getByLabelText(/^会话 #\d+$/)).toBeTruthy();
-    expect(screen.getByText('今天想完成什么？')).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /未命名会话/ })).toBeTruthy();
+      expect(screen.getByLabelText(/^会话 #.+$/)).toBeTruthy();
+      expect(screen.getByText('今天想完成什么？')).toBeTruthy();
+    });
   });
 
   it('switches sessions and sends the request with the selected session id', async () => {
@@ -342,11 +533,13 @@ describe('Studio Agent Chat', () => {
       handlers.onEvent({ type: 'completed', turnId: 'turn-session-switch' });
     });
 
-    render(<App />);
+    await renderApp();
     fireEvent.click(screen.getByRole('button', { name: /Session event store/ }));
 
     expect(screen.getByText('会话 #event-store')).toBeTruthy();
-    expect(screen.getByText('今天想完成什么？')).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText('今天想完成什么？')).toBeTruthy();
+    });
 
     fireEvent.change(screen.getByLabelText('发送消息'), {
       target: { value: '在当前会话中提问' },
@@ -367,7 +560,17 @@ describe('Studio Agent Chat', () => {
     expect(screen.getByText('今天想完成什么？')).toBeTruthy();
   });
 
-  it('keeps a new session unavailable for switching while a run is active', () => {
+  it('loads persisted messages when switching to another session', async () => {
+    await renderApp();
+
+    fireEvent.click(screen.getByRole('button', { name: /Foundation 设计/ }));
+
+    expect(await screen.findByText('历史项目问题')).toBeTruthy();
+    expect(screen.getByText('历史项目回答')).toBeTruthy();
+    expect(screen.getByText('会话 #foundation')).toBeTruthy();
+  });
+
+  it('keeps a new session unavailable for switching while a run is active', async () => {
     streamAgentRunMock.mockImplementation(
       () =>
         new Promise<void>(() => {
@@ -375,7 +578,7 @@ describe('Studio Agent Chat', () => {
         }),
     );
 
-    render(<App />);
+    await renderApp();
     fireEvent.change(screen.getByLabelText('发送消息'), {
       target: { value: '保持运行' },
     });
@@ -414,7 +617,7 @@ describe('Studio Agent Chat', () => {
       handlers.onEvent({ type: 'completed', turnId: 'turn-2' });
     });
 
-    render(<App />);
+    await renderApp();
     fireEvent.change(screen.getByLabelText('发送消息'), {
       target: { value: '搜索 SSE' },
     });
@@ -436,7 +639,7 @@ describe('Studio Agent Chat', () => {
     });
     streamAgentRunMock.mockRejectedValue(error);
 
-    render(<App />);
+    await renderApp();
     fireEvent.change(screen.getByLabelText('发送消息'), {
       target: { value: '触发错误' },
     });
@@ -467,7 +670,7 @@ describe('Studio Agent Chat', () => {
         }),
     );
 
-    render(<App />);
+    await renderApp();
     fireEvent.change(screen.getByLabelText('发送消息'), {
       target: { value: '取消这次运行' },
     });
@@ -490,7 +693,7 @@ describe('Studio Agent Chat', () => {
     expect(screen.getByText('本次运行已取消')).toBeTruthy();
   });
 
-  it('does not submit a second message while streaming', () => {
+  it('does not submit a second message while streaming', async () => {
     streamAgentRunMock.mockImplementation(
       () =>
         new Promise<void>(() => {
@@ -498,7 +701,7 @@ describe('Studio Agent Chat', () => {
         }),
     );
 
-    render(<App />);
+    await renderApp();
     fireEvent.change(screen.getByLabelText('发送消息'), {
       target: { value: '只发送一次' },
     });
@@ -508,8 +711,8 @@ describe('Studio Agent Chat', () => {
     expect(streamAgentRunMock).toHaveBeenCalledTimes(1);
   });
 
-  it('switches product navigation views', () => {
-    render(<App />);
+  it('switches product navigation views', async () => {
+    await renderApp();
 
     fireEvent.click(screen.getByRole('button', { name: '项目' }));
 
@@ -527,11 +730,13 @@ describe('Studio Agent Chat', () => {
     fireEvent.click(screen.getByRole('button', { name: '工作台' }));
 
     expect(screen.getByRole('heading', { name: 'Agent 工作台' })).toBeTruthy();
-    expect(screen.getByText('今天想完成什么？')).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText('今天想完成什么？')).toBeTruthy();
+    });
   });
 
-  it('filters sessions from the search control', () => {
-    render(<App />);
+  it('filters sessions from the search control', async () => {
+    await renderApp();
 
     fireEvent.click(screen.getByRole('button', { name: /搜索会话/ }));
     const searchInput = screen.getByRole('searchbox', { name: '搜索会话' });
@@ -545,8 +750,8 @@ describe('Studio Agent Chat', () => {
     expect(screen.queryByText('没有匹配的会话')).toBeNull();
   });
 
-  it('toggles the activity panel and opens the model menu', () => {
-    render(<App />);
+  it('toggles the activity panel and opens the model menu', async () => {
+    await renderApp();
 
     fireEvent.click(screen.getByRole('button', { name: '收起上下文' }));
 
@@ -566,8 +771,8 @@ describe('Studio Agent Chat', () => {
     expect(screen.queryByRole('menu', { name: '选择模型' })).toBeNull();
   });
 
-  it('opens the permission and context menus', () => {
-    render(<App />);
+  it('opens the permission and context menus', async () => {
+    await renderApp();
 
     fireEvent.click(screen.getByRole('button', { name: '工作区访问' }));
     expect(screen.getByRole('menu', { name: '权限模式' })).toBeTruthy();
@@ -596,7 +801,7 @@ describe('Studio Agent Chat', () => {
       });
     });
 
-    render(<App />);
+    await renderApp();
     fireEvent.change(screen.getByLabelText('发送消息'), {
       target: { value: '第一轮' },
     });

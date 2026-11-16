@@ -44,6 +44,9 @@ importers:
       '@weave/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+      '@weave/workspace':
+        specifier: workspace:*
+        version: link:../../packages/workspace
       '@weave/session':
         specifier: workspace:*
         version: link:../../packages/session
@@ -131,6 +134,16 @@ importers:
       '@weave/protocol':
         specifier: workspace:*
         version: link:../protocol
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@types/node':
+        specifier: 24.10.1
+        version: 24.10.1
+
+  packages/workspace:
+    dependencies:
       zod:
         specifier: 4.6.7
         version: 4.6.7
