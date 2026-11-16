@@ -550,15 +550,12 @@ describe('Studio Agent Chat', () => {
           defaultModel: 'deepseek-chat',
         },
       ],
-      defaultProvider: 'mock',
+      defaultProvider: 'deepseek',
     });
     vi.stubGlobal('fetch', fetchMock);
     streamAgentRunMock.mockResolvedValue(undefined);
 
     await renderApp();
-    fireEvent.click(screen.getByRole('button', { name: /本地演示/ }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'DeepSeek' }));
-
     expect(screen.getByRole('button', { name: /DeepSeek/ })).toBeTruthy();
     fireEvent.change(screen.getByLabelText('发送消息'), {
       target: { value: '使用 DeepSeek' },

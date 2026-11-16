@@ -149,7 +149,9 @@ Runtime.
 
 The Server always registers a deterministic `mock` Provider. Additional
 OpenAI-compatible Providers can be configured with the
-`WEAVE_LLM_PROVIDERS` environment variable:
+`WEAVE_LLM_PROVIDERS` environment variable. When at least one external
+Provider is configured, the first configured Provider becomes the default
+selection in Studio; otherwise Studio uses `mock`:
 
 ```json
 [

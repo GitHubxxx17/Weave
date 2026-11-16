@@ -40,6 +40,7 @@ describe('Server LLM Provider configuration', () => {
       type: 'openai-compatible',
       defaultModel: 'deepseek-chat',
     });
+    expect(settings.defaultProvider).toBe('deepseek');
     expect(JSON.stringify(settings.providers)).not.toContain('server-secret');
     expect(settings.registry.get('deepseek')).toBeDefined();
   });
@@ -109,13 +110,14 @@ describe('GET /settings/providers', () => {
     try {
       const response = await createApp(runtime, {
         providerRegistry: settings.registry,
+        defaultProvider: settings.defaultProvider,
       }).request('/settings/providers');
 
       expect(response.status).toBe(200);
       const body = await response.json();
       expect(body).toEqual({
         providers: settings.providers,
-        defaultProvider: 'mock',
+        defaultProvider: 'deepseek',
       });
       expect(JSON.stringify(body)).not.toContain('server-secret');
     } finally {

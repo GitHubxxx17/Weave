@@ -186,6 +186,7 @@ Studio 启动时并行加载项目树和 Provider 元数据。加载结果只保
 Provider 信息：
 
 - 没有配置外部 Provider 时默认选择 `mock`；
+- 配置外部 Provider 后默认选择配置数组中的第一个 Provider；
 - 配置 DeepSeek 后，模型菜单显示 `DeepSeek` 和默认模型；
 - 切换 Provider 时使用该 Provider 的默认模型；
 - Provider 请求失败时显示中文错误提示，并保留当前会话；
