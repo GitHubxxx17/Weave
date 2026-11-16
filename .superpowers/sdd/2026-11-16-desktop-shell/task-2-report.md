@@ -151,7 +151,7 @@ git diff --check
 审查修复本地提交：
 
 ```text
-d236ea8
+fb0523d
 fix: 保持 Provider 请求契约并补充桌面路由测试
 ```
 
