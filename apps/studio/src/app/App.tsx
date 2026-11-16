@@ -34,6 +34,13 @@ import type { LucideIcon } from 'lucide-react';
 
 import { AgentStreamError, streamAgentRun } from '../features/agent/agent-stream.js';
 import type { AgentRuntimeEvent } from '../features/agent/agent-types.js';
+import { createWorkspaceApi, WorkspaceApiError } from '../features/workspace/workspace-api.js';
+import type {
+  ProjectWithSessions,
+  SessionDetail,
+  SessionSummary,
+  WorkspaceMessage,
+} from '../features/workspace/workspace-types.js';
 
 type RunStatus = 'idle' | 'streaming' | 'completed' | 'error' | 'cancelled';
 type ProductView = 'studio' | 'projects' | 'history' | 'archived' | 'settings';
@@ -117,36 +124,7 @@ const permissionOptions = [
 
 let nextId = 0;
 
-const initialProjects: readonly StudioProject[] = [
-  {
-    id: 'project-weave',
-    name: 'Weave',
-    folderName: 'weave',
-    sessions: [
-      {
-        id: 'session-local',
-        title: '本地 Agent 演示',
-        lastUsedLabel: '刚刚使用',
-        archivedAt: null,
-        messages: [],
-      },
-      {
-        id: 'session-event-store',
-        title: 'Session event store',
-        lastUsedLabel: '昨天',
-        archivedAt: null,
-        messages: [],
-      },
-      {
-        id: 'session-foundation',
-        title: 'Foundation 设计',
-        lastUsedLabel: '11 月 14 日',
-        archivedAt: null,
-        messages: [],
-      },
-    ],
-  },
-];
+const workspaceApi = createWorkspaceApi();
 
 function createId(prefix: string): string {
   nextId += 1;
@@ -205,15 +183,78 @@ function getAssistantPlaceholder(status: RunStatus, isLatest: boolean): string {
   }
 }
 
+function messageText(message: WorkspaceMessage): string {
+  return message.content
+    .filter((part) => part.type === 'text')
+    .map((part) => part.text)
+    .join('');
+}
+
+function toChatMessages(sessionId: string, messages: readonly WorkspaceMessage[]): ChatMessage[] {
+  return messages.flatMap((message, index) => {
+    if (message.role !== 'user' && message.role !== 'assistant') {
+      return [];
+    }
+    return [
+      {
+        id: `${sessionId}-message-${index + 1}`,
+        role: message.role,
+        text: messageText(message),
+      },
+    ];
+  });
+}
+
+function toStudioSession(session: SessionSummary | SessionDetail): StudioSession {
+  return {
+    id: session.id,
+    title: session.title,
+    lastUsedLabel: '最近使用',
+    archivedAt: session.archivedAt ?? null,
+    messages: 'messages' in session ? toChatMessages(session.id, session.messages) : [],
+  };
+}
+
+function toStudioProject(project: ProjectWithSessions): StudioProject {
+  return {
+    id: project.id,
+    name: project.name,
+    folderName: project.folderName,
+    sessions: project.sessions.map(toStudioSession),
+  };
+}
+
+function workspaceErrorMessage(error: unknown): string {
+  if (!(error instanceof WorkspaceApiError)) {
+    return '工作区服务暂时不可用，请稍后重试';
+  }
+
+  switch (error.code) {
+    case 'workspace-project-not-found':
+      return '项目不存在，请重新加载工作区';
+    case 'session-not-found':
+      return '会话不存在，请重新加载工作区';
+    case 'session-deleted':
+      return '会话已经删除';
+    case 'session-archived':
+      return '归档会话不能执行当前操作';
+    case 'workspace-api-network':
+      return '无法连接到本地服务，请确认后端已经启动';
+    default:
+      return error.message;
+  }
+}
+
 /** Studio's first local Agent workspace, combining chat state and stream events. */
 export function App() {
   const [messageInput, setMessageInput] = useState('');
-  const [projects, setProjects] = useState<readonly StudioProject[]>(initialProjects);
-  const [activeProjectId, setActiveProjectId] = useState('project-weave');
-  const [expandedProjectIds, setExpandedProjectIds] = useState<readonly string[]>([
-    'project-weave',
-  ]);
-  const [activeSessionId, setActiveSessionId] = useState('session-local');
+  const [projects, setProjects] = useState<readonly StudioProject[]>([]);
+  const [activeProjectId, setActiveProjectId] = useState('');
+  const [expandedProjectIds, setExpandedProjectIds] = useState<readonly string[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState('');
+  const [isLoadingWorkspace, setIsLoadingWorkspace] = useState(true);
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [workspaceLoadKey, setWorkspaceLoadKey] = useState(0);
   const [activeView, setActiveView] = useState<ProductView>('studio');
   const [openMenu, setOpenMenu] = useState<OpenMenu>(null);
   const [isProjectDialogOpen, setIsProjectDialogOpen] = useState(false);
@@ -243,7 +284,7 @@ export function App() {
   const latestAssistantMessageId = useRef<string | null>(null);
   const controller = useRef<AbortController | null>(null);
   const activeRunId = useRef<string | null>(null);
-  const activeSessionIdRef = useRef('session-local');
+  const activeSessionIdRef = useRef('');
   const messageInputRef = useRef<HTMLTextAreaElement | null>(null);
   const directoryInputRef = useRef<HTMLInputElement | null>(null);
   const activeProject = projects.find((project) => project.id === activeProjectId);
@@ -268,6 +309,67 @@ export function App() {
       sessions: project.sessions.filter((session) => session.archivedAt !== null),
     }))
     .filter((project) => project.sessions.length > 0);
+
+  useEffect(() => {
+    let disposed = false;
+
+    async function loadWorkspace(): Promise<void> {
+      setIsLoadingWorkspace(true);
+      setWorkspaceError(null);
+      try {
+        const response = await workspaceApi.listProjects({ includeArchived: true });
+        if (disposed) {
+          return;
+        }
+
+        const loadedProjects = response.projects.map(toStudioProject);
+        setProjects(loadedProjects);
+        setExpandedProjectIds(loadedProjects.map((project) => project.id));
+
+        const firstProject = loadedProjects[0];
+        const firstSession = firstProject?.sessions.find((session) => session.archivedAt === null);
+        if (firstProject === undefined || firstSession === undefined) {
+          activeSessionIdRef.current = '';
+          setActiveProjectId(firstProject?.id ?? '');
+          setActiveSessionId('');
+          return;
+        }
+
+        activeSessionIdRef.current = firstSession.id;
+        setActiveProjectId(firstProject.id);
+        setActiveSessionId(firstSession.id);
+        const detail = await workspaceApi.getSession(firstSession.id);
+        if (disposed) {
+          return;
+        }
+        setProjects((current) =>
+          current.map((project) =>
+            project.id === firstProject.id
+              ? {
+                  ...project,
+                  sessions: project.sessions.map((session) =>
+                    session.id === firstSession.id ? toStudioSession(detail) : session,
+                  ),
+                }
+              : project,
+          ),
+        );
+      } catch (error: unknown) {
+        if (!disposed) {
+          setWorkspaceError(workspaceErrorMessage(error));
+        }
+      } finally {
+        if (!disposed) {
+          setIsLoadingWorkspace(false);
+        }
+      }
+    }
+
+    void loadWorkspace();
+    return () => {
+      disposed = true;
+    };
+  }, [workspaceLoadKey]);
 
   useEffect(() => {
     function handleEscape(event: KeyboardEvent): void {
@@ -317,6 +419,41 @@ export function App() {
     setReasoning('');
     setErrorMessage(null);
     setStatus('idle');
+  }
+
+  function applySessionDetail(projectId: string, detail: SessionDetail): void {
+    setProjects((current) =>
+      current.map((project) =>
+        project.id !== projectId
+          ? project
+          : {
+              ...project,
+              sessions: project.sessions.map((session) =>
+                session.id === detail.id ? toStudioSession(detail) : session,
+              ),
+            },
+      ),
+    );
+  }
+
+  async function loadSessionDetail(projectId: string, sessionId: string): Promise<void> {
+    try {
+      const detail = await workspaceApi.getSession(sessionId);
+      applySessionDetail(projectId, detail);
+    } catch (error: unknown) {
+      if (activeSessionIdRef.current === sessionId) {
+        setNotice(workspaceErrorMessage(error));
+      }
+    }
+  }
+
+  function findNextRunnableSession(
+    projectId: string,
+    excludedSessionId: string,
+  ): StudioSession | undefined {
+    return projects
+      .find((project) => project.id === projectId)
+      ?.sessions.find((session) => session.id !== excludedSessionId && session.archivedAt === null);
   }
 
   function handleEvent(
@@ -487,6 +624,7 @@ export function App() {
     setActiveSessionId(sessionId);
     setActiveView('studio');
     resetTransientState();
+    void loadSessionDetail(projectId, sessionId);
   }
 
   /** Expands or collapses one project node without changing the active project. */
@@ -514,85 +652,64 @@ export function App() {
     setSessionTitleInput(session.title);
   }
 
-  function saveSessionTitle(): void {
+  async function saveSessionTitle(): Promise<void> {
     const editing = editingSession;
     const title = sessionTitleInput.trim();
     if (editing === null || title === '' || status === 'streaming') {
       return;
     }
 
-    setProjects((current) =>
-      current.map((project) =>
-        project.id !== editing.projectId
-          ? project
-          : {
-              ...project,
-              sessions: project.sessions.map((session) =>
-                session.id === editing.sessionId ? { ...session, title } : session,
-              ),
-            },
-      ),
-    );
-    setEditingSession(null);
+    try {
+      const detail = await workspaceApi.renameSession(editing.sessionId, title);
+      applySessionDetail(editing.projectId, detail);
+      setEditingSession(null);
+    } catch (error: unknown) {
+      setNotice(workspaceErrorMessage(error));
+    }
   }
 
-  function archiveSession(projectId: string, sessionId: string): void {
+  async function archiveSession(projectId: string, sessionId: string): Promise<void> {
     if (status === 'streaming') {
       return;
     }
 
-    const archivedAt = new Date().toISOString();
-    setProjects((current) =>
-      current.map((project) =>
-        project.id !== projectId
-          ? project
-          : {
-              ...project,
-              sessions: project.sessions.map((session) =>
-                session.id === sessionId ? { ...session, archivedAt } : session,
-              ),
-            },
-      ),
-    );
+    try {
+      const detail = await workspaceApi.archiveSession(sessionId);
+      applySessionDetail(projectId, detail);
 
-    if (projectId === activeProjectId && sessionId === activeSessionId) {
-      const nextSession = activeProject?.sessions.find(
-        (session) => session.id !== sessionId && session.archivedAt === null,
-      );
-      if (nextSession !== undefined) {
-        activeSessionIdRef.current = nextSession.id;
-        setActiveSessionId(nextSession.id);
-      } else {
-        activeSessionIdRef.current = '';
-        setActiveSessionId('');
+      if (projectId === activeProjectId && sessionId === activeSessionId) {
+        const nextSession = findNextRunnableSession(projectId, sessionId);
+        if (nextSession !== undefined) {
+          activeSessionIdRef.current = nextSession.id;
+          setActiveSessionId(nextSession.id);
+        } else {
+          activeSessionIdRef.current = '';
+          setActiveSessionId('');
+        }
+        resetTransientState();
       }
-      resetTransientState();
+    } catch (error: unknown) {
+      setNotice(workspaceErrorMessage(error));
     }
   }
 
-  function restoreSession(projectId: string, sessionId: string): void {
-    setProjects((current) =>
-      current.map((project) =>
-        project.id !== projectId
-          ? project
-          : {
-              ...project,
-              sessions: project.sessions.map((session) =>
-                session.id === sessionId ? { ...session, archivedAt: null } : session,
-              ),
-            },
-      ),
-    );
-    activeSessionIdRef.current = sessionId;
-    setActiveProjectId(projectId);
-    setActiveSessionId(sessionId);
-    setActiveView('studio');
-    setExpandedProjectIds((current) =>
-      current.includes(projectId) ? current : [...current, projectId],
-    );
+  async function restoreSession(projectId: string, sessionId: string): Promise<void> {
+    try {
+      const detail = await workspaceApi.restoreSession(sessionId);
+      applySessionDetail(projectId, detail);
+      activeSessionIdRef.current = sessionId;
+      setActiveProjectId(projectId);
+      setActiveSessionId(sessionId);
+      setActiveView('studio');
+      setExpandedProjectIds((current) =>
+        current.includes(projectId) ? current : [...current, projectId],
+      );
+    } catch (error: unknown) {
+      setNotice(workspaceErrorMessage(error));
+    }
   }
 
-  function permanentlyDeleteSession(): void {
+  async function permanentlyDeleteSession(): Promise<void> {
     const session = sessionToDelete;
     if (session === null || status === 'streaming') {
       return;
@@ -605,58 +722,64 @@ export function App() {
       return;
     }
 
-    setProjects((current) =>
-      current.map((project) =>
-        project.id !== session.projectId
-          ? project
-          : {
-              ...project,
-              sessions: project.sessions.filter((candidate) => candidate.id !== session.sessionId),
-            },
-      ),
-    );
-    if (session.projectId === activeProjectId && session.sessionId === activeSessionId) {
-      const nextSession = activeProject?.sessions.find(
-        (candidate) => candidate.id !== session.sessionId && candidate.archivedAt === null,
+    try {
+      await workspaceApi.deleteSession(session.sessionId);
+      setProjects((current) =>
+        current.map((project) =>
+          project.id !== session.projectId
+            ? project
+            : {
+                ...project,
+                sessions: project.sessions.filter(
+                  (candidate) => candidate.id !== session.sessionId,
+                ),
+              },
+        ),
       );
-      if (nextSession !== undefined) {
-        activeSessionIdRef.current = nextSession.id;
-        setActiveSessionId(nextSession.id);
-      } else {
-        activeSessionIdRef.current = '';
-        setActiveSessionId('');
+      if (session.projectId === activeProjectId && session.sessionId === activeSessionId) {
+        const nextSession = findNextRunnableSession(session.projectId, session.sessionId);
+        if (nextSession !== undefined) {
+          activeSessionIdRef.current = nextSession.id;
+          setActiveSessionId(nextSession.id);
+        } else {
+          activeSessionIdRef.current = '';
+          setActiveSessionId('');
+        }
+        resetTransientState();
       }
-      resetTransientState();
+      setSessionToDelete(null);
+    } catch (error: unknown) {
+      setNotice(workspaceErrorMessage(error));
     }
-    setSessionToDelete(null);
   }
 
   /** Creates an empty local session and focuses it in the session rail. */
-  function createSession(): void {
+  async function createSession(): Promise<void> {
     if (status === 'streaming') {
       return;
     }
 
-    const sessionId = createId('session');
-    const newSession: StudioSession = {
-      id: sessionId,
-      title: '未命名会话',
-      lastUsedLabel: '刚刚使用',
-      archivedAt: null,
-      messages: [],
-    };
+    if (activeProjectId === '') {
+      return;
+    }
 
-    setProjects((current) =>
-      current.map((project) =>
-        project.id === activeProjectId
-          ? { ...project, sessions: [newSession, ...project.sessions] }
-          : project,
-      ),
-    );
-    activeSessionIdRef.current = sessionId;
-    setActiveSessionId(sessionId);
-    setActiveView('studio');
-    resetTransientState();
+    try {
+      const detail = await workspaceApi.createSession(activeProjectId);
+      const newSession = toStudioSession(detail);
+      setProjects((current) =>
+        current.map((project) =>
+          project.id === activeProjectId
+            ? { ...project, sessions: [newSession, ...project.sessions] }
+            : project,
+        ),
+      );
+      activeSessionIdRef.current = newSession.id;
+      setActiveSessionId(newSession.id);
+      setActiveView('studio');
+      resetTransientState();
+    } catch (error: unknown) {
+      setNotice(workspaceErrorMessage(error));
+    }
   }
 
   /** Switches the Studio to another local project and its most recent session. */
@@ -679,6 +802,7 @@ export function App() {
     setOpenMenu(null);
     setSearchQuery('');
     resetTransientState();
+    void loadSessionDetail(project.id, session.id);
   }
 
   function openProjectDialog(): void {
@@ -731,39 +855,32 @@ export function App() {
     event.target.value = '';
   }
 
-  function createProject(): void {
+  async function createProject(): Promise<void> {
     const name = projectName.trim();
     const folderName = selectedFolderName.trim();
     if (name === '' || folderName === '' || status === 'streaming') {
       return;
     }
 
-    const projectId = createId('project');
-    const sessionId = createId('session');
-    const project: StudioProject = {
-      id: projectId,
-      name,
-      folderName,
-      sessions: [
-        {
-          id: sessionId,
-          title: '未命名会话',
-          lastUsedLabel: '刚刚使用',
-          archivedAt: null,
-          messages: [],
-        },
-      ],
-    };
-
-    setProjects((current) => [...current, project]);
-    setExpandedProjectIds((current) => [...current, projectId]);
-    setActiveProjectId(projectId);
-    activeSessionIdRef.current = sessionId;
-    setActiveSessionId(sessionId);
-    setActiveView('studio');
-    setIsProjectDialogOpen(false);
-    setSearchQuery('');
-    resetTransientState();
+    try {
+      const project = await workspaceApi.createProject({ name, folderName });
+      const session = await workspaceApi.createSession(project.id);
+      const nextProject: StudioProject = {
+        ...toStudioProject({ ...project, sessions: [] }),
+        sessions: [toStudioSession(session)],
+      };
+      setProjects((current) => [...current, nextProject]);
+      setExpandedProjectIds((current) => [...current, project.id]);
+      setActiveProjectId(project.id);
+      activeSessionIdRef.current = session.id;
+      setActiveSessionId(session.id);
+      setActiveView('studio');
+      setIsProjectDialogOpen(false);
+      setSearchQuery('');
+      resetTransientState();
+    } catch (error: unknown) {
+      setNotice(workspaceErrorMessage(error));
+    }
   }
 
   /** Switches the visible Studio product area without changing session state. */
@@ -808,6 +925,38 @@ export function App() {
     controller.current = null;
     requestController.abort();
     setStatus('cancelled');
+  }
+
+  if (isLoadingWorkspace) {
+    return (
+      <main className="studio-shell studio-shell-loading">
+        <section className="workspace-loading" aria-live="polite">
+          <Sparkles aria-hidden="true" />
+          <h1>正在加载工作区</h1>
+          <p>正在读取项目和会话...</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (workspaceError !== null) {
+    return (
+      <main className="studio-shell studio-shell-loading">
+        <section className="workspace-loading workspace-loading-error" role="alert">
+          <X aria-hidden="true" />
+          <h1>工作区加载失败</h1>
+          <p>{workspaceError}</p>
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => setWorkspaceLoadKey((current) => current + 1)}
+          >
+            <RotateCcw aria-hidden="true" />
+            重试加载
+          </button>
+        </section>
+      </main>
+    );
   }
 
   return (
@@ -933,7 +1082,7 @@ export function App() {
         <button
           className="new-session-button"
           type="button"
-          onClick={createSession}
+          onClick={() => void createSession()}
           disabled={status === 'streaming'}
         >
           <Plus aria-hidden="true" />
@@ -1046,7 +1195,7 @@ export function App() {
                               type="button"
                               aria-label="归档会话"
                               title="归档会话"
-                              onClick={() => archiveSession(project.id, session.id)}
+                              onClick={() => void archiveSession(project.id, session.id)}
                               disabled={status === 'streaming'}
                             >
                               <Archive aria-hidden="true" />
@@ -1441,7 +1590,7 @@ export function App() {
                                   className="secondary-button"
                                   type="button"
                                   aria-label={`恢复会话 ${session.title}`}
-                                  onClick={() => restoreSession(project.id, session.id)}
+                                  onClick={() => void restoreSession(project.id, session.id)}
                                   disabled={status === 'streaming'}
                                 >
                                   <RotateCcw aria-hidden="true" />
@@ -1622,7 +1771,7 @@ export function App() {
               className="project-dialog-form"
               onSubmit={(event) => {
                 event.preventDefault();
-                saveSessionTitle();
+                void saveSessionTitle();
               }}
             >
               <label className="project-name-field">
@@ -1704,7 +1853,7 @@ export function App() {
                   className="danger-button"
                   type="button"
                   aria-label="确认永久删除"
-                  onClick={permanentlyDeleteSession}
+                  onClick={() => void permanentlyDeleteSession()}
                 >
                   <Trash2 aria-hidden="true" />
                   永久删除
@@ -1747,7 +1896,7 @@ export function App() {
               className="project-dialog-form"
               onSubmit={(event) => {
                 event.preventDefault();
-                createProject();
+                void createProject();
               }}
             >
               <label className="project-name-field">

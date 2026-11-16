@@ -8,6 +8,12 @@ export default defineConfig({
       '/agent': {
         target: 'http://127.0.0.1:4317',
       },
+      '/projects': {
+        target: 'http://127.0.0.1:4317',
+      },
+      '/sessions': {
+        target: 'http://127.0.0.1:4317',
+      },
     },
   },
 });

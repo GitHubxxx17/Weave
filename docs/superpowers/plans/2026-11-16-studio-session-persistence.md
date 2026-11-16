@@ -841,7 +841,7 @@ export interface WorkspaceApi {
 }
 ```
 
-- [ ] **Step 1: 建立浏览器 API Schema 和失败测试**
+- [x] **Step 1: 建立浏览器 API Schema 和失败测试**
 
 在 `workspace-types.ts` 中定义与 Server 响应一一对应的 Zod Schema。浏览器
 只接受：
@@ -860,7 +860,7 @@ type ProjectListResponse = {
 - `404`、`409` 和 `500` 转换为保留 `code` 的 `WorkspaceApiError`；
 - 请求体只包含 API 允许的字段。
 
-- [ ] **Step 2: 运行 Studio 测试确认 API Client 尚未实现**
+- [x] **Step 2: 运行 Studio 测试确认 API Client 尚未实现**
 
 Run:
 
@@ -870,7 +870,7 @@ pnpm --filter @weave/studio test -- workspace-api.test.ts
 
 Expected: 因 API Client 和类型文件不存在而失败。
 
-- [ ] **Step 3: 实现 Workspace API Client**
+- [x] **Step 3: 实现 Workspace API Client**
 
 在 `workspace-api.ts` 中实现一个 `requestJson()`：
 
@@ -893,7 +893,7 @@ async function requestJson<T>(
 路径必须使用 `encodeURIComponent(sessionId/projectId)`，避免 ID 中的特殊
 字符破坏路由。
 
-- [ ] **Step 4: 增加 Vite proxy**
+- [x] **Step 4: 增加 Vite proxy**
 
 在 `apps/studio/vite.config.ts` 增加：
 
@@ -908,7 +908,7 @@ proxy: {
 保持现有 `/agent` 行为不变，Studio 开发服务器请求三个前缀都转发到
 `http://127.0.0.1:4317`。
 
-- [ ] **Step 5: 将 App 初始加载改成 API 加载**
+- [x] **Step 5: 将 App 初始加载改成 API 加载**
 
 在 `App.tsx`：
 
@@ -924,7 +924,7 @@ proxy: {
 将 `StudioSession.messages` 与 API 返回的 `Message[]` 做一个单独转换函数，
 不要在 JSX 中直接混合 Protocol message 和展示文本。
 
-- [ ] **Step 6: 将创建、编辑、归档、恢复和删除接入 API**
+- [x] **Step 6: 将创建、编辑、归档、恢复和删除接入 API**
 
 替换这些当前纯内存函数：
 
@@ -950,7 +950,7 @@ permanentlyDeleteSession()
 成功后从正常树和归档区移除。运行状态为 `streaming` 时继续禁用所有会话
 管理操作。
 
-- [ ] **Step 7: 为 Studio 测试增加 fetch mock 并验证行为**
+- [x] **Step 7: 为 Studio 测试增加 fetch mock 并验证行为**
 
 在 `App.test.tsx` 建立可读的响应工厂：
 
@@ -967,7 +967,7 @@ function mockJsonResponse<T>(body: T, status = 200): Response {
 `globalThis.fetch`。保留现有中文界面、项目树、会话按钮和 SSE 测试，并把
 管理操作断言改为“请求成功后 UI 更新”。
 
-- [ ] **Step 8: 运行 Studio 检查**
+- [x] **Step 8: 运行 Studio 检查**
 
 Run:
 
@@ -980,7 +980,7 @@ pnpm --filter @weave/studio test
 Expected: 刷新式重新挂载可以从 mock API 恢复消息；所有按钮仍然保持原有
 交互，API 失败不会静默修改界面。
 
-- [ ] **Step 9: 提交**
+- [x] **Step 9: 提交**
 
 ```bash
 git add apps/studio
@@ -1001,7 +1001,7 @@ git commit -m "feat: 接入 Studio 项目会话持久化"
 - Consumes: 已实现的 Session、Workspace、Server 和 Studio 代码。
 - Produces: 面向学习和面试解释的中文文档，以及可审查的完整验证结果。
 
-- [ ] **Step 1: 写学习文档**
+- [x] **Step 1: 写学习文档**
 
 文档按以下顺序解释：
 
@@ -1017,7 +1017,7 @@ git commit -m "feat: 接入 Studio 项目会话持久化"
 
 每个概念都配一个来自代码的短 TypeScript 示例，避免只写抽象名词。
 
-- [ ] **Step 2: 更新 Foundation 架构说明**
+- [x] **Step 2: 更新 Foundation 架构说明**
 
 在 `docs/architecture/foundation.md` 增加 Project/Session 持久化路径：
 
@@ -1032,7 +1032,7 @@ Studio
 明确说明 Studio 不直接导入 `@weave/session`、`@weave/runtime` 或 Node 模块，
 并保留现有 Agent SSE、Runtime 和 Tool Pipeline 的边界说明。
 
-- [ ] **Step 3: 运行完整验证**
+- [x] **Step 3: 运行完整验证**
 
 Run:
 
@@ -1053,7 +1053,9 @@ Expected:
 - `git diff --check` 没有空白错误；
 - 工作区只保留当前功能分支的已提交内容。
 
-- [ ] **Step 4: 提交文档和验证相关修改**
+- [x] **Step 4: 提交文档和验证相关修改**
+
+实现代码、架构说明、学习文档和验证状态已随当前功能提交一起提交。
 
 ```bash
 git add docs/learning/2026-11-16-studio-session-persistence.md docs/architecture/foundation.md
