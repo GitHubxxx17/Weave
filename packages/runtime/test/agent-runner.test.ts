@@ -730,7 +730,10 @@ describe('Agent Runner contracts', () => {
       validRequest.userMessage,
       {
         role: 'assistant',
-        content: [{ type: 'text', text: '分析完成' }],
+        content: [
+          { type: 'reasoning', text: '内部推理' },
+          { type: 'text', text: '分析完成' },
+        ],
       },
     ]);
     expect(projection.turns[0]).toMatchObject({
@@ -853,7 +856,7 @@ describe('Agent Runner contracts', () => {
     await store.close();
   });
 
-  it('does not persist an empty assistant message for reasoning-only output', async () => {
+  it('persists reasoning content so a Session can restore the process view', async () => {
     const store = createInMemorySessionEventStore();
     const runner = createAgentRunner({
       llm: recordingClient(
@@ -871,7 +874,13 @@ describe('Agent Runner contracts', () => {
       { type: 'completed', turnId: expect.any(String) },
     ]);
     const projection = projectSession(await store.read('session-1'));
-    expect(projection.messages.map(({ message }) => message)).toEqual([validRequest.userMessage]);
+    expect(projection.messages.map(({ message }) => message)).toEqual([
+      validRequest.userMessage,
+      {
+        role: 'assistant',
+        content: [{ type: 'reasoning', text: '只进行推理' }],
+      },
+    ]);
 
     await store.close();
   });

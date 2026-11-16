@@ -5,6 +5,7 @@ import {
   SessionProjectionError,
   type SessionEventStore,
   type SessionProjection,
+  type SessionMessage as ProjectedSessionMessage,
 } from '@weave/session';
 import {
   type Project,
@@ -40,8 +41,15 @@ export interface SessionSummary {
 
 /** A Session summary with its complete projected messages. */
 export interface SessionDetail extends SessionSummary {
-  readonly messages: readonly Message[];
+  readonly messages: readonly SessionMessage[];
 }
+
+/** A durable message with the metadata needed by Studio timelines. */
+export type SessionMessage = ProjectedSessionMessage['message'] & {
+  readonly messageId: string;
+  readonly sequence: number;
+  readonly occurredAt: string;
+};
 
 /** A recoverable warning for one damaged Session in a Project list. */
 export interface ProjectListWarning {
@@ -97,7 +105,12 @@ function summaryFor(sessionId: string, projection: SessionProjection): SessionSu
 function detailFor(sessionId: string, projection: SessionProjection): SessionDetail {
   return {
     ...summaryFor(sessionId, projection),
-    messages: projection.messages.map((item) => item.message),
+    messages: projection.messages.map((item) => ({
+      ...item.message,
+      messageId: item.messageId,
+      sequence: item.sequence,
+      occurredAt: item.occurredAt,
+    })),
   };
 }
 

@@ -52,6 +52,9 @@ type ChatMessage = {
   readonly id: string;
   readonly role: 'user' | 'assistant';
   readonly text: string;
+  readonly reasoning: string;
+  readonly tools: readonly ToolActivity[];
+  readonly occurredAt: string;
 };
 
 type StudioSession = {
@@ -205,19 +208,72 @@ function messageText(message: WorkspaceMessage): string {
     .join('');
 }
 
+function messageReasoning(message: WorkspaceMessage): string {
+  return message.content
+    .filter((part) => part.type === 'reasoning')
+    .map((part) => part.text)
+    .join('');
+}
+
+function messageToolResult(
+  messages: readonly WorkspaceMessage[],
+  toolCallId: string,
+): string | undefined {
+  const toolMessage = messages.find(
+    (message) => message.role === 'tool' && message.toolCallId === toolCallId,
+  );
+  return toolMessage === undefined ? undefined : messageText(toolMessage);
+}
+
 function toChatMessages(sessionId: string, messages: readonly WorkspaceMessage[]): ChatMessage[] {
   return messages.flatMap((message, index) => {
     if (message.role !== 'user' && message.role !== 'assistant') {
       return [];
     }
+    const tools =
+      message.role !== 'assistant'
+        ? []
+        : (message.toolCalls ?? []).map((toolCall) => {
+            const result = messageToolResult(messages, toolCall.id);
+            return {
+              toolCallId: toolCall.id,
+              name: toolCall.name,
+              arguments: toolCall.arguments,
+              status: 'completed' as const,
+              ...(result === undefined ? {} : { result }),
+            };
+          });
     return [
       {
-        id: `${sessionId}-message-${index + 1}`,
+        id: message.messageId ?? `${sessionId}-message-${index + 1}`,
         role: message.role,
         text: messageText(message),
+        reasoning: messageReasoning(message),
+        tools,
+        occurredAt: message.occurredAt ?? '',
       },
     ];
   });
+}
+
+function formatMessageTime(occurredAt: string): string {
+  const date = new Date(occurredAt);
+  if (Number.isNaN(date.getTime())) {
+    return '时间未知';
+  }
+
+  const now = new Date();
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  const time = new Intl.DateTimeFormat('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date);
+
+  return sameDay ? time : `${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
 }
 
 function toStudioSession(session: SessionSummary | SessionDetail): StudioSession {
@@ -301,8 +357,10 @@ export function App() {
   } | null>(null);
   const [tools, setTools] = useState<readonly ToolActivity[]>([]);
   const [reasoning, setReasoning] = useState('');
+  const [expandedMessageIds, setExpandedMessageIds] = useState<readonly string[]>([]);
   const [status, setStatus] = useState<RunStatus>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const toolsRef = useRef<readonly ToolActivity[]>([]);
   const latestAssistantMessageId = useRef<string | null>(null);
   const controller = useRef<AbortController | null>(null);
   const activeRunId = useRef<string | null>(null);
@@ -477,8 +535,10 @@ export function App() {
   /** Clears run-scoped state when the active session changes. */
   function resetTransientState(): void {
     latestAssistantMessageId.current = null;
+    toolsRef.current = [];
     setTools([]);
     setReasoning('');
+    setExpandedMessageIds([]);
     setErrorMessage(null);
     setStatus('idle');
   }
@@ -538,41 +598,62 @@ export function App() {
         break;
       case 'reasoning-delta':
         setReasoning((current) => current + event.text);
+        updateSessionMessages(sessionId, (current) =>
+          current.map((message) =>
+            message.id === assistantId
+              ? { ...message, reasoning: message.reasoning + event.text }
+              : message,
+          ),
+        );
         break;
       case 'tool-call':
-        setTools((current) =>
-          updateToolActivity(current, event.toolCall.id, () => ({
-            toolCallId: event.toolCall.id,
-            name: event.toolCall.name,
-            arguments: event.toolCall.arguments,
-            status: 'called',
-          })),
+        toolsRef.current = updateToolActivity(toolsRef.current, event.toolCall.id, () => ({
+          toolCallId: event.toolCall.id,
+          name: event.toolCall.name,
+          arguments: event.toolCall.arguments,
+          status: 'called',
+        }));
+        setTools(toolsRef.current);
+        updateSessionMessages(sessionId, (messages) =>
+          messages.map((message) =>
+            message.id === assistantId ? { ...message, tools: toolsRef.current } : message,
+          ),
         );
         break;
       case 'tool-executing':
-        setTools((current) =>
-          updateToolActivity(current, event.toolCall.id, (existing) => {
-            const updated: ToolActivity = {
-              toolCallId: event.toolCall.id,
-              name: event.toolCall.name,
-              arguments: event.toolCall.arguments,
-              status: 'executing',
-            };
-            return existing?.result === undefined
-              ? updated
-              : { ...updated, result: existing.result };
-          }),
+        toolsRef.current = updateToolActivity(toolsRef.current, event.toolCall.id, (existing) => {
+          const updated: ToolActivity = {
+            toolCallId: event.toolCall.id,
+            name: event.toolCall.name,
+            arguments: event.toolCall.arguments,
+            status: 'executing',
+          };
+          return existing?.result === undefined ? updated : { ...updated, result: existing.result };
+        });
+        setTools(toolsRef.current);
+        updateSessionMessages(sessionId, (messages) =>
+          messages.map((message) =>
+            message.id === assistantId ? { ...message, tools: toolsRef.current } : message,
+          ),
         );
         break;
       case 'tool-result':
-        setTools((current) =>
-          updateToolActivity(current, event.result.toolCallId, (existing) => ({
+        toolsRef.current = updateToolActivity(
+          toolsRef.current,
+          event.result.toolCallId,
+          (existing) => ({
             toolCallId: event.result.toolCallId,
             name: event.result.name,
             arguments: existing?.arguments ?? '',
             status: 'completed',
             result: event.result.content,
-          })),
+          }),
+        );
+        setTools(toolsRef.current);
+        updateSessionMessages(sessionId, (messages) =>
+          messages.map((message) =>
+            message.id === assistantId ? { ...message, tools: toolsRef.current } : message,
+          ),
         );
         break;
       case 'completed':
@@ -597,14 +678,29 @@ export function App() {
     const assistantId = createId('assistant');
     const runId = createId('run');
     const requestController = new AbortController();
+    const occurredAt = new Date().toISOString();
 
     latestAssistantMessageId.current = assistantId;
     activeRunId.current = runId;
     controller.current = requestController;
     updateSessionMessages(sessionId, (current) => [
       ...current,
-      { id: userMessageId, role: 'user', text },
-      { id: assistantId, role: 'assistant', text: '' },
+      {
+        id: userMessageId,
+        role: 'user',
+        text,
+        reasoning: '',
+        tools: [],
+        occurredAt,
+      },
+      {
+        id: assistantId,
+        role: 'assistant',
+        text: '',
+        reasoning: '',
+        tools: [],
+        occurredAt,
+      },
     ]);
     setProjects((current) =>
       current.map((project) =>
@@ -627,7 +723,9 @@ export function App() {
     );
     setMessageInput('');
     setReasoning('');
+    toolsRef.current = [];
     setTools([]);
+    setExpandedMessageIds([assistantId]);
     setErrorMessage(null);
     setStatus('streaming');
 
@@ -1030,7 +1128,7 @@ export function App() {
 
   return (
     <main
-      className={`studio-shell${!isActivityPanelOpen || activeView !== 'studio' ? ' studio-shell-context-collapsed' : ''}`}
+      className={`studio-shell studio-shell-fixed${!isActivityPanelOpen || activeView !== 'studio' ? ' studio-shell-context-collapsed' : ''}`}
     >
       {openMenu !== null ? (
         <button
@@ -1366,7 +1464,11 @@ export function App() {
             </div>
           </header>
 
-          <div className="message-list" aria-label="Agent 工作流" aria-live="polite">
+          <div
+            className="message-list conversation-scroll"
+            aria-label="Agent 工作流"
+            aria-live="polite"
+          >
             {messages.length === 0 ? (
               <div className="empty-chat">
                 <div className="empty-orbit" aria-hidden="true">
@@ -1387,30 +1489,115 @@ export function App() {
                 </div>
               </div>
             ) : (
-              messages.map((message) => (
-                <article className={`timeline-item timeline-item-${message.role}`} key={message.id}>
-                  <div className="timeline-content">
-                    <div className="message-meta">
-                      {message.role === 'assistant' ? (
-                        <span className="message-avatar" aria-hidden="true">
-                          <Sparkles />
-                        </span>
+              messages.map((message) => {
+                const isLatestAssistant =
+                  message.role === 'assistant' && message.id === latestAssistantMessageId.current;
+                const hasProcess =
+                  message.role === 'assistant' &&
+                  (message.reasoning !== '' ||
+                    message.tools.length > 0 ||
+                    (isLatestAssistant && status === 'streaming'));
+
+                return (
+                  <article
+                    className={`timeline-item timeline-item-${message.role}`}
+                    key={message.id}
+                  >
+                    <div className="timeline-content">
+                      <div className="message-meta">
+                        {message.role === 'assistant' ? (
+                          <span className="message-avatar" aria-hidden="true">
+                            <Sparkles />
+                          </span>
+                        ) : null}
+                        {message.role === 'user' ? '你' : 'Weave Agent'}
+                        <time dateTime={message.occurredAt}>
+                          {formatMessageTime(message.occurredAt)}
+                        </time>
+                      </div>
+                      {hasProcess ? (
+                        <details
+                          className="message-process"
+                          role="group"
+                          aria-label="本轮过程"
+                          open={expandedMessageIds.includes(message.id)}
+                          onToggle={(event) => {
+                            const isOpen = event.currentTarget.open;
+                            setExpandedMessageIds((current) =>
+                              isOpen
+                                ? current.includes(message.id)
+                                  ? current
+                                  : [...current, message.id]
+                                : current.filter((id) => id !== message.id),
+                            );
+                          }}
+                        >
+                          <summary>
+                            <span className="message-process-title">
+                              <TerminalSquare aria-hidden="true" />
+                              {message.tools.length > 0
+                                ? `${message.tools.length} 次工具调用`
+                                : '思考过程'}
+                            </span>
+                            <span className="message-process-state">
+                              {isLatestAssistant && status === 'streaming' ? '进行中' : '已完成'}
+                            </span>
+                          </summary>
+                          <div className="message-process-content">
+                            {message.reasoning !== '' ? (
+                              <section className="message-process-section" aria-label="思考内容">
+                                <div className="message-process-heading">
+                                  <span>思考</span>
+                                  {isLatestAssistant && status === 'streaming' ? (
+                                    <span className="message-process-live">实时</span>
+                                  ) : null}
+                                </div>
+                                <p className="message-process-text">{message.reasoning}</p>
+                              </section>
+                            ) : null}
+                            {message.tools.length > 0 ? (
+                              <section className="message-process-section" aria-label="工具步骤">
+                                <div className="message-process-heading">
+                                  <span>工具调用</span>
+                                  <span>{message.tools.length} 次</span>
+                                </div>
+                                <div className="message-process-tools">
+                                  {message.tools.map((tool) => (
+                                    <article className="message-process-tool" key={tool.toolCallId}>
+                                      <div className="message-process-tool-heading">
+                                        <strong>{tool.name}</strong>
+                                        <span className={`status-badge status-${tool.status}`}>
+                                          {tool.status === 'called'
+                                            ? '已调用'
+                                            : tool.status === 'executing'
+                                              ? '执行中'
+                                              : tool.status === 'completed'
+                                                ? '已完成'
+                                                : '失败'}
+                                        </span>
+                                      </div>
+                                      <pre>{tool.arguments}</pre>
+                                      {tool.result !== undefined ? (
+                                        <p className="message-process-text">{tool.result}</p>
+                                      ) : null}
+                                    </article>
+                                  ))}
+                                </div>
+                              </section>
+                            ) : null}
+                            {message.reasoning === '' && message.tools.length === 0 ? (
+                              <p className="message-process-placeholder">Agent 正在准备回复…</p>
+                            ) : null}
+                          </div>
+                        </details>
                       ) : null}
-                      {message.role === 'user' ? '你' : 'Weave Agent'}
-                      <time>刚刚</time>
+                      <div className="message">
+                        <p>{message.text || getAssistantPlaceholder(status, isLatestAssistant)}</p>
+                      </div>
                     </div>
-                    <div className="message">
-                      <p>
-                        {message.text ||
-                          getAssistantPlaceholder(
-                            status,
-                            message.id === latestAssistantMessageId.current,
-                          )}
-                      </p>
-                    </div>
-                  </div>
-                </article>
-              ))
+                  </article>
+                );
+              })
             )}
           </div>
 
@@ -1740,7 +1927,7 @@ export function App() {
       )}
 
       {activeView === 'studio' && isActivityPanelOpen ? (
-        <aside className="activity-panel" aria-label="运行活动">
+        <aside className="activity-panel activity-scroll" aria-label="运行活动">
           <header className="activity-header">
             <div>
               <h2>会话状态</h2>

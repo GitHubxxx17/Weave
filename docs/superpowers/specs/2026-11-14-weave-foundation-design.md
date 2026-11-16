@@ -93,6 +93,7 @@ Model Contract
 - Token Usage 类型
 - LLM 错误类型
 - 对外输入的 Zod Schema
+- Session 投影消息的 `occurredAt` 时间戳和可恢复的 reasoning 内容片段
 
 #### `@weave/llm`
 
@@ -123,7 +124,23 @@ Model Contract
 - 最小的 Runtime 状态检查
 - HTTP 输入和错误边界示例
 
-### 3.2 本轮不包含
+### 3.2 后续补充
+
+Foundation vertical slice 已经进入 Studio 交互验证阶段。为保证会话
+恢复和界面展示的一致性，当前实现补充以下跨层契约：
+
+- Session projection 为每条消息保留创建事件的 `occurredAt`；
+- Agent Runner 将 Provider 暴露的 reasoning 聚合后写入完成的 assistant
+  message；
+- Studio 将 reasoning、tool call、tool result 和消息时间按同一条 assistant
+  message 渲染，并在刷新或切换 Session 后恢复；
+- 运行中的 reasoning 仍通过 transient `AgentRuntimeEvent` 实时发送，持久化
+  只在完成的 assistant message 上发生。
+
+这组补充不改变 `protocol -> llm -> runtime -> server` 的依赖方向，只扩展
+Session read model 和 Server 的消息返回结构。
+
+### 3.3 本轮不包含
 
 - 完整 Agent Loop
 - Session 和 Turn 持久化

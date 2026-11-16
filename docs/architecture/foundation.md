@@ -195,9 +195,17 @@ Session concurrency slice.
 Runtime events are not durable Session events. Deltas are for live consumers
 and are never appended individually. Durable events describe the completed
 assistant message and lifecycle state used for recovery, timelines, and
-projection. Reasoning is streamed but is not persisted because the current
-Session Message schema has no reasoning field. A reasoning-only response still
-completes the Step and Turn without creating an empty assistant message.
+projection. Reasoning that the provider exposes is stored as a `reasoning`
+content part on the completed assistant message, so Studio can restore the
+process block after a refresh or Session switch. Tool calls and tool results
+remain durable Session facts and are reconstructed into the same assistant
+message's process view. A reasoning-only response still completes the Step and
+Turn without creating an empty assistant message.
+
+The Session projection also preserves the `occurredAt` value for each
+`message.created` event. The Server exposes those timestamps alongside the
+projected messages so clients can render message times from durable facts
+instead of replacing every timestamp with a client-side "just now" label.
 
 The model stream must contain exactly one `finish`, and it must be last.
 Missing, repeated, or followed-by-more-output finishes produce
