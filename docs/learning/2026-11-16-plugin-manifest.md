@@ -211,10 +211,10 @@ context.registerProvider({
   label: 'DeepSeek',
   type: 'openai-compatible',
   client: createOpenAiCompatibleClient({
-    baseUrl: 'https://api.deepseek.com/v1',
+    baseUrl: 'https://api.deepseek.com',
     apiKey: process.env.DEEPSEEK_API_KEY,
   }),
-  defaultModel: 'deepseek-chat',
+  defaultModel: 'deepseek-flash',
 });
 ```
 

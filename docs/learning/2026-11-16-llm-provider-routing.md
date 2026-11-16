@@ -57,7 +57,7 @@ Provider 表示一个可以提供模型能力的服务或适配器，例如：
 - `openai`：使用 OpenAI-compatible 接口的另一组配置；
 - 将来的插件 Provider：通过插件注册的本地或远程模型服务。
 
-Provider id 是系统内部稳定引用，例如 `deepseek`。label 是给人看的名称，例如 `DeepSeek`。defaultModel 是选择这个 Provider 后，Studio 默认填入的模型，例如 `deepseek-chat`。
+Provider id 是系统内部稳定引用，例如 `deepseek`。label 是给人看的名称，例如 `DeepSeek`。defaultModel 是选择这个 Provider 后，Studio 默认填入的模型，例如 `deepseek-flash`。
 
 Provider 和模型不是同一个概念。Provider 决定“请求交给哪个服务实现”，model 决定“这个服务使用哪个具体模型”。把两者分开，后续才能支持一个 Provider 暴露多个模型。
 
@@ -91,7 +91,7 @@ Provider id -> 可公开的 ProviderDescriptor
   id: 'deepseek',
   label: 'DeepSeek',
   type: 'openai-compatible',
-  defaultModel: 'deepseek-chat'
+  defaultModel: 'deepseek-flash'
 }
 ```
 
@@ -120,7 +120,7 @@ GET /settings/providers
       "id": "deepseek",
       "label": "DeepSeek",
       "type": "openai-compatible",
-      "defaultModel": "deepseek-chat"
+      "defaultModel": "deepseek-flash"
     }
   ],
   "defaultProvider": "mock"
@@ -150,9 +150,9 @@ Server 通过 `WEAVE_LLM_PROVIDERS` 读取一个 JSON 数组。每个外部 Prov
     "id": "deepseek",
     "label": "DeepSeek",
     "type": "openai-compatible",
-    "baseUrl": "https://api.deepseek.com/v1",
+    "baseUrl": "https://api.deepseek.com",
     "apiKey": "replace-with-your-key",
-    "defaultModel": "deepseek-chat"
+    "defaultModel": "deepseek-flash"
   }
 ]
 ```
@@ -160,21 +160,19 @@ Server 通过 `WEAVE_LLM_PROVIDERS` 读取一个 JSON 数组。每个外部 Prov
 可以在启动 Server 前设置环境变量：
 
 ```bash
-export WEAVE_LLM_PROVIDERS='[
-  {
-    "id": "deepseek",
-    "label": "DeepSeek",
-    "type": "openai-compatible",
-    "baseUrl": "https://api.deepseek.com/v1",
-    "apiKey": "replace-with-your-key",
-    "defaultModel": "deepseek-chat"
-  }
-]'
-
+cp .env.example .env
+# 编辑 .env，把占位 API Key 替换成自己的密钥
 pnpm dev
 ```
 
-实际使用时应通过本地 `.env`、Shell 环境或系统密钥管理方式注入真实密钥。不要把真实 API Key 写进 Git、README、测试 fixture、Session 事件、SSE 事件或浏览器请求。
+`@weave/llm` 的 OpenAI 兼容适配器会在 `baseUrl` 后面拼接
+`/chat/completions`，因此 DeepSeek 配置使用 `https://api.deepseek.com`，
+不要重复写 `/v1`。Server 的开发命令通过 Node 内置的
+`--env-file-if-exists` 读取根目录 `.env`。
+
+实际使用时应通过本地 `.env`、Shell 环境或系统密钥管理方式注入真实密钥。
+不要把真实 API Key 写进 Git、README、测试 fixture、Session 事件、SSE
+事件或浏览器请求。
 
 Server 的装配顺序可以理解为：
 
@@ -242,7 +240,7 @@ App 启动时同时发起 Workspace 和 Provider 请求。Provider 请求失败�
 
 ```text
 selectedProviderId = deepseek
-selectedModel = deepseek-chat
+selectedModel = deepseek-flash
 ```
 
 提交消息时才把这两个值放进 Agent 请求：
@@ -255,7 +253,7 @@ selectedModel = deepseek-chat
     "content": [{ "type": "text", "text": "介绍一下 Weave" }]
   },
   "provider": "deepseek",
-  "model": "deepseek-chat"
+  "model": "deepseek-flash"
 }
 ```
 
@@ -300,11 +298,14 @@ Server 覆盖默认 Mock、JSON 配置、非法配置、重复 id、公开元数
 
 Studio Provider API 覆盖成功响应、非 200 错误和格式错误；App 覆盖菜单展示、DeepSeek 选择、请求参数、Settings 页面和 Mock fallback。Studio 测试共 54 个通过。
 
-这些测试使用 fake fetch、Mock LLM 和内存 Session Store，不访问真实 DeepSeek 网络，也不需要真实 API Key。
+这些自动化测试使用 fake fetch、Mock LLM 和内存 Session Store，不依赖真实
+DeepSeek 网络，也不需要真实 API Key。除此之外，本轮还使用本机已保存的
+DeepSeek 配置完成了一次隔离的真实流式对话验收，确认 reasoning 增量、正文
+增量、completed 事件和 API Key 隔离都符合预期。
 
 ## 8. 当前边界与下一步
 
-本轮已经完成 Provider 路由的基础纵向切片，但以下能力仍然有意保留到后续：
+本轮已经完成 Provider 路由的基础纵向切片和一次真实模型验收，但以下能力仍然有意保留到后续：
 
 - Plugin Manifest、动态安装、版本兼容和插件沙箱；
 - 一个 Provider 下的模型自动发现；

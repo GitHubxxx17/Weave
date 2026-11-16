@@ -51,8 +51,8 @@ const providerChoiceSchema = z
   .object({
     delta: z
       .object({
-        content: z.string().optional(),
-        reasoning_content: z.string().optional(),
+        content: z.string().nullable().optional(),
+        reasoning_content: z.string().nullable().optional(),
         tool_calls: z.array(providerToolCallSchema).optional(),
       })
       .passthrough()
@@ -326,10 +326,10 @@ function parseProviderChunk(data: string, state: StreamParseState, apiKey: strin
 
   const events: StreamEvent[] = [];
   const delta = choice.delta;
-  if (delta?.content !== undefined) {
+  if (delta?.content !== undefined && delta.content !== null) {
     events.push({ type: 'text-delta', text: delta.content });
   }
-  if (delta?.reasoning_content !== undefined) {
+  if (delta?.reasoning_content !== undefined && delta.reasoning_content !== null) {
     events.push({ type: 'reasoning-delta', text: delta.reasoning_content });
   }
 
