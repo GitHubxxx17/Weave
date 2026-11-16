@@ -1,4 +1,4 @@
-import type { LlmClient } from '@weave/llm';
+import type { LlmClient, LlmProviderRegistry } from '@weave/llm';
 import {
   toolCallSchema,
   userMessageSchema,
@@ -74,6 +74,7 @@ export const agentRuntimeEventSchema: z.ZodType<AgentRuntimeEvent> = z.discrimin
 /** Stable failure categories exposed by the Agent Runner boundary. */
 export type AgentRunErrorCode =
   | 'agent-invalid-input'
+  | 'agent-provider-unavailable'
   | 'agent-stream-protocol'
   | 'agent-tool-call-unsupported'
   | 'agent-tool-call-invalid'
@@ -99,7 +100,9 @@ export interface AgentRunner {
 /** Services required to construct an Agent Runner. */
 export interface AgentRunnerOptions {
   /** Provider-independent model stream implementation. */
-  readonly llm: LlmClient;
+  readonly llm?: LlmClient | undefined;
+  /** Registry used to route each request to its selected Provider. */
+  readonly llmRegistry?: LlmProviderRegistry | undefined;
   /** Append-only Session Event Store used for durable turn facts. */
   readonly sessionStore: SessionEventStore;
   /** Model-visible and executable tool registry; must pair with `toolPipeline`. */

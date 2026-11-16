@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { LlmClient } from '@weave/llm';
+import {
+  createLlmProviderRegistry,
+  type LlmClient,
+} from '@weave/llm';
 import type { LlmRequest, StreamEvent } from '@weave/protocol';
 import { z } from 'zod';
 import {
@@ -226,6 +229,79 @@ describe('Agent Runner contracts', () => {
         toolPipeline: pipeline,
       }),
     ).toThrowError(/toolRegistry and toolPipeline must be provided together/);
+  });
+
+  it('routes each Agent request to the Provider selected by id', async () => {
+    const requests: LlmRequest[] = [];
+    const registry = createLlmProviderRegistry([
+      {
+        id: 'alpha',
+        label: 'Alpha',
+        type: 'mock',
+        client: recordingClient(
+          [
+            { type: 'text-delta', text: '甲' },
+            { type: 'finish', reason: 'stop' },
+          ],
+          requests,
+        ),
+      },
+      {
+        id: 'beta',
+        label: 'Beta',
+        type: 'mock',
+        client: recordingClient(
+          [
+            { type: 'text-delta', text: '乙' },
+            { type: 'finish', reason: 'stop' },
+          ],
+          requests,
+        ),
+      },
+    ]);
+    const runner = createAgentRunner({
+      llmRegistry: registry,
+      sessionStore: createInMemorySessionEventStore(),
+    });
+
+    const alphaEvents = await collect(
+      runner.run({
+        ...validRequest,
+        sessionId: 'session-alpha',
+        provider: 'alpha',
+      }),
+    );
+    const betaEvents = await collect(
+      runner.run({
+        ...validRequest,
+        sessionId: 'session-beta',
+        provider: 'beta',
+      }),
+    );
+
+    expect(alphaEvents).toContainEqual({ type: 'text-delta', text: '甲' });
+    expect(betaEvents).toContainEqual({ type: 'text-delta', text: '乙' });
+    expect(requests.map((request) => request.provider)).toEqual(['alpha', 'beta']);
+  });
+
+  it('rejects an Agent request when its Provider is unavailable', async () => {
+    const store = createInMemorySessionEventStore();
+    const runner = createAgentRunner({
+      llmRegistry: createLlmProviderRegistry(),
+      sessionStore: store,
+    });
+
+    await expect(
+      collect(
+        runner.run({
+          ...validRequest,
+          provider: 'missing',
+        }),
+      ),
+    ).rejects.toMatchObject({
+      code: 'agent-provider-unavailable',
+    });
+    await expect(store.read(validRequest.sessionId)).resolves.toEqual([]);
   });
 
   it('rejects an invalid maximum step count', () => {
