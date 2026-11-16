@@ -1,5 +1,5 @@
 import { mkdir } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { serve, type ServerType } from '@hono/node-server';
 import { createSqliteSessionEventStore, type SessionEventStore } from '@weave/session';
 import type { WeavePlugin } from '@weave/plugin';
@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { createApp } from './app.js';
 import { createSessionService } from './session-service.js';
 import { createServerLlmProviders } from './llm-providers.js';
+import { resolveDatabaseFile } from './persistence-path.js';
 import {
   approvalBrokerService,
   createServerAgentRunner,
@@ -17,9 +18,9 @@ import {
   registerServerPlugins,
 } from './runtime.js';
 
-const portSchema = z.coerce.number().int().min(1).max(65535);
+const portSchema = z.coerce.number().int().min(0).max(65535);
 const persistenceOptionsSchema = z.object({
-  dataDirectory: z.string().min(1).default('.weave'),
+  dataDirectory: z.string().min(1).optional(),
   databaseFile: z.string().min(1).optional(),
 });
 const defaultPort = 4317;
@@ -81,7 +82,13 @@ export async function startServer(
 ) {
   const port = portSchema.parse(portInput);
   const persistence = persistenceOptionsSchema.parse(options);
-  const databaseFile = persistence.databaseFile ?? join(persistence.dataDirectory, 'weave.sqlite');
+  const databaseFile = resolveDatabaseFile({
+    ...(persistence.databaseFile === undefined ? {} : { databaseFile: persistence.databaseFile }),
+    ...(persistence.dataDirectory === undefined
+      ? {}
+      : { dataDirectory: persistence.dataDirectory }),
+    ...(options.environment === undefined ? {} : { environment: options.environment }),
+  });
   await mkdir(dirname(databaseFile), { recursive: true });
   const providerSettings = createServerLlmProviders({
     ...(options.environment === undefined ? {} : { environment: options.environment }),
@@ -133,6 +140,10 @@ export async function startServer(
 
     await listening;
     createdServer.off('error', onError);
+    const address = createdServer.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('Expected the server to have a TCP address after listening');
+    }
 
     let stopPromise: Promise<void> | undefined;
     const stop = async (): Promise<void> => {
@@ -166,7 +177,7 @@ export async function startServer(
       void stop();
     });
 
-    return { port, runtime, server: createdServer, stop };
+    return { port: address.port, runtime, server: createdServer, stop };
   } catch (error) {
     if (server !== undefined) {
       await closeServer(server).catch(() => undefined);

@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createServer } from 'node:http';
+import { access, mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { createTemporaryDatabaseFile, reservePort } from './persistence-fixture.js';
 import { createRuntime } from '@weave/runtime';
 import { createApp } from '../src/app.js';
@@ -94,6 +97,40 @@ describe('GET /health', () => {
 });
 
 describe('startServer', () => {
+  it('returns the actual port when started with port zero', async () => {
+    const database = createTemporaryDatabaseFile();
+
+    try {
+      const result = await startServer(0, {
+        databaseFile: database.filename,
+      });
+
+      expect(result.port).toBeGreaterThan(0);
+      expect(result.server.listening).toBe(true);
+
+      await result.stop();
+    } finally {
+      await database.cleanup();
+    }
+  });
+
+  it('uses WEAVE_DATA_DIR when no explicit database file is provided', async () => {
+    const dataDirectory = await mkdtemp(join(tmpdir(), 'weave-server-data-'));
+
+    try {
+      const result = await startServer(0, {
+        environment: { WEAVE_DATA_DIR: dataDirectory },
+      });
+
+      expect(result.port).toBeGreaterThan(0);
+      await expect(access(join(dataDirectory, 'weave.sqlite'))).resolves.toBeUndefined();
+
+      await result.stop();
+    } finally {
+      await rm(dataDirectory, { recursive: true, force: true });
+    }
+  });
+
   it('waits for listening before resolving and stops its server and runtime', async () => {
     const reservation = createServer().listen(0, '127.0.0.1');
     await new Promise<void>((resolve) => {

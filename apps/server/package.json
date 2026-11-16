@@ -8,6 +8,10 @@
       "types": "./dist/app.d.ts",
       "import": "./dist/app.js"
     },
+    "./main": {
+      "types": "./dist/main.d.ts",
+      "import": "./dist/main.js"
+    },
     "./runtime": {
       "types": "./dist/runtime.d.ts",
       "import": "./dist/runtime.js"
