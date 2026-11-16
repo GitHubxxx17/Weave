@@ -66,6 +66,7 @@ const packageLayers = new Map([
         '@weave/session',
         '@weave/runtime',
         '@weave/workspace',
+        '@weave/plugin',
       ],
       layer: 'server',
     },

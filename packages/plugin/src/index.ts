@@ -1,5 +1,4 @@
-/** Current Plugin Context compatibility version. */
-export const pluginApiVersion = '1.0.0' as const;
+export { pluginApiVersion } from './constants.js';
 
 export { pluginManifestSchema } from './manifest.js';
 export type { PluginCapability, PluginManifest } from './manifest.js';

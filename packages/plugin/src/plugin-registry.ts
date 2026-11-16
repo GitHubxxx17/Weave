@@ -1,7 +1,7 @@
 import { type LlmProviderRegistry, type LlmProviderRegistration } from '@weave/llm';
 import { type RegisteredToolDefinition, type ToolRegistry } from '@weave/runtime';
 import { z } from 'zod';
-import { pluginApiVersion } from './index.js';
+import { pluginApiVersion } from './constants.js';
 import { pluginManifestSchema, type PluginManifest } from './manifest.js';
 import { PluginError } from './plugin-errors.js';
 import {
