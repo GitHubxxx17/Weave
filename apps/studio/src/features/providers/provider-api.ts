@@ -23,10 +23,10 @@ const errorPayloadSchema = z.object({
   }),
 });
 
-async function requestJson<T>(input: RequestInfo | URL, schema: z.ZodType<T>): Promise<T> {
+async function requestJson<T>(path: string, schema: z.ZodType<T>): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(runtimeApiUrl(String(input)), { method: 'GET' });
+    response = await fetch(runtimeApiUrl(path), { method: 'GET' });
   } catch (error: unknown) {
     throw new ProviderApiError('provider-api-network', '无法连接到本地服务', 0, {
       cause: error,

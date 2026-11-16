@@ -114,3 +114,46 @@ Agent 的桌面地址断言按预期失败；实现桥接和客户端改造后�
 - 未推送；
 - 未创建 Pull Request；
 - 未调度子代理。
+
+## Task 2 Review Fix
+
+本次修复处理了两项审查意见：
+
+- P2：将 Provider API 内部 `requestJson` helper 的输入从
+  `RequestInfo | URL` 收窄为实际支持的 `string` 路径，并直接传入
+  `runtimeApiUrl(path)`。这样不再通过 `String(input)` 隐式转换任意
+  `RequestInfo`，保留了明确且类型安全的请求契约。
+- P3：增加桌面模式 Workspace 回归测试，覆盖带查询参数的
+  `listProjects({ includeArchived: true })`，以及 `getSession`、
+  `createSession`、`renameSession`、`archiveSession`、`restoreSession`、
+  `deleteSession` 的绝对 URL、HTTP 方法和关键请求体。
+
+修复后重新运行：
+
+```bash
+pnpm --filter @weave/studio test
+pnpm --filter @weave/studio lint
+pnpm --filter @weave/studio typecheck
+pnpm exec prettier --check \
+  apps/studio/src/features/providers/provider-api.ts \
+  apps/studio/test/workspace-api.test.ts
+git diff --check
+```
+
+结果：
+
+- Studio 测试：6 个测试文件通过，65 个测试通过；
+- Studio lint：通过；
+- Studio typecheck：通过；
+- Prettier 检查：通过；
+- Git diff 空白检查：通过。
+
+审查修复本地提交：
+
+```text
+d236ea8
+fix: 保持 Provider 请求契约并补充桌面路由测试
+```
+
+该修复未推送、未创建 Pull Request，未修改 Server 或 Electron 文件，也未将
+`apps/server/.weave/` 加入暂存区。
