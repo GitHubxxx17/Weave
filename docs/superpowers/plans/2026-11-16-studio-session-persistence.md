@@ -705,7 +705,7 @@ git commit -m "feat: 增加项目与会话管理接口"
 - Produces: `startServer(port, options?)` 在未传入测试 Store 时使用
   `.weave/weave.sqlite`，并在停止时关闭 Workspace Store 和 Runtime Store。
 
-- [ ] **Step 1: 写默认持久化的重启测试**
+- [x] **Step 1: 写默认持久化的重启测试**
 
 在 `apps/server/test/health.test.ts` 增加临时数据库目录测试：
 
@@ -728,7 +728,7 @@ await second.stop();
 
 测试必须使用 `tmpdir()` 生成唯一文件，结束时 `rm(..., { force: true })`。
 
-- [ ] **Step 2: 运行测试确认默认持久化尚未接入**
+- [x] **Step 2: 运行测试确认默认持久化尚未接入**
 
 Run:
 
@@ -739,7 +739,7 @@ pnpm --filter @weave/server test -- health.test.ts
 Expected: 新增重启测试失败，因为 `startServer()` 还没有数据库配置参数和
 Workspace Store 生命周期。
 
-- [ ] **Step 3: 实现数据库配置 Schema**
+- [x] **Step 3: 实现数据库配置 Schema**
 
 在 `apps/server/src/main.ts` 定义：
 
@@ -773,7 +773,7 @@ Runtime Service 使用它；两个依赖都传入时不创建默认 SQLite 文�
 Server 根据解析后的 `databaseFile` 分别创建 SQLite Project Store 和
 SQLite Session Event Store。
 
-- [ ] **Step 4: 实现启动、失败清理和停止清理**
+- [x] **Step 4: 实现启动、失败清理和停止清理**
 
 启动顺序：
 
@@ -792,7 +792,7 @@ SQLite Session Event Store。
 错误。`stop()` 先关闭 HTTP Server，再停止 Runtime，最后关闭 Workspace
 Store。Runtime 仍负责关闭 Session Store。
 
-- [ ] **Step 5: 运行 Server 持久化测试**
+- [x] **Step 5: 运行 Server 持久化测试**
 
 Run:
 
@@ -805,7 +805,7 @@ pnpm --filter @weave/server test
 Expected: 同一个 SQLite 文件关闭并重启 Server 后，Project、Session 标题、
 归档状态和消息都可以读取；停止重复调用不会抛错。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add apps/server

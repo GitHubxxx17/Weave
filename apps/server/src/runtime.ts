@@ -1,6 +1,6 @@
 import { createMockLlmClient, type LlmClient } from '@weave/llm';
 import type { StreamEvent } from '@weave/protocol';
-import { createInMemorySessionEventStore } from '@weave/session';
+import type { SessionEventStore } from '@weave/session';
 import {
   createApprovalBroker,
   createAgentRunner,
@@ -10,7 +10,9 @@ import {
   type ApprovalBroker,
   type Runtime,
   type RuntimeService,
+  type SessionEventStoreFactory,
 } from '@weave/runtime';
+import { createInMemorySessionEventStore } from '@weave/session';
 
 /** Fixed local script used to make the default Studio demo reproducible. */
 const localDemoScript: readonly StreamEvent[] = [
@@ -35,16 +37,28 @@ export const sessionEventStoreService = createSessionEventStoreService({
   create: () => createInMemorySessionEventStore(),
 });
 
+export interface ServerRuntimeOptions {
+  readonly sessionStoreFactory?: SessionEventStoreFactory;
+}
+
+const sessionStoreServices = new WeakMap<Runtime, RuntimeService<SessionEventStore>>();
+
 /**
  * Assembles the services used by the local server entry point.
  *
- * The default server intentionally uses a Mock LLM and an In-Memory Session
- * Store so startup and health checks remain deterministic.
+ * The default runtime intentionally uses an In-Memory Session Store so unit
+ * tests remain deterministic. The process entry point injects a SQLite factory.
  */
-export function createServerRuntime(): Runtime {
-  return createRuntime({
-    services: [mockLlmService, approvalBrokerService, sessionEventStoreService],
+export function createServerRuntime(options: ServerRuntimeOptions = {}): Runtime {
+  const sessionStoreService =
+    options.sessionStoreFactory === undefined
+      ? sessionEventStoreService
+      : createSessionEventStoreService({ create: options.sessionStoreFactory });
+  const runtime = createRuntime({
+    services: [mockLlmService, approvalBrokerService, sessionStoreService],
   });
+  sessionStoreServices.set(runtime, sessionStoreService);
+  return runtime;
 }
 
 /**
@@ -54,8 +68,22 @@ export function createServerRuntime(): Runtime {
  * factory does not declare dependencies between services.
  */
 export function createServerAgentRunner(runtime: Runtime): AgentRunner {
+  const sessionStoreService = sessionStoreServices.get(runtime);
+  if (sessionStoreService === undefined) {
+    throw new Error('Server Runtime was not created by createServerRuntime');
+  }
+
   return createAgentRunner({
     llm: runtime.get(mockLlmService),
-    sessionStore: runtime.get(sessionEventStoreService),
+    sessionStore: runtime.get(sessionStoreService),
   });
+}
+
+/** Gets the Session Store owned by a running Server Runtime. */
+export function getServerSessionStore(runtime: Runtime): SessionEventStore {
+  const sessionStoreService = sessionStoreServices.get(runtime);
+  if (sessionStoreService === undefined) {
+    throw new Error('Server Runtime was not created by createServerRuntime');
+  }
+  return runtime.get(sessionStoreService);
 }

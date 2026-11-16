@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createServer } from 'node:http';
+import { createTemporaryDatabaseFile, reservePort } from './persistence-fixture.js';
 import { createRuntime } from '@weave/runtime';
 import { createApp } from '../src/app.js';
 import {
@@ -107,18 +108,105 @@ describe('startServer', () => {
       reservation.close((error) => (error === undefined ? resolve() : reject(error)));
     });
 
-    const result = await startServer(address.port);
+    const database = createTemporaryDatabaseFile();
+    try {
+      const result = await startServer(address.port, { databaseFile: database.filename });
 
-    expect(result.server.listening).toBe(true);
-    expect(result.runtime.status).toBe('running');
-    const approvalsResponse = await fetch(`http://127.0.0.1:${address.port}/approvals`);
-    expect(approvalsResponse.status).toBe(200);
-    expect(await approvalsResponse.json()).toEqual({ approvals: [] });
+      expect(result.server.listening).toBe(true);
+      expect(result.runtime.status).toBe('running');
+      const approvalsResponse = await fetch(`http://127.0.0.1:${address.port}/approvals`);
+      expect(approvalsResponse.status).toBe(200);
+      expect(await approvalsResponse.json()).toEqual({ approvals: [] });
 
-    await result.stop();
+      await result.stop();
 
-    expect(result.server.listening).toBe(false);
-    expect(result.runtime.status).toBe('stopped');
+      expect(result.server.listening).toBe(false);
+      expect(result.runtime.status).toBe('stopped');
+      await result.stop();
+    } finally {
+      await database.cleanup();
+    }
+  });
+
+  it('persists Projects, Sessions, lifecycle state, and messages across restart', async () => {
+    const database = createTemporaryDatabaseFile();
+    const firstPort = await reservePort();
+
+    try {
+      const first = await startServer(firstPort, { databaseFile: database.filename });
+      const projectResponse = await fetch(`http://127.0.0.1:${firstPort}/projects`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Weave', folderName: 'weave' }),
+      });
+      const project = (await projectResponse.json()) as { id: string };
+      const sessionResponse = await fetch(
+        `http://127.0.0.1:${firstPort}/projects/${project.id}/sessions`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ title: '可恢复会话' }),
+        },
+      );
+      const session = (await sessionResponse.json()) as { id: string };
+      const agentResponse = await fetch(`http://127.0.0.1:${firstPort}/agent/runs/stream`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: session.id,
+          userMessage: {
+            role: 'user',
+            content: [{ type: 'text', text: '请记录这条消息' }],
+          },
+          provider: 'mock',
+          model: 'test-model',
+        }),
+      });
+      expect(agentResponse.status).toBe(200);
+      await agentResponse.text();
+
+      const archiveResponse = await fetch(
+        `http://127.0.0.1:${firstPort}/sessions/${session.id}/archive`,
+        { method: 'POST' },
+      );
+      expect(archiveResponse.status).toBe(200);
+      await first.stop();
+
+      const secondPort = await reservePort();
+      const second = await startServer(secondPort, { databaseFile: database.filename });
+      try {
+        const projectsResponse = await fetch(
+          `http://127.0.0.1:${secondPort}/projects?includeArchived=true`,
+        );
+        expect(projectsResponse.status).toBe(200);
+        expect(await projectsResponse.json()).toMatchObject({
+          projects: [
+            {
+              name: 'Weave',
+              sessions: [
+                {
+                  id: session.id,
+                  title: '可恢复会话',
+                  archivedAt: expect.any(String),
+                },
+              ],
+            },
+          ],
+          warnings: [],
+        });
+
+        const detailResponse = await fetch(`http://127.0.0.1:${secondPort}/sessions/${session.id}`);
+        expect(detailResponse.status).toBe(200);
+        const detail = (await detailResponse.json()) as {
+          readonly messages: readonly unknown[];
+        };
+        expect(detail.messages.length).toBeGreaterThan(0);
+      } finally {
+        await second.stop();
+      }
+    } finally {
+      await database.cleanup();
+    }
   });
 
   it('rejects when the port is already occupied without leaving an unhandled error', async () => {
@@ -137,9 +225,10 @@ describe('startServer', () => {
       uncaughtErrors.push(error);
     };
     process.once('uncaughtException', onUncaughtException);
+    const database = createTemporaryDatabaseFile();
 
     try {
-      const outcome = await startServer(address.port).then(
+      const outcome = await startServer(address.port, { databaseFile: database.filename }).then(
         (result) => ({ kind: 'resolved' as const, result }),
         (error: unknown) => ({ kind: 'rejected' as const, error }),
       );
@@ -159,6 +248,7 @@ describe('startServer', () => {
       await new Promise<void>((resolve, reject) => {
         occupiedServer.close((error) => (error === undefined ? resolve() : reject(error)));
       });
+      await database.cleanup();
     }
   });
 });
