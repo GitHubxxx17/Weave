@@ -1,7 +1,7 @@
 # Weave LLM Provider 路由设计
 
 **日期：** 2026-11-16
-**状态：** 已批准，待实施
+**状态：** 已实现，2026-11-16 完成首个纵向切片
 
 ## 1. 背景
 
@@ -192,7 +192,9 @@ Provider 信息：
 - 设置页展示已配置 Provider、类型和默认模型，不显示 API Key。
 
 当前 Studio 的模型菜单仍然位于 Composer 内部，不新增全局状态管理。
-Provider 状态通过一个独立的浏览器 API 模块读取，便于后续拆出设置页。
+Provider 状态通过一个独立的浏览器 API 模块读取，设置页展示同一份公开
+元数据。Workspace 和 Provider 请求在 App 启动时分别启动，Provider 失败时
+使用 Mock fallback，不阻断项目和会话加载。
 
 ## 6. 错误与安全
 
@@ -239,7 +241,17 @@ Provider 状态通过一个独立的浏览器 API 模块读取，便于后续拆
 - 切换 Provider 后提交请求使用对应的 provider 和 defaultModel；
 - 未配置外部 Provider 时仍然使用 Mock 演示。
 
-完整验证仍然使用根级 `pnpm check`。
+本轮实现结果：
+
+- Registry 测试 5 个通过；
+- Runtime 与 Agent Runner 相关测试 63 个通过；
+- Server Provider、Agent、Health 相关测试 22 个通过；
+- Studio 测试 54 个通过；
+- Studio typecheck、lint、build 和根级格式检查通过。
+
+完整验证仍然使用根级 `pnpm check`。Plugin Manifest、动态插件安装、
+Provider fallback、模型自动发现、计费统计和浏览器密钥管理仍属于后续
+阶段。
 
 ## 8. 文档同步
 

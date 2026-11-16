@@ -1,6 +1,6 @@
 # LLM Provider Routing Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax to track the original implementation workflow.
 
 **Goal:** 让 Weave Server 根据本地配置注册多个 LLM Provider，Runtime 按请求路由 Provider，Studio 使用真实的可用 Provider 和默认模型。
 
@@ -23,7 +23,7 @@
 
 ---
 
-### Task 1: 实现 LLM Provider Registry
+### Task 1: 实现 LLM Provider Registry（已完成）
 
 **Files:**
 
@@ -68,7 +68,7 @@
   ): LlmProviderRegistry;
   ```
 
-- [ ] **Step 1: Write the failing Registry tests**
+- [x] **Step 1: Write the failing Registry tests**
 
   Add tests for registration, lookup, descriptor listing, duplicate ids and
   secret isolation:
@@ -125,7 +125,7 @@
   });
   ```
 
-- [ ] **Step 2: Run the focused test and verify the expected failure**
+- [x] **Step 2: Run the focused test and verify the expected failure**
 
   Run:
 
@@ -135,26 +135,26 @@
 
   Expected: FAIL because the Registry module and factory do not exist yet.
 
-- [ ] **Step 3: Implement the minimal Registry**
+- [x] **Step 3: Implement the minimal Registry**
 
   Use a private `Map<string, LlmProviderRegistration>`. Validate the public
   registration fields with a local Zod schema at the Registry boundary, reject
   duplicate ids, return frozen descriptor objects, and never include the client
   in `list()` results.
 
-- [ ] **Step 4: Export the Registry and run the focused test**
+- [x] **Step 4: Export the Registry and run the focused test**
 
   Export the types and factory from `packages/llm/src/index.ts`, then run the
   focused test again. Expected: all Registry tests pass.
 
-- [ ] **Step 5: Commit the Registry**
+- [x] **Step 5: Commit the Registry**
 
   ```bash
   git add packages/llm/src/provider-registry.ts packages/llm/src/index.ts packages/llm/test/provider-registry.test.ts
   git commit -m "feat: 增加 LLM Provider 注册表"
   ```
 
-### Task 2: 让 Agent Runner 按 Provider 路由
+### Task 2: 让 Agent Runner 按 Provider 路由（已完成）
 
 **Files:**
 
@@ -186,7 +186,7 @@
   | 'agent-provider-unavailable'
   ```
 
-- [ ] **Step 1: Add the failing routing tests**
+- [x] **Step 1: Add the failing routing tests**
 
   Add a test with two deterministic clients. The first emits `甲`, the second
   emits `乙`; requests using `provider: 'alpha'` and `provider: 'beta'` must
@@ -194,7 +194,7 @@
   provider throws `AgentRunError` with code
   `agent-provider-unavailable` before any model call.
 
-- [ ] **Step 2: Run the focused tests and verify failure**
+- [x] **Step 2: Run the focused tests and verify failure**
 
   ```bash
   pnpm exec vitest run packages/runtime/test/agent-runner.test.ts --config vitest.config.ts
@@ -203,7 +203,7 @@
   Expected: FAIL because `AgentRunnerOptions` has no Registry route and the
   current Runner always uses one `llm`.
 
-- [ ] **Step 3: Resolve the client inside the execution path**
+- [x] **Step 3: Resolve the client inside the execution path**
 
   Add a small resolver:
 
@@ -233,13 +233,13 @@
   event is appended, so a bad Provider does not create a misleading running
   Turn. Use the resolved client for every model step in that run.
 
-- [ ] **Step 4: Preserve the old single-client contract**
+- [x] **Step 4: Preserve the old single-client contract**
 
   Update existing tests and type exports so existing callers that pass only
   `llm` continue to work. Reject construction only when both `llm` and
   `llmRegistry` are absent; allow exactly one or both with Registry precedence.
 
-- [ ] **Step 5: Run Runtime tests and commit**
+- [x] **Step 5: Run Runtime tests and commit**
 
   ```bash
   pnpm exec vitest run packages/runtime/test/agent-runner.test.ts packages/runtime/test/runtime.test.ts --config vitest.config.ts
@@ -247,7 +247,7 @@
   git commit -m "feat: 增加 Agent Provider 路由"
   ```
 
-### Task 3: 增加 Server Provider 配置和元数据 API
+### Task 3: 增加 Server Provider 配置和元数据 API（已完成）
 
 **Files:**
 
@@ -296,7 +296,7 @@
 
 - `GET /settings/providers` returns the public descriptors and default id.
 
-- [ ] **Step 1: Write failing config and API tests**
+- [x] **Step 1: Write failing config and API tests**
 
   Cover:
 
@@ -345,7 +345,7 @@
   Also test invalid JSON, invalid URL and duplicate ids during configuration
   creation.
 
-- [ ] **Step 2: Run the focused Server tests and verify failure**
+- [x] **Step 2: Run the focused Server tests and verify failure**
 
   ```bash
   pnpm exec vitest run apps/server/test/provider-api.test.ts --config vitest.config.ts
@@ -353,7 +353,7 @@
 
   Expected: FAIL because the config factory and route do not exist.
 
-- [ ] **Step 3: Parse and validate `WEAVE_LLM_PROVIDERS`**
+- [x] **Step 3: Parse and validate `WEAVE_LLM_PROVIDERS`**
 
   Add a strict Zod schema for an array of external Provider configs. Read the
   environment value from an injectable `environment` object so tests never
@@ -362,27 +362,27 @@
   error with the original validation error as `cause`, while its public message
   contains no secret.
 
-- [ ] **Step 4: Build the Server Registry**
+- [x] **Step 4: Build the Server Registry**
 
   Always register the existing deterministic Mock Provider under `mock`.
   For every valid external config, create an OpenAI-compatible client with the
   configured base URL, API Key and injected fetch, then register its public
   descriptor. Reject duplicate ids, including `mock`.
 
-- [ ] **Step 5: Mount the metadata route**
+- [x] **Step 5: Mount the metadata route**
 
   Add a thin `registerProviderRoutes()` adapter. It reads only the already-built
   public descriptors and returns JSON. Do not parse environment variables in the
   route and do not return Registry clients.
 
-- [ ] **Step 6: Inject the Registry into the Server Agent Runner**
+- [x] **Step 6: Inject the Registry into the Server Agent Runner**
 
   Store the registry in a `WeakMap<Runtime, RuntimeService<LlmProviderRegistry>>`
   or an equivalent composition-root service. `createServerAgentRunner()` passes
   `llmRegistry` to `createAgentRunner()`. Existing Session and Approval services
   keep their current ownership.
 
-- [ ] **Step 7: Run Server tests and commit**
+- [x] **Step 7: Run Server tests and commit**
 
   ```bash
   pnpm exec vitest run apps/server/test/provider-api.test.ts apps/server/test/agent-api.test.ts apps/server/test/health.test.ts --config vitest.config.ts
@@ -390,7 +390,7 @@
   git commit -m "feat: 增加 Server Provider 配置"
   ```
 
-### Task 4: 接入 Studio Provider API 和模型选择
+### Task 4: 接入 Studio Provider API 和模型选择（已完成）
 
 **Files:**
 
@@ -416,12 +416,14 @@ export type ProviderSettings = {
   readonly defaultProvider: string;
 };
 
-export function createProviderApi(fetcher?: typeof fetch): {
-  getProviders(): Promise<ProviderSettings>;
-};
+export interface ProviderApi {
+  listProviders(): Promise<ProviderSettings>;
+}
+
+export function createProviderApi(): ProviderApi;
 ```
 
-- [ ] **Step 1: Write failing API and App tests**
+- [x] **Step 1: Write failing API and App tests**
 
   Test `createProviderApi().getProviders()` validates the response and maps
   non-OK responses to a stable error. In `App.test.tsx`, mock
@@ -437,7 +439,7 @@ export function createProviderApi(fetcher?: typeof fetch): {
 
   Add the fallback test for an API response containing only `mock`.
 
-- [ ] **Step 2: Run focused Studio tests and verify failure**
+- [x] **Step 2: Run focused Studio tests and verify failure**
 
   ```bash
   pnpm exec vitest run apps/studio/test/provider-api.test.ts apps/studio/test/App.test.tsx --config vitest.config.ts
@@ -446,13 +448,13 @@ export function createProviderApi(fetcher?: typeof fetch): {
   Expected: FAIL because the Provider API does not exist and App still uses a
   hard-coded model array and `provider: 'mock'`.
 
-- [ ] **Step 3: Implement the browser Provider API**
+- [x] **Step 3: Implement the browser Provider API**
 
   Use the existing `WorkspaceApiError` pattern or a focused
   `ProviderApiError`. Parse every response with Zod before returning it. Never
   include or accept an API Key field in the browser types.
 
-- [ ] **Step 4: Load Provider metadata with workspace data**
+- [x] **Step 4: Load Provider metadata with workspace data**
 
   Start both requests before awaiting either one:
 
@@ -469,21 +471,21 @@ export function createProviderApi(fetcher?: typeof fetch): {
   default model. If the Provider request fails, keep the workspace usable with
   Mock Provider and show a Chinese notice.
 
-- [ ] **Step 5: Replace the cosmetic model menu**
+- [x] **Step 5: Replace the cosmetic model menu**
 
   Render the actual provider descriptors. When a Provider is selected, set both
   the selected provider id and its default model. Submit the selected values to
   `streamAgentRun()`. Keep the current run disabled while streaming and keep
   provider state independent from Session messages.
 
-- [ ] **Step 6: Add a minimal Settings view**
+- [x] **Step 6: Add a minimal Settings view**
 
   Replace the placeholder Settings view with a compact list of configured
   Providers showing label, type and default model. Show a Chinese note that
   API Key is managed by the local Server configuration. Do not add a browser
   form for secrets in this slice.
 
-- [ ] **Step 7: Run Studio tests and commit**
+- [x] **Step 7: Run Studio tests and commit**
 
   ```bash
   pnpm exec vitest run apps/studio/test/provider-api.test.ts apps/studio/test/App.test.tsx --config vitest.config.ts
@@ -491,7 +493,7 @@ export function createProviderApi(fetcher?: typeof fetch): {
   git commit -m "feat: 接入 Studio Provider 选择"
   ```
 
-### Task 5: 同步架构与学习文档
+### Task 5: 同步架构与学习文档（已完成）
 
 **Files:**
 
@@ -501,7 +503,7 @@ export function createProviderApi(fetcher?: typeof fetch): {
 - Modify: `docs/superpowers/specs/2026-11-16-llm-provider-routing-design.md`
 - Modify: `docs/superpowers/plans/2026-11-16-llm-provider-routing.md`
 
-- [ ] **Step 1: Document the request path**
+- [x] **Step 1: Document the request path**
 
   Add a diagram and explanation:
 
@@ -518,33 +520,33 @@ export function createProviderApi(fetcher?: typeof fetch): {
   Explain why API Keys stay in Server and why Runtime sees a Registry rather
   than a provider-specific adapter.
 
-- [ ] **Step 2: Add the local DeepSeek example**
+- [x] **Step 2: Add the local DeepSeek example**
 
   Document the shape of `WEAVE_LLM_PROVIDERS`, the required fields, the
   OpenAI-compatible base URL convention, and the local start flow. Use a
   placeholder such as `replace-with-your-key`; never add a real secret.
 
-- [ ] **Step 3: Record implemented boundaries**
+- [x] **Step 3: Record implemented boundaries**
 
   Mark the design and plan status as implemented, record exact test counts,
   and explicitly list the deferred Plugin Runtime, provider fallback,
   model-discovery and browser secret-management work.
 
-- [ ] **Step 4: Run documentation formatting**
+- [x] **Step 4: Run documentation formatting**
 
   ```bash
   pnpm format:check
   git diff --check
   ```
 
-- [ ] **Step 5: Commit documentation**
+- [x] **Step 5: Commit documentation**
 
   ```bash
   git add README.md docs/architecture/foundation.md docs/learning docs/superpowers/specs/2026-11-16-llm-provider-routing-design.md docs/superpowers/plans/2026-11-16-llm-provider-routing.md
   git commit -m "docs: 补充 LLM Provider 路由说明"
   ```
 
-### Task 6: 全量验证、推送和自动合并
+### Task 6: 全量验证、推送和自动合并（待执行）
 
 **Files:**
 
