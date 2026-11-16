@@ -2,6 +2,7 @@ import { mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { serve, type ServerType } from '@hono/node-server';
 import { createSqliteSessionEventStore, type SessionEventStore } from '@weave/session';
+import type { WeavePlugin } from '@weave/plugin';
 import { createSqliteProjectStore, type ProjectStore } from '@weave/workspace';
 import { z } from 'zod';
 import { createApp } from './app.js';
@@ -12,6 +13,8 @@ import {
   createServerAgentRunner,
   createServerRuntime,
   getServerSessionStore,
+  getServerPluginRegistry,
+  registerServerPlugins,
 } from './runtime.js';
 
 const portSchema = z.coerce.number().int().min(1).max(65535);
@@ -28,6 +31,7 @@ export interface StartServerOptions {
   readonly fetch?: typeof globalThis.fetch;
   readonly projectStore?: ProjectStore;
   readonly sessionStoreFactory?: () => SessionEventStore | Promise<SessionEventStore>;
+  readonly plugins?: readonly WeavePlugin[];
 }
 
 async function closeServer(server: ServerType): Promise<void> {
@@ -93,6 +97,7 @@ export async function startServer(
 
   try {
     await runtime.start();
+    await registerServerPlugins(runtime, options.plugins);
     const sessionStore = getServerSessionStore(runtime);
     const sessionService = createSessionService({ projectStore, sessionStore });
     const agentRunner = createServerAgentRunner(runtime);
@@ -135,10 +140,19 @@ export async function startServer(
       }
       stopPromise = (async () => {
         await closeServer(createdServer);
+        let pluginDisposeError: unknown;
+        try {
+          await getServerPluginRegistry(runtime).dispose();
+        } catch (error: unknown) {
+          pluginDisposeError = error;
+        }
         try {
           await runtime.stop();
         } finally {
           await closeProjectStore(projectStore);
+        }
+        if (pluginDisposeError !== undefined) {
+          throw pluginDisposeError;
         }
       })();
       return stopPromise;
@@ -156,6 +170,9 @@ export async function startServer(
     if (server !== undefined) {
       await closeServer(server).catch(() => undefined);
     }
+    await getServerPluginRegistry(runtime)
+      .dispose()
+      .catch(() => undefined);
     await runtime.stop().catch(() => undefined);
     await closeProjectStore(projectStore).catch(() => undefined);
     throw error;

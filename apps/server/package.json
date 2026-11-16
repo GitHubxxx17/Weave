@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@weave/llm": "workspace:*",
+    "@weave/plugin": "workspace:*",
     "@weave/protocol": "workspace:*",
     "@weave/session": "workspace:*",
     "@weave/runtime": "workspace:*",

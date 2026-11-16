@@ -10,6 +10,7 @@ const workspacePackageNames = new Set([
   '@weave/session',
   '@weave/workspace',
   '@weave/runtime',
+  '@weave/plugin',
   '@weave/server',
 ]);
 
@@ -50,6 +51,13 @@ const packageLayers = new Map([
     },
   ],
   [
+    '@weave/plugin',
+    {
+      allowedDependencies: ['@weave/llm', '@weave/runtime'],
+      layer: 'plugin',
+    },
+  ],
+  [
     '@weave/server',
     {
       allowedDependencies: [
@@ -58,6 +66,7 @@ const packageLayers = new Map([
         '@weave/session',
         '@weave/runtime',
         '@weave/workspace',
+        '@weave/plugin',
       ],
       layer: 'server',
     },

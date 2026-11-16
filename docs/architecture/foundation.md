@@ -434,6 +434,63 @@ changes Provider, then sends `provider` and `model` in
 The Settings view shows Provider label, id, type, and default model, while the
 Server remains the only owner of secret configuration.
 
+### Plugin Manifest and controlled registration
+
+Weave's first Plugin phase adds a trusted in-process extension boundary:
+
+```text
+Plugin Manifest
+  -> Plugin Context
+  -> Plugin Registry
+  -> Tool Registry / LlmProviderRegistry
+  -> Tool Pipeline / Agent Runner
+```
+
+`@weave/plugin` owns the Manifest schema, API version check, capability
+declaration, staged registration, conflict checks, immutable snapshots, and
+plugin lifecycle. It does not execute model requests or tools. The Server
+composition root explicitly creates a Plugin Registry and registers trusted
+plugins before creating the Agent Runner.
+
+The Plugin Context only exposes `registerTool()` and `registerProvider()`.
+It does not expose Runtime, Session Store, Workspace roots, Approval internals,
+Hono, or Node host APIs. A plugin Tool is still invoked through
+`ToolRegistry -> ToolPipeline -> Approval / Workspace`, and a plugin Provider
+is still resolved through `LlmProviderRegistry`. Plugin snapshots contain
+names and public metadata only; Provider clients and API Keys remain private
+to the host process.
+
+Registration uses a staged commit:
+
+```text
+setup(context)
+  -> validate and collect registrations
+  -> check plugin/API/name conflicts
+  -> commit all Tool/Provider registrations
+  -> publish PluginSnapshot
+```
+
+This prevents a failed setup or a known naming conflict from leaving a partial
+plugin registration. The current host registries do not support ownership-aware
+removal, so Plugin disposal releases lifecycle hooks and snapshots but does not
+hot-unload already registered Tools or Providers.
+
+The current phase trusts the plugin code because it runs inside the Server
+process. Manifest validation is not a sandbox. Future GitHub installation will
+be a separate chain:
+
+```text
+Plugin Catalog
+  -> Plugin Installer
+  -> Installed Plugin Store
+  -> Plugin Registry
+```
+
+Git sources must lock the repository URL, exact Commit, and Monorepo package
+path. A future untrusted plugin mode requires an independent process,
+permission proxy, resource limits, and an RPC protocol; it cannot be provided
+by TypeScript types alone.
+
 ### Why Runtime Does Not Depend on HTTP
 
 `@weave/runtime` owns service registration, startup, shutdown, status, and

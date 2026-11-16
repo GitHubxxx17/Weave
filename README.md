@@ -15,11 +15,12 @@ remains a separate reference project and is not copied into this repository.
 
 The Foundation vertical slice, Session persistence, the headless Agent Tool
 Loop, the shared Tool Pipeline, the Approval HTTP control plane, the Agent
-HTTP/SSE adapter, the first Studio Agent Chat workspace, and the first
-multi-Provider routing slice are implemented. `@weave/protocol`,
-`@weave/llm`, `@weave/session`, `@weave/runtime`, `@weave/server`, and
-`@weave/studio` form the current architecture. Shell/Sandbox hardening,
-Plugin loading, and the broader Studio product remain later phases. The first
+HTTP/SSE adapter, the first Studio Agent Chat workspace, multi-Provider
+routing, and the first trusted in-process Plugin Registry are implemented.
+`@weave/protocol`, `@weave/llm`, `@weave/session`, `@weave/runtime`,
+`@weave/plugin`, `@weave/server`, and `@weave/studio` form the current
+architecture. Shell/Sandbox hardening, GitHub Plugin installation, the Plugin
+Catalog, and the broader Studio product remain later phases. The first
 protected Workspace file tools are now available in `@weave/runtime`.
 
 Start with the [Foundation architecture guide](docs/architecture/foundation.md)
@@ -66,18 +67,35 @@ weave/
 │   ├── protocol/     # Shared data types and Zod schemas
 │   ├── llm/          # Model client interface and provider adapters
 │   ├── session/      # Append-only Session events and projections
-│   └── runtime/      # Service assembly, Agent Runner, and Tool Pipeline
+│   ├── runtime/      # Service assembly, Agent Runner, and Tool Pipeline
+│   └── plugin/       # Plugin Manifest, Context, Registry, and lifecycle
 ├── docs/              # Architecture, ADR, and learning material
 └── root tooling       # pnpm, Turbo, TypeScript, ESLint, Prettier, Vitest
 ```
 
 The package dependency direction is
-`protocol -> {llm, session} -> runtime -> server`. `protocol` owns stable
-public contracts, `llm` isolates provider differences, `session` stores
+`protocol -> {llm, session} -> runtime -> plugin -> server`. `protocol` owns
+stable public contracts, `llm` isolates provider differences, `session` stores
 durable facts and rebuilds read models, `runtime` assembles services and
-lifecycle state, and `server` exposes the control plane. ESLint rejects
+lifecycle state, `plugin` validates trusted extensions and registers their
+capabilities, and `server` exposes the control plane. ESLint rejects
 undeclared workspace dependencies, reverse layer imports, cross-package
 relative source imports, and HTTP/UI imports from `runtime`.
+
+The first Plugin phase accepts explicitly provided trusted in-process plugins:
+
+```bash
+pnpm --filter @weave/plugin test
+pnpm --filter @weave/plugin typecheck
+```
+
+The Server composition root can register a `WeavePlugin` before creating the
+Agent Runner. A plugin can register a Tool or Provider through `PluginContext`,
+but Tool execution still goes through the shared Tool Pipeline and Provider
+selection still goes through `LlmProviderRegistry`. The current phase does not
+download arbitrary GitHub code. GitHub Catalog and Installer support will be
+added as a separate phase with repository, exact Commit, and Monorepo path
+locking.
 
 Server does not contain the Agent Loop because HTTP should remain a thin
 control-plane boundary while agent behavior belongs in the runtime. Server
