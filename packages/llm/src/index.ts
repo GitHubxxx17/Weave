@@ -3,6 +3,13 @@ export { createLlmError } from './errors.js';
 export { createMockLlmClient } from './mock-client.js';
 export { createOpenAiCompatibleClient } from './openai-compatible.js';
 export type { OpenAiCompatibleClientOptions } from './openai-compatible.js';
+export { createLlmProviderRegistry } from './provider-registry.js';
+export type {
+  LlmProviderDescriptor,
+  LlmProviderRegistration,
+  LlmProviderRegistry,
+  LlmProviderType,
+} from './provider-registry.js';
 export {
   createSseParserState,
   decodeSseChunks,
