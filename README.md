@@ -87,11 +87,20 @@ used by CLI and tests; it does not implement model calls or tool execution.
 
 ## Studio Agent Chat
 
-Start the local demo with two terminals:
+Start the local demo with one command:
+
+```bash
+pnpm dev
+```
+
+This starts both the Server and Studio. Open `http://127.0.0.1:5173` after
+both processes are ready.
+
+You can also start them in two terminals when debugging one side separately:
 
 ```bash
 pnpm --filter @weave/server dev
-pnpm --filter @weave/studio dev --host 127.0.0.1
+pnpm --filter @weave/studio dev
 ```
 
 Open `http://127.0.0.1:5173`. Vite serves the React Studio and proxies
@@ -103,10 +112,11 @@ Browser acceptance flow:
 
 1. Confirm the Studio workspace is visible in the first viewport.
 2. Enter a message and submit it.
-3. Observe the user message, streamed assistant text, and `Completed` status.
-4. Click `Cancel` during a run to verify the cancellation state.
-5. Resize to a narrow viewport and confirm the activity panel moves below the
-   conversation without horizontal overflow.
+3. Observe the user message, streamed assistant text, and `已完成` status.
+4. Click `停止运行` during a run to verify the cancellation state.
+5. Resize to a narrow viewport and confirm the secondary context panel is
+   hidden while the conversation and input area remain usable without
+   horizontal overflow.
 
 This first Studio slice intentionally does not include Session history,
 Workspace editing, Plugin loading, Crew orchestration, Run Registry,
