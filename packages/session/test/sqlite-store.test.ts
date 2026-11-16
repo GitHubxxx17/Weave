@@ -53,6 +53,29 @@ describe('SQLite Session Event Store', () => {
     await reopened.close();
   });
 
+  it('restores lifecycle tombstones without deleting earlier events', async () => {
+    const filename = createTemporaryFilename();
+    const first = createSqliteSessionEventStore({ filename });
+
+    await first.append('session-1', [
+      { type: 'session.created', payload: { title: 'Persisted' } },
+      { type: 'session.archived', payload: {} },
+      { type: 'session.deleted', payload: { reason: '测试删除' } },
+    ]);
+    await first.close();
+
+    const reopened = createSqliteSessionEventStore({ filename });
+    const events = await reopened.read('session-1');
+
+    expect(events.map((event) => event.type)).toEqual([
+      'session.created',
+      'session.archived',
+      'session.deleted',
+    ]);
+    expect(events.map((event) => event.sequence)).toEqual([1, 2, 3]);
+    await reopened.close();
+  });
+
   it('isolates sessions and supports incremental reads', async () => {
     await withStore(async (store) => {
       await store.append('session-1', [

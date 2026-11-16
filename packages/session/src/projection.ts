@@ -75,6 +75,8 @@ export interface SessionTurn {
 export interface SessionProjection {
   readonly sessionId: string;
   readonly title: string | undefined;
+  readonly archivedAt: string | undefined;
+  readonly deletedAt: string | undefined;
   readonly messages: readonly SessionMessage[];
   readonly turns: readonly SessionTurn[];
   readonly lastSequence: number;
@@ -121,6 +123,8 @@ export function projectSession(events: readonly SessionEvent[]): SessionProjecti
 
   const sessionId = firstEvent.sessionId;
   let title: string | undefined = firstEvent.payload.title;
+  let archivedAt: string | undefined;
+  let deletedAt: string | undefined;
   const messages: SessionMessage[] = [];
   const messageIds = new Set<string>();
   const turns: MutableTurn[] = [];
@@ -140,7 +144,26 @@ export function projectSession(events: readonly SessionEvent[]): SessionProjecti
         throw invalidOrder('session.created can only appear once as the first event');
       }
       title = event.payload.title;
+    } else if (deletedAt !== undefined) {
+      throw invalidOrder('A deleted Session cannot receive more events');
+    } else if (event.type === 'session.renamed') {
+      title = event.payload.title;
+    } else if (event.type === 'session.archived') {
+      if (archivedAt !== undefined) {
+        throw invalidOrder('A Session cannot be archived more than once without being restored');
+      }
+      archivedAt = event.occurredAt;
+    } else if (event.type === 'session.restored') {
+      if (archivedAt === undefined) {
+        throw invalidOrder('Only an archived Session can be restored');
+      }
+      archivedAt = undefined;
+    } else if (event.type === 'session.deleted') {
+      deletedAt = event.occurredAt;
     } else if (event.type === 'message.created') {
+      if (archivedAt !== undefined) {
+        throw invalidOrder('An archived Session cannot receive messages');
+      }
       if (messageIds.has(event.payload.messageId)) {
         throw invalidOrder(`Message ${event.payload.messageId} was created more than once`);
       }
@@ -151,6 +174,9 @@ export function projectSession(events: readonly SessionEvent[]): SessionProjecti
         sequence: event.sequence,
       });
     } else if (event.type === 'turn.started') {
+      if (archivedAt !== undefined) {
+        throw invalidOrder('An archived Session cannot start a Turn');
+      }
       if (turnById.has(event.payload.turnId)) {
         throw invalidOrder(`Turn ${event.payload.turnId} was started more than once`);
       }
@@ -173,6 +199,9 @@ export function projectSession(events: readonly SessionEvent[]): SessionProjecti
       }
       turn.status = event.payload.status;
     } else if (event.type === 'step.started') {
+      if (archivedAt !== undefined) {
+        throw invalidOrder('An archived Session cannot start a Step');
+      }
       const turn = turnById.get(event.payload.turnId);
       if (turn === undefined) {
         throw missingReference(`Turn ${event.payload.turnId} does not exist`);
@@ -189,6 +218,9 @@ export function projectSession(events: readonly SessionEvent[]): SessionProjecti
         status: 'running',
       });
     } else if (event.type === 'step.completed') {
+      if (archivedAt !== undefined) {
+        throw invalidOrder('An archived Session cannot complete a Step');
+      }
       const turn = turnById.get(event.payload.turnId);
       if (turn === undefined) {
         throw missingReference(`Turn ${event.payload.turnId} does not exist`);
@@ -202,6 +234,9 @@ export function projectSession(events: readonly SessionEvent[]): SessionProjecti
       }
       step.status = event.payload.status;
     } else if (event.type === 'tool-call.created') {
+      if (archivedAt !== undefined) {
+        throw invalidOrder('An archived Session cannot create a Tool Call');
+      }
       const turn = turnById.get(event.payload.turnId);
       if (turn === undefined) {
         throw missingReference(`Turn ${event.payload.turnId} does not exist`);
@@ -222,6 +257,9 @@ export function projectSession(events: readonly SessionEvent[]): SessionProjecti
         toolCall: { ...event.payload.toolCall },
       });
     } else if (event.type === 'tool-result.created') {
+      if (archivedAt !== undefined) {
+        throw invalidOrder('An archived Session cannot create a Tool Result');
+      }
       const turn = turnById.get(event.payload.turnId);
       if (turn === undefined) {
         throw missingReference(`Turn ${event.payload.turnId} does not exist`);
@@ -261,6 +299,8 @@ export function projectSession(events: readonly SessionEvent[]): SessionProjecti
   return {
     sessionId,
     title,
+    archivedAt,
+    deletedAt,
     messages: messages.map((message) => ({ ...message })),
     turns: turns.map((turn) => ({
       turnId: turn.turnId,
