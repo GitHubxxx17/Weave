@@ -48,7 +48,9 @@ function sessionDetail(
   };
 }
 
-function createWorkspaceFetchMock(): ReturnType<typeof vi.fn> {
+function createWorkspaceFetchMock(
+  providerSettings?: Record<string, unknown>,
+): ReturnType<typeof vi.fn> {
   const sessions = new Map<string, Record<string, unknown>>([
     [sessionIds.local, sessionDetail(sessionIds.local, '本地 Agent 演示')],
     [sessionIds.eventStore, sessionDetail(sessionIds.eventStore, 'Session event store')],
@@ -80,6 +82,23 @@ function createWorkspaceFetchMock(): ReturnType<typeof vi.fn> {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
+    if (url === '/settings/providers') {
+      if (providerSettings === undefined) {
+        return new Response(
+          JSON.stringify({
+            error: { code: 'provider-service-unavailable', message: 'Provider unavailable' },
+          }),
+          {
+            status: 503,
+            headers: { 'content-type': 'application/json' },
+          },
+        );
+      }
+      return new Response(JSON.stringify(providerSettings), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
     if (url === '/projects?includeArchived=true' || url === '/projects?includeArchived=false') {
       return new Response(JSON.stringify({ projects, warnings: [] }), {
         status: 200,
@@ -515,6 +534,49 @@ describe('Studio Agent Chat', () => {
     );
   });
 
+  it('loads configured Providers and submits the selected Provider and default model', async () => {
+    fetchMock = createWorkspaceFetchMock({
+      providers: [
+        {
+          id: 'mock',
+          label: '本地演示',
+          type: 'mock',
+          defaultModel: 'weave-local-demo',
+        },
+        {
+          id: 'deepseek',
+          label: 'DeepSeek',
+          type: 'openai-compatible',
+          defaultModel: 'deepseek-chat',
+        },
+      ],
+      defaultProvider: 'mock',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    streamAgentRunMock.mockResolvedValue(undefined);
+
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: /本地演示/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'DeepSeek' }));
+
+    expect(screen.getByRole('button', { name: /DeepSeek/ })).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('发送消息'), {
+      target: { value: '使用 DeepSeek' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+
+    await waitFor(() => {
+      expect(streamAgentRunMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: 'deepseek',
+          model: 'deepseek-chat',
+        }),
+        expect.objectContaining({ onEvent: expect.any(Function) }),
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    });
+  });
+
   it('creates a local session and makes it the active conversation', async () => {
     await renderApp();
 
@@ -751,6 +813,25 @@ describe('Studio Agent Chat', () => {
   });
 
   it('toggles the activity panel and opens the model menu', async () => {
+    fetchMock = createWorkspaceFetchMock({
+      providers: [
+        {
+          id: 'mock',
+          label: '本地演示',
+          type: 'mock',
+          defaultModel: 'weave-local-demo',
+        },
+        {
+          id: 'deepseek',
+          label: 'DeepSeek',
+          type: 'openai-compatible',
+          defaultModel: 'deepseek-chat',
+        },
+      ],
+      defaultProvider: 'mock',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
     await renderApp();
 
     fireEvent.click(screen.getByRole('button', { name: '收起上下文' }));
@@ -762,13 +843,44 @@ describe('Studio Agent Chat', () => {
     expect(headerButtons.at(-1)?.getAttribute('aria-label')).toBe('显示上下文');
 
     fireEvent.click(screen.getByRole('button', { name: '显示上下文' }));
-    fireEvent.click(screen.getByRole('button', { name: '本地模型' }));
+    fireEvent.click(screen.getByRole('button', { name: '本地演示' }));
 
     expect(screen.getByRole('menu', { name: '选择模型' })).toBeTruthy();
     fireEvent.click(screen.getByRole('menuitem', { name: 'DeepSeek' }));
 
     expect(screen.getByText('DeepSeek')).toBeTruthy();
     expect(screen.queryByRole('menu', { name: '选择模型' })).toBeNull();
+  });
+
+  it('shows configured Providers in the settings view without exposing API keys', async () => {
+    fetchMock = createWorkspaceFetchMock({
+      providers: [
+        {
+          id: 'mock',
+          label: '本地演示',
+          type: 'mock',
+          defaultModel: 'weave-local-demo',
+        },
+        {
+          id: 'deepseek',
+          label: 'DeepSeek',
+          type: 'openai-compatible',
+          defaultModel: 'deepseek-chat',
+        },
+      ],
+      defaultProvider: 'mock',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: '设置' }));
+
+    const settings = screen.getByRole('region', { name: '设置' });
+    expect(within(settings).getByRole('heading', { name: '设置' })).toBeTruthy();
+    expect(within(settings).getByText('DeepSeek')).toBeTruthy();
+    expect(within(settings).getByText('deepseek-chat')).toBeTruthy();
+    expect(within(settings).getByText(/API Key 由本地 Server 配置管理/)).toBeTruthy();
+    expect(within(settings).queryByText('server-only-key')).toBeNull();
   });
 
   it('opens the permission and context menus', async () => {
