@@ -49,6 +49,7 @@ Plugin Manifest
 8. 插件 id、Tool 名称和 Provider id 重复时，在注册阶段明确失败；
 9. 为后续动态加载、独立进程、MCP、Skills 和沙箱适配器保留稳定边界；
 10. 增加包级测试、架构说明和面向学习的文档。
+11. 为后续 GitHub 插件市场保留清晰的目录、安装和运行时边界。
 
 ## 3. 非目标
 
@@ -68,6 +69,10 @@ Plugin Manifest
 
 本轮的插件是宿主代码显式创建并注册的受信任对象。Manifest 负责描述
 和校验插件身份，不能被误解为“拿到 Manifest 就能执行任意代码”。
+
+本轮会定义插件市场与安装器的长期边界，但不在当前 Plugin Registry
+切片中实现远程下载、依赖安装和市场 UI。这样可以先稳定运行时契约，再
+把 GitHub 安装作为后续独立功能接入。
 
 ## 4. 方案比较
 
@@ -343,7 +348,181 @@ interface PluginRegistryOptions {
 没有删除能力，插件生命周期只支持“注册一次、Runtime 停止时销毁”。
 真正的热插拔需要独立的所有权、引用计数和动态路由设计，应放到后续主题。
 
-## 10. Tool 与 Provider 的边界
+## 10. Marketplace、安装来源与运行时注册
+
+DeepSeek Harness 的插件市场给 Weave 的主要启发是：插件市场应该是独立
+的发现和版本索引层，而不是 Runtime Registry，也不是一个直接执行
+GitHub 代码的下载按钮。插件目录可以由静态 JSON 提供，每个插件版本
+记录精确来源、版本和兼容性；来源可以是 npm，也可以是带 Commit 和
+子目录的 Git 仓库。
+
+因此，Weave 后续应该拆成四层：
+
+```text
+Plugin Catalog
+  -> Plugin Installer
+  -> Installed Plugin Store
+  -> Plugin Registry
+  -> Runtime
+```
+
+### 10.1 Plugin Catalog
+
+Catalog 是可审计的静态插件目录，不直接执行插件代码，也不保存用户的
+安装状态。它可以放在 GitHub 仓库中，通过 Pull Request 修改，再通过
+GitHub Pages、对象存储或其他 HTTPS 静态服务发布。
+
+一个 Catalog 条目应至少包含：
+
+```ts
+interface PluginCatalogEntry {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly author?: string;
+  readonly repository: string;
+  readonly homepage?: string;
+  readonly tags: readonly string[];
+  readonly verified: boolean;
+  readonly versions: readonly PluginCatalogVersion[];
+}
+
+interface PluginCatalogVersion {
+  readonly version: string;
+  readonly apiVersion: string;
+  readonly source:
+    | {
+        readonly type: 'git';
+        readonly url: string;
+        readonly commit: string;
+        readonly path?: string;
+      }
+    | {
+        readonly type: 'npm';
+        readonly packageName: string;
+        readonly registry?: string;
+      };
+  readonly engines?: {
+    readonly weave?: string;
+  };
+}
+```
+
+Catalog 的 `verified` 只表示目录维护者完成了自己的审核流程，不能被
+解释为 Weave 对第三方代码提供安全担保。目录内容本身也是外部输入，
+客户端必须校验 JSON 格式，并在安装确认页展示真实来源。
+
+### 10.2 Plugin Installer
+
+Installer 负责把用户选择的 Catalog 版本转换为本地安装内容。GitHub
+应该是第一优先级来源，因为它同时提供源代码、Commit、Release、Issue
+和 Pull Request，方便用户审阅和回滚。Git 来源必须锁定精确 Commit，
+不能使用会变化的默认分支作为已安装版本。
+
+第一版安装流程建议为：
+
+```text
+读取 HTTPS Catalog
+  -> 用户搜索和查看插件详情
+  -> 选择明确的插件版本
+  -> 展示仓库、Commit、能力和兼容版本
+  -> 用户确认安装
+  -> 获取 Git Commit 或 npm 版本
+  -> 读取并校验 Plugin Manifest
+  -> 检查 API / Weave 版本兼容性
+  -> 安装依赖并构建插件
+  -> 写入安装锁定信息
+  -> 重启或重新装配 Runtime
+```
+
+Git 仓库中的插件可以位于仓库根目录，也可以位于 Monorepo 子目录。
+因此安装来源必须同时保存：
+
+```text
+repository URL
+exact commit
+package path
+```
+
+不能只保存一个 GitHub URL，否则同一个仓库的默认分支变化后，已经安装
+的插件可能在没有用户操作的情况下改变行为。
+
+安装锁定信息建议由项目级文件保存：
+
+```json
+{
+  "plugins": {
+    "example-files": {
+      "source": "git",
+      "repository": "https://github.com/example/weave-plugin-files",
+      "commit": "0123456789abcdef0123456789abcdef01234567",
+      "path": "packages/plugin",
+      "version": "1.0.0"
+    }
+  }
+}
+```
+
+项目级锁定文件让不同机器可以复现同一套插件组合，也让插件升级变成
+可审查的配置变化。用户级插件目录可以用于跨项目复用，但项目配置仍然
+需要明确启用哪些插件。
+
+### 10.3 Installed Plugin Store
+
+Installed Plugin Store 保存插件获取后的本地状态，包括：
+
+- 插件 id 和版本；
+- Git 仓库、精确 Commit 和子目录；
+- 安装时间；
+- API 版本和 Weave 版本；
+- 依赖安装结果；
+- 构建产物位置；
+- 上一次启用或加载错误。
+
+Store 不直接承担插件执行。它只负责安装结果、锁定信息、升级、回滚和
+卸载所需的状态。真正加载插件时，Loader 应该先读取 Store，再把通过
+校验的插件交给 Plugin Registry。
+
+### 10.4 与 Plugin Registry 的关系
+
+Marketplace 和 Installer 解决“插件从哪里来、安装哪个版本”；Plugin
+Registry 解决“当前 Runtime 接受哪些插件并注册哪些能力”：
+
+```text
+Catalog
+  -> Installer
+  -> Installed Plugin Store
+  -> Manifest validation
+  -> Plugin Registry
+  -> Tool / Provider Registry
+```
+
+这样可以保持当前第一阶段的代码边界：
+
+- `@weave/plugin` 先实现 Manifest、Context 和 Registry；
+- 后续增加 `PluginCatalog` 和 `PluginInstaller`；
+- Server、CLI、Desktop 负责选择安装目录和启动策略；
+- Runtime 只消费已经注册的 Tool、Provider 和其他宿主能力。
+
+Marketplace 不应该直接修改 Runtime 配置，更不能在用户没有确认的情况
+下安装或启用插件。安装页面需要展示仓库、Commit、能力、兼容版本和
+插件权限摘要。
+
+### 10.5 Weave 的安装来源优先级
+
+按实现阶段建议采用以下优先级：
+
+1. 本地目录：用于插件开发和调试；
+2. GitHub Git URL + Commit：用于公开插件和团队私有插件；
+3. npm 包 + 精确版本：用于成熟插件的发布和依赖复用；
+4. Weave Plugin Catalog：用于统一搜索、分类、版本和兼容性展示；
+5. 后续插件市场服务：用于评分、反馈、自动更新和社区治理。
+
+第一版 GitHub 支持不需要立刻实现复杂的在线市场。可以先支持 CLI 或
+Settings 页面输入仓库地址，安装完成后再接入静态 Catalog。这样安装器
+和运行时契约可以先稳定，市场 UI 不会反过来决定插件执行模型。
+
+## 11. Tool 与 Provider 的边界
 
 插件注册 Tool 后，实际调用路径是：
 
@@ -375,7 +554,7 @@ Provider 的 API Key、Base URL 和客户端内部状态不会出现在
 插件不能通过自定义 Tool 绕过 Pipeline。宿主不向插件提供“直接执行工具”
 的快捷方法，也不允许 Agent Runner 读取插件内部的 `execute` 函数。
 
-## 11. 错误模型
+## 12. 错误模型
 
 新增稳定错误码：
 
@@ -406,7 +585,7 @@ type PluginErrorCode =
 宿主代码和部署配置不一致。未来外部插件可以有“跳过失败插件、继续启动”
 的策略，但这需要插件来源可信度和配置级别，暂不提前加入。
 
-## 12. 安全边界
+## 13. 安全边界
 
 第一版的安全模型是“受信任代码 + 受控能力注册”，不是沙箱：
 
@@ -424,7 +603,7 @@ type PluginErrorCode =
 插件支持需要独立进程、权限代理、资源限制和通信协议，不能仅靠
 TypeScript 类型或 Manifest 解决。因此本轮不对第三方代码宣称沙箱能力。
 
-## 13. 测试策略
+## 14. 测试策略
 
 ### Manifest 测试
 
@@ -460,7 +639,7 @@ TypeScript 类型或 Manifest 解决。因此本轮不对第三方代码宣称�
 测试只验证 Plugin 契约和注册行为。Workspace、Approval、Agent Loop
 的已有行为继续由各自包的测试负责，避免复制测试。
 
-## 14. 实施顺序
+## 15. 实施顺序
 
 实现阶段拆成一个独立功能分支，但按以下顺序推进：
 
@@ -479,7 +658,7 @@ TypeScript 类型或 Manifest 解决。因此本轮不对第三方代码宣称�
 的改动大小。如果示例插件会同时改变 Server、Runtime 和 Studio 契约，
 应拆成后续独立分支，保持一个分支只解决一个主题。
 
-## 15. 后续演进
+## 16. 后续演进
 
 本轮完成后，插件能力可以沿着同一个 Manifest 和宿主 Context 演进：
 
