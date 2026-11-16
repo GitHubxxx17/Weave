@@ -199,7 +199,7 @@ CREATE TABLE IF NOT EXISTS provider_settings (
   label TEXT NOT NULL,
   type TEXT NOT NULL,
   base_url TEXT NOT NULL,
-  encrypted_api_key TEXT NOT NULL,
+  encrypted_api_key TEXT,
   default_model TEXT NOT NULL,
   is_default INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
@@ -211,12 +211,16 @@ CREATE TABLE IF NOT EXISTS provider_settings (
 
 - `id` 是稳定的 Provider 标识；
 - `type` 当前只接受 `openai-compatible`；
-- `encrypted_api_key` 只保存 Secret Codec 输出；
+- `encrypted_api_key` 只保存 Secret Codec 输出；清除密钥时为 `NULL`；
 - `is_default` 最多有一条为 1；
 - `created_at` 和 `updated_at` 使用 ISO 8601；
 - 表结构创建必须是幂等的；
 - 删除最后一个外部 Provider 时，默认 Provider 回退到内置 `mock`；
 - 现有 Project、Session 和事件表不受影响。
+
+没有 API Key 的 Provider 仍然保留在设置列表中，并显示为“未配置密钥”，但不会
+注册到可调用的 Provider Registry。用户重新保存 API Key 后，Provider 才会恢复到
+Registry；这样“保留配置”和“允许模型调用”不会混为一谈。
 
 环境变量 Provider 和数据库 Provider 的优先级：
 
