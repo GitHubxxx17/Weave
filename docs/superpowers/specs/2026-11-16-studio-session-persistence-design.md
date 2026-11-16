@@ -506,7 +506,7 @@ DELETE /sessions/:sessionId
 
 - 已归档再次归档不重复追加事件；
 - 未归档恢复返回当前状态，不追加无意义事件；
-- 已删除 Session 返回 `session-already-deleted`；
+- 已删除 Session 返回 `session-deleted`，HTTP 状态码为 `410`；
 - 归档、恢复和删除由 Server 调用 Session Service，而不是由 HTTP Handler
   直接拼接事件。
 
@@ -709,7 +709,6 @@ workspace-session-already-attached
 session-not-found
 session-archived
 session-deleted
-session-already-deleted
 session-projection-invalid
 server-internal-error
 ```

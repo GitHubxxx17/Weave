@@ -44,6 +44,9 @@ importers:
       '@weave/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+      '@weave/workspace':
+        specifier: workspace:*
+        version: link:../../packages/workspace
       '@weave/session':
         specifier: workspace:*
         version: link:../../packages/session

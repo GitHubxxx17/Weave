@@ -195,7 +195,7 @@ export function createSqliteProjectStore(options: { readonly filename: string })
           .prepare(
             `SELECT project_id, name, folder_name, folder_path, created_at, updated_at
              FROM projects
-             ORDER BY created_at ASC, project_id ASC`,
+             ORDER BY created_at ASC, rowid ASC`,
           )
           .all();
         return rows.map((row) => parseProject(row));
@@ -305,7 +305,7 @@ export function createSqliteProjectStore(options: { readonly filename: string })
             `SELECT project_id, session_id, created_at
              FROM project_sessions
              WHERE project_id = ?
-             ORDER BY created_at ASC, session_id ASC`,
+             ORDER BY created_at ASC, rowid ASC`,
           )
           .all(projectIdInput);
         return rows.map((row) => parseSessionRef(row));

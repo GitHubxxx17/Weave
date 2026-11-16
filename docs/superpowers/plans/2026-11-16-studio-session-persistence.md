@@ -515,7 +515,7 @@ export interface ProjectListWarning {
 }
 ```
 
-- [ ] **Step 1: 定义服务错误和 API 测试辅助工厂**
+- [x] **Step 1: 定义服务错误和 API 测试辅助工厂**
 
 在 `apps/server/src/session-service.ts` 定义稳定的 Service 错误码：
 
@@ -524,7 +524,6 @@ type SessionServiceErrorCode =
   | 'session-not-found'
   | 'session-archived'
   | 'session-deleted'
-  | 'session-already-deleted'
   | 'session-projection-invalid';
 ```
 
@@ -532,7 +531,7 @@ type SessionServiceErrorCode =
 `createInMemorySessionTestContext()`，创建 In-Memory Project Store、
 In-Memory Session Store 和 Service，并在每个用例后关闭两个 Store。
 
-- [ ] **Step 2: 写 Session Service 的失败测试**
+- [x] **Step 2: 写 Session Service 的失败测试**
 
 在 `apps/server/test/session-service.test.ts` 覆盖：
 
@@ -564,7 +563,7 @@ it('rejects agent runs for archived and deleted sessions', async () => {
 创建、查询、重命名、归档、恢复、删除和无效输入分别断言状态码与
 `{ error: { code, message } }` 结构。
 
-- [ ] **Step 3: 运行 Server 测试确认失败**
+- [x] **Step 3: 运行 Server 测试确认失败**
 
 Run:
 
@@ -575,7 +574,7 @@ pnpm --filter @weave/server test
 Expected: 新增测试因 Service、路由和 `AppOptions` 尚未存在而失败；已有健康
 检查和 Approval 测试的失败只能来自接口注入变化，不允许删除原有行为断言。
 
-- [ ] **Step 4: 实现 Session Service**
+- [x] **Step 4: 实现 Session Service**
 
 `create()` 按下面顺序执行：
 
@@ -604,11 +603,11 @@ await sessionStore.append(sessionId, [
 
 `rename()`、`archive()`、`restore()`、`delete()` 都先投影当前状态，再按设计
 文档里的状态转换规则追加一个事件。重复归档和重复删除保持幂等；已删除
-Session 的恢复返回 `session-already-deleted`。`assertRunnable()` 只允许
+Session 的恢复返回 `session-deleted` 和 HTTP 状态码 `410`。`assertRunnable()` 只允许
 未归档、未删除的 Session。删除接口对重复删除返回当前详情，不重复追加
 tombstone。
 
-- [ ] **Step 5: 实现 Project 和 Session 路由**
+- [x] **Step 5: 实现 Project 和 Session 路由**
 
 在 `workspace-api.ts` 注册：
 
@@ -647,10 +646,9 @@ DELETE /sessions/:sessionId
 
 `DELETE /sessions/:sessionId` 对已经追加 tombstone 的 Session 返回 `200` 和
 当前 SessionDetail，保证重复点击删除不会把前端带入错误状态；`restore` 对
-已删除 Session 返回 `410 session-deleted`。`session-already-deleted` 只作为
-Service 内部的状态错误保留，不作为删除接口的常规响应。
+已删除 Session 返回 `410 session-deleted`。
 
-- [ ] **Step 6: 把 Service 接入 App 和 Agent API**
+- [x] **Step 6: 把 Service 接入 App 和 Agent API**
 
 扩展 `AppOptions`：
 
@@ -670,7 +668,7 @@ export interface AppOptions {
 修改 Server 测试中所有依赖 Runner 的 App 构造，使用测试上下文创建一个
 已存在的 `session-http-1`，避免 Agent 请求因为 Session 不存在而提前失败。
 
-- [ ] **Step 7: 运行 Server 测试与类型检查**
+- [x] **Step 7: 运行 Server 测试与类型检查**
 
 Run:
 
@@ -683,7 +681,7 @@ pnpm --filter @weave/server test
 Expected: 新增 API、Service、Agent 状态校验和原有 Approval/Health/SSE 行为
 全部通过。
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 ```bash
 git add apps/server packages/workspace/package.json

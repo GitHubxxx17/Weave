@@ -65,5 +65,5 @@ export interface ProjectSessionRef {
 export interface CreateProjectInput {
   readonly name: string;
   readonly folderName: string;
-  readonly folderPath?: string;
+  readonly folderPath?: string | undefined;
 }

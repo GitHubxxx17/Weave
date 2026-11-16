@@ -1,12 +1,19 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   AgentRunError,
   createRuntime,
   type AgentRunner,
   type AgentRuntimeEvent,
 } from '@weave/runtime';
+import { createInMemorySessionEventStore, type SessionEventStore } from '@weave/session';
+import { createInMemoryProjectStore } from '@weave/workspace';
 import { createApp } from '../src/app.js';
-import { createServerAgentRunner, createServerRuntime } from '../src/runtime.js';
+import { createSessionService } from '../src/session-service.js';
+import {
+  createServerAgentRunner,
+  createServerRuntime,
+  sessionEventStoreService,
+} from '../src/runtime.js';
 
 const validRequest = {
   sessionId: 'session-http-1',
@@ -17,6 +24,29 @@ const validRequest = {
   provider: 'mock',
   model: 'test-model',
 };
+
+const resources: Array<{ close: () => Promise<void> }> = [];
+
+afterEach(async () => {
+  await Promise.all(resources.splice(0).map((resource) => resource.close()));
+});
+
+async function createAgentSessionService(sessionStore: SessionEventStore) {
+  const projectStore = createInMemoryProjectStore();
+  const project = await projectStore.createProject({
+    name: 'Agent API Test',
+    folderName: 'agent-api-test',
+  });
+  await sessionStore.append(validRequest.sessionId, [
+    {
+      type: 'session.created',
+      payload: { title: 'Agent API 测试' },
+    },
+  ]);
+  await projectStore.attachSession(project.id, validRequest.sessionId);
+  resources.push(projectStore);
+  return createSessionService({ projectStore, sessionStore });
+}
 
 function createRuntimeEventStream(
   events: readonly AgentRuntimeEvent[],
@@ -48,10 +78,12 @@ describe('Agent HTTP/SSE API', () => {
   it('streams the deterministic local demo with the default Agent Runner', async () => {
     const runtime = createServerRuntime();
     await runtime.start();
+    const sessionService = await createAgentSessionService(runtime.get(sessionEventStoreService));
 
     try {
       const response = await createApp(runtime, {
         agentRunner: createServerAgentRunner(runtime),
+        sessionService,
       }).request('/agent/runs/stream', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -107,9 +139,12 @@ describe('Agent HTTP/SSE API', () => {
         receivedSignal = request.signal;
       },
     );
+    const sessionStore = createInMemorySessionEventStore();
+    const sessionService = await createAgentSessionService(sessionStore);
+    resources.push(sessionStore);
 
     try {
-      const response = await createApp(runtime, { agentRunner: runner }).request(
+      const response = await createApp(runtime, { agentRunner: runner, sessionService }).request(
         '/agent/runs/stream',
         {
           method: 'POST',
@@ -188,6 +223,43 @@ describe('Agent HTTP/SSE API', () => {
     }
   });
 
+  it('returns 404 when the Agent Session does not exist', async () => {
+    const runtime = createRuntime();
+    await runtime.start();
+    const sessionStore = createInMemorySessionEventStore();
+    const projectStore = createInMemoryProjectStore();
+    const project = await projectStore.createProject({
+      name: 'Agent API Test',
+      folderName: 'agent-api-test',
+    });
+    await projectStore.attachSession(project.id, validRequest.sessionId);
+    const sessionService = createSessionService({ projectStore, sessionStore });
+    resources.push(projectStore, sessionStore);
+    let called = false;
+    const runner = createRunner(createRuntimeEventStream([]), () => {
+      called = true;
+    });
+
+    try {
+      const response = await createApp(runtime, { agentRunner: runner, sessionService }).request(
+        '/agent/runs/stream',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(validRequest),
+        },
+      );
+
+      expect(response.status).toBe(404);
+      expect(await response.json()).toMatchObject({
+        error: { code: 'session-not-found' },
+      });
+      expect(called).toBe(false);
+    } finally {
+      await runtime.stop();
+    }
+  });
+
   it('returns 503 when the Agent Runner is not available', async () => {
     const runtime = createRuntime();
     await runtime.start();
@@ -236,9 +308,12 @@ describe('Agent HTTP/SSE API', () => {
         };
       },
     };
+    const sessionStore = createInMemorySessionEventStore();
+    const sessionService = await createAgentSessionService(sessionStore);
+    resources.push(sessionStore);
 
     try {
-      const response = await createApp(runtime, { agentRunner: runner }).request(
+      const response = await createApp(runtime, { agentRunner: runner, sessionService }).request(
         '/agent/runs/stream',
         {
           method: 'POST',
@@ -295,9 +370,12 @@ describe('Agent HTTP/SSE API', () => {
         };
       },
     };
+    const sessionStore = createInMemorySessionEventStore();
+    const sessionService = await createAgentSessionService(sessionStore);
+    resources.push(sessionStore);
 
     try {
-      const response = await createApp(runtime, { agentRunner: runner }).request(
+      const response = await createApp(runtime, { agentRunner: runner, sessionService }).request(
         '/agent/runs/stream',
         {
           method: 'POST',

@@ -150,10 +150,7 @@ describe('Session Projection', () => {
 
   it('rejects invalid Session lifecycle transitions', () => {
     const invalidCases: readonly SessionEvent[][] = [
-      [
-        event(1, 'session.created', {}),
-        event(2, 'session.restored', {}),
-      ],
+      [event(1, 'session.created', {}), event(2, 'session.restored', {})],
       [
         event(1, 'session.created', {}),
         event(2, 'session.archived', {}),
