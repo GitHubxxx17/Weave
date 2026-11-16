@@ -15,12 +15,12 @@ remains a separate reference project and is not copied into this repository.
 
 The Foundation vertical slice, Session persistence, the headless Agent Tool
 Loop, the shared Tool Pipeline, the Approval HTTP control plane, the Agent
-HTTP/SSE adapter, and the first Studio Agent Chat workspace are implemented.
-`@weave/protocol`, `@weave/llm`, `@weave/session`, `@weave/runtime`,
-`@weave/server`, and `@weave/studio` form the current architecture.
-Shell/Sandbox hardening, Plugin loading, and the broader Studio product remain
-later phases. The first protected Workspace file tools are now available in
-`@weave/runtime`.
+HTTP/SSE adapter, the first Studio Agent Chat workspace, and the first
+multi-Provider routing slice are implemented. `@weave/protocol`,
+`@weave/llm`, `@weave/session`, `@weave/runtime`, `@weave/server`, and
+`@weave/studio` form the current architecture. Shell/Sandbox hardening,
+Plugin loading, and the broader Studio product remain later phases. The first
+protected Workspace file tools are now available in `@weave/runtime`.
 
 Start with the [Foundation architecture guide](docs/architecture/foundation.md)
 for the request path, package boundaries, and AI editing checklist. The
@@ -104,9 +104,10 @@ pnpm --filter @weave/studio dev
 ```
 
 Open `http://127.0.0.1:5173`. Vite serves the React Studio and proxies
-`/agent/*` to `http://127.0.0.1:4317`, so the browser can call the local Server
-without a separate CORS setup. The Server `dev` script builds the TypeScript
-packages first and then starts `dist/main.js`.
+`/agent/*`, `/projects`, `/sessions`, and `/settings` to
+`http://127.0.0.1:4317`, so the browser can call the local Server without a
+separate CORS setup. The Server `dev` script builds the TypeScript packages
+first and then starts `dist/main.js`.
 
 Browser acceptance flow:
 
@@ -120,9 +121,56 @@ Browser acceptance flow:
 
 This first Studio slice intentionally does not include Session history,
 Workspace editing, Plugin loading, Crew orchestration, Run Registry,
-reconnection or `Last-Event-ID`, login, or persistent browser state. The page is
-an HTTP/SSE acceptance surface for the existing Runtime, not a replacement for
-the Runtime.
+reconnection or `Last-Event-ID`, login, or persistent browser state. Provider
+configuration is local Server configuration; Studio only receives public
+Provider metadata and never accepts an API Key. The page is an HTTP/SSE
+acceptance surface for the existing Runtime, not a replacement for the
+Runtime.
+
+### LLM Provider routing
+
+The Server always registers a deterministic `mock` Provider. Additional
+OpenAI-compatible Providers can be configured with the
+`WEAVE_LLM_PROVIDERS` environment variable:
+
+```json
+[
+  {
+    "id": "deepseek",
+    "label": "DeepSeek",
+    "type": "openai-compatible",
+    "baseUrl": "https://api.deepseek.com/v1",
+    "apiKey": "replace-with-your-key",
+    "defaultModel": "deepseek-chat"
+  }
+]
+```
+
+Start the local workspace after setting the variable:
+
+```bash
+export WEAVE_LLM_PROVIDERS='[
+  {
+    "id": "deepseek",
+    "label": "DeepSeek",
+    "type": "openai-compatible",
+    "baseUrl": "https://api.deepseek.com/v1",
+    "apiKey": "replace-with-your-key",
+    "defaultModel": "deepseek-chat"
+  }
+]'
+pnpm dev
+```
+
+The Server validates this configuration with Zod, creates one private
+`LlmClient` per entry, and injects the shared `LlmProviderRegistry` into the
+Runtime. Studio reads `GET /settings/providers`, displays the public Provider
+metadata, and sends the selected `provider` and `model` with each Agent run.
+API Keys stay inside the Server process and are not returned by the metadata
+route, written to Session events, or sent to the browser.
+
+The detailed learning guide is
+[LLM Provider 路由：从配置到 Studio 选择](docs/learning/2026-11-16-llm-provider-routing.md).
 
 ## Agent Runner
 

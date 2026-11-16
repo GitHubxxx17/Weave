@@ -34,6 +34,8 @@ import type { LucideIcon } from 'lucide-react';
 
 import { AgentStreamError, streamAgentRun } from '../features/agent/agent-stream.js';
 import type { AgentRuntimeEvent } from '../features/agent/agent-types.js';
+import { createProviderApi, ProviderApiError } from '../features/providers/provider-api.js';
+import type { ProviderDescriptor, ProviderSettings } from '../features/providers/provider-types.js';
 import { createWorkspaceApi, WorkspaceApiError } from '../features/workspace/workspace-api.js';
 import type {
   ProjectWithSessions,
@@ -122,8 +124,21 @@ const permissionOptions = [
   ['仅查看', Eye],
 ] as const satisfies readonly (readonly [string, LucideIcon])[];
 
+const fallbackProviderSettings: ProviderSettings = {
+  providers: [
+    {
+      id: 'mock',
+      label: '本地模型',
+      type: 'mock',
+      defaultModel: 'weave-local-demo',
+    },
+  ],
+  defaultProvider: 'mock',
+};
+
 let nextId = 0;
 
+const providerApi = createProviderApi();
 const workspaceApi = createWorkspaceApi();
 
 function createId(prefix: string): string {
@@ -264,7 +279,14 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isActivityPanelOpen, setIsActivityPanelOpen] = useState(true);
   const [permissionMode, setPermissionMode] = useState('工作区访问');
-  const [selectedModel, setSelectedModel] = useState('本地模型');
+  const [providerSettings, setProviderSettings] =
+    useState<ProviderSettings>(fallbackProviderSettings);
+  const [selectedProviderId, setSelectedProviderId] = useState(
+    fallbackProviderSettings.defaultProvider,
+  );
+  const [selectedModel, setSelectedModel] = useState(
+    fallbackProviderSettings.providers[0]?.defaultModel ?? '',
+  );
   const [selectedContexts, setSelectedContexts] = useState<readonly string[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [editingSession, setEditingSession] = useState<{
@@ -290,6 +312,9 @@ export function App() {
   const activeProject = projects.find((project) => project.id === activeProjectId);
   const sessions = activeProject?.sessions ?? [];
   const activeSession = sessions.find((session) => session.id === activeSessionId);
+  const selectedProvider =
+    providerSettings.providers.find((provider) => provider.id === selectedProviderId) ??
+    providerSettings.providers[0];
   const messages = activeSession?.messages ?? [];
   const normalizedSearchQuery = searchQuery.trim().toLocaleLowerCase();
   const visibleProjects = projects
@@ -370,6 +395,43 @@ export function App() {
       disposed = true;
     };
   }, [workspaceLoadKey]);
+
+  useEffect(() => {
+    let disposed = false;
+
+    async function loadProviders(): Promise<void> {
+      try {
+        const settings = await providerApi.listProviders();
+        if (disposed || settings.providers.length === 0) {
+          return;
+        }
+
+        const [firstProvider] = settings.providers;
+        const defaultProvider =
+          settings.providers.find((provider) => provider.id === settings.defaultProvider) ??
+          firstProvider;
+        if (defaultProvider === undefined) {
+          return;
+        }
+        setProviderSettings(settings);
+        setSelectedProviderId(defaultProvider.id);
+        setSelectedModel(defaultProvider.defaultModel ?? '');
+      } catch (error: unknown) {
+        if (!disposed) {
+          setNotice(
+            error instanceof ProviderApiError && error.code === 'provider-api-network'
+              ? '无法连接到本地服务，当前使用本地模型'
+              : 'Provider 配置加载失败，当前使用本地模型',
+          );
+        }
+      }
+    }
+
+    void loadProviders();
+    return () => {
+      disposed = true;
+    };
+  }, []);
 
   useEffect(() => {
     function handleEscape(event: KeyboardEvent): void {
@@ -577,8 +639,8 @@ export function App() {
             role: 'user',
             content: [{ type: 'text', text }],
           },
-          provider: 'mock',
-          model: 'weave-local-demo',
+          provider: selectedProviderId,
+          model: selectedModel,
         },
         { onEvent: (event) => handleEvent(event, runId, assistantId, sessionId) },
         { signal: requestController.signal },
@@ -903,6 +965,13 @@ export function App() {
   function fillSuggestion(text: string): void {
     setMessageInput(text);
     requestAnimationFrame(() => messageInputRef.current?.focus());
+  }
+
+  /** Selects a public Provider and its configured default model for new runs. */
+  function chooseProvider(provider: ProviderDescriptor): void {
+    setSelectedProviderId(provider.id);
+    setSelectedModel(provider.defaultModel ?? '');
+    setOpenMenu(null);
   }
 
   function showNotice(message: string): void {
@@ -1463,7 +1532,7 @@ export function App() {
                       aria-expanded={openMenu === 'model'}
                       onClick={() => toggleMenu('model')}
                     >
-                      {selectedModel}
+                      {selectedProvider?.label ?? selectedModel}
                       <ChevronDown aria-hidden="true" />
                     </button>
                     {openMenu === 'model' ? (
@@ -1472,21 +1541,24 @@ export function App() {
                         role="menu"
                         aria-label="选择模型"
                       >
-                        {['本地模型', 'DeepSeek', 'OpenAI'].map((model) => (
+                        {providerSettings.providers.map((provider) => (
                           <button
                             type="button"
                             role="menuitem"
-                            key={model}
-                            onClick={() => {
-                              setSelectedModel(model);
-                              setOpenMenu(null);
-                            }}
+                            aria-label={provider.label}
+                            key={provider.id}
+                            onClick={() => chooseProvider(provider)}
                           >
                             <span className="menu-icon">
                               <Bot aria-hidden="true" />
                             </span>
-                            {model}
-                            {selectedModel === model ? (
+                            <span className="provider-menu-copy">
+                              <strong>{provider.label}</strong>
+                              {provider.defaultModel !== undefined ? (
+                                <small>{provider.defaultModel}</small>
+                              ) : null}
+                            </span>
+                            {selectedProviderId === provider.id ? (
                               <Check className="menu-check" aria-hidden="true" />
                             ) : null}
                           </button>
@@ -1623,6 +1695,36 @@ export function App() {
                   )}
                 </div>
               </>
+            ) : activeView === 'settings' ? (
+              <div className="provider-settings-view">
+                <div className="product-view-heading">
+                  <div>
+                    <p>WEAVE STUDIO</p>
+                    <h2>设置</h2>
+                    <span>查看当前 Server 已配置的模型 Provider。</span>
+                  </div>
+                </div>
+                <div className="provider-settings-list" aria-label="Provider 列表">
+                  {providerSettings.providers.map((provider) => (
+                    <article className="provider-settings-item" key={provider.id}>
+                      <div className="provider-settings-icon" aria-hidden="true">
+                        <Bot />
+                      </div>
+                      <div className="provider-settings-copy">
+                        <strong>{provider.label}</strong>
+                        <span>{provider.id}</span>
+                      </div>
+                      <div className="provider-settings-meta">
+                        <span>{provider.type === 'mock' ? '本地演示' : 'OpenAI 兼容'}</span>
+                        <small>{provider.defaultModel ?? '未设置默认模型'}</small>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+                <p className="provider-settings-note">
+                  API Key 由本地 Server 配置管理，浏览器只接收 Provider 的公开信息。
+                </p>
+              </div>
             ) : (
               <>
                 <span className="product-view-icon" aria-hidden="true">

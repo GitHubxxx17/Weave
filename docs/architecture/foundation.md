@@ -387,6 +387,53 @@ normalized `LlmError`; successful streams must receive the provider's terminal
 `[DONE]` marker, while a response body that reaches EOF first is a protocol
 failure.
 
+### Provider Registry and Server Routing
+
+The first Server composition root now supports more than one LLM Provider
+without moving vendor details into Runtime:
+
+```text
+WEAVE_LLM_PROVIDERS
+        |
+        v
+Server Zod configuration
+        |
+        v
+LlmProviderRegistry
+   |                 |
+mock LlmClient   OpenAI-compatible LlmClient
+        |
+        v
+AgentRunner(provider, model)
+        |
+        v
+HTTP/SSE -> Studio
+```
+
+`LlmProviderRegistry` stores a private `LlmClient` together with a public
+descriptor. The descriptor contains only `id`, `label`, `type`, and an
+optional `defaultModel`. The client can capture the Server-side API Key, but
+`registry.list()` cannot expose that client or its configuration.
+
+The Server reads `WEAVE_LLM_PROVIDERS` as a Zod-validated JSON array. It always
+registers the deterministic `mock` Provider, then creates an
+OpenAI-compatible client for each configured entry. The same Registry is used
+by both the Agent Runner and `GET /settings/providers`; this keeps the list in
+Studio aligned with the clients Runtime can actually resolve.
+
+When an Agent request contains `provider: "deepseek"`, Runtime resolves that
+id before it appends the first running Turn event. An unknown id returns the
+stable `agent-provider-unavailable` error and does not create a misleading
+partial Turn. Runtime still accepts the older single `llm` option for callers
+that do not need a Registry; Server uses Registry mode.
+
+Studio calls `GET /settings/providers` and validates the response with its own
+Zod schema. It uses the selected descriptor's default model when the user
+changes Provider, then sends `provider` and `model` in
+`POST /agent/runs/stream`. The browser never receives or submits an API Key.
+The Settings view shows Provider label, id, type, and default model, while the
+Server remains the only owner of secret configuration.
+
 ### Why Runtime Does Not Depend on HTTP
 
 `@weave/runtime` owns service registration, startup, shutdown, status, and

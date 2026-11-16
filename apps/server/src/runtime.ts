@@ -1,5 +1,4 @@
-import { createMockLlmClient, type LlmClient } from '@weave/llm';
-import type { StreamEvent } from '@weave/protocol';
+import { type LlmProviderRegistry } from '@weave/llm';
 import type { SessionEventStore } from '@weave/session';
 import {
   createApprovalBroker,
@@ -13,18 +12,7 @@ import {
   type SessionEventStoreFactory,
 } from '@weave/runtime';
 import { createInMemorySessionEventStore } from '@weave/session';
-
-/** Fixed local script used to make the default Studio demo reproducible. */
-const localDemoScript: readonly StreamEvent[] = [
-  { type: 'text-delta', text: '这是 Weave 的本地 Agent 演示。' },
-  { type: 'text-delta', text: ' 当前消息通过 SSE 增量传输。' },
-  { type: 'finish', reason: 'stop' },
-];
-
-const mockLlmService: RuntimeService<LlmClient> = {
-  key: Symbol('weave.server.mock-llm'),
-  create: () => createMockLlmClient(localDemoScript),
-};
+import { createServerLlmProviders, type ServerLlmProviderSettings } from './llm-providers.js';
 
 /** Approval Broker used by the local HTTP control plane. */
 export const approvalBrokerService: RuntimeService<ApprovalBroker> = {
@@ -39,9 +27,11 @@ export const sessionEventStoreService = createSessionEventStoreService({
 
 export interface ServerRuntimeOptions {
   readonly sessionStoreFactory?: SessionEventStoreFactory;
+  readonly providerSettings?: ServerLlmProviderSettings;
 }
 
 const sessionStoreServices = new WeakMap<Runtime, RuntimeService<SessionEventStore>>();
+const providerRegistryServices = new WeakMap<Runtime, RuntimeService<LlmProviderRegistry>>();
 
 /**
  * Assembles the services used by the local server entry point.
@@ -54,10 +44,15 @@ export function createServerRuntime(options: ServerRuntimeOptions = {}): Runtime
     options.sessionStoreFactory === undefined
       ? sessionEventStoreService
       : createSessionEventStoreService({ create: options.sessionStoreFactory });
+  const providerRegistryService: RuntimeService<LlmProviderRegistry> = {
+    key: Symbol('weave.server.llm-provider-registry'),
+    create: () => options.providerSettings?.registry ?? createServerLlmProviders().registry,
+  };
   const runtime = createRuntime({
-    services: [mockLlmService, approvalBrokerService, sessionStoreService],
+    services: [approvalBrokerService, providerRegistryService, sessionStoreService],
   });
   sessionStoreServices.set(runtime, sessionStoreService);
+  providerRegistryServices.set(runtime, providerRegistryService);
   return runtime;
 }
 
@@ -69,12 +64,13 @@ export function createServerRuntime(options: ServerRuntimeOptions = {}): Runtime
  */
 export function createServerAgentRunner(runtime: Runtime): AgentRunner {
   const sessionStoreService = sessionStoreServices.get(runtime);
-  if (sessionStoreService === undefined) {
+  const providerRegistryService = providerRegistryServices.get(runtime);
+  if (sessionStoreService === undefined || providerRegistryService === undefined) {
     throw new Error('Server Runtime was not created by createServerRuntime');
   }
 
   return createAgentRunner({
-    llm: runtime.get(mockLlmService),
+    llmRegistry: runtime.get(providerRegistryService),
     sessionStore: runtime.get(sessionStoreService),
   });
 }
@@ -86,4 +82,13 @@ export function getServerSessionStore(runtime: Runtime): SessionEventStore {
     throw new Error('Server Runtime was not created by createServerRuntime');
   }
   return runtime.get(sessionStoreService);
+}
+
+/** Gets the Provider Registry owned by a running Server Runtime. */
+export function getServerLlmProviderRegistry(runtime: Runtime): LlmProviderRegistry {
+  const providerRegistryService = providerRegistryServices.get(runtime);
+  if (providerRegistryService === undefined) {
+    throw new Error('Server Runtime was not created by createServerRuntime');
+  }
+  return runtime.get(providerRegistryService);
 }

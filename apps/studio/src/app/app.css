@@ -1706,6 +1706,24 @@ h3 {
   height: 12px;
 }
 
+.provider-menu-copy {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 2px;
+}
+
+.provider-menu-copy strong {
+  color: inherit;
+  font-size: 0.66rem;
+  font-weight: 650;
+}
+
+.provider-menu-copy small {
+  color: var(--muted);
+  font-size: 0.58rem;
+}
+
 .context-chip {
   display: inline-flex;
   min-height: 26px;
@@ -1933,6 +1951,79 @@ h3 {
 .product-view-content > span:last-child {
   color: var(--muted);
   font-size: 0.78rem;
+}
+
+.provider-settings-view {
+  width: 100%;
+}
+
+.provider-settings-list {
+  display: grid;
+  gap: 8px;
+}
+
+.provider-settings-item {
+  display: flex;
+  min-height: 68px;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+
+.provider-settings-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 7px;
+}
+
+.provider-settings-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.provider-settings-copy {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 4px;
+}
+
+.provider-settings-copy strong {
+  color: var(--ink);
+  font-size: 0.78rem;
+}
+
+.provider-settings-copy span,
+.provider-settings-meta small {
+  color: var(--muted);
+  font-size: 0.63rem;
+}
+
+.provider-settings-meta {
+  display: grid;
+  gap: 4px;
+  min-width: 130px;
+  text-align: right;
+}
+
+.provider-settings-meta span {
+  color: var(--ink-soft);
+  font-size: 0.66rem;
+}
+
+.provider-settings-note {
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.6;
 }
 
 .archive-overview-list {

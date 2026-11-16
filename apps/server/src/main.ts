@@ -6,6 +6,7 @@ import { createSqliteProjectStore, type ProjectStore } from '@weave/workspace';
 import { z } from 'zod';
 import { createApp } from './app.js';
 import { createSessionService } from './session-service.js';
+import { createServerLlmProviders } from './llm-providers.js';
 import {
   approvalBrokerService,
   createServerAgentRunner,
@@ -23,6 +24,8 @@ const defaultPort = 4317;
 export interface StartServerOptions {
   readonly databaseFile?: string;
   readonly dataDirectory?: string;
+  readonly environment?: NodeJS.ProcessEnv;
+  readonly fetch?: typeof globalThis.fetch;
   readonly projectStore?: ProjectStore;
   readonly sessionStoreFactory?: () => SessionEventStore | Promise<SessionEventStore>;
 }
@@ -76,12 +79,16 @@ export async function startServer(
   const persistence = persistenceOptionsSchema.parse(options);
   const databaseFile = persistence.databaseFile ?? join(persistence.dataDirectory, 'weave.sqlite');
   await mkdir(dirname(databaseFile), { recursive: true });
+  const providerSettings = createServerLlmProviders({
+    ...(options.environment === undefined ? {} : { environment: options.environment }),
+    ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+  });
 
   const projectStore = options.projectStore ?? createSqliteProjectStore({ filename: databaseFile });
   const sessionStoreFactory =
     options.sessionStoreFactory ??
     (() => createSqliteSessionEventStore({ filename: databaseFile }));
-  const runtime = createServerRuntime({ sessionStoreFactory });
+  const runtime = createServerRuntime({ sessionStoreFactory, providerSettings });
   let server: ServerType | undefined;
 
   try {
@@ -103,6 +110,7 @@ export async function startServer(
           agentRunner,
           projectStore,
           sessionService,
+          providerRegistry: providerSettings.registry,
         }).fetch,
         hostname: '127.0.0.1',
         port,

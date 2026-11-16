@@ -1,3 +1,4 @@
+import type { LlmClient } from '@weave/llm';
 import type { FinishReason, LlmRequest, Message, ToolCall } from '@weave/protocol';
 import type { NewSessionEvent } from '@weave/session';
 import { projectSession } from '@weave/session';
@@ -11,6 +12,23 @@ import {
 import { ToolExecutionError, type ToolExecutionResult } from './tool-types.js';
 
 const defaultMaxSteps = 8;
+
+function resolveLlm(options: AgentRunnerOptions, provider: string): LlmClient {
+  if (options.llmRegistry !== undefined) {
+    const client = options.llmRegistry.get(provider);
+    if (client === undefined) {
+      throw new AgentRunError(
+        'agent-provider-unavailable',
+        `LLM provider "${provider}" is not configured`,
+      );
+    }
+    return client;
+  }
+  if (options.llm !== undefined) {
+    return options.llm;
+  }
+  throw new AgentRunError('agent-provider-unavailable', 'No LLM provider is configured');
+}
 
 function isCancellation(error: unknown, signal: AbortSignal): boolean {
   return (
@@ -66,6 +84,9 @@ function createToolMessage(result: ToolExecutionResult): Message {
  * SessionEventStore contract has no cross-process lease or CAS primitive.
  */
 export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
+  if (options.llm === undefined && options.llmRegistry === undefined) {
+    throw new Error('llm or llmRegistry must be provided');
+  }
   const hasToolRegistry = options.toolRegistry !== undefined;
   const hasToolPipeline = options.toolPipeline !== undefined;
   if (hasToolRegistry !== hasToolPipeline) {
@@ -258,6 +279,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
             throw new AgentRunError('agent-invalid-input', 'Agent Run input is invalid');
           }
           const validRequest = requestResult.data;
+          const llm = resolveLlm(options, validRequest.provider);
           sessionId = validRequest.sessionId;
           let storedEvents = await options.sessionStore.read(validRequest.sessionId);
           if (storedEvents.length === 0) {
@@ -336,7 +358,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
             };
 
             signal.throwIfAborted();
-            for await (const event of options.llm.stream(llmRequest, { signal })) {
+            for await (const event of llm.stream(llmRequest, { signal })) {
               if (finishSeen) {
                 throw new AgentRunError(
                   'agent-stream-protocol',
