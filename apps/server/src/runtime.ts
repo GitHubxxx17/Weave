@@ -1,6 +1,4 @@
-import {
-  type LlmProviderRegistry,
-} from '@weave/llm';
+import { type LlmProviderRegistry } from '@weave/llm';
 import type { SessionEventStore } from '@weave/session';
 import {
   createApprovalBroker,
@@ -48,8 +46,7 @@ export function createServerRuntime(options: ServerRuntimeOptions = {}): Runtime
       : createSessionEventStoreService({ create: options.sessionStoreFactory });
   const providerRegistryService: RuntimeService<LlmProviderRegistry> = {
     key: Symbol('weave.server.llm-provider-registry'),
-    create: () =>
-      options.providerSettings?.registry ?? createServerLlmProviders().registry,
+    create: () => options.providerSettings?.registry ?? createServerLlmProviders().registry,
   };
   const runtime = createRuntime({
     services: [approvalBrokerService, providerRegistryService, sessionStoreService],

@@ -1,8 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import {
-  createLlmProviderRegistry,
-  type LlmClient,
-} from '@weave/llm';
+import { createLlmProviderRegistry, type LlmClient } from '@weave/llm';
 import type { LlmRequest, StreamEvent } from '@weave/protocol';
 import { z } from 'zod';
 import {

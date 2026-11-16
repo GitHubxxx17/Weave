@@ -23,7 +23,8 @@ const healthResponseSchema = z.object({
  * @returns A Hono application that can be mounted on a server or tested in memory.
  */
 export interface AppOptions
-  extends ApprovalAppOptions,
+  extends
+    ApprovalAppOptions,
     AgentAppOptions,
     SessionAppOptions,
     WorkspaceAppOptions,

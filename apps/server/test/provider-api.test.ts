@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createRuntime } from '@weave/runtime';
 import { createApp } from '../src/app.js';
-import {
-  createServerLlmProviders,
-  ServerLlmProviderConfigError,
-} from '../src/llm-providers.js';
+import { createServerLlmProviders, ServerLlmProviderConfigError } from '../src/llm-providers.js';
 
 describe('Server LLM Provider configuration', () => {
   it('always exposes the local mock Provider by default', () => {
