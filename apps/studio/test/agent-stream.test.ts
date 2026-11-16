@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -82,6 +84,7 @@ function collectEvents(): {
 }
 
 afterEach(() => {
+  delete window.weaveDesktop;
   vi.restoreAllMocks();
 });
 
@@ -301,6 +304,25 @@ describe('streamAgentRun', () => {
           Accept: 'text/event-stream',
           'Content-Type': 'application/json',
         },
+        body: JSON.stringify(request),
+      }),
+    );
+  });
+
+  it('uses the desktop Server URL for the Agent SSE request', async () => {
+    window.weaveDesktop = {
+      isDesktop: true,
+      serverUrl: 'http://127.0.0.1:46321/',
+    };
+    const response = responseFromChunks([]);
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(response);
+
+    await streamAgentRun(request, collectEvents());
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:46321/agent/runs/stream',
+      expect.objectContaining({
+        method: 'POST',
         body: JSON.stringify(request),
       }),
     );

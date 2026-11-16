@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { createServer } from 'node:http';
+import { access, mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { createInMemorySessionEventStore, type SessionEventStore } from '@weave/session';
+import type { WeavePlugin } from '@weave/plugin';
+import { createInMemoryProjectStore, type ProjectStore } from '@weave/workspace';
 import { createTemporaryDatabaseFile, reservePort } from './persistence-fixture.js';
 import { createRuntime } from '@weave/runtime';
 import { createApp } from '../src/app.js';
@@ -91,9 +97,142 @@ describe('GET /health', () => {
       runtime: 'created',
     });
   });
+
+  it('allows requests from the configured Studio origin only', async () => {
+    const runtime = createRuntime();
+    await runtime.start();
+
+    const app = createApp(runtime, {
+      studioOrigin: 'http://127.0.0.1:5173',
+    });
+    const allowedResponse = await app.request('/health', {
+      headers: { Origin: 'http://127.0.0.1:5173' },
+    });
+    const rejectedResponse = await app.request('/health', {
+      headers: { Origin: 'https://untrusted.example' },
+    });
+
+    expect(allowedResponse.headers.get('Access-Control-Allow-Origin')).toBe(
+      'http://127.0.0.1:5173',
+    );
+    expect(rejectedResponse.headers.get('Access-Control-Allow-Origin')).toBeNull();
+
+    await runtime.stop();
+  });
 });
 
 describe('startServer', () => {
+  it('returns the actual port when started with port zero', async () => {
+    const database = createTemporaryDatabaseFile();
+
+    try {
+      const result = await startServer(0, {
+        databaseFile: database.filename,
+      });
+
+      expect(result.port).toBeGreaterThan(0);
+      expect(result.server.listening).toBe(true);
+
+      await result.stop();
+    } finally {
+      await database.cleanup();
+    }
+  });
+
+  it('uses WEAVE_DATA_DIR when no explicit database file is provided', async () => {
+    const dataDirectory = await mkdtemp(join(tmpdir(), 'weave-server-data-'));
+
+    try {
+      const result = await startServer(0, {
+        environment: { WEAVE_DATA_DIR: dataDirectory },
+      });
+
+      expect(result.port).toBeGreaterThan(0);
+      await expect(access(join(dataDirectory, 'weave.sqlite'))).resolves.toBeUndefined();
+
+      await result.stop();
+    } finally {
+      await rm(dataDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('continues all stop cleanup steps and reports the first cleanup error', async () => {
+    const database = createTemporaryDatabaseFile();
+    const cleanupCalls: string[] = [];
+    const baseProjectStore = createInMemoryProjectStore();
+    const projectStore: ProjectStore = {
+      ...baseProjectStore,
+      async close(): Promise<void> {
+        cleanupCalls.push('project-store');
+        throw new Error('project store close failed');
+      },
+    };
+    const baseSessionStore = createInMemorySessionEventStore();
+    const sessionStore: SessionEventStore = {
+      ...baseSessionStore,
+      async close(): Promise<void> {
+        cleanupCalls.push('runtime');
+        throw new Error('runtime stop failed');
+      },
+    };
+    const plugin: WeavePlugin = {
+      manifest: {
+        id: 'cleanup-failure-plugin',
+        name: 'Cleanup Failure Plugin',
+        version: '1.0.0',
+        apiVersion: '1.0.0',
+        capabilities: ['tool'],
+      },
+      setup: () => undefined,
+      dispose: () => {
+        cleanupCalls.push('plugin');
+        throw new Error('plugin dispose failed');
+      },
+    };
+
+    try {
+      const result = await startServer(0, {
+        databaseFile: database.filename,
+        projectStore,
+        sessionStoreFactory: () => sessionStore,
+        plugins: [plugin],
+      });
+
+      await expect(result.stop()).rejects.toMatchObject({
+        code: 'plugin-dispose-failed',
+      });
+      expect(cleanupCalls).toEqual(['plugin', 'runtime', 'project-store']);
+      expect(result.server.listening).toBe(false);
+      expect(result.runtime.status).toBe('stopped');
+    } finally {
+      await database.cleanup();
+    }
+  });
+
+  it('removes signal listeners after every start and stop cycle', async () => {
+    const database = createTemporaryDatabaseFile();
+    const initialSigintListeners = process.listenerCount('SIGINT');
+    const initialSigtermListeners = process.listenerCount('SIGTERM');
+
+    try {
+      for (let cycle = 0; cycle < 2; cycle += 1) {
+        const result = await startServer(0, {
+          databaseFile: database.filename,
+        });
+
+        expect(process.listenerCount('SIGINT')).toBe(initialSigintListeners + 1);
+        expect(process.listenerCount('SIGTERM')).toBe(initialSigtermListeners + 1);
+
+        await result.stop();
+
+        expect(process.listenerCount('SIGINT')).toBe(initialSigintListeners);
+        expect(process.listenerCount('SIGTERM')).toBe(initialSigtermListeners);
+      }
+    } finally {
+      await database.cleanup();
+    }
+  });
+
   it('waits for listening before resolving and stops its server and runtime', async () => {
     const reservation = createServer().listen(0, '127.0.0.1');
     await new Promise<void>((resolve) => {

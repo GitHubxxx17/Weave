@@ -1,5 +1,5 @@
 import { mkdir } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { serve, type ServerType } from '@hono/node-server';
 import { createSqliteSessionEventStore, type SessionEventStore } from '@weave/session';
 import type { WeavePlugin } from '@weave/plugin';
@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { createApp } from './app.js';
 import { createSessionService } from './session-service.js';
 import { createServerLlmProviders } from './llm-providers.js';
+import { resolveDatabaseFile } from './persistence-path.js';
 import {
   approvalBrokerService,
   createServerAgentRunner,
@@ -17,16 +18,22 @@ import {
   registerServerPlugins,
 } from './runtime.js';
 
-const portSchema = z.coerce.number().int().min(1).max(65535);
+const portSchema = z.coerce.number().int().min(0).max(65535);
 const persistenceOptionsSchema = z.object({
-  dataDirectory: z.string().min(1).default('.weave'),
+  dataDirectory: z.string().min(1).optional(),
   databaseFile: z.string().min(1).optional(),
 });
+const studioOriginSchema = z
+  .string()
+  .url()
+  .transform((value) => new URL(value).origin)
+  .optional();
 const defaultPort = 4317;
 
 export interface StartServerOptions {
   readonly databaseFile?: string;
   readonly dataDirectory?: string;
+  readonly studioOrigin?: string;
   readonly environment?: NodeJS.ProcessEnv;
   readonly fetch?: typeof globalThis.fetch;
   readonly projectStore?: ProjectStore;
@@ -81,7 +88,14 @@ export async function startServer(
 ) {
   const port = portSchema.parse(portInput);
   const persistence = persistenceOptionsSchema.parse(options);
-  const databaseFile = persistence.databaseFile ?? join(persistence.dataDirectory, 'weave.sqlite');
+  const studioOrigin = studioOriginSchema.parse(options.studioOrigin);
+  const databaseFile = resolveDatabaseFile({
+    ...(persistence.databaseFile === undefined ? {} : { databaseFile: persistence.databaseFile }),
+    ...(persistence.dataDirectory === undefined
+      ? {}
+      : { dataDirectory: persistence.dataDirectory }),
+    ...(options.environment === undefined ? {} : { environment: options.environment }),
+  });
   await mkdir(dirname(databaseFile), { recursive: true });
   const providerSettings = createServerLlmProviders({
     ...(options.environment === undefined ? {} : { environment: options.environment }),
@@ -117,6 +131,7 @@ export async function startServer(
           sessionService,
           providerRegistry: providerSettings.registry,
           defaultProvider: providerSettings.defaultProvider,
+          ...(studioOrigin === undefined ? {} : { studioOrigin }),
         }).fetch,
         hostname: '127.0.0.1',
         port,
@@ -133,40 +148,58 @@ export async function startServer(
 
     await listening;
     createdServer.off('error', onError);
+    const address = createdServer.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('Expected the server to have a TCP address after listening');
+    }
 
     let stopPromise: Promise<void> | undefined;
+    const onSigint = (): void => {
+      void stop();
+    };
+    const onSigterm = (): void => {
+      void stop();
+    };
     const stop = async (): Promise<void> => {
       if (stopPromise !== undefined) {
         return stopPromise;
       }
+
+      process.removeListener('SIGINT', onSigint);
+      process.removeListener('SIGTERM', onSigterm);
+
       stopPromise = (async () => {
-        await closeServer(createdServer);
-        let pluginDisposeError: unknown;
-        try {
+        let firstError: unknown;
+        let hasError = false;
+        const cleanup = async (operation: () => Promise<void>): Promise<void> => {
+          try {
+            await operation();
+          } catch (error: unknown) {
+            if (!hasError) {
+              hasError = true;
+              firstError = error;
+            }
+          }
+        };
+
+        await cleanup(() => closeServer(createdServer));
+        await cleanup(async () => {
           await getServerPluginRegistry(runtime).dispose();
-        } catch (error: unknown) {
-          pluginDisposeError = error;
-        }
-        try {
-          await runtime.stop();
-        } finally {
-          await closeProjectStore(projectStore);
-        }
-        if (pluginDisposeError !== undefined) {
-          throw pluginDisposeError;
+        });
+        await cleanup(() => runtime.stop());
+        await cleanup(() => closeProjectStore(projectStore));
+
+        if (hasError) {
+          throw firstError;
         }
       })();
       return stopPromise;
     };
 
-    process.once('SIGINT', () => {
-      void stop();
-    });
-    process.once('SIGTERM', () => {
-      void stop();
-    });
+    process.on('SIGINT', onSigint);
+    process.on('SIGTERM', onSigterm);
 
-    return { port, runtime, server: createdServer, stop };
+    return { port: address.port, runtime, server: createdServer, stop };
   } catch (error) {
     if (server !== undefined) {
       await closeServer(server).catch(() => undefined);

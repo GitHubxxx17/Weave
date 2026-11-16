@@ -107,11 +107,28 @@ flowchart LR
 ```
 
 At startup, `apps/server/src/main.ts` validates the port with Zod, creates the
-server Runtime, opens the default `.weave/weave.sqlite` Project Store and
-Session Event Store, starts its services, and binds Hono to `127.0.0.1`. Tests
-can still inject In-Memory stores. A request enters `apps/server/src/app.ts`,
-reads the Runtime status, validates the response shape, and returns `200` only
-when the Runtime is running; otherwise it returns `503`.
+server Runtime, opens the Project Store and Session Event Store, starts its
+services, and binds Hono to `127.0.0.1`. The default database path is resolved
+by platform: macOS uses `~/Library/Application Support/Weave`, Windows uses
+`%APPDATA%/Weave`, and Linux uses `$XDG_DATA_HOME/weave` or
+`~/.local/share/weave`. Explicit `databaseFile` and `dataDirectory` options
+remain available, followed by `WEAVE_DATABASE_FILE` and `WEAVE_DATA_DIR`.
+Tests can still inject In-Memory stores. A request enters
+`apps/server/src/app.ts`, reads the Runtime status, validates the response
+shape, and returns `200` only when the Runtime is running; otherwise it returns
+`503`.
+
+The desktop composition root is `apps/desktop`. Electron Main calls
+`startServer(0, { databaseFile, studioOrigin })`, so the operating system
+chooses an available local port and the Server can allow the exact Studio
+origin through CORS. The Renderer never opens SQLite or reads an API Key. Its
+Workspace, Provider, and Agent clients use the same `runtimeApiUrl()` helper in
+browser and desktop modes: the browser uses Vite-relative paths, while the
+desktop Preload supplies the local Server base URL.
+
+The old `apps/server/.weave/` directory is not automatically deleted or
+migrated. It is a legacy local runtime artifact; migration requires a separate
+backup, confirmation, copy, and rollback flow.
 
 The persistence path is:
 

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { providerSettingsSchema, type ProviderSettings } from './provider-types.js';
+import { runtimeApiUrl } from '../runtime/runtime-bridge.js';
 
 /** A stable failure raised by the browser-side Provider API client. */
 export class ProviderApiError extends Error {
@@ -22,10 +23,10 @@ const errorPayloadSchema = z.object({
   }),
 });
 
-async function requestJson<T>(input: RequestInfo | URL, schema: z.ZodType<T>): Promise<T> {
+async function requestJson<T>(path: string, schema: z.ZodType<T>): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(input, { method: 'GET' });
+    response = await fetch(runtimeApiUrl(path), { method: 'GET' });
   } catch (error: unknown) {
     throw new ProviderApiError('provider-api-network', '无法连接到本地服务', 0, {
       cause: error,

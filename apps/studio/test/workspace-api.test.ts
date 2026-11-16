@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createWorkspaceApi, WorkspaceApiError } from '../src/features/workspace/workspace-api.js';
@@ -25,6 +27,7 @@ function jsonResponse(payload: unknown, status = 200): Response {
 }
 
 afterEach(() => {
+  delete window.weaveDesktop;
   vi.restoreAllMocks();
 });
 
@@ -125,6 +128,98 @@ describe('Workspace API client', () => {
           folderName: 'weave',
           folderPath: '/Users/mi/Projects/weave',
         }),
+      }),
+    );
+  });
+
+  it('uses the desktop Server URL for project requests', async () => {
+    window.weaveDesktop = {
+      isDesktop: true,
+      serverUrl: 'http://127.0.0.1:46321/',
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(project, 201));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await createWorkspaceApi().createProject({
+      name: 'Weave 项目',
+      folderName: 'weave',
+      folderPath: '/Users/mi/Projects/weave',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:46321/projects',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('uses the desktop Server URL for project list queries', async () => {
+    window.weaveDesktop = {
+      isDesktop: true,
+      serverUrl: 'http://127.0.0.1:46321/',
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        projects: [],
+        warnings: [],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await createWorkspaceApi().listProjects({ includeArchived: true });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:46321/projects?includeArchived=true',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('uses the desktop Server URL for every Session lifecycle route', async () => {
+    window.weaveDesktop = {
+      isDesktop: true,
+      serverUrl: 'http://127.0.0.1:46321/',
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(session))
+      .mockResolvedValueOnce(jsonResponse(session, 201))
+      .mockResolvedValueOnce(jsonResponse(session))
+      .mockResolvedValueOnce(jsonResponse(session))
+      .mockResolvedValueOnce(jsonResponse(session))
+      .mockResolvedValueOnce(jsonResponse(session));
+    vi.stubGlobal('fetch', fetchMock);
+    const api = createWorkspaceApi();
+
+    await api.getSession('session-1');
+    await api.createSession('project-1', '新会话');
+    await api.renameSession('session-1', '重命名会话');
+    await api.archiveSession('session-1');
+    await api.restoreSession('session-1');
+    await api.deleteSession('session-1');
+
+    expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([
+      'http://127.0.0.1:46321/sessions/session-1',
+      'http://127.0.0.1:46321/projects/project-1/sessions',
+      'http://127.0.0.1:46321/sessions/session-1',
+      'http://127.0.0.1:46321/sessions/session-1/archive',
+      'http://127.0.0.1:46321/sessions/session-1/restore',
+      'http://127.0.0.1:46321/sessions/session-1',
+    ]);
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual([
+      'GET',
+      'POST',
+      'PATCH',
+      'POST',
+      'POST',
+      'DELETE',
+    ]);
+    expect(fetchMock.mock.calls[1]?.[1]).toEqual(
+      expect.objectContaining({
+        body: JSON.stringify({ title: '新会话' }),
+      }),
+    );
+    expect(fetchMock.mock.calls[2]?.[1]).toEqual(
+      expect.objectContaining({
+        body: JSON.stringify({ title: '重命名会话' }),
       }),
     );
   });
