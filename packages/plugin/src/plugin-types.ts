@@ -1,22 +1,12 @@
-import {
-  type LlmClient,
-  type LlmProviderRegistration,
-  type LlmProviderType,
-} from '@weave/llm';
+import { type LlmClient, type LlmProviderRegistration, type LlmProviderType } from '@weave/llm';
 import {
   toolDefinitionSchema,
   type RegisteredToolDefinition,
   type ToolDefinition,
 } from '@weave/runtime';
 import { z } from 'zod';
-import {
-  PluginError,
-  type PluginErrorCode,
-} from './plugin-errors.js';
-import {
-  type PluginCapability,
-  type PluginManifest,
-} from './manifest.js';
+import { PluginError, type PluginErrorCode } from './plugin-errors.js';
+import { type PluginCapability, type PluginManifest } from './manifest.js';
 
 /** Methods exposed to a trusted plugin during setup. */
 export interface PluginContext {
@@ -80,10 +70,7 @@ function createInvalidDefinitionError(
   );
 }
 
-function createCapabilityError(
-  capability: PluginCapability,
-  pluginId: string,
-): PluginError {
+function createCapabilityError(capability: PluginCapability, pluginId: string): PluginError {
   return new PluginError(
     'plugin-capability-not-declared',
     `Plugin "${pluginId}" did not declare "${capability}" capability`,

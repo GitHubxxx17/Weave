@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  PluginError,
-  pluginApiVersion,
-  pluginManifestSchema,
-} from '../src/index.js';
+import { PluginError, pluginApiVersion, pluginManifestSchema } from '../src/index.js';
 
 const validManifest = {
   id: 'example-tools',
@@ -49,9 +45,7 @@ describe('Plugin Manifest', () => {
 
   it('rejects an empty description', () => {
     expect(pluginManifestSchema).toBeDefined();
-    expect(() =>
-      pluginManifestSchema.parse({ ...validManifest, description: '' }),
-    ).toThrow();
+    expect(() => pluginManifestSchema.parse({ ...validManifest, description: '' })).toThrow();
   });
 });
 

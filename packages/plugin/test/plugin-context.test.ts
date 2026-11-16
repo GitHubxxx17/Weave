@@ -1,14 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createMockLlmClient } from '@weave/llm';
-import {
-  PluginError,
-  type PluginManifest,
-} from '../src/index.js';
-import {
-  createPluginContext,
-  type StagedPluginContext,
-} from '../src/plugin-types.js';
+import { PluginError, type PluginManifest } from '../src/index.js';
+import { createPluginContext, type StagedPluginContext } from '../src/plugin-types.js';
 
 const echoTool = {
   name: 'echo',

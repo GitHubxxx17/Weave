@@ -11,3 +11,5 @@ export type {
   StagedPluginContext,
   WeavePlugin,
 } from './plugin-types.js';
+export { createPluginRegistry } from './plugin-registry.js';
+export type { PluginRegistry, PluginRegistryOptions } from './plugin-registry.js';
