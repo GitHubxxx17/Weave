@@ -97,6 +97,28 @@ describe('GET /health', () => {
       runtime: 'created',
     });
   });
+
+  it('allows requests from the configured Studio origin only', async () => {
+    const runtime = createRuntime();
+    await runtime.start();
+
+    const app = createApp(runtime, {
+      studioOrigin: 'http://127.0.0.1:5173',
+    });
+    const allowedResponse = await app.request('/health', {
+      headers: { Origin: 'http://127.0.0.1:5173' },
+    });
+    const rejectedResponse = await app.request('/health', {
+      headers: { Origin: 'https://untrusted.example' },
+    });
+
+    expect(allowedResponse.headers.get('Access-Control-Allow-Origin')).toBe(
+      'http://127.0.0.1:5173',
+    );
+    expect(rejectedResponse.headers.get('Access-Control-Allow-Origin')).toBeNull();
+
+    await runtime.stop();
+  });
 });
 
 describe('startServer', () => {

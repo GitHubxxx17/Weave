@@ -292,7 +292,7 @@ git commit -m "feat: 适配桌面端本地 Server 地址"
 - `createMainWindow(config: DesktopConfig, serverUrl: string): BrowserWindow`
 - `startDesktopServer(config: DesktopConfig): Promise<{ port: number; stop: () => Promise<void> }>`
 
-- [ ] **Step 1: 写 Desktop 配置测试**
+- [x] **Step 1: 写 Desktop 配置测试**
 
 验证：
 
@@ -313,7 +313,7 @@ expect(config.studioUrl).toBe('http://127.0.0.1:5173');
 同时验证没有 `WEAVE_STUDIO_URL` 时使用
 `http://127.0.0.1:5173`，以及路径始终位于传入的用户数据目录内。
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 运行：
 
@@ -323,7 +323,7 @@ pnpm --filter @weave/desktop test
 
 预期：FAIL，因为 Desktop 包尚未创建。
 
-- [ ] **Step 3: 创建严格 TypeScript Electron 包**
+- [x] **Step 3: 创建严格 TypeScript Electron 包**
 
 `apps/desktop/package.json` 使用 `type: module`，脚本包括：
 
@@ -345,7 +345,7 @@ pnpm --filter @weave/desktop test
 
 在 `pnpm-workspace.yaml` 保持现有 `apps/*` 发现规则能够包含新包。
 
-- [ ] **Step 4: 实现 Desktop 配置和 Server 启动**
+- [x] **Step 4: 实现 Desktop 配置和 Server 启动**
 
 `desktop-config.ts` 负责：
 
@@ -366,7 +366,7 @@ const server = await startServer(0, {
 然后把 `http://127.0.0.1:${server.port}` 传给窗口 Preload。所有窗口关闭
 后调用 `server.stop()`，避免 Server 遗留。
 
-- [ ] **Step 5: 实现安全的 Preload**
+- [x] **Step 5: 实现安全的 Preload**
 
 `preload.ts` 使用 `contextBridge.exposeInMainWorld('weaveDesktop', ...)`
 暴露：
@@ -390,13 +390,13 @@ webPreferences: {
 }
 ```
 
-- [ ] **Step 6: 实现窗口加载和启动错误处理**
+- [x] **Step 6: 实现窗口加载和启动错误处理**
 
 开发模式从 `WEAVE_STUDIO_URL` 加载 Studio。窗口加载失败时显示可读错误
 页面或使用 `loadURL` 重试，不能静默显示空白窗口。Server 启动失败时先
 调用已创建资源的清理逻辑，再退出应用。
 
-- [ ] **Step 7: 运行 Desktop 测试和构建**
+- [x] **Step 7: 运行 Desktop 测试和构建**
 
 运行：
 
@@ -409,7 +409,7 @@ pnpm --filter @weave/desktop build
 
 预期：配置测试通过，Electron 主进程和 Preload 都能生成 ESM 输出。
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 ```bash
 git add apps/desktop pnpm-workspace.yaml apps/server/package.json
@@ -432,7 +432,7 @@ git commit -m "feat: 增加 Electron 桌面端基础壳"
 - Studio URL: `WEAVE_STUDIO_URL`, default `http://127.0.0.1:5173`
 - Desktop Server data path: Electron `app.getPath('userData')`
 
-- [ ] **Step 1: 写启动命令文档和最小可测试配置**
+- [x] **Step 1: 写启动命令文档和最小可测试配置**
 
 先在 README 中记录预期命令和行为，明确：
 
@@ -442,7 +442,7 @@ pnpm desktop:dev
 
 会启动 Studio Vite 和 Electron，Server 由 Electron 主进程启动。
 
-- [ ] **Step 2: 实现根级启动命令**
+- [x] **Step 2: 实现根级启动命令**
 
 使用现有 pnpm workspace 能力并行启动 `@weave/studio` 和
 `@weave/desktop`，不再额外启动 `@weave/server`。Desktop 主进程启动的
@@ -452,7 +452,7 @@ Server 使用随机端口和应用数据目录。
 `WEAVE_STUDIO_URL`，最多等待 30 秒；失败时输出具体 URL 和下一步检查命令。
 不得使用无限重试。
 
-- [ ] **Step 3: 运行一键启动**
+- [x] **Step 3: 运行一键启动**
 
 运行：
 
@@ -464,7 +464,7 @@ pnpm desktop:dev
 确认 Server 端口不再监听。不要把用户的现有 `4317` 或 `5173` 进程强制
 终止，验证使用独立实例或由本命令启动的进程。
 
-- [ ] **Step 4: 更新启动文档**
+- [x] **Step 4: 更新启动文档**
 
 在 README 中说明：
 
@@ -499,7 +499,7 @@ git commit -m "chore: 增加桌面端一键启动命令"
 - 文档必须解释为什么 SQLite 不放在 `apps/server`；
 - 文档必须给出浏览器和桌面两种启动命令。
 
-- [ ] **Step 1: 写学习文档**
+- [x] **Step 1: 写学习文档**
 
 内容按“现象、问题、方案、代码边界、请求链路、关闭流程、测试方式”
 组织，不复制完整源码。用一个完整请求说明：
@@ -514,7 +514,7 @@ git commit -m "chore: 增加桌面端一键启动命令"
   -> Session Event Store 写入 SQLite
 ```
 
-- [ ] **Step 2: 更新架构文档**
+- [x] **Step 2: 更新架构文档**
 
 在 `foundation.md` 中补充：
 
@@ -524,7 +524,7 @@ git commit -m "chore: 增加桌面端一键启动命令"
 - 浏览器和桌面 Renderer 共用 API Client；
 - 旧 `.weave` 不自动迁移。
 
-- [ ] **Step 3: 运行文档格式和链接检查**
+- [x] **Step 3: 运行文档格式和链接检查**
 
 运行：
 

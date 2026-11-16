@@ -23,11 +23,17 @@ const persistenceOptionsSchema = z.object({
   dataDirectory: z.string().min(1).optional(),
   databaseFile: z.string().min(1).optional(),
 });
+const studioOriginSchema = z
+  .string()
+  .url()
+  .transform((value) => new URL(value).origin)
+  .optional();
 const defaultPort = 4317;
 
 export interface StartServerOptions {
   readonly databaseFile?: string;
   readonly dataDirectory?: string;
+  readonly studioOrigin?: string;
   readonly environment?: NodeJS.ProcessEnv;
   readonly fetch?: typeof globalThis.fetch;
   readonly projectStore?: ProjectStore;
@@ -82,6 +88,7 @@ export async function startServer(
 ) {
   const port = portSchema.parse(portInput);
   const persistence = persistenceOptionsSchema.parse(options);
+  const studioOrigin = studioOriginSchema.parse(options.studioOrigin);
   const databaseFile = resolveDatabaseFile({
     ...(persistence.databaseFile === undefined ? {} : { databaseFile: persistence.databaseFile }),
     ...(persistence.dataDirectory === undefined
@@ -124,6 +131,7 @@ export async function startServer(
           sessionService,
           providerRegistry: providerSettings.registry,
           defaultProvider: providerSettings.defaultProvider,
+          ...(studioOrigin === undefined ? {} : { studioOrigin }),
         }).fetch,
         hostname: '127.0.0.1',
         port,

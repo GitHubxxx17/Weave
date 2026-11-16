@@ -29,7 +29,8 @@ HTTP/SSE 控制面和 Runtime 装配。
 1. 新增 `apps/desktop` Electron 应用。
 2. Electron 主进程启动和停止本地 Weave Server。
 3. Electron 使用随机可用端口启动 Server，避免固定端口冲突。
-4. 通过受控 Preload API 把本地 Server 地址提供给 Studio Renderer。
+4. 通过受控 Preload API 把本地 Server 地址提供给 Studio Renderer，并让
+   Server 只允许配置的 Studio origin 跨源访问。
 5. Studio 在浏览器模式下继续使用相对 API，在桌面模式下使用 Preload
    提供的 Server 地址。
 6. SQLite 默认迁移到操作系统的应用数据目录：
@@ -255,9 +256,21 @@ pnpm desktop:dev
 桌面命令退出时必须清理 Electron 启动的 Server。Server 进程不能因为窗口
 关闭而遗留在后台。
 
-## 9. 错误处理与安全边界
+## 9. 跨源请求与安全边界
 
-- Server 启动失败：主进程显示启动失败页面或系统错误提示，并退出；
+桌面模式下，Studio 默认加载在 `http://127.0.0.1:5173`，Server 使用系统
+分配的随机端口，因此 Renderer 到 Server 的请求属于跨源请求。Server 只在
+Desktop 组合根传入 `studioOrigin` 时启用 CORS，并且只返回完全匹配的
+`Access-Control-Allow-Origin`，不使用 `*`。
+
+`WEAVE_STUDIO_URL` 默认只允许 `localhost`、`127.0.0.1` 和 `[::1]` 等
+loopback 地址。BrowserWindow 会继续拦截跳转到其他 origin 的页面，也不允许
+通过 `window.open` 创建带有同一 Preload 的新窗口。这样 Preload 暴露的本地
+Server 地址只会交给受信任的本地 Studio 页面。
+
+## 10. 错误处理与安全边界
+
+- Server 启动失败：主进程显示系统错误提示，并在清理已创建资源后退出；
 - Server 关闭失败：记录错误，继续释放 BrowserWindow，避免 Electron 无法
   退出；
 - Renderer 请求失败：沿用现有 HTTP/SSE 错误码，不把 Node 或 SQLite 原始
@@ -268,13 +281,14 @@ pnpm desktop:dev
 - 插件安装不属于本轮，不能借桌面壳提前绕过 Workspace、Approval 和
   Security 边界。
 
-## 10. 测试策略
+## 11. 测试策略
 
 ### Server
 
 - 默认数据目录在 macOS、Windows 和 Linux 环境变量组合下解析正确；
 - `WEAVE_DATABASE_FILE` 优先级高于 `WEAVE_DATA_DIR`；
 - `startServer(0)` 返回实际监听端口；
+- 桌面 `studioOrigin` 只允许精确匹配的 CORS origin；
 - Server 停止后关闭 SQLite Store；
 - 现有临时数据库持久化测试继续通过。
 
@@ -288,12 +302,14 @@ pnpm desktop:dev
 ### Desktop
 
 - 配置解析测试不依赖真实 Electron Window；
+- 非 loopback 的 Studio URL 会被拒绝；
 - 主进程启动失败时会停止已启动的 Server；
 - 主进程关闭时调用 Server `stop()`；
+- BrowserWindow 会阻止跨 origin 导航和新窗口；
 - `pnpm desktop:dev` 能启动窗口并访问 Studio 页面；
 - `pnpm check` 继续通过。
 
-## 11. 本轮交付边界
+## 12. 本轮交付边界
 
 本轮完成后，用户应该能执行：
 

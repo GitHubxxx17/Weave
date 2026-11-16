@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { cors } from 'hono/cors';
 import { z } from 'zod';
 import { registerProviderRoutes, type ProviderAppOptions } from './provider-api.js';
 import type { Runtime } from '@weave/runtime';
@@ -28,10 +29,30 @@ export interface AppOptions
     AgentAppOptions,
     SessionAppOptions,
     WorkspaceAppOptions,
-    ProviderAppOptions {}
+    ProviderAppOptions {
+  /**
+   * Exact browser origin allowed to call the local control plane.
+   *
+   * The desktop composition root supplies this value because its Studio and
+   * randomly-port Server use different origins.
+   */
+  readonly studioOrigin?: string;
+}
 
 export function createApp(runtime: Runtime, options?: AppOptions): Hono {
   const app = new Hono();
+  const studioOrigin = options?.studioOrigin;
+
+  if (studioOrigin !== undefined) {
+    app.use(
+      '*',
+      cors({
+        origin: studioOrigin,
+        allowMethods: ['GET', 'POST', 'OPTIONS'],
+        allowHeaders: ['Content-Type'],
+      }),
+    );
+  }
 
   app.get('/health', (context) => {
     const running = runtime.status === 'running';

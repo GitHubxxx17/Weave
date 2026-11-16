@@ -2,19 +2,28 @@ import { join, relative, resolve } from 'node:path';
 import { z } from 'zod';
 
 const defaultStudioUrl = 'http://127.0.0.1:5173';
+const loopbackHosts = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 const desktopConfigInputSchema = z.object({
   userDataDirectory: z.string().min(1),
   studioUrl: z
     .string()
     .url()
-    .refine(
-      (value) => {
-        const protocol = new URL(value).protocol;
-        return protocol === 'http:' || protocol === 'https:';
-      },
-      { message: 'Studio URL must use HTTP or HTTPS' },
-    )
+    .superRefine((value, context) => {
+      const url = new URL(value);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        context.addIssue({
+          code: 'custom',
+          message: 'Studio URL must use HTTP or HTTPS',
+        });
+      }
+      if (!loopbackHosts.has(url.hostname)) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Studio URL must point to a loopback host',
+        });
+      }
+    })
     .optional(),
 });
 
@@ -22,6 +31,7 @@ export interface DesktopConfig {
   readonly userDataDirectory: string;
   readonly databaseFile: string;
   readonly studioUrl: string;
+  readonly studioOrigin: string;
 }
 
 export interface CreateDesktopConfigInput {
@@ -45,5 +55,6 @@ export function createDesktopConfig(input: CreateDesktopConfigInput): DesktopCon
     userDataDirectory,
     databaseFile,
     studioUrl: parsed.studioUrl ?? defaultStudioUrl,
+    studioOrigin: new URL(parsed.studioUrl ?? defaultStudioUrl).origin,
   };
 }

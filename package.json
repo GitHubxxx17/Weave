@@ -3,6 +3,12 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.13.1",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild"
+    ]
+  },
   "engines": {
     "node": ">=24.4.0",
     "pnpm": ">=10.13.1"
@@ -11,6 +17,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "dev": "pnpm --parallel --filter @weave/server --filter @weave/studio dev",
+    "desktop:dev": "pnpm --filter @weave/desktop build && node apps/desktop/dist/dev.js",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",

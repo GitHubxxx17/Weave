@@ -62,7 +62,8 @@ and makes the same validation sequence work locally and in GitHub Actions.
 weave/
 ├── apps/
 │   ├── server/       # HTTP control-plane entry point
-│   └── studio/       # React + Vite Agent workspace
+│   ├── studio/       # React + Vite Agent workspace
+│   └── desktop/      # Electron desktop composition root
 ├── packages/
 │   ├── protocol/     # Shared data types and Zod schemas
 │   ├── llm/          # Model client interface and provider adapters
@@ -178,6 +179,31 @@ The OpenAI-compatible adapter appends `/chat/completions` to `baseUrl`, so
 DeepSeek uses `https://api.deepseek.com` in this configuration. The Server
 development command loads the root `.env` file with Node's built-in
 `--env-file-if-exists` option.
+
+### Desktop development
+
+Use the Electron shell when you want to verify the desktop runtime and local
+data boundary:
+
+```bash
+pnpm desktop:dev
+```
+
+The command starts the Studio Vite server, waits up to 30 seconds for
+`WEAVE_STUDIO_URL` (default `http://127.0.0.1:5173`) to become available, and
+then starts Electron. Electron starts the local Weave Server on a random
+loopback port and stops it when the window closes. The desktop Server stores
+SQLite at Electron's `app.getPath('userData')/weave.sqlite`:
+
+- macOS: `~/Library/Application Support/Weave/weave.sqlite`
+- Windows: `%APPDATA%/Weave/weave.sqlite`
+- Linux: `$XDG_DATA_HOME/weave/weave.sqlite` or
+  `~/.local/share/weave/weave.sqlite`
+
+The browser command `pnpm dev` remains available. `WEAVE_DATA_DIR` and
+`WEAVE_DATABASE_FILE` continue to override the browser Server's storage
+location. The old `apps/server/.weave/` directory is kept as-is and is not
+automatically deleted or migrated.
 
 The Server validates this configuration with Zod, creates one private
 `LlmClient` per entry, and injects the shared `LlmProviderRegistry` into the

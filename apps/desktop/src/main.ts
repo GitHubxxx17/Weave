@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, dialog } from 'electron';
 import { startServer } from '@weave/server/main';
 import { createDesktopConfig, type DesktopConfig } from './desktop-config.js';
 
@@ -10,8 +10,10 @@ interface DesktopServer {
 
 const serverUrlArgumentPrefix = '--weave-server-url=';
 
+app.setName('Weave');
+
 function getPreloadPath(): string {
-  return fileURLToPath(new URL('./preload.js', import.meta.url));
+  return fileURLToPath(new URL('./preload.cjs', import.meta.url));
 }
 
 function getServerUrlArgument(serverUrl: string): string {
@@ -74,6 +76,18 @@ export function createMainWindow(config: DesktopConfig, serverUrl: string): Brow
     },
   });
 
+  window.webContents.on('will-navigate', (event, url) => {
+    if (new URL(url).origin !== config.studioOrigin) {
+      event.preventDefault();
+    }
+  });
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (new URL(url).origin !== config.studioOrigin) {
+      return { action: 'deny' };
+    }
+    return { action: 'deny' };
+  });
+
   void window.loadURL(config.studioUrl).catch((error: unknown) => {
     showWindowError(window, error);
   });
@@ -86,6 +100,7 @@ export async function startDesktopServer(
 ): Promise<{ port: number; stop: () => Promise<void> }> {
   const server = await startServer(0, {
     databaseFile: config.databaseFile,
+    studioOrigin: config.studioOrigin,
   });
 
   return {
@@ -129,7 +144,7 @@ function quitAfterStopping(): void {
     });
 }
 
-async function startDesktopApplication(): Promise<void> {
+export async function startDesktopApplication(): Promise<void> {
   try {
     const config = createDesktopConfig({
       userDataDirectory: app.getPath('userData'),
@@ -145,6 +160,11 @@ async function startDesktopApplication(): Promise<void> {
       );
     });
     console.error('Weave Desktop failed to start:', getErrorMessage(error));
+    if (!app.isReady()) {
+      app.exit(1);
+      return;
+    }
+    dialog.showErrorBox('Weave Desktop 启动失败', getErrorMessage(error));
     app.exit(1);
   }
 }
