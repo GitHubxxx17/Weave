@@ -6,6 +6,7 @@ import {
   type AgentRuntimeEvent,
   type AgentStreamHandlers,
 } from './agent-types.js';
+import { runtimeApiUrl } from '../runtime/runtime-bridge.js';
 
 /** A safe, typed failure surfaced by the browser-side Agent stream client. */
 export class AgentStreamError extends Error {
@@ -106,7 +107,7 @@ export async function streamAgentRun(
   if (options?.signal !== undefined) {
     fetchInit.signal = options.signal;
   }
-  const response = await fetch('/agent/runs/stream', fetchInit);
+  const response = await fetch(runtimeApiUrl('/agent/runs/stream'), fetchInit);
 
   if (!response.ok) {
     throw await createHttpError(response);

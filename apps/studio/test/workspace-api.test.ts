@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createWorkspaceApi, WorkspaceApiError } from '../src/features/workspace/workspace-api.js';
@@ -25,6 +27,7 @@ function jsonResponse(payload: unknown, status = 200): Response {
 }
 
 afterEach(() => {
+  delete window.weaveDesktop;
   vi.restoreAllMocks();
 });
 
@@ -126,6 +129,26 @@ describe('Workspace API client', () => {
           folderPath: '/Users/mi/Projects/weave',
         }),
       }),
+    );
+  });
+
+  it('uses the desktop Server URL for project requests', async () => {
+    window.weaveDesktop = {
+      isDesktop: true,
+      serverUrl: 'http://127.0.0.1:46321/',
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(project, 201));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await createWorkspaceApi().createProject({
+      name: 'Weave 项目',
+      folderName: 'weave',
+      folderPath: '/Users/mi/Projects/weave',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:46321/projects',
+      expect.objectContaining({ method: 'POST' }),
     );
   });
 

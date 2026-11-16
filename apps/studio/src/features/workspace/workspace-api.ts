@@ -9,6 +9,7 @@ import {
   type SessionDetail,
   type WorkspaceApiErrorPayload,
 } from './workspace-types.js';
+import { runtimeApiUrl } from '../runtime/runtime-bridge.js';
 
 /** A typed failure returned by the Studio workspace API client. */
 export class WorkspaceApiError extends Error {
@@ -116,21 +117,29 @@ export function createWorkspaceApi(): WorkspaceApi {
     listProjects(options) {
       const query =
         options?.includeArchived === true ? '?includeArchived=true' : '?includeArchived=false';
-      return requestJson('/projects' + query, { method: 'GET' }, projectListResponseSchema);
+      return requestJson(
+        runtimeApiUrl('/projects' + query),
+        { method: 'GET' },
+        projectListResponseSchema,
+      );
     },
 
     getSession(sessionId) {
-      return requestJson(sessionPath(sessionId), { method: 'GET' }, sessionDetailSchema);
+      return requestJson(
+        runtimeApiUrl(sessionPath(sessionId)),
+        { method: 'GET' },
+        sessionDetailSchema,
+      );
     },
 
     createProject(input) {
-      return requestJson('/projects', jsonRequest('POST', input), projectSchema);
+      return requestJson(runtimeApiUrl('/projects'), jsonRequest('POST', input), projectSchema);
     },
 
     createSession(projectId, title) {
       const body = title === undefined ? {} : { title };
       return requestJson(
-        `/projects/${encodeURIComponent(projectId)}/sessions`,
+        runtimeApiUrl(`/projects/${encodeURIComponent(projectId)}/sessions`),
         jsonRequest('POST', body),
         sessionDetailSchema,
       );
@@ -138,7 +147,7 @@ export function createWorkspaceApi(): WorkspaceApi {
 
     renameSession(sessionId, title) {
       return requestJson(
-        sessionPath(sessionId),
+        runtimeApiUrl(sessionPath(sessionId)),
         jsonRequest('PATCH', { title }),
         sessionDetailSchema,
       );
@@ -146,7 +155,7 @@ export function createWorkspaceApi(): WorkspaceApi {
 
     archiveSession(sessionId) {
       return requestJson(
-        `${sessionPath(sessionId)}/archive`,
+        runtimeApiUrl(`${sessionPath(sessionId)}/archive`),
         jsonRequest('POST'),
         sessionDetailSchema,
       );
@@ -154,14 +163,18 @@ export function createWorkspaceApi(): WorkspaceApi {
 
     restoreSession(sessionId) {
       return requestJson(
-        `${sessionPath(sessionId)}/restore`,
+        runtimeApiUrl(`${sessionPath(sessionId)}/restore`),
         jsonRequest('POST'),
         sessionDetailSchema,
       );
     },
 
     deleteSession(sessionId) {
-      return requestJson(sessionPath(sessionId), jsonRequest('DELETE'), sessionDetailSchema);
+      return requestJson(
+        runtimeApiUrl(sessionPath(sessionId)),
+        jsonRequest('DELETE'),
+        sessionDetailSchema,
+      );
     },
   };
 }

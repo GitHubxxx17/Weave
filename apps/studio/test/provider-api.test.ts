@@ -12,6 +12,7 @@ describe('Provider API client', () => {
   });
 
   afterEach(() => {
+    delete window.weaveDesktop;
     vi.restoreAllMocks();
     fetchMock.mockReset();
   });
@@ -65,6 +66,25 @@ describe('Provider API client', () => {
       name: 'ProviderApiError',
       code: 'provider-service-unavailable',
       status: 503,
+    });
+  });
+
+  it('uses the desktop Server URL for Provider requests', async () => {
+    window.weaveDesktop = {
+      isDesktop: true,
+      serverUrl: 'http://127.0.0.1:46321/',
+    };
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ providers: [], defaultProvider: 'deepseek' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    await createProviderApi().listProviders();
+
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:46321/settings/providers', {
+      method: 'GET',
     });
   });
 
