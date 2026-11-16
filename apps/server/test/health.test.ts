@@ -3,6 +3,9 @@ import { createServer } from 'node:http';
 import { access, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { createInMemorySessionEventStore, type SessionEventStore } from '@weave/session';
+import type { WeavePlugin } from '@weave/plugin';
+import { createInMemoryProjectStore, type ProjectStore } from '@weave/workspace';
 import { createTemporaryDatabaseFile, reservePort } from './persistence-fixture.js';
 import { createRuntime } from '@weave/runtime';
 import { createApp } from '../src/app.js';
@@ -128,6 +131,83 @@ describe('startServer', () => {
       await result.stop();
     } finally {
       await rm(dataDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('continues all stop cleanup steps and reports the first cleanup error', async () => {
+    const database = createTemporaryDatabaseFile();
+    const cleanupCalls: string[] = [];
+    const baseProjectStore = createInMemoryProjectStore();
+    const projectStore: ProjectStore = {
+      ...baseProjectStore,
+      async close(): Promise<void> {
+        cleanupCalls.push('project-store');
+        throw new Error('project store close failed');
+      },
+    };
+    const baseSessionStore = createInMemorySessionEventStore();
+    const sessionStore: SessionEventStore = {
+      ...baseSessionStore,
+      async close(): Promise<void> {
+        cleanupCalls.push('runtime');
+        throw new Error('runtime stop failed');
+      },
+    };
+    const plugin: WeavePlugin = {
+      manifest: {
+        id: 'cleanup-failure-plugin',
+        name: 'Cleanup Failure Plugin',
+        version: '1.0.0',
+        apiVersion: '1.0.0',
+        capabilities: ['tool'],
+      },
+      setup: () => undefined,
+      dispose: () => {
+        cleanupCalls.push('plugin');
+        throw new Error('plugin dispose failed');
+      },
+    };
+
+    try {
+      const result = await startServer(0, {
+        databaseFile: database.filename,
+        projectStore,
+        sessionStoreFactory: () => sessionStore,
+        plugins: [plugin],
+      });
+
+      await expect(result.stop()).rejects.toMatchObject({
+        code: 'plugin-dispose-failed',
+      });
+      expect(cleanupCalls).toEqual(['plugin', 'runtime', 'project-store']);
+      expect(result.server.listening).toBe(false);
+      expect(result.runtime.status).toBe('stopped');
+    } finally {
+      await database.cleanup();
+    }
+  });
+
+  it('removes signal listeners after every start and stop cycle', async () => {
+    const database = createTemporaryDatabaseFile();
+    const initialSigintListeners = process.listenerCount('SIGINT');
+    const initialSigtermListeners = process.listenerCount('SIGTERM');
+
+    try {
+      for (let cycle = 0; cycle < 2; cycle += 1) {
+        const result = await startServer(0, {
+          databaseFile: database.filename,
+        });
+
+        expect(process.listenerCount('SIGINT')).toBe(initialSigintListeners + 1);
+        expect(process.listenerCount('SIGTERM')).toBe(initialSigtermListeners + 1);
+
+        await result.stop();
+
+        expect(process.listenerCount('SIGINT')).toBe(initialSigintListeners);
+        expect(process.listenerCount('SIGTERM')).toBe(initialSigtermListeners);
+      }
+    } finally {
+      await database.cleanup();
     }
   });
 

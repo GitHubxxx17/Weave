@@ -1,7 +1,11 @@
-import { join } from 'node:path';
+import { posix, win32 } from 'node:path';
 import { z } from 'zod';
 
 const nonEmptyStringSchema = z.string().min(1);
+
+function joinForPlatform(platform: NodeJS.Platform, ...paths: string[]): string {
+  return (platform === 'win32' ? win32 : posix).join(...paths);
+}
 
 function parseNonEmptyString(value: string, name: string): string {
   try {
@@ -30,7 +34,8 @@ export function resolveDefaultDataDirectory(
   let dataDirectory: string;
 
   if (platform === 'darwin') {
-    dataDirectory = join(
+    dataDirectory = joinForPlatform(
+      platform,
       resolveHomeDirectory(environment, homeDirectory),
       'Library',
       'Application Support',
@@ -40,14 +45,26 @@ export function resolveDefaultDataDirectory(
     const appData = environment.APPDATA;
     dataDirectory =
       appData === undefined
-        ? join(resolveHomeDirectory(environment, homeDirectory), 'AppData', 'Roaming', 'Weave')
-        : join(parseNonEmptyString(appData, 'APPDATA'), 'Weave');
+        ? joinForPlatform(
+            platform,
+            resolveHomeDirectory(environment, homeDirectory),
+            'AppData',
+            'Roaming',
+            'Weave',
+          )
+        : joinForPlatform(platform, parseNonEmptyString(appData, 'APPDATA'), 'Weave');
   } else {
     const xdgDataHome = environment.XDG_DATA_HOME;
     dataDirectory =
       xdgDataHome === undefined
-        ? join(resolveHomeDirectory(environment, homeDirectory), '.local', 'share', 'weave')
-        : join(parseNonEmptyString(xdgDataHome, 'XDG_DATA_HOME'), 'weave');
+        ? joinForPlatform(
+            platform,
+            resolveHomeDirectory(environment, homeDirectory),
+            '.local',
+            'share',
+            'weave',
+          )
+        : joinForPlatform(platform, parseNonEmptyString(xdgDataHome, 'XDG_DATA_HOME'), 'weave');
   }
 
   return parseNonEmptyString(dataDirectory, 'data directory');
@@ -68,19 +85,28 @@ export function resolveDatabaseFile(options: ResolveDatabaseFileOptions = {}): s
     return parseNonEmptyString(options.databaseFile, 'database file');
   }
 
+  if (options.dataDirectory !== undefined) {
+    return joinForPlatform(
+      options.platform ?? process.platform,
+      parseNonEmptyString(options.dataDirectory, 'data directory'),
+      'weave.sqlite',
+    );
+  }
+
   if (environment.WEAVE_DATABASE_FILE !== undefined) {
     return parseNonEmptyString(environment.WEAVE_DATABASE_FILE, 'WEAVE_DATABASE_FILE');
   }
 
-  if (options.dataDirectory !== undefined) {
-    return join(parseNonEmptyString(options.dataDirectory, 'data directory'), 'weave.sqlite');
-  }
-
   if (environment.WEAVE_DATA_DIR !== undefined) {
-    return join(parseNonEmptyString(environment.WEAVE_DATA_DIR, 'WEAVE_DATA_DIR'), 'weave.sqlite');
+    return joinForPlatform(
+      options.platform ?? process.platform,
+      parseNonEmptyString(environment.WEAVE_DATA_DIR, 'WEAVE_DATA_DIR'),
+      'weave.sqlite',
+    );
   }
 
-  return join(
+  return joinForPlatform(
+    options.platform ?? process.platform,
     resolveDefaultDataDirectory(environment, options.platform, options.homeDirectory),
     'weave.sqlite',
   );

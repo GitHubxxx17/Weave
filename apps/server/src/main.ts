@@ -146,36 +146,50 @@ export async function startServer(
     }
 
     let stopPromise: Promise<void> | undefined;
+    const onSigint = (): void => {
+      void stop();
+    };
+    const onSigterm = (): void => {
+      void stop();
+    };
     const stop = async (): Promise<void> => {
       if (stopPromise !== undefined) {
         return stopPromise;
       }
+
+      process.removeListener('SIGINT', onSigint);
+      process.removeListener('SIGTERM', onSigterm);
+
       stopPromise = (async () => {
-        await closeServer(createdServer);
-        let pluginDisposeError: unknown;
-        try {
+        let firstError: unknown;
+        let hasError = false;
+        const cleanup = async (operation: () => Promise<void>): Promise<void> => {
+          try {
+            await operation();
+          } catch (error: unknown) {
+            if (!hasError) {
+              hasError = true;
+              firstError = error;
+            }
+          }
+        };
+
+        await cleanup(() => closeServer(createdServer));
+        await cleanup(async () => {
           await getServerPluginRegistry(runtime).dispose();
-        } catch (error: unknown) {
-          pluginDisposeError = error;
-        }
-        try {
-          await runtime.stop();
-        } finally {
-          await closeProjectStore(projectStore);
-        }
-        if (pluginDisposeError !== undefined) {
-          throw pluginDisposeError;
+        });
+        await cleanup(() => runtime.stop());
+        await cleanup(() => closeProjectStore(projectStore));
+
+        if (hasError) {
+          throw firstError;
         }
       })();
       return stopPromise;
     };
 
-    process.once('SIGINT', () => {
-      void stop();
-    });
-    process.once('SIGTERM', () => {
-      void stop();
-    });
+    process.on('SIGINT', onSigint);
+    process.on('SIGTERM', onSigterm);
 
     return { port: address.port, runtime, server: createdServer, stop };
   } catch (error) {

@@ -11,7 +11,7 @@ describe('resolveDefaultDataDirectory', () => {
   it('resolves the Windows application data directory from APPDATA', () => {
     expect(
       resolveDefaultDataDirectory({ APPDATA: 'C:\\Users\\tester\\AppData\\Roaming' }, 'win32'),
-    ).toBe('C:\\Users\\tester\\AppData\\Roaming/Weave');
+    ).toBe('C:\\Users\\tester\\AppData\\Roaming\\Weave');
   });
 
   it('resolves the Linux application data directory from XDG_DATA_HOME', () => {
@@ -66,6 +66,20 @@ describe('resolveDatabaseFile', () => {
     ).toBe('/tmp/env.sqlite');
   });
 
+  it('prefers an explicit data directory over environment database settings', () => {
+    expect(
+      resolveDatabaseFile({
+        dataDirectory: '/tmp/explicit-data',
+        environment: {
+          WEAVE_DATABASE_FILE: '/tmp/env.sqlite',
+          WEAVE_DATA_DIR: '/tmp/env-data',
+        },
+        platform: 'darwin',
+        homeDirectory: '/Users/tester',
+      }),
+    ).toBe('/tmp/explicit-data/weave.sqlite');
+  });
+
   it('uses WEAVE_DATA_DIR before the operating system default', () => {
     expect(
       resolveDatabaseFile({
@@ -76,5 +90,15 @@ describe('resolveDatabaseFile', () => {
         homeDirectory: '/Users/tester',
       }),
     ).toBe('/tmp/env-data/weave.sqlite');
+  });
+
+  it('uses Windows path separators for Windows data directories', () => {
+    expect(
+      resolveDatabaseFile({
+        dataDirectory: 'C:\\Users\\tester\\Weave',
+        platform: 'win32',
+        homeDirectory: 'C:\\Users\\tester',
+      }),
+    ).toBe('C:\\Users\\tester\\Weave\\weave.sqlite');
   });
 });
