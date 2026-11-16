@@ -44,12 +44,12 @@ importers:
       '@weave/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
-      '@weave/workspace':
-        specifier: workspace:*
-        version: link:../../packages/workspace
       '@weave/session':
         specifier: workspace:*
         version: link:../../packages/session
+      '@weave/workspace':
+        specifier: workspace:*
+        version: link:../../packages/workspace
       hono:
         specifier: 4.13.18
         version: 4.13.18
@@ -103,6 +103,22 @@ importers:
       zod:
         specifier: 4.6.7
         version: 4.6.7
+
+  packages/plugin:
+    dependencies:
+      '@weave/llm':
+        specifier: workspace:*
+        version: link:../llm
+      '@weave/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@types/node':
+        specifier: 24.10.1
+        version: 24.10.1
 
   packages/protocol:
     dependencies:
