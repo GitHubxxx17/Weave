@@ -110,6 +110,6 @@ export function createServerLlmProviders(options?: {
   return {
     registry,
     providers: registry.list(),
-    defaultProvider: 'mock',
+    defaultProvider: configs[0]?.id ?? 'mock',
   };
 }

@@ -4,6 +4,7 @@ import type { LlmProviderRegistry } from '@weave/llm';
 /** Dependencies needed by the public Provider metadata route. */
 export interface ProviderAppOptions {
   readonly providerRegistry?: LlmProviderRegistry | undefined;
+  readonly defaultProvider?: string | undefined;
 }
 
 /** Mounts the read-only Provider metadata route used by Studio. */
@@ -23,7 +24,7 @@ export function registerProviderRoutes(app: Hono, options: ProviderAppOptions): 
 
     return context.json({
       providers: options.providerRegistry.list(),
-      defaultProvider: 'mock',
+      defaultProvider: options.defaultProvider ?? 'mock',
     });
   });
 }

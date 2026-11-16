@@ -123,11 +123,15 @@ GET /settings/providers
       "defaultModel": "deepseek-flash"
     }
   ],
-  "defaultProvider": "mock"
+  "defaultProvider": "deepseek"
 }
 ```
 
 浏览器只需要知道菜单怎么显示、选择后发送什么 `provider` 和 `model`。它不需要知道 `baseUrl` 和 `apiKey`。
+
+`defaultProvider` 的选择规则是：配置了外部 Provider 时使用配置数组中的第一个
+Provider；没有外部配置时使用内置的 `mock`。这样本地配置了 DeepSeek 后，Studio
+打开时会直接选择 DeepSeek，可以马上验证真实模型对话，不需要每次手动切换。
 
 ## 3. Server 配置是如何进入 Registry 的
 

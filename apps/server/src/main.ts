@@ -116,6 +116,7 @@ export async function startServer(
           projectStore,
           sessionService,
           providerRegistry: providerSettings.registry,
+          defaultProvider: providerSettings.defaultProvider,
         }).fetch,
         hostname: '127.0.0.1',
         port,
