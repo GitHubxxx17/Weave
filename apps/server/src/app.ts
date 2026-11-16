@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { registerProviderRoutes, type ProviderAppOptions } from './provider-api.js';
 import type { Runtime } from '@weave/runtime';
 import { registerApprovalRoutes, type ApprovalAppOptions } from './approval-api.js';
 import { registerAgentRoutes, type AgentAppOptions } from './agent-api.js';
@@ -22,7 +23,11 @@ const healthResponseSchema = z.object({
  * @returns A Hono application that can be mounted on a server or tested in memory.
  */
 export interface AppOptions
-  extends ApprovalAppOptions, AgentAppOptions, SessionAppOptions, WorkspaceAppOptions {}
+  extends ApprovalAppOptions,
+    AgentAppOptions,
+    SessionAppOptions,
+    WorkspaceAppOptions,
+    ProviderAppOptions {}
 
 export function createApp(runtime: Runtime, options?: AppOptions): Hono {
   const app = new Hono();
@@ -41,9 +46,11 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
   registerWorkspaceRoutes(app, options ?? {});
   registerSessionRoutes(app, options ?? {});
   registerAgentRoutes(app, runtime, options ?? {});
+  registerProviderRoutes(app, options ?? {});
 
   return app;
 }
 
 export type { ApprovalAppOptions } from './approval-api.js';
 export type { AgentAppOptions } from './agent-api.js';
+export type { ProviderAppOptions } from './provider-api.js';
