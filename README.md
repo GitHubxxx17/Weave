@@ -157,28 +157,25 @@ OpenAI-compatible Providers can be configured with the
     "id": "deepseek",
     "label": "DeepSeek",
     "type": "openai-compatible",
-    "baseUrl": "https://api.deepseek.com/v1",
+    "baseUrl": "https://api.deepseek.com",
     "apiKey": "replace-with-your-key",
-    "defaultModel": "deepseek-chat"
+    "defaultModel": "deepseek-flash"
   }
 ]
 ```
 
-Start the local workspace after setting the variable:
+Start the local workspace after creating the local environment file:
 
 ```bash
-export WEAVE_LLM_PROVIDERS='[
-  {
-    "id": "deepseek",
-    "label": "DeepSeek",
-    "type": "openai-compatible",
-    "baseUrl": "https://api.deepseek.com/v1",
-    "apiKey": "replace-with-your-key",
-    "defaultModel": "deepseek-chat"
-  }
-]'
+cp .env.example .env
+# Edit .env and replace the placeholder API key.
 pnpm dev
 ```
+
+The OpenAI-compatible adapter appends `/chat/completions` to `baseUrl`, so
+DeepSeek uses `https://api.deepseek.com` in this configuration. The Server
+development command loads the root `.env` file with Node's built-in
+`--env-file-if-exists` option.
 
 The Server validates this configuration with Zod, creates one private
 `LlmClient` per entry, and injects the shared `LlmProviderRegistry` into the

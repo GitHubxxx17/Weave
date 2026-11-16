@@ -174,6 +174,25 @@ describe('OpenAI-compatible provider', () => {
     ]);
   });
 
+  it('accepts nullable content fields used by DeepSeek reasoning streams', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      streamingResponse(
+        'data: {"choices":[{"delta":{"role":"assistant","content":null,"reasoning_content":""},"finish_reason":null}]}',
+        'data: {"choices":[{"delta":{"content":null,"reasoning_content":"think "},"finish_reason":null}]}',
+        'data: {"choices":[{"delta":{"content":"answer","reasoning_content":null},"finish_reason":null}]}',
+        'data: {"choices":[{"delta":{"content":null},"finish_reason":"stop"}]}',
+        'data: [DONE]',
+      ),
+    );
+
+    await expect(collectEvents(createClient(fetchMock))).resolves.toEqual([
+      { type: 'reasoning-delta', text: '' },
+      { type: 'reasoning-delta', text: 'think ' },
+      { type: 'text-delta', text: 'answer' },
+      { type: 'finish', reason: 'stop' },
+    ]);
+  });
+
   it('preserves partial tool-call fragments and starts before deltas', async () => {
     const fetchMock = vi.fn<typeof fetch>(async () =>
       streamingResponse(
