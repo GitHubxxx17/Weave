@@ -1,6 +1,11 @@
 import { z } from 'zod';
 
 const nonEmptyStringSchema = z.string().min(1);
+const messageMetadataSchema = z.object({
+  messageId: nonEmptyStringSchema.optional(),
+  sequence: z.number().int().positive().optional(),
+  occurredAt: z.string().datetime().optional(),
+});
 
 const contentPartSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('text'), text: z.string() }),
@@ -8,26 +13,34 @@ const contentPartSchema = z.discriminatedUnion('type', [
 ]);
 
 const messageSchema = z.discriminatedUnion('role', [
-  z.object({ role: z.literal('system'), content: z.array(contentPartSchema) }),
-  z.object({ role: z.literal('user'), content: z.array(contentPartSchema) }),
-  z.object({
-    role: z.literal('assistant'),
-    content: z.array(contentPartSchema),
-    toolCalls: z
-      .array(
-        z.object({
-          id: nonEmptyStringSchema,
-          name: nonEmptyStringSchema,
-          arguments: z.string(),
-        }),
-      )
-      .optional(),
-  }),
-  z.object({
-    role: z.literal('tool'),
-    toolCallId: nonEmptyStringSchema,
-    content: z.array(contentPartSchema),
-  }),
+  z
+    .object({ role: z.literal('system'), content: z.array(contentPartSchema) })
+    .extend(messageMetadataSchema.shape),
+  z
+    .object({ role: z.literal('user'), content: z.array(contentPartSchema) })
+    .extend(messageMetadataSchema.shape),
+  z
+    .object({
+      role: z.literal('assistant'),
+      content: z.array(contentPartSchema),
+      toolCalls: z
+        .array(
+          z.object({
+            id: nonEmptyStringSchema,
+            name: nonEmptyStringSchema,
+            arguments: z.string(),
+          }),
+        )
+        .optional(),
+    })
+    .extend(messageMetadataSchema.shape),
+  z
+    .object({
+      role: z.literal('tool'),
+      toolCallId: nonEmptyStringSchema,
+      content: z.array(contentPartSchema),
+    })
+    .extend(messageMetadataSchema.shape),
 ]);
 
 const sessionSummarySchema = z.object({

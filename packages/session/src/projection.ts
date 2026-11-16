@@ -28,6 +28,7 @@ export interface SessionMessage {
   readonly messageId: string;
   readonly message: Message;
   readonly sequence: number;
+  readonly occurredAt: string;
 }
 
 /**
@@ -172,6 +173,7 @@ export function projectSession(events: readonly SessionEvent[]): SessionProjecti
         messageId: event.payload.messageId,
         message: event.payload.message,
         sequence: event.sequence,
+        occurredAt: event.occurredAt,
       });
     } else if (event.type === 'turn.started') {
       if (archivedAt !== undefined) {

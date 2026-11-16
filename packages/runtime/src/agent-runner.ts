@@ -237,16 +237,27 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
         status: 'completed' | 'failed' | 'cancelled',
         reason?: string,
         assistantText?: string,
+        assistantReasoning?: string,
       ): NewSessionEvent[] => {
         const events: NewSessionEvent[] = [];
-        if (assistantText !== undefined && assistantText.length > 0) {
+        if (
+          (assistantText !== undefined && assistantText.length > 0) ||
+          (assistantReasoning !== undefined && assistantReasoning.length > 0)
+        ) {
           events.push({
             type: 'message.created',
             payload: {
               messageId: crypto.randomUUID(),
               message: {
                 role: 'assistant',
-                content: [{ type: 'text', text: assistantText }],
+                content: [
+                  ...(assistantReasoning === undefined || assistantReasoning.length === 0
+                    ? []
+                    : [{ type: 'reasoning' as const, text: assistantReasoning }]),
+                  ...(assistantText === undefined || assistantText.length === 0
+                    ? []
+                    : [{ type: 'text' as const, text: assistantText }]),
+                ],
               },
             },
           });
@@ -338,6 +349,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
             }
 
             let assistantText = '';
+            let assistantReasoning = '';
             let finishSeen = false;
             let finishReason: FinishReason | undefined;
             const toolCalls = new Map<string, ToolCallState>();
@@ -369,6 +381,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
                 assistantText += event.text;
                 emit(event);
               } else if (event.type === 'reasoning-delta') {
+                assistantReasoning += event.text;
                 emit(event);
               } else if (event.type === 'tool-call-start') {
                 if (options.toolPipeline === undefined || options.toolRegistry === undefined) {
@@ -426,7 +439,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
 
             if (finishReason !== 'tool-call') {
               await appendTerminal(
-                terminalEvents('completed', undefined, assistantText),
+                terminalEvents('completed', undefined, assistantText, assistantReasoning),
                 undefined,
                 false,
                 'completed',
@@ -452,7 +465,14 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
 
             const assistantMessage: Message = {
               role: 'assistant',
-              content: assistantText.length === 0 ? [] : [{ type: 'text', text: assistantText }],
+              content: [
+                ...(assistantReasoning.length === 0
+                  ? []
+                  : [{ type: 'reasoning' as const, text: assistantReasoning }]),
+                ...(assistantText.length === 0
+                  ? []
+                  : [{ type: 'text' as const, text: assistantText }]),
+              ],
               toolCalls: completeToolCalls.map(({ id, name, arguments: toolArguments }) => ({
                 id,
                 name,

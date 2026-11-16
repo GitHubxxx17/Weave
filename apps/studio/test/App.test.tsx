@@ -44,7 +44,12 @@ function sessionDetail(
 ): Record<string, unknown> {
   return {
     ...sessionSummary(id, title, archivedAt),
-    messages,
+    messages: messages.map((message, index) => ({
+      ...message,
+      messageId: `${id}-message-${index + 1}`,
+      sequence: index + 2,
+      occurredAt: `2026-11-16T${String(index + 8).padStart(2, '0')}:30:00.000Z`,
+    })),
   };
 }
 
@@ -58,7 +63,21 @@ function createWorkspaceFetchMock(
       sessionIds.foundation,
       sessionDetail(sessionIds.foundation, 'Foundation 设计', [
         { role: 'user', content: [{ type: 'text', text: '历史项目问题' }] },
-        { role: 'assistant', content: [{ type: 'text', text: '历史项目回答' }] },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'reasoning', text: '历史思考过程' },
+            { type: 'text', text: '历史项目回答' },
+          ],
+          toolCalls: [
+            { id: 'history-call', name: 'workspace.search', arguments: '{"query":"历史"}' },
+          ],
+        },
+        {
+          role: 'tool',
+          toolCallId: 'history-call',
+          content: [{ type: 'text', text: '找到 2 个结果' }],
+        },
       ]),
     ],
   ]);
@@ -521,7 +540,17 @@ describe('Studio Agent Chat', () => {
 
     expect(await screen.findByText('介绍一下 Weave')).toBeTruthy();
     expect(await screen.findByText('你好，这是 Weave。')).toBeTruthy();
-    expect(screen.getByText('先分析。')).toBeTruthy();
+    const assistantItem = screen.getByText('你好，这是 Weave。').closest('.timeline-item');
+    expect(assistantItem).toBeTruthy();
+    expect(
+      within(assistantItem as HTMLElement).getByRole('group', { name: '本轮过程' }),
+    ).toBeTruthy();
+    expect(within(assistantItem as HTMLElement).getByText('先分析。')).toBeTruthy();
+    expect(
+      (assistantItem as HTMLElement)
+        .querySelector('.message-process')
+        ?.nextElementSibling?.classList.contains('message'),
+    ).toBe(true);
     expect(screen.getByText('已完成', { selector: '.run-status' })).toBeTruthy();
     expect(streamAgentRunMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -627,6 +656,23 @@ describe('Studio Agent Chat', () => {
     expect(await screen.findByText('历史项目问题')).toBeTruthy();
     expect(screen.getByText('历史项目回答')).toBeTruthy();
     expect(screen.getByText('会话 #foundation')).toBeTruthy();
+    const assistantItem = screen.getByText('历史项目回答').closest('.timeline-item');
+    expect(assistantItem).toBeTruthy();
+    expect(within(assistantItem as HTMLElement).getByText('历史思考过程')).toBeTruthy();
+    expect(within(assistantItem as HTMLElement).getByText('workspace.search')).toBeTruthy();
+    expect(within(assistantItem as HTMLElement).getByText('找到 2 个结果')).toBeTruthy();
+  });
+
+  it('renders durable message timestamps instead of a fixed relative label', async () => {
+    await renderApp();
+
+    fireEvent.click(screen.getByRole('button', { name: /Foundation 设计/ }));
+    expect(await screen.findByText('历史项目问题')).toBeTruthy();
+
+    const messageTimes = document.querySelectorAll('.message-meta time');
+    expect(messageTimes.length).toBeGreaterThan(0);
+    expect([...messageTimes].every((time) => time.textContent !== '刚刚')).toBe(true);
+    expect(messageTimes[0]?.getAttribute('datetime')).toBeTruthy();
   });
 
   it('keeps a new session unavailable for switching while a run is active', async () => {
@@ -682,14 +728,32 @@ describe('Studio Agent Chat', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
 
-    expect(await screen.findByText('workspace.search')).toBeTruthy();
+    expect(await screen.findAllByText('workspace.search')).not.toHaveLength(0);
+    const assistantItem = document.querySelector('.timeline-item-assistant');
+    expect(assistantItem).toBeTruthy();
+    expect(
+      within(assistantItem as HTMLElement).getByRole('group', { name: '本轮过程' }),
+    ).toBeTruthy();
+    expect(within(assistantItem as HTMLElement).getByText('workspace.search')).toBeTruthy();
     expect(
       within(screen.getByRole('region', { name: '工具调用' })).getByText('已完成', {
         selector: '.status-badge',
       }),
     ).toBeTruthy();
-    expect(screen.getByText('2 matches')).toBeTruthy();
-    expect(screen.getByText('{"query":"SSE"}')).toBeTruthy();
+    expect(screen.getAllByText('2 matches')).not.toHaveLength(0);
+    expect(screen.getAllByText('{"query":"SSE"}')).not.toHaveLength(0);
+  });
+
+  it('keeps conversation and activity panel as independent scroll regions', async () => {
+    await renderApp();
+
+    expect(document.querySelector('.studio-shell')?.classList.contains('studio-shell-fixed')).toBe(
+      true,
+    );
+    expect(screen.getByLabelText('Agent 工作流').classList.contains('conversation-scroll')).toBe(
+      true,
+    );
+    expect(screen.getByLabelText('运行活动').classList.contains('activity-scroll')).toBe(true);
   });
 
   it('shows a safe error without leaking implementation details', async () => {
