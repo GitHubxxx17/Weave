@@ -1,0 +1,282 @@
+import { DatabaseSync } from 'node:sqlite';
+import { z } from 'zod';
+import {
+  providerSettingsRecordSchema,
+  type ProviderSettingsRecord,
+} from './provider-settings-types.js';
+
+const createTableSql = `
+  CREATE TABLE IF NOT EXISTS provider_settings (
+    id TEXT NOT NULL PRIMARY KEY,
+    label TEXT NOT NULL,
+    type TEXT NOT NULL,
+    base_url TEXT NOT NULL,
+    encrypted_api_key TEXT,
+    default_model TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+`;
+
+const invalidMessage = 'Provider Settings Store input is invalid';
+const closedMessage = 'Provider Settings Store is closed';
+const storageMessage = 'Provider Settings Store database operation failed';
+const protocolMessage = 'Provider Settings Store contains invalid persisted data';
+const notFoundMessage = 'Provider configuration does not exist';
+
+export type ProviderSettingsStoreErrorCode =
+  | 'provider-settings-storage'
+  | 'provider-settings-invalid'
+  | 'provider-settings-closed'
+  | 'provider-settings-protocol'
+  | 'provider-settings-not-found';
+
+export class ProviderSettingsStoreError extends Error {
+  readonly code: ProviderSettingsStoreErrorCode;
+
+  constructor(code: ProviderSettingsStoreErrorCode, message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'ProviderSettingsStoreError';
+    this.code = code;
+  }
+}
+
+const optionsSchema = z.object({
+  filename: z.string().min(1),
+});
+
+interface ProviderSettingsRow {
+  readonly id: unknown;
+  readonly label: unknown;
+  readonly type: unknown;
+  readonly base_url: unknown;
+  readonly encrypted_api_key: unknown;
+  readonly default_model: unknown;
+  readonly created_at: unknown;
+  readonly updated_at: unknown;
+}
+
+function requireOpen(closed: boolean): void {
+  if (closed) {
+    throw new ProviderSettingsStoreError('provider-settings-closed', closedMessage);
+  }
+}
+
+function parseRecord(row: Record<string, unknown>): ProviderSettingsRecord {
+  const stored: ProviderSettingsRow = {
+    id: row.id,
+    label: row.label,
+    type: row.type,
+    base_url: row.base_url,
+    encrypted_api_key: row.encrypted_api_key,
+    default_model: row.default_model,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+
+  const parsed = providerSettingsRecordSchema.safeParse({
+    id: stored.id,
+    label: stored.label,
+    type: stored.type,
+    baseUrl: stored.base_url,
+    encryptedApiKey: stored.encrypted_api_key,
+    defaultModel: stored.default_model,
+    createdAt: stored.created_at,
+    updatedAt: stored.updated_at,
+  });
+  if (!parsed.success) {
+    throw new ProviderSettingsStoreError('provider-settings-protocol', protocolMessage, {
+      cause: parsed.error,
+    });
+  }
+  return parsed.data;
+}
+
+function parseInput(record: ProviderSettingsRecord): ProviderSettingsRecord {
+  const parsed = providerSettingsRecordSchema.safeParse(record);
+  if (!parsed.success) {
+    throw new ProviderSettingsStoreError('provider-settings-invalid', invalidMessage, {
+      cause: parsed.error,
+    });
+  }
+  return parsed.data;
+}
+
+function withStorageError<T>(operation: () => T): T {
+  try {
+    return operation();
+  } catch (error: unknown) {
+    if (error instanceof ProviderSettingsStoreError) {
+      throw error;
+    }
+    throw new ProviderSettingsStoreError('provider-settings-storage', storageMessage, {
+      cause: error,
+    });
+  }
+}
+
+/**
+ * Creates a file-backed SQLite Store for Desktop-managed Provider settings.
+ *
+ * The Store treats encrypted API keys as opaque values. Encryption and
+ * decryption belong to the Provider Settings Manager and Desktop boundary.
+ */
+export function createSqliteProviderSettingsStore(options: {
+  readonly filename: string;
+}): ProviderSettingsStore {
+  const parsedOptions = optionsSchema.safeParse(options);
+  if (!parsedOptions.success) {
+    throw new ProviderSettingsStoreError('provider-settings-invalid', invalidMessage, {
+      cause: parsedOptions.error,
+    });
+  }
+
+  const database = withStorageError(() => {
+    const created = new DatabaseSync(parsedOptions.data.filename);
+    created.exec(createTableSql);
+    return created;
+  });
+  let closed = false;
+
+  return {
+    async list(): Promise<readonly ProviderSettingsRecord[]> {
+      requireOpen(closed);
+      return withStorageError(() => {
+        const rows = database
+          .prepare(
+            `SELECT id, label, type, base_url, encrypted_api_key,
+                    default_model, created_at, updated_at
+             FROM provider_settings
+             ORDER BY created_at ASC, rowid ASC`,
+          )
+          .all();
+        return rows.map((row) => parseRecord(row));
+      });
+    },
+
+    async get(id: string): Promise<ProviderSettingsRecord | undefined> {
+      requireOpen(closed);
+      if (!z.string().trim().min(1).safeParse(id).success) {
+        throw new ProviderSettingsStoreError('provider-settings-invalid', invalidMessage);
+      }
+
+      return withStorageError(() => {
+        const row = database
+          .prepare(
+            `SELECT id, label, type, base_url, encrypted_api_key,
+                    default_model, created_at, updated_at
+             FROM provider_settings
+             WHERE id = ?`,
+          )
+          .get(id);
+        return row === undefined ? undefined : parseRecord(row);
+      });
+    },
+
+    async create(recordInput: ProviderSettingsRecord): Promise<void> {
+      requireOpen(closed);
+      const record = parseInput(recordInput);
+      withStorageError(() => {
+        database
+          .prepare(
+            `INSERT INTO provider_settings
+              (id, label, type, base_url, encrypted_api_key, default_model, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            record.id,
+            record.label,
+            record.type,
+            record.baseUrl,
+            record.encryptedApiKey,
+            record.defaultModel,
+            record.createdAt,
+            record.updatedAt,
+          );
+      });
+    },
+
+    async update(recordInput: ProviderSettingsRecord): Promise<void> {
+      requireOpen(closed);
+      const record = parseInput(recordInput);
+      withStorageError(() => {
+        let transactionStarted = false;
+        try {
+          database.exec('BEGIN IMMEDIATE');
+          transactionStarted = true;
+          const result = database
+            .prepare(
+              `UPDATE provider_settings
+               SET label = ?, type = ?, base_url = ?, encrypted_api_key = ?,
+                   default_model = ?, created_at = ?, updated_at = ?
+               WHERE id = ?`,
+            )
+            .run(
+              record.label,
+              record.type,
+              record.baseUrl,
+              record.encryptedApiKey,
+              record.defaultModel,
+              record.createdAt,
+              record.updatedAt,
+              record.id,
+            );
+          if (result.changes === 0) {
+            throw new ProviderSettingsStoreError('provider-settings-not-found', notFoundMessage);
+          }
+          database.exec('COMMIT');
+          transactionStarted = false;
+        } finally {
+          if (transactionStarted) {
+            try {
+              database.exec('ROLLBACK');
+            } catch {
+              // Preserve the original Store or database error.
+            }
+          }
+        }
+      });
+    },
+
+    async delete(id: string): Promise<void> {
+      requireOpen(closed);
+      if (!z.string().trim().min(1).safeParse(id).success) {
+        throw new ProviderSettingsStoreError('provider-settings-invalid', invalidMessage);
+      }
+
+      withStorageError(() => {
+        let transactionStarted = false;
+        try {
+          database.exec('BEGIN IMMEDIATE');
+          transactionStarted = true;
+          const result = database
+            .prepare('DELETE FROM provider_settings WHERE id = ?')
+            .run(id);
+          if (result.changes === 0) {
+            throw new ProviderSettingsStoreError('provider-settings-not-found', notFoundMessage);
+          }
+          database.exec('COMMIT');
+          transactionStarted = false;
+        } finally {
+          if (transactionStarted) {
+            try {
+              database.exec('ROLLBACK');
+            } catch {
+              // Preserve the original Store or database error.
+            }
+          }
+        }
+      });
+    },
+
+    async close(): Promise<void> {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      withStorageError(() => database.close());
+    },
+  };
+}
+
+export type { ProviderSettingsRecord } from './provider-settings-types.js';
