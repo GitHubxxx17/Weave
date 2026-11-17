@@ -96,6 +96,18 @@ type ToolActivity = {
   readonly result?: string;
 };
 
+type ProviderFormState = {
+  readonly mode: 'create' | 'edit';
+  readonly editingId: string | null;
+  readonly id: string;
+  readonly label: string;
+  readonly baseUrl: string;
+  readonly apiKey: string;
+  readonly defaultModel: string;
+  readonly makeDefault: boolean;
+  readonly clearApiKey: boolean;
+};
+
 const statusLabels: Record<RunStatus, string> = {
   idle: '就绪',
   streaming: '运行中',
@@ -141,9 +153,12 @@ const fallbackProviderSettings: ProviderSettings = {
       label: '本地模型',
       type: 'mock',
       defaultModel: 'weave-local-demo',
+      hasApiKey: false,
+      editable: false,
     },
   ],
   defaultProvider: 'mock',
+  canManage: false,
 };
 
 let nextId = 0;
@@ -352,6 +367,12 @@ export function App() {
   );
   const [selectedContexts, setSelectedContexts] = useState<readonly string[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
+  const [providerForm, setProviderForm] = useState<ProviderFormState | null>(null);
+  const [providerFormError, setProviderFormError] = useState<string | null>(null);
+  const [providerMutation, setProviderMutation] = useState<
+    'idle' | 'saving' | 'deleting' | 'defaulting'
+  >('idle');
+  const [providerToDelete, setProviderToDelete] = useState<ProviderDescriptor | null>(null);
   const [editingSession, setEditingSession] = useState<{
     readonly projectId: string;
     readonly sessionId: string;
@@ -399,6 +420,24 @@ export function App() {
       sessions: project.sessions.filter((session) => session.archivedAt !== null),
     }))
     .filter((project) => project.sessions.length > 0);
+
+  function applyProviderSettings(settings: ProviderSettings): void {
+    setProviderSettings(settings);
+    const nextProvider =
+      settings.providers.find((provider) => provider.id === selectedProviderId) ??
+      settings.providers.find((provider) => provider.id === settings.defaultProvider) ??
+      settings.providers[0];
+    if (nextProvider !== undefined) {
+      setSelectedProviderId(nextProvider.id);
+      setSelectedModel(nextProvider.defaultModel ?? '');
+    }
+  }
+
+  async function refreshProviderSettings(): Promise<ProviderSettings> {
+    const settings = await providerApi.listProviders();
+    applyProviderSettings(settings);
+    return settings;
+  }
 
   useEffect(() => {
     let disposed = false;
@@ -1141,6 +1180,152 @@ export function App() {
     setNotice(null);
   }
 
+  function openProviderForm(provider?: ProviderDescriptor): void {
+    setProviderFormError(null);
+    setProviderForm(
+      provider === undefined
+        ? {
+            mode: 'create',
+            editingId: null,
+            id: '',
+            label: '',
+            baseUrl: '',
+            apiKey: '',
+            defaultModel: '',
+            makeDefault: providerSettings.providers.length === 0,
+            clearApiKey: false,
+          }
+        : {
+            mode: 'edit',
+            editingId: provider.id,
+            id: provider.id,
+            label: provider.label,
+            baseUrl: provider.baseUrl ?? '',
+            apiKey: '',
+            defaultModel: provider.defaultModel ?? '',
+            makeDefault: provider.id === providerSettings.defaultProvider,
+            clearApiKey: false,
+          },
+    );
+  }
+
+  function closeProviderForm(): void {
+    if (providerMutation === 'saving') {
+      return;
+    }
+    setProviderForm(null);
+    setProviderFormError(null);
+  }
+
+  function updateProviderForm<K extends keyof ProviderFormState>(
+    key: K,
+    value: ProviderFormState[K],
+  ): void {
+    setProviderForm((current) => (current === null ? current : { ...current, [key]: value }));
+  }
+
+  function providerErrorMessage(error: unknown): string {
+    if (!(error instanceof ProviderApiError)) {
+      return 'Provider 配置暂时不可用，请稍后重试';
+    }
+    switch (error.code) {
+      case 'provider-settings-secret-unavailable':
+        return '系统密钥存储不可用，请在桌面端重试';
+      case 'provider-settings-duplicate':
+        return 'Provider ID 已存在，请换一个 ID';
+      case 'provider-settings-protected':
+        return '这个 Provider 由系统或插件管理，不能从此处修改';
+      case 'provider-settings-provider-invalid':
+        return 'Provider 客户端创建失败，请检查地址和配置';
+      case 'provider-api-network':
+        return '无法连接到本地服务，请确认后端已经启动';
+      default:
+        return error.message;
+    }
+  }
+
+  async function saveProvider(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    const form = providerForm;
+    if (form === null) {
+      return;
+    }
+    if (
+      form.id.trim() === '' ||
+      form.label.trim() === '' ||
+      form.baseUrl.trim() === '' ||
+      form.defaultModel.trim() === '' ||
+      (form.mode === 'create' && form.apiKey.trim() === '')
+    ) {
+      setProviderFormError('请填写完整的 Provider 信息');
+      return;
+    }
+
+    setProviderMutation('saving');
+    setProviderFormError(null);
+    try {
+      if (form.mode === 'create') {
+        await providerApi.createProvider({
+          id: form.id.trim(),
+          label: form.label.trim(),
+          type: 'openai-compatible',
+          baseUrl: form.baseUrl.trim(),
+          apiKey: form.apiKey,
+          defaultModel: form.defaultModel.trim(),
+          makeDefault: form.makeDefault,
+        });
+      } else if (form.editingId !== null) {
+        await providerApi.updateProvider(form.editingId, {
+          label: form.label.trim(),
+          baseUrl: form.baseUrl.trim(),
+          apiKey: form.apiKey,
+          defaultModel: form.defaultModel.trim(),
+          makeDefault: form.makeDefault,
+          ...(form.clearApiKey ? { clearApiKey: true } : {}),
+        });
+      }
+      await refreshProviderSettings();
+      setProviderForm(null);
+      setNotice('Provider 已保存');
+    } catch (error: unknown) {
+      setProviderFormError(providerErrorMessage(error));
+    } finally {
+      setProviderMutation('idle');
+    }
+  }
+
+  async function setDefaultProvider(providerId: string): Promise<void> {
+    setProviderMutation('defaulting');
+    setNotice(null);
+    try {
+      const settings = await providerApi.setDefaultProvider(providerId);
+      applyProviderSettings(settings);
+      setNotice('默认 Provider 已更新');
+    } catch (error: unknown) {
+      setNotice(providerErrorMessage(error));
+    } finally {
+      setProviderMutation('idle');
+    }
+  }
+
+  async function deleteProvider(): Promise<void> {
+    const provider = providerToDelete;
+    if (provider === null) {
+      return;
+    }
+    setProviderMutation('deleting');
+    try {
+      await providerApi.deleteProvider(provider.id);
+      await refreshProviderSettings();
+      setProviderToDelete(null);
+      setNotice('Provider 已删除');
+    } catch (error: unknown) {
+      setNotice(providerErrorMessage(error));
+    } finally {
+      setProviderMutation('idle');
+    }
+  }
+
   function toggleMenu(menu: Exclude<OpenMenu, null>): void {
     setOpenMenu((current) => (current === menu ? null : menu));
     setNotice(null);
@@ -1228,7 +1413,7 @@ export function App() {
 
   return (
     <main
-      className={`studio-shell studio-shell-fixed${!isActivityPanelOpen || activeView !== 'studio' ? ' studio-shell-context-collapsed' : ''}`}
+      className={`studio-shell studio-shell-fixed${!isActivityPanelOpen || activeView !== 'studio' ? ' studio-shell-context-collapsed' : ''}${activeView === 'settings' ? ' studio-shell-settings' : ''}`}
     >
       {openMenu !== null ? (
         <button
@@ -1291,201 +1476,242 @@ export function App() {
         </button>
       </aside>
 
-      <aside className="session-rail" aria-label="会话列表">
-        <div className={`menu-anchor${openMenu === 'project' ? ' menu-anchor-open' : ''}`}>
-          <button
-            className="project-switcher"
-            type="button"
-            aria-label={`${activeProject?.name ?? '当前'} 项目`}
-            aria-expanded={openMenu === 'project'}
-            disabled={status === 'streaming'}
-            onClick={() => toggleMenu('project')}
-          >
-            <span className="project-avatar" aria-hidden="true">
-              {(activeProject?.name ?? 'W').slice(0, 1).toLocaleUpperCase()}
-            </span>
-            <span className="project-switcher-copy">
-              <small>当前项目</small>
-              <strong>{activeProject?.name ?? 'Weave'}</strong>
-              <span className="project-folder-name">{activeProject?.folderName ?? 'weave'}</span>
-            </span>
-            <span className="project-chevron" aria-hidden="true">
-              <ChevronDown aria-hidden="true" />
-            </span>
-          </button>
-          {openMenu === 'project' ? (
-            <div
-              className="popup-menu popup-menu-rail project-menu"
-              role="menu"
-              aria-label="切换项目"
-            >
-              <p className="menu-section-label">项目</p>
-              {projects.map((project) => (
-                <button
-                  type="button"
-                  role="menuitem"
-                  key={project.id}
-                  onClick={() => selectProject(project.id)}
-                >
-                  <span className="menu-icon">
-                    <FolderOpen aria-hidden="true" />
-                  </span>
-                  <span>
-                    <strong>{project.name}</strong>
-                    <small>{project.folderName}</small>
-                  </span>
-                </button>
-              ))}
-              <div className="menu-divider" />
-              <button type="button" role="menuitem" onClick={openProjectDialog}>
-                <span className="menu-icon menu-icon-accent">
-                  <Plus aria-hidden="true" />
-                </span>
-                创建项目
-              </button>
-            </div>
-          ) : null}
-        </div>
-        <button
-          className="new-session-button"
-          type="button"
-          onClick={() => void createSession()}
-          disabled={status === 'streaming'}
-        >
-          <Plus aria-hidden="true" />
-          新建会话
-        </button>
-        {isSearchOpen ? (
-          <div className="session-search">
+      {activeView === 'settings' ? (
+        <aside className="settings-sidebar" aria-label="设置分类">
+          <header className="settings-sidebar-header">
+            <Settings aria-hidden="true" />
+            <h2>设置</h2>
+          </header>
+          <div className="settings-sidebar-search">
             <Search aria-hidden="true" />
-            <input
-              type="search"
-              aria-label="搜索会话"
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              autoFocus
-            />
-            <button
-              type="button"
-              aria-label="关闭搜索"
-              onClick={() => {
-                setIsSearchOpen(false);
-                setSearchQuery('');
-              }}
-            >
-              <X aria-hidden="true" />
-            </button>
+            <span>搜索设置</span>
           </div>
-        ) : (
-          <button className="search-sessions" type="button" onClick={() => setIsSearchOpen(true)}>
-            <Search aria-hidden="true" />
-            搜索会话
-            <kbd>⌘ K</kbd>
-          </button>
-        )}
-        <nav className="project-tree" aria-label="项目树" role="tree">
-          <p className="section-label">项目</p>
-          {visibleProjects.map((project) => {
-            const isExpanded =
-              normalizedSearchQuery !== '' || expandedProjectIds.includes(project.id);
-
-            return (
-              <div className="project-tree-node" role="treeitem" key={project.id}>
-                <div className="project-tree-row">
+          <nav className="settings-sidebar-nav" aria-label="设置分类导航">
+            <p className="settings-sidebar-label">配置</p>
+            <button className="settings-sidebar-item settings-sidebar-item-active" type="button">
+              <Bot aria-hidden="true" />
+              <span>模型服务</span>
+            </button>
+            <button className="settings-sidebar-item" type="button" disabled>
+              <ShieldCheck aria-hidden="true" />
+              <span>运行权限</span>
+              <small>即将推出</small>
+            </button>
+            <p className="settings-sidebar-label">系统</p>
+            <button className="settings-sidebar-item" type="button" disabled>
+              <FolderOpen aria-hidden="true" />
+              <span>数据存储</span>
+              <small>即将推出</small>
+            </button>
+            <button className="settings-sidebar-item" type="button" disabled>
+              <Settings aria-hidden="true" />
+              <span>界面外观</span>
+              <small>即将推出</small>
+            </button>
+          </nav>
+          <div className="settings-sidebar-footer">
+            <span className="connection-dot" aria-hidden="true" />
+            <span>本地运行时</span>
+            <small>已连接</small>
+          </div>
+        </aside>
+      ) : (
+        <aside className="session-rail" aria-label="会话列表">
+          <div className={`menu-anchor${openMenu === 'project' ? ' menu-anchor-open' : ''}`}>
+            <button
+              className="project-switcher"
+              type="button"
+              aria-label={`${activeProject?.name ?? '当前'} 项目`}
+              aria-expanded={openMenu === 'project'}
+              disabled={status === 'streaming'}
+              onClick={() => toggleMenu('project')}
+            >
+              <span className="project-avatar" aria-hidden="true">
+                {(activeProject?.name ?? 'W').slice(0, 1).toLocaleUpperCase()}
+              </span>
+              <span className="project-switcher-copy">
+                <small>当前项目</small>
+                <strong>{activeProject?.name ?? 'Weave'}</strong>
+                <span className="project-folder-name">{activeProject?.folderName ?? 'weave'}</span>
+              </span>
+              <span className="project-chevron" aria-hidden="true">
+                <ChevronDown aria-hidden="true" />
+              </span>
+            </button>
+            {openMenu === 'project' ? (
+              <div
+                className="popup-menu popup-menu-rail project-menu"
+                role="menu"
+                aria-label="切换项目"
+              >
+                <p className="menu-section-label">项目</p>
+                {projects.map((project) => (
                   <button
-                    className="project-tree-toggle"
                     type="button"
-                    aria-label={`${isExpanded ? '收起' : '展开'}项目 ${project.name}`}
-                    aria-expanded={isExpanded}
-                    onClick={() => toggleProjectExpanded(project.id)}
-                    disabled={status === 'streaming'}
-                  >
-                    {isExpanded ? (
-                      <ChevronDown aria-hidden="true" />
-                    ) : (
-                      <ChevronRight aria-hidden="true" />
-                    )}
-                  </button>
-                  <button
-                    className="project-tree-project"
-                    type="button"
-                    aria-label={`项目：${project.name}`}
+                    role="menuitem"
+                    key={project.id}
                     onClick={() => selectProject(project.id)}
-                    disabled={status === 'streaming'}
                   >
-                    <FolderOpen aria-hidden="true" />
+                    <span className="menu-icon">
+                      <FolderOpen aria-hidden="true" />
+                    </span>
                     <span>
                       <strong>{project.name}</strong>
                       <small>{project.folderName}</small>
                     </span>
-                    <small className="project-session-count">
-                      {project.sessions.length} 个会话
-                    </small>
                   </button>
-                </div>
-                {isExpanded ? (
-                  <div className="project-tree-sessions" role="group">
-                    {project.sessions.length > 0 ? (
-                      project.sessions.map((session) => (
-                        <div
-                          className={`session-tree-item${session.id === activeSessionId && project.id === activeProjectId ? ' session-tree-item-active' : ''}`}
-                          key={session.id}
-                        >
-                          <button
-                            className="session-item"
-                            type="button"
-                            aria-label={`会话：${session.title}`}
-                            onClick={() => selectProjectSession(project.id, session.id)}
-                            disabled={status === 'streaming'}
-                          >
-                            <span>
-                              <strong>{session.title}</strong>
-                              <small>{session.lastUsedLabel}</small>
-                            </span>
-                          </button>
-                          {session.id === activeSessionId && project.id === activeProjectId ? (
-                            <span className="session-dot" aria-hidden="true" />
-                          ) : null}
-                          <div className="session-actions" role="group" aria-label="会话操作">
-                            <button
-                              className="session-action-button"
-                              type="button"
-                              aria-label="编辑会话"
-                              title="编辑会话标题"
-                              onClick={() => openSessionEditor(project.id, session.id)}
-                              disabled={status === 'streaming'}
-                            >
-                              <Pencil aria-hidden="true" />
-                            </button>
-                            <button
-                              className="session-action-button session-action-button-danger"
-                              type="button"
-                              aria-label="归档会话"
-                              title="归档会话"
-                              onClick={() => void archiveSession(project.id, session.id)}
-                              disabled={status === 'streaming'}
-                            >
-                              <Archive aria-hidden="true" />
-                            </button>
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="session-empty">暂无聊天</p>
-                    )}
-                  </div>
-                ) : null}
+                ))}
+                <div className="menu-divider" />
+                <button type="button" role="menuitem" onClick={openProjectDialog}>
+                  <span className="menu-icon menu-icon-accent">
+                    <Plus aria-hidden="true" />
+                  </span>
+                  创建项目
+                </button>
               </div>
-            );
-          })}
-          {visibleProjects.length === 0 ? <p className="session-empty">没有匹配的会话</p> : null}
-        </nav>
-        <div className="rail-footer">
-          <span className="connection-dot" aria-hidden="true" />
-          <span>本地运行时</span>
-          <small>已连接</small>
-        </div>
-      </aside>
+            ) : null}
+          </div>
+          <button
+            className="new-session-button"
+            type="button"
+            onClick={() => void createSession()}
+            disabled={status === 'streaming'}
+          >
+            <Plus aria-hidden="true" />
+            新建会话
+          </button>
+          {isSearchOpen ? (
+            <div className="session-search">
+              <Search aria-hidden="true" />
+              <input
+                type="search"
+                aria-label="搜索会话"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                autoFocus
+              />
+              <button
+                type="button"
+                aria-label="关闭搜索"
+                onClick={() => {
+                  setIsSearchOpen(false);
+                  setSearchQuery('');
+                }}
+              >
+                <X aria-hidden="true" />
+              </button>
+            </div>
+          ) : (
+            <button className="search-sessions" type="button" onClick={() => setIsSearchOpen(true)}>
+              <Search aria-hidden="true" />
+              搜索会话
+              <kbd>⌘ K</kbd>
+            </button>
+          )}
+          <nav className="project-tree" aria-label="项目树" role="tree">
+            <p className="section-label">项目</p>
+            {visibleProjects.map((project) => {
+              const isExpanded =
+                normalizedSearchQuery !== '' || expandedProjectIds.includes(project.id);
+
+              return (
+                <div className="project-tree-node" role="treeitem" key={project.id}>
+                  <div className="project-tree-row">
+                    <button
+                      className="project-tree-toggle"
+                      type="button"
+                      aria-label={`${isExpanded ? '收起' : '展开'}项目 ${project.name}`}
+                      aria-expanded={isExpanded}
+                      onClick={() => toggleProjectExpanded(project.id)}
+                      disabled={status === 'streaming'}
+                    >
+                      {isExpanded ? (
+                        <ChevronDown aria-hidden="true" />
+                      ) : (
+                        <ChevronRight aria-hidden="true" />
+                      )}
+                    </button>
+                    <button
+                      className="project-tree-project"
+                      type="button"
+                      aria-label={`项目：${project.name}`}
+                      onClick={() => selectProject(project.id)}
+                      disabled={status === 'streaming'}
+                    >
+                      <FolderOpen aria-hidden="true" />
+                      <span>
+                        <strong>{project.name}</strong>
+                        <small>{project.folderName}</small>
+                      </span>
+                      <small className="project-session-count">
+                        {project.sessions.length} 个会话
+                      </small>
+                    </button>
+                  </div>
+                  {isExpanded ? (
+                    <div className="project-tree-sessions" role="group">
+                      {project.sessions.length > 0 ? (
+                        project.sessions.map((session) => (
+                          <div
+                            className={`session-tree-item${session.id === activeSessionId && project.id === activeProjectId ? ' session-tree-item-active' : ''}`}
+                            key={session.id}
+                          >
+                            <button
+                              className="session-item"
+                              type="button"
+                              aria-label={`会话：${session.title}`}
+                              onClick={() => selectProjectSession(project.id, session.id)}
+                              disabled={status === 'streaming'}
+                            >
+                              <span>
+                                <strong>{session.title}</strong>
+                                <small>{session.lastUsedLabel}</small>
+                              </span>
+                            </button>
+                            {session.id === activeSessionId && project.id === activeProjectId ? (
+                              <span className="session-dot" aria-hidden="true" />
+                            ) : null}
+                            <div className="session-actions" role="group" aria-label="会话操作">
+                              <button
+                                className="session-action-button"
+                                type="button"
+                                aria-label="编辑会话"
+                                title="编辑会话标题"
+                                onClick={() => openSessionEditor(project.id, session.id)}
+                                disabled={status === 'streaming'}
+                              >
+                                <Pencil aria-hidden="true" />
+                              </button>
+                              <button
+                                className="session-action-button session-action-button-danger"
+                                type="button"
+                                aria-label="归档会话"
+                                title="归档会话"
+                                onClick={() => void archiveSession(project.id, session.id)}
+                                disabled={status === 'streaming'}
+                              >
+                                <Archive aria-hidden="true" />
+                              </button>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="session-empty">暂无聊天</p>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+            {visibleProjects.length === 0 ? <p className="session-empty">没有匹配的会话</p> : null}
+          </nav>
+          <div className="rail-footer">
+            <span className="connection-dot" aria-hidden="true" />
+            <span>本地运行时</span>
+            <small>已连接</small>
+          </div>
+        </aside>
+      )}
 
       {activeView === 'studio' ? (
         <section className="chat-column" aria-label="智能对话">
@@ -1879,7 +2105,10 @@ export function App() {
           </form>
         </section>
       ) : (
-        <section className="product-view" aria-label={viewLabels[activeView].title}>
+        <section
+          className={`product-view${activeView === 'settings' ? ' product-view-settings' : ''}`}
+          aria-label={viewLabels[activeView].title}
+        >
           <div className="product-view-content">
             {activeView === 'projects' ? (
               <>
@@ -1985,16 +2214,40 @@ export function App() {
               </>
             ) : activeView === 'settings' ? (
               <div className="provider-settings-view">
-                <div className="product-view-heading">
+                <div className="product-view-heading provider-settings-heading">
                   <div>
-                    <p>WEAVE STUDIO</p>
-                    <h2>设置</h2>
-                    <span>查看当前 Server 已配置的模型 Provider。</span>
+                    <p>配置</p>
+                    <h2>模型服务</h2>
+                    <span>管理 Weave 使用的 AI 服务和默认模型。</span>
                   </div>
+                  {providerSettings.canManage ? (
+                    <button
+                      className="primary-button"
+                      type="button"
+                      onClick={() => openProviderForm()}
+                      disabled={providerMutation !== 'idle'}
+                    >
+                      <Plus aria-hidden="true" />
+                      添加 AI 服务
+                    </button>
+                  ) : null}
+                </div>
+                <div className="provider-settings-section-heading">
+                  <div>
+                    <h3>已配置的服务</h3>
+                    <span>{providerSettings.providers.length} 个服务</span>
+                  </div>
+                  <span className="provider-settings-section-status">
+                    <span className="connection-dot" aria-hidden="true" />
+                    本地配置
+                  </span>
                 </div>
                 <div className="provider-settings-list" aria-label="Provider 列表">
                   {providerSettings.providers.map((provider) => (
-                    <article className="provider-settings-item" key={provider.id}>
+                    <article
+                      className={`provider-settings-item${provider.id === providerSettings.defaultProvider ? ' provider-settings-item-default' : ''}`}
+                      key={provider.id}
+                    >
                       <div className="provider-settings-icon" aria-hidden="true">
                         <Bot />
                       </div>
@@ -2003,14 +2256,65 @@ export function App() {
                         <span>{provider.id}</span>
                       </div>
                       <div className="provider-settings-meta">
-                        <span>{provider.type === 'mock' ? '本地演示' : 'OpenAI 兼容'}</span>
-                        <small>{provider.defaultModel ?? '未设置默认模型'}</small>
+                        <span
+                          className={
+                            provider.hasApiKey ? 'provider-status-ready' : 'provider-status-warning'
+                          }
+                        >
+                          <span className="provider-status-dot" aria-hidden="true" />
+                          {provider.hasApiKey ? '可用' : '需要配置 API Key'}
+                        </span>
+                        <small>模型 · {provider.defaultModel ?? '未设置默认模型'}</small>
+                        <small className="provider-settings-endpoint">
+                          {provider.baseUrl ?? '本地运行时'}
+                        </small>
                       </div>
+                      {providerSettings.canManage && provider.editable ? (
+                        <div className="provider-settings-actions">
+                          {provider.id !== providerSettings.defaultProvider ? (
+                            <button
+                              className="provider-action-button"
+                              type="button"
+                              onClick={() => void setDefaultProvider(provider.id)}
+                              disabled={providerMutation !== 'idle' || !provider.hasApiKey}
+                            >
+                              设为默认
+                            </button>
+                          ) : (
+                            <span className="provider-default-mark">
+                              <Check aria-hidden="true" />
+                              当前默认
+                            </span>
+                          )}
+                          <button
+                            className="provider-action-button"
+                            type="button"
+                            aria-label={`编辑 Provider ${provider.label}`}
+                            onClick={() => openProviderForm(provider)}
+                            disabled={providerMutation !== 'idle'}
+                          >
+                            <Pencil aria-hidden="true" />
+                            编辑
+                          </button>
+                          <button
+                            className="provider-action-button provider-action-button-danger"
+                            type="button"
+                            aria-label={`删除 Provider ${provider.label}`}
+                            onClick={() => setProviderToDelete(provider)}
+                            disabled={providerMutation !== 'idle'}
+                          >
+                            <Trash2 aria-hidden="true" />
+                            删除
+                          </button>
+                        </div>
+                      ) : null}
                     </article>
                   ))}
                 </div>
                 <p className="provider-settings-note">
-                  API Key 由本地 Server 配置管理，浏览器只接收 Provider 的公开信息。
+                  {providerSettings.canManage
+                    ? 'API Key 只保存在本机的系统密钥存储中，页面不会回显已保存的密钥。'
+                    : '浏览器开发模式下，Provider 通过 .env 只读配置；需要管理 API Key 时请使用 Desktop。'}
                 </p>
               </div>
             ) : (
@@ -2126,6 +2430,199 @@ export function App() {
           <button type="button" aria-label="关闭提示" onClick={() => setNotice(null)}>
             <X aria-hidden="true" />
           </button>
+        </div>
+      ) : null}
+      {providerForm !== null ? (
+        <div
+          className="dialog-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              closeProviderForm();
+            }
+          }}
+        >
+          <section
+            className="project-dialog provider-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="provider-dialog-title"
+          >
+            <header className="project-dialog-header">
+              <div>
+                <p>模型服务</p>
+                <h2 id="provider-dialog-title">
+                  {providerForm.mode === 'create' ? '添加 AI 服务' : '编辑 Provider'}
+                </h2>
+              </div>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="关闭 Provider 表单"
+                onClick={closeProviderForm}
+                disabled={providerMutation === 'saving'}
+              >
+                <X aria-hidden="true" />
+              </button>
+            </header>
+            <form className="project-dialog-form" onSubmit={(event) => void saveProvider(event)}>
+              <div className="provider-form-grid">
+                <label className="provider-form-field">
+                  <span>显示名称</span>
+                  <input
+                    aria-label="显示名称"
+                    value={providerForm.label}
+                    onChange={(event) => updateProviderForm('label', event.target.value)}
+                    placeholder="例如 DeepSeek"
+                    autoFocus
+                  />
+                </label>
+                <label className="provider-form-field">
+                  <span>Provider ID</span>
+                  <input
+                    aria-label="Provider ID"
+                    value={providerForm.id}
+                    onChange={(event) => updateProviderForm('id', event.target.value)}
+                    placeholder="例如 deepseek"
+                    disabled={providerForm.mode === 'edit'}
+                  />
+                </label>
+              </div>
+              <label className="provider-form-field">
+                <span>API 地址</span>
+                <input
+                  aria-label="API 地址"
+                  type="url"
+                  value={providerForm.baseUrl}
+                  onChange={(event) => updateProviderForm('baseUrl', event.target.value)}
+                  placeholder="https://api.deepseek.com"
+                />
+              </label>
+              <label className="provider-form-field">
+                <span>API Key</span>
+                <input
+                  aria-label="API Key"
+                  type="password"
+                  value={providerForm.apiKey}
+                  onChange={(event) => updateProviderForm('apiKey', event.target.value)}
+                  placeholder={
+                    providerForm.mode === 'edit' ? '留空表示保持当前密钥' : '输入 API Key'
+                  }
+                  autoComplete="new-password"
+                />
+              </label>
+              <label className="provider-form-field">
+                <span>默认模型</span>
+                <input
+                  aria-label="默认模型"
+                  value={providerForm.defaultModel}
+                  onChange={(event) => updateProviderForm('defaultModel', event.target.value)}
+                  placeholder="例如 deepseek-chat"
+                />
+              </label>
+              <label className="provider-checkbox-field">
+                <input
+                  type="checkbox"
+                  checked={providerForm.makeDefault}
+                  onChange={(event) => updateProviderForm('makeDefault', event.target.checked)}
+                />
+                <span>设为默认 Provider</span>
+              </label>
+              {providerForm.mode === 'edit' ? (
+                <label className="provider-checkbox-field provider-checkbox-danger">
+                  <input
+                    type="checkbox"
+                    checked={providerForm.clearApiKey}
+                    onChange={(event) => updateProviderForm('clearApiKey', event.target.checked)}
+                  />
+                  <span>清除当前密钥</span>
+                </label>
+              ) : null}
+              {providerForm.mode === 'edit' ? (
+                <p className="project-dialog-note">
+                  留空表示保持当前密钥，清除密钥后 Provider 将不能用于对话。
+                </p>
+              ) : null}
+              {providerFormError !== null ? (
+                <p className="provider-form-error" role="alert">
+                  {providerFormError}
+                </p>
+              ) : null}
+              <footer className="project-dialog-actions">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={closeProviderForm}
+                  disabled={providerMutation === 'saving'}
+                >
+                  取消
+                </button>
+                <button
+                  className="primary-button"
+                  type="submit"
+                  disabled={providerMutation === 'saving'}
+                >
+                  {providerMutation === 'saving' ? '保存中...' : '保存 Provider'}
+                </button>
+              </footer>
+            </form>
+          </section>
+        </div>
+      ) : null}
+      {providerToDelete !== null ? (
+        <div
+          className="dialog-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setProviderToDelete(null);
+            }
+          }}
+        >
+          <section
+            className="project-dialog session-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-provider-dialog-title"
+          >
+            <header className="project-dialog-header">
+              <div>
+                <p>删除确认</p>
+                <h2 id="delete-provider-dialog-title">删除 Provider</h2>
+              </div>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="关闭删除确认"
+                onClick={() => setProviderToDelete(null)}
+                disabled={providerMutation === 'deleting'}
+              >
+                <X aria-hidden="true" />
+              </button>
+            </header>
+            <div className="project-dialog-form">
+              <p className="delete-session-warning">
+                确定删除「{providerToDelete.label}」吗？已保存的密钥和配置会从本机移除。
+              </p>
+              <footer className="project-dialog-actions">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => setProviderToDelete(null)}
+                  disabled={providerMutation === 'deleting'}
+                >
+                  取消
+                </button>
+                <button
+                  className="danger-button"
+                  type="button"
+                  onClick={() => void deleteProvider()}
+                  disabled={providerMutation === 'deleting'}
+                >
+                  <Trash2 aria-hidden="true" />
+                  {providerMutation === 'deleting' ? '删除中...' : '确认删除'}
+                </button>
+              </footer>
+            </div>
+          </section>
         </div>
       ) : null}
       {editingSession !== null ? (

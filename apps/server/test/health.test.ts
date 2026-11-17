@@ -16,6 +16,8 @@ import {
   sessionEventStoreService,
 } from '../src/runtime.js';
 import { startServer } from '../src/main.js';
+import type { ProviderSecretCodec } from '../src/provider-secret-codec.js';
+import type { ProviderSettingsStore } from '../src/provider-settings-store.js';
 
 describe('GET /health', () => {
   it('returns running runtime health', async () => {
@@ -122,6 +124,102 @@ describe('GET /health', () => {
 });
 
 describe('startServer', () => {
+  it('restores saved Provider configuration after Server restart', async () => {
+    const database = createTemporaryDatabaseFile();
+    const secretCodec: ProviderSecretCodec = {
+      isAvailable: () => true,
+      encrypt: (value) => `encrypted:${value}`,
+      decrypt: (value) => value.replace(/^encrypted:/, ''),
+    };
+    const input = {
+      id: 'deepseek',
+      label: 'DeepSeek',
+      type: 'openai-compatible',
+      baseUrl: 'https://api.deepseek.com',
+      apiKey: 'deepseek-secret',
+      defaultModel: 'deepseek-chat',
+      makeDefault: true,
+    };
+
+    try {
+      const first = await startServer(0, {
+        databaseFile: database.filename,
+        providerSecretCodec: secretCodec,
+        environment: {},
+      });
+      const createdResponse = await fetch(`http://127.0.0.1:${first.port}/settings/providers`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+        headers: { 'content-type': 'application/json' },
+      });
+      expect(createdResponse.status).toBe(201);
+      await expect(createdResponse.json()).resolves.toMatchObject({
+        provider: { id: 'deepseek', hasApiKey: true },
+      });
+      await first.stop();
+
+      const second = await startServer(0, {
+        databaseFile: database.filename,
+        providerSecretCodec: secretCodec,
+        environment: {},
+      });
+      const settingsResponse = await fetch(`http://127.0.0.1:${second.port}/settings/providers`);
+
+      expect(settingsResponse.status).toBe(200);
+      await expect(settingsResponse.json()).resolves.toEqual(
+        expect.objectContaining({
+          defaultProvider: 'deepseek',
+          canManage: true,
+          providers: expect.arrayContaining([
+            expect.objectContaining({ id: 'deepseek', hasApiKey: true }),
+          ]),
+        }),
+      );
+      await second.stop();
+    } finally {
+      await database.cleanup();
+    }
+  });
+
+  it('closes the injected Provider Settings Store once during shutdown', async () => {
+    const database = createTemporaryDatabaseFile();
+    let closeCount = 0;
+    const providerSettingsStore: ProviderSettingsStore = {
+      async list() {
+        return [];
+      },
+      async get() {
+        return undefined;
+      },
+      async create() {},
+      async update() {},
+      async delete() {},
+      async close() {
+        closeCount += 1;
+      },
+    };
+    const secretCodec: ProviderSecretCodec = {
+      isAvailable: () => true,
+      encrypt: (value) => value,
+      decrypt: (value) => value,
+    };
+
+    try {
+      const server = await startServer(0, {
+        databaseFile: database.filename,
+        providerSettingsStore,
+        providerSecretCodec: secretCodec,
+        environment: {},
+      });
+
+      await Promise.all([server.stop(), server.stop()]);
+
+      expect(closeCount).toBe(1);
+    } finally {
+      await database.cleanup();
+    }
+  });
+
   it('returns the actual port when started with port zero', async () => {
     const database = createTemporaryDatabaseFile();
 

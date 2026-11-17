@@ -100,12 +100,14 @@ function createWorkspaceFetchMock(
       ];
   let nextProjectId = 0;
   let nextSessionId = 0;
+  let currentProviderSettings = providerSettings;
 
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
-    if (url === '/settings/providers') {
-      if (providerSettings === undefined) {
+    const requestPath = new URL(url, 'http://weave.local').pathname;
+    if (requestPath === '/settings/providers') {
+      if (currentProviderSettings === undefined) {
         return new Response(
           JSON.stringify({
             error: { code: 'provider-service-unavailable', message: 'Provider unavailable' },
@@ -116,18 +118,125 @@ function createWorkspaceFetchMock(
           },
         );
       }
-      return new Response(JSON.stringify(providerSettings), {
+      if (method === 'GET') {
+        return new Response(JSON.stringify(currentProviderSettings), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (method === 'POST') {
+        const body = JSON.parse(String(init?.body)) as {
+          id: string;
+          label: string;
+          type: 'openai-compatible';
+          baseUrl: string;
+          defaultModel: string;
+          makeDefault: boolean;
+        };
+        const provider = {
+          id: body.id,
+          label: body.label,
+          type: body.type,
+          baseUrl: body.baseUrl,
+          defaultModel: body.defaultModel,
+          hasApiKey: true,
+          editable: true,
+        };
+        currentProviderSettings = {
+          providers: [...currentProviderSettings.providers, provider],
+          defaultProvider: body.makeDefault ? body.id : currentProviderSettings.defaultProvider,
+          canManage: true,
+        };
+        return new Response(JSON.stringify({ provider }), {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ error: { code: 'not-found', message: 'Not found' } }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    const providerPatchMatch = requestPath.match(/^\/settings\/providers\/([^/]+)$/);
+    if (providerPatchMatch !== null && currentProviderSettings !== undefined) {
+      const providerId = decodeURIComponent(providerPatchMatch[1]!);
+      const current = currentProviderSettings.providers.find(
+        (provider) => provider.id === providerId,
+      );
+      if (current === undefined) {
+        return new Response(
+          JSON.stringify({ error: { code: 'not-found', message: 'Not found' } }),
+          {
+            status: 404,
+            headers: { 'content-type': 'application/json' },
+          },
+        );
+      }
+      if (method === 'PATCH') {
+        const body = JSON.parse(String(init?.body)) as {
+          label?: string;
+          baseUrl?: string;
+          defaultModel?: string;
+          makeDefault?: boolean;
+          clearApiKey?: boolean;
+        };
+        const provider = {
+          ...current,
+          ...(body.label === undefined ? {} : { label: body.label }),
+          ...(body.baseUrl === undefined ? {} : { baseUrl: body.baseUrl }),
+          ...(body.defaultModel === undefined ? {} : { defaultModel: body.defaultModel }),
+          hasApiKey: body.clearApiKey === true ? false : current.hasApiKey,
+        };
+        currentProviderSettings = {
+          ...currentProviderSettings,
+          providers: currentProviderSettings.providers.map((item) =>
+            item.id === providerId ? provider : item,
+          ),
+          defaultProvider:
+            body.makeDefault === true ? providerId : currentProviderSettings.defaultProvider,
+        };
+        return new Response(JSON.stringify({ provider }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (method === 'DELETE') {
+        currentProviderSettings = {
+          ...currentProviderSettings,
+          providers: currentProviderSettings.providers.filter((item) => item.id !== providerId),
+          defaultProvider:
+            currentProviderSettings.defaultProvider === providerId
+              ? 'mock'
+              : currentProviderSettings.defaultProvider,
+        };
+        return new Response(null, { status: 204 });
+      }
+    }
+    const providerDefaultMatch = requestPath.match(/^\/settings\/providers\/([^/]+)\/default$/);
+    if (
+      providerDefaultMatch !== null &&
+      method === 'POST' &&
+      currentProviderSettings !== undefined
+    ) {
+      currentProviderSettings = {
+        ...currentProviderSettings,
+        defaultProvider: decodeURIComponent(providerDefaultMatch[1]!),
+      };
+      return new Response(JSON.stringify(currentProviderSettings), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       });
     }
-    if (url === '/projects?includeArchived=true' || url === '/projects?includeArchived=false') {
+    if (
+      requestPath === '/projects' &&
+      new URL(url, 'http://weave.local').searchParams.has('includeArchived')
+    ) {
       return new Response(JSON.stringify({ projects, warnings: [] }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       });
     }
-    if (url === '/projects' && method === 'POST') {
+    if (requestPath === '/projects' && method === 'POST') {
       const body = JSON.parse(String(init?.body)) as { name: string; folderName: string };
       const project = {
         id: `project-created-${++nextProjectId}`,
@@ -142,7 +251,7 @@ function createWorkspaceFetchMock(
         headers: { 'content-type': 'application/json' },
       });
     }
-    const projectSessionMatch = url.match(/^\/projects\/([^/]+)\/sessions$/);
+    const projectSessionMatch = requestPath.match(/^\/projects\/([^/]+)\/sessions$/);
     if (projectSessionMatch !== null && method === 'POST') {
       const body = JSON.parse(String(init?.body)) as { title?: string };
       const id = `session-created-${++nextSessionId}`;
@@ -155,7 +264,7 @@ function createWorkspaceFetchMock(
         headers: { 'content-type': 'application/json' },
       });
     }
-    const sessionMatch = url.match(/^\/sessions\/([^/]+)(?:\/(archive|restore))?$/);
+    const sessionMatch = requestPath.match(/^\/sessions\/([^/]+)(?:\/(archive|restore))?$/);
     if (sessionMatch !== null) {
       const id = decodeURIComponent(sessionMatch[1]!);
       const current = sessions.get(id) ?? sessionDetail(id, '未命名会话');
@@ -651,15 +760,21 @@ describe('Studio Agent Chat', () => {
           label: '本地演示',
           type: 'mock',
           defaultModel: 'weave-local-demo',
+          hasApiKey: false,
+          editable: false,
         },
         {
           id: 'deepseek',
           label: 'DeepSeek',
           type: 'openai-compatible',
+          baseUrl: 'https://api.deepseek.com',
           defaultModel: 'deepseek-chat',
+          hasApiKey: true,
+          editable: true,
         },
       ],
       defaultProvider: 'deepseek',
+      canManage: false,
     });
     vi.stubGlobal('fetch', fetchMock);
     streamAgentRunMock.mockResolvedValue(undefined);
@@ -961,15 +1076,21 @@ describe('Studio Agent Chat', () => {
           label: '本地演示',
           type: 'mock',
           defaultModel: 'weave-local-demo',
+          hasApiKey: false,
+          editable: false,
         },
         {
           id: 'deepseek',
           label: 'DeepSeek',
           type: 'openai-compatible',
+          baseUrl: 'https://api.deepseek.com',
           defaultModel: 'deepseek-chat',
+          hasApiKey: true,
+          editable: true,
         },
       ],
       defaultProvider: 'mock',
+      canManage: false,
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -1001,15 +1122,21 @@ describe('Studio Agent Chat', () => {
           label: '本地演示',
           type: 'mock',
           defaultModel: 'weave-local-demo',
+          hasApiKey: false,
+          editable: false,
         },
         {
           id: 'deepseek',
           label: 'DeepSeek',
           type: 'openai-compatible',
+          baseUrl: 'https://api.deepseek.com',
           defaultModel: 'deepseek-chat',
+          hasApiKey: true,
+          editable: true,
         },
       ],
       defaultProvider: 'mock',
+      canManage: false,
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -1017,11 +1144,123 @@ describe('Studio Agent Chat', () => {
     fireEvent.click(screen.getByRole('button', { name: '设置' }));
 
     const settings = screen.getByRole('region', { name: '设置' });
-    expect(within(settings).getByRole('heading', { name: '设置' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: '设置' })).toBeTruthy();
+    expect(screen.getByRole('complementary', { name: '设置分类' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '模型服务' })).toBeTruthy();
+    expect(within(settings).getByRole('heading', { name: '模型服务' })).toBeTruthy();
+    expect(within(settings).getByText('已配置的服务')).toBeTruthy();
     expect(within(settings).getByText('DeepSeek')).toBeTruthy();
-    expect(within(settings).getByText('deepseek-chat')).toBeTruthy();
-    expect(within(settings).getByText(/API Key 由本地 Server 配置管理/)).toBeTruthy();
+    expect(within(settings).getByText(/deepseek-chat/)).toBeTruthy();
+    expect(within(settings).getByText(/浏览器开发模式下/)).toBeTruthy();
     expect(within(settings).queryByText('server-only-key')).toBeNull();
+  });
+
+  it('allows Desktop users to add a Provider without displaying the secret afterward', async () => {
+    window.weaveDesktop = {
+      isDesktop: true,
+      serverUrl: 'http://127.0.0.1:46321',
+    };
+    fetchMock = createWorkspaceFetchMock({
+      providers: [
+        {
+          id: 'mock',
+          label: '本地演示',
+          type: 'mock',
+          defaultModel: 'weave-local-demo',
+          hasApiKey: false,
+          editable: false,
+        },
+      ],
+      defaultProvider: 'mock',
+      canManage: true,
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: '设置' }));
+    fireEvent.click(screen.getByRole('button', { name: '添加 AI 服务' }));
+    fireEvent.change(screen.getByLabelText('显示名称'), {
+      target: { value: 'DeepSeek' },
+    });
+    fireEvent.change(screen.getByLabelText('Provider ID'), {
+      target: { value: 'deepseek' },
+    });
+    fireEvent.change(screen.getByLabelText('API 地址'), {
+      target: { value: 'https://api.deepseek.com' },
+    });
+    fireEvent.change(screen.getByLabelText('API Key'), {
+      target: { value: 'deepseek-secret' },
+    });
+    fireEvent.change(screen.getByLabelText('默认模型'), {
+      target: { value: 'deepseek-chat' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存 Provider' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://127.0.0.1:46321/settings/providers',
+        expect.objectContaining({
+          method: 'POST',
+          body: expect.stringContaining('"apiKey":"deepseek-secret"'),
+        }),
+      );
+    });
+    await waitFor(() => expect(screen.getByText('DeepSeek')).toBeTruthy());
+    expect(screen.queryByDisplayValue('deepseek-secret')).toBeNull();
+  });
+
+  it('edits an existing Provider with an empty API key to keep the old secret', async () => {
+    window.weaveDesktop = {
+      isDesktop: true,
+      serverUrl: 'http://127.0.0.1:46321',
+    };
+    fetchMock = createWorkspaceFetchMock({
+      providers: [
+        {
+          id: 'mock',
+          label: '本地演示',
+          type: 'mock',
+          defaultModel: 'weave-local-demo',
+          hasApiKey: false,
+          editable: false,
+        },
+        {
+          id: 'deepseek',
+          label: 'DeepSeek',
+          type: 'openai-compatible',
+          baseUrl: 'https://api.deepseek.com',
+          defaultModel: 'deepseek-chat',
+          hasApiKey: true,
+          editable: true,
+        },
+      ],
+      defaultProvider: 'deepseek',
+      canManage: true,
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: '设置' }));
+    fireEvent.click(screen.getByRole('button', { name: '编辑 Provider DeepSeek' }));
+
+    expect((screen.getByLabelText('API Key') as HTMLInputElement).value).toBe('');
+    fireEvent.click(screen.getByRole('button', { name: '保存 Provider' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://127.0.0.1:46321/settings/providers/deepseek',
+        expect.objectContaining({
+          method: 'PATCH',
+          body: JSON.stringify({
+            label: 'DeepSeek',
+            baseUrl: 'https://api.deepseek.com',
+            apiKey: '',
+            defaultModel: 'deepseek-chat',
+            makeDefault: true,
+          }),
+        }),
+      );
+    });
   });
 
   it('opens the permission and context menus', async () => {

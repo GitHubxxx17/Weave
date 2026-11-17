@@ -10,7 +10,10 @@ export const providerDescriptorSchema = z
     id: nonEmptyStringSchema,
     label: nonEmptyStringSchema,
     type: providerTypeSchema,
+    baseUrl: z.string().url().optional(),
     defaultModel: nonEmptyStringSchema.optional(),
+    hasApiKey: z.boolean(),
+    editable: z.boolean(),
   })
   .strict();
 
@@ -19,8 +22,28 @@ export const providerSettingsSchema = z
   .object({
     providers: z.array(providerDescriptorSchema),
     defaultProvider: nonEmptyStringSchema,
+    canManage: z.boolean(),
   })
   .strict();
 
 export type ProviderDescriptor = z.infer<typeof providerDescriptorSchema>;
 export type ProviderSettings = z.infer<typeof providerSettingsSchema>;
+
+export interface ProviderSettingsInput {
+  readonly id: string;
+  readonly label: string;
+  readonly type: 'openai-compatible';
+  readonly baseUrl: string;
+  readonly apiKey: string;
+  readonly defaultModel: string;
+  readonly makeDefault: boolean;
+}
+
+export interface ProviderSettingsPatch {
+  readonly label?: string;
+  readonly baseUrl?: string;
+  readonly apiKey?: string;
+  readonly clearApiKey?: boolean;
+  readonly defaultModel?: string;
+  readonly makeDefault?: boolean;
+}
