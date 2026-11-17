@@ -16,6 +16,11 @@ const mocks = vi.hoisted(() => {
   }
 
   return {
+    safeStorage: {
+      isEncryptionAvailable: vi.fn(() => true),
+      encryptString: vi.fn(),
+      decryptString: vi.fn(),
+    },
     app: {
       exit: vi.fn(),
       getPath: vi.fn(() => '/tmp/weave-user-data'),
@@ -37,6 +42,7 @@ vi.mock('electron', () => ({
   BrowserWindow: mocks.FakeBrowserWindow,
   app: mocks.app,
   dialog: mocks.dialog,
+  safeStorage: mocks.safeStorage,
 }));
 
 vi.mock('@weave/server/main', () => ({
@@ -53,6 +59,12 @@ const config = {
   studioOrigin: 'http://127.0.0.1:5173',
 } as const;
 
+const providerSecretCodec = {
+  isAvailable: vi.fn(() => true),
+  encrypt: vi.fn((value: string) => value),
+  decrypt: vi.fn((value: string) => value),
+};
+
 describe('desktop main process', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -63,11 +75,12 @@ describe('desktop main process', () => {
     const stop = vi.fn(async () => undefined);
     mocks.startServer.mockResolvedValueOnce({ port: 46321, stop });
 
-    const result = await startDesktopServer(config);
+    const result = await startDesktopServer(config, providerSecretCodec);
 
     expect(mocks.startServer).toHaveBeenCalledWith(0, {
       databaseFile: config.databaseFile,
       studioOrigin: config.studioOrigin,
+      providerSecretCodec,
     });
     expect(result.port).toBe(46321);
     expect(result.stop).toBe(stop);

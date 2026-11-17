@@ -2,6 +2,8 @@ import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, dialog } from 'electron';
 import { startServer } from '@weave/server/main';
 import { createDesktopConfig, type DesktopConfig } from './desktop-config.js';
+import { createElectronProviderSecretCodec } from './provider-secret-codec.js';
+import type { ProviderSecretCodec } from '@weave/server';
 
 interface DesktopServer {
   readonly port: number;
@@ -97,10 +99,12 @@ export function createMainWindow(config: DesktopConfig, serverUrl: string): Brow
 
 export async function startDesktopServer(
   config: DesktopConfig,
+  providerSecretCodec: ProviderSecretCodec,
 ): Promise<{ port: number; stop: () => Promise<void> }> {
   const server = await startServer(0, {
     databaseFile: config.databaseFile,
     studioOrigin: config.studioOrigin,
+    providerSecretCodec,
   });
 
   return {
@@ -150,7 +154,7 @@ export async function startDesktopApplication(): Promise<void> {
       userDataDirectory: app.getPath('userData'),
       environment: process.env,
     });
-    desktopServer = await startDesktopServer(config);
+    desktopServer = await startDesktopServer(config, createElectronProviderSecretCodec());
     createMainWindow(config, `http://127.0.0.1:${desktopServer.port}`);
   } catch (error: unknown) {
     await stopDesktopServer().catch((cleanupError: unknown) => {

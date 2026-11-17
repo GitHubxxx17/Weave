@@ -76,3 +76,4 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
 export type { ApprovalAppOptions } from './approval-api.js';
 export type { AgentAppOptions } from './agent-api.js';
 export type { ProviderAppOptions } from './provider-api.js';
+export type { ProviderSecretCodec } from './provider-secret-codec.js';

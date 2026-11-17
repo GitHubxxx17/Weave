@@ -9,6 +9,7 @@ import { createApp } from './app.js';
 import { createSessionService } from './session-service.js';
 import { createServerLlmProviders } from './llm-providers.js';
 import { resolveDatabaseFile } from './persistence-path.js';
+import type { ProviderSecretCodec } from './provider-secret-codec.js';
 import {
   approvalBrokerService,
   createServerAgentRunner,
@@ -36,6 +37,7 @@ export interface StartServerOptions {
   readonly studioOrigin?: string;
   readonly environment?: NodeJS.ProcessEnv;
   readonly fetch?: typeof globalThis.fetch;
+  readonly providerSecretCodec?: ProviderSecretCodec;
   readonly projectStore?: ProjectStore;
   readonly sessionStoreFactory?: () => SessionEventStore | Promise<SessionEventStore>;
   readonly plugins?: readonly WeavePlugin[];
