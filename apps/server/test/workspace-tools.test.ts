@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createLlmProviderRegistry } from '@weave/llm';
-import type { StreamEvent } from '@weave/protocol';
+import type { LlmRequest, StreamEvent } from '@weave/protocol';
 import { createRuntime } from '@weave/runtime';
 import { createInMemorySessionEventStore } from '@weave/session';
 import { createInMemoryProjectStore, type ProjectStore } from '@weave/workspace';
@@ -16,6 +16,7 @@ import {
   getServerSessionStore,
 } from '../src/runtime.js';
 import { createWorkspaceRootResolver } from '../src/workspace-root.js';
+import { createAgentInstructions } from '../src/agent-instructions.js';
 
 const cleanups: Array<() => Promise<void>> = [];
 
@@ -253,5 +254,154 @@ describe('Project folder validation', () => {
       expect(response.status).toBe(400);
       expect(await response.json()).toMatchObject({ error: { code: 'project-folder-invalid' } });
     }
+  });
+});
+
+describe('Default Agent instructions', () => {
+  it('tells the model its tools and the Project folder', async () => {
+    const instructions = createAgentInstructions({
+      toolNames: () => ['read_file', 'write_file'],
+      resolveWorkspaceRoot: async () => '/Users/me/demo',
+    });
+
+    const text = await instructions({ sessionId: 'session-1' });
+
+    expect(text).toContain('Weave Agent');
+    expect(text).toContain('read_file、write_file');
+    expect(text).toContain('当前项目文件夹：/Users/me/demo');
+    expect(text).toContain('相对这个文件夹的路径');
+  });
+
+  it('tells the model when the Project has no folder', async () => {
+    const instructions = createAgentInstructions({
+      toolNames: () => ['read_file', 'write_file'],
+      resolveWorkspaceRoot: async () => undefined,
+    });
+
+    await expect(instructions({ sessionId: 'session-1' })).resolves.toContain(
+      '当前项目还没有设置文件夹',
+    );
+  });
+
+  it('states that no tools are available when the registry is empty', async () => {
+    const instructions = createAgentInstructions({ toolNames: () => [] });
+
+    const text = await instructions({ sessionId: 'session-1' });
+    expect(text).toContain('本轮没有可用的工具');
+    expect(text).not.toContain('文件夹');
+  });
+
+  it('is sent as the first message of every model request', async () => {
+    const folder = await createTemporaryFolder();
+    const requests: LlmRequest[] = [];
+    const registry = createLlmProviderRegistry([
+      {
+        id: 'mock',
+        label: '本地演示',
+        type: 'mock',
+        client: {
+          async *stream(request) {
+            requests.push(structuredClone(request));
+            yield { type: 'text-delta', text: '好的' } as const;
+            yield { type: 'finish', reason: 'stop' } as const;
+          },
+        },
+        defaultModel: 'test-model',
+      },
+    ]);
+    const runtime = createServerRuntime({
+      providerSettings: { registry, providers: registry.list(), defaultProvider: 'mock' },
+    });
+    await runtime.start();
+    cleanups.push(() => runtime.stop());
+    const projectStore = createInMemoryProjectStore();
+    cleanups.push(() => projectStore.close());
+    const project = await projectStore.createProject({
+      name: 'Files',
+      folderName: 'files',
+      folderPath: folder,
+    });
+    const sessionService = createSessionService({
+      projectStore,
+      sessionStore: getServerSessionStore(runtime),
+    });
+    const session = await sessionService.create(project.id);
+    const app = createApp(runtime, {
+      agentRunner: createServerAgentRunner(runtime, {
+        resolveWorkspaceRoot: createWorkspaceRootResolver(projectStore),
+      }),
+      sessionService,
+    });
+
+    const response = await app.request('/agent/runs/stream', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: session.id,
+        userMessage: { role: 'user', content: [{ type: 'text', text: '能读文件吗' }] },
+        provider: 'mock',
+        model: 'test-model',
+      }),
+    });
+    await response.text();
+
+    expect(requests[0]?.messages[0]?.role).toBe('system');
+    expect(JSON.stringify(requests[0]?.messages[0])).toContain(`当前项目文件夹：${folder}`);
+    expect(requests[0]?.tools?.map((tool) => tool.name)).toEqual(['read_file', 'write_file']);
+  });
+});
+
+describe('Project folder update API', () => {
+  async function createApiApp() {
+    const runtime = createRuntime();
+    await runtime.start();
+    const projectStore = createInMemoryProjectStore();
+    const sessionStore = createInMemorySessionEventStore();
+    cleanups.push(
+      () => runtime.stop(),
+      () => projectStore.close(),
+      () => sessionStore.close(),
+    );
+    const sessionService = createSessionService({ projectStore, sessionStore });
+    const project = await projectStore.createProject({ name: 'Old', folderName: 'old' });
+    return { app: createApp(runtime, { projectStore, sessionService }), project, projectStore };
+  }
+
+  function patchFolder(
+    app: Awaited<ReturnType<typeof createApiApp>>['app'],
+    projectId: string,
+    folderPath: string | null,
+  ) {
+    return app.request(`/projects/${projectId}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ folderPath }),
+    });
+  }
+
+  it('sets and clears the folder of an existing Project', async () => {
+    const folder = await createTemporaryFolder();
+    const { app, project, projectStore } = await createApiApp();
+
+    const setResponse = await patchFolder(app, project.id, folder);
+    expect(setResponse.status).toBe(200);
+    expect(await setResponse.json()).toMatchObject({ id: project.id, folderPath: folder });
+    expect((await projectStore.getProject(project.id))?.folderPath).toBe(folder);
+
+    const clearResponse = await patchFolder(app, project.id, null);
+    expect(clearResponse.status).toBe(200);
+    expect((await projectStore.getProject(project.id))?.folderPath).toBeUndefined();
+  });
+
+  it('rejects a missing folder and an unknown Project', async () => {
+    const folder = await createTemporaryFolder();
+    const { app, project } = await createApiApp();
+
+    const invalid = await patchFolder(app, project.id, join(folder, 'missing'));
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toMatchObject({ error: { code: 'project-folder-invalid' } });
+
+    const unknown = await patchFolder(app, 'missing-project', folder);
+    expect(unknown.status).toBe(404);
   });
 });
