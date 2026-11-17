@@ -191,10 +191,20 @@ unbounded model/tool cycle.
 
 After a valid text terminal `finish`, the Runner appends the complete assistant
 message (when non-empty), the completed Step, and the completed Turn in one
-batch, then yields `completed`. Tool execution failures persist a failed Tool
-Result and failed Step/Turn, then rethrow the original Pipeline error. The
-first Tool Loop slice does not send failed tool results back to the model for
-recovery.
+batch, then yields `completed`.
+
+Tool failures are split into two groups. A recoverable `ToolExecutionError`
+(`tool-not-found`, `tool-invalid-json`, `tool-invalid-arguments`,
+`tool-execution-failed`, `tool-timeout`, `tool-result-serialization-failed`,
+`tool-approval-rejected`, `tool-approval-expired`) persists a failed Tool
+Result, a `role: 'tool'` message describing the error, and a failed tool Step,
+emits `tool-result` with `status: 'failed'`, and then continues with the next
+model step so the model can correct the call or explain the outcome. The
+description names the tool, the error code, and the tool's own error message;
+it never contains arguments or file content. Cancellation,
+`tool-approval-cancelled`, `tool-approval-required`, and errors that are not a
+`ToolExecutionError` still persist failed or cancelled Step/Turn events and
+rethrow the original error.
 
 The Runner uses `projectSession()` for recovery rather than extracting
 messages directly from raw events. An existing Session is continued without
@@ -316,6 +326,20 @@ remain consistent with every other Runtime tool. `read_file` is not protected
 in this phase. `write_file` declares a high-risk `workspace.write_file`
 Approval requirement whose summary includes only path, byte count, and
 overwrite state, never the complete content.
+
+The tools accept either a fixed `workspace` policy or a `resolveWorkspace`
+function that receives the `ToolExecutionContext` and returns the policy for
+that call's Session. The Server uses the resolver form: after trusted plugins
+are registered, `createServerAgentRunner(runtime, { resolveWorkspaceRoot })`
+registers both tools, and the resolver maps the Session to its Project's
+`folderPath`. A Session whose Project has no folder fails the call with
+`workspace-file-unavailable`, which the Runner returns to the model as a
+recoverable failure. `POST /projects` only accepts a `folderPath` that is an
+existing absolute directory. The Server Tool Pipeline uses a ten-minute
+timeout that also bounds the wait for Approval, so an unanswered request
+expires instead of blocking the turn. Studio subscribes to
+`GET /approvals/stream` and shows pending requests as cards above the
+composer; the Broker remains the only Approval state.
 
 Approval does not replace Workspace policy or filesystem validation. The file
 tool still resolves the real root and target after approval, so a stale or
