@@ -1,4 +1,6 @@
 import type { Context, Hono } from 'hono';
+import { stat } from 'node:fs/promises';
+import { isAbsolute } from 'node:path';
 import { z } from 'zod';
 import type { ProjectStore } from '@weave/workspace';
 import {
@@ -25,6 +27,18 @@ const createSessionRequestSchema = z
 
 const includeArchivedSchema = z.enum(['true', 'false']).transform((value) => value === 'true');
 
+/** The Agent can only use a Project folder that the Server can see as a directory. */
+async function isExistingDirectory(folderPath: string): Promise<boolean> {
+  if (!isAbsolute(folderPath) || folderPath.includes('\0')) {
+    return false;
+  }
+  try {
+    return (await stat(folderPath)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /** Dependencies needed by Project and Project Session routes. */
 export interface WorkspaceAppOptions {
   readonly projectStore?: ProjectStore | undefined;
@@ -32,7 +46,11 @@ export interface WorkspaceAppOptions {
 }
 
 function errorStatus(code: string): 400 | 404 | 409 | 422 | 500 | 503 {
-  if (code === 'workspace-store-invalid-input' || code === 'invalid-request') {
+  if (
+    code === 'workspace-store-invalid-input' ||
+    code === 'invalid-request' ||
+    code === 'project-folder-invalid'
+  ) {
     return 400;
   }
   if (code === 'workspace-project-not-found' || code === 'session-not-found') {
@@ -134,6 +152,16 @@ export function registerWorkspaceRoutes(app: Hono, options: WorkspaceAppOptions)
     const parsed = createProjectRequestSchema.safeParse(body);
     if (!parsed.success) {
       return jsonError(context, 'workspace-store-invalid-input', 'Project input is invalid');
+    }
+    if (
+      parsed.data.folderPath !== undefined &&
+      !(await isExistingDirectory(parsed.data.folderPath))
+    ) {
+      return jsonError(
+        context,
+        'project-folder-invalid',
+        'Project folder must be an existing absolute directory',
+      );
     }
 
     try {

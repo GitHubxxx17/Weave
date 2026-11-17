@@ -412,3 +412,87 @@ describe('Workspace File Tools', () => {
     });
   });
 });
+
+describe('Workspace File Tools with a per-Session resolver', () => {
+  function createResolverPipeline(roots: ReadonlyMap<string, string>) {
+    const approvalBroker = createApprovalBroker();
+    const registry = createToolRegistry();
+    const seenSessions: (string | undefined)[] = [];
+    const tools = createWorkspaceFileTools({
+      resolveWorkspace: async ({ sessionId }) => {
+        seenSessions.push(sessionId);
+        const root = sessionId === undefined ? undefined : roots.get(sessionId);
+        return root === undefined ? undefined : createWorkspacePolicy({ root });
+      },
+    });
+    registry.register(tools.readFile);
+    registry.register(tools.writeFile);
+    return {
+      approvalBroker,
+      pipeline: createToolPipeline({ registry, approvalBroker }),
+      seenSessions,
+    };
+  }
+
+  it('reads and writes inside the Workspace of the calling Session', async () => {
+    const first = await createWorkspace();
+    const second = await createWorkspace();
+    await writeFile(join(second, 'README.md'), 'Second workspace', 'utf8');
+    const { approvalBroker, pipeline, seenSessions } = createResolverPipeline(
+      new Map([
+        ['session-a', first],
+        ['session-b', second],
+      ]),
+    );
+
+    await expect(
+      pipeline.execute({
+        toolCallId: 'read-b',
+        name: 'read_file',
+        arguments: JSON.stringify({ path: 'README.md' }),
+        sessionId: 'session-b',
+      }),
+    ).resolves.toMatchObject({ content: 'Second workspace' });
+
+    await approveWrite(pipeline, approvalBroker, {
+      toolCallId: 'write-a',
+      name: 'write_file',
+      arguments: JSON.stringify({ path: 'notes.md', content: 'A only' }),
+      sessionId: 'session-a',
+    });
+
+    await expect(readFile(join(first, 'notes.md'), 'utf8')).resolves.toBe('A only');
+    await expect(readFile(join(second, 'notes.md'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    expect(seenSessions).toEqual(['session-b', 'session-a']);
+  });
+
+  it('fails with workspace-file-unavailable when the Session has no Workspace', async () => {
+    const { pipeline } = createResolverPipeline(new Map());
+
+    const error = await pipeline
+      .execute({
+        toolCallId: 'read-none',
+        name: 'read_file',
+        arguments: JSON.stringify({ path: 'README.md' }),
+        sessionId: 'session-without-folder',
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ code: 'tool-execution-failed' });
+    expect((error as Error).cause).toBeInstanceOf(WorkspaceFileError);
+    expect((error as Error).cause).toMatchObject({ code: 'workspace-file-unavailable' });
+  });
+
+  it('rejects options that provide both or neither Workspace source', () => {
+    const root = '/tmp/weave-placeholder';
+    expect(() =>
+      createWorkspaceFileTools({
+        workspace: createWorkspacePolicy({ root }),
+        resolveWorkspace: () => undefined,
+      } as never),
+    ).toThrow(TypeError);
+    expect(() => createWorkspaceFileTools({} as never)).toThrow(TypeError);
+  });
+});

@@ -1,5 +1,13 @@
 import { fileURLToPath } from 'node:url';
-import { app, BrowserWindow, dialog } from 'electron';
+import { basename } from 'node:path';
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  type IpcMainInvokeEvent,
+  type OpenDialogOptions,
+} from 'electron';
 import { startServer } from '@weave/server/main';
 import { createDesktopConfig, type DesktopConfig } from './desktop-config.js';
 import { createElectronProviderSecretCodec } from './provider-secret-codec.js';
@@ -25,6 +33,55 @@ function getServerUrlArgument(serverUrl: string): string {
 /** Returns the standard Fetch implementation used by the desktop Server. */
 export function createDesktopFetch(): typeof globalThis.fetch {
   return (input, init) => globalThis.fetch(input, init);
+}
+
+/** IPC channel used by the Preload `pickDirectory()` bridge. */
+export const pickDirectoryChannel = 'weave:pick-directory';
+
+/** A folder the user explicitly chose in the system dialog. */
+export interface PickedDirectory {
+  readonly path: string;
+  readonly name: string;
+}
+
+/**
+ * Handles `pickDirectory()` from the Studio Renderer.
+ *
+ * Only the trusted Studio origin may open the dialog, and the Renderer only
+ * receives the folder the user chose; it gains no other filesystem access.
+ */
+export async function handlePickDirectory(
+  event: IpcMainInvokeEvent,
+  studioOrigin: string,
+): Promise<PickedDirectory | null> {
+  let senderOrigin: string | undefined;
+  try {
+    senderOrigin = new URL(event.senderFrame?.url ?? '').origin;
+  } catch {
+    senderOrigin = undefined;
+  }
+  if (senderOrigin !== studioOrigin) {
+    return null;
+  }
+  const options: OpenDialogOptions = {
+    title: '选择项目文件夹',
+    properties: ['openDirectory', 'createDirectory'],
+  };
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const result =
+    window === null
+      ? await dialog.showOpenDialog(options)
+      : await dialog.showOpenDialog(window, options);
+  const folderPath = result.filePaths[0];
+  if (result.canceled || folderPath === undefined) {
+    return null;
+  }
+  return { path: folderPath, name: basename(folderPath) };
+}
+
+function registerDesktopIpc(config: DesktopConfig): void {
+  ipcMain.removeHandler(pickDirectoryChannel);
+  ipcMain.handle(pickDirectoryChannel, (event) => handlePickDirectory(event, config.studioOrigin));
 }
 
 function getErrorMessage(error: unknown): string {
@@ -161,6 +218,7 @@ export async function startDesktopApplication(): Promise<void> {
       environment: process.env,
     });
     desktopServer = await startDesktopServer(config, createElectronProviderSecretCodec());
+    registerDesktopIpc(config);
     createMainWindow(config, `http://127.0.0.1:${desktopServer.port}`);
   } catch (error: unknown) {
     await stopDesktopServer().catch((cleanupError: unknown) => {

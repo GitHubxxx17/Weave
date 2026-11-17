@@ -332,6 +332,7 @@ afterEach(() => {
   vi.clearAllMocks();
   fetchMock.mockClear();
   Reflect.deleteProperty(window, 'showDirectoryPicker');
+  Reflect.deleteProperty(window, 'weaveDesktop');
 });
 
 describe('Studio Agent Chat', () => {
@@ -392,6 +393,71 @@ describe('Studio Agent Chat', () => {
       name: /Demo 项目/,
     });
     expect(within(createdProject).getByRole('button', { name: /未命名会话/ })).toBeTruthy();
+  });
+
+  function projectPostBodies(): unknown[] {
+    return fetchMock.mock.calls
+      .filter(
+        ([url, init]) =>
+          String(url).endsWith('/projects') && (init as RequestInit | undefined)?.method === 'POST',
+      )
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as unknown);
+  }
+
+  it('submits an absolute folder path typed in browser mode', async () => {
+    Object.defineProperty(window, 'showDirectoryPicker', {
+      configurable: true,
+      value: vi.fn().mockResolvedValue({ name: 'demo-project' }),
+    });
+
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: /Weave 项目/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '创建项目' }));
+    const dialog = screen.getByRole('dialog', { name: '创建项目' });
+    expect(within(dialog).getByText('未设置文件夹路径时，Agent 不能读写项目文件。')).toBeTruthy();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '选择文件夹' }));
+    await waitFor(() =>
+      expect(
+        (within(dialog).getByRole('textbox', { name: '项目名称' }) as HTMLInputElement).value,
+      ).toBe('demo-project'),
+    );
+    fireEvent.change(within(dialog).getByRole('textbox', { name: '文件夹绝对路径' }), {
+      target: { value: '/Users/me/demo-project' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: '创建项目' }));
+
+    await waitFor(() =>
+      expect(projectPostBodies()).toContainEqual({
+        name: 'demo-project',
+        folderName: 'demo-project',
+        folderPath: '/Users/me/demo-project',
+      }),
+    );
+  });
+
+  it('uses the desktop folder dialog path when the bridge provides one', async () => {
+    const pickDirectory = vi.fn(async () => ({ path: '/Users/me/desk-app', name: 'desk-app' }));
+    window.weaveDesktop = { isDesktop: true, serverUrl: '', pickDirectory };
+
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: /Weave 项目/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '创建项目' }));
+    const dialog = screen.getByRole('dialog', { name: '创建项目' });
+    expect(within(dialog).queryByRole('textbox', { name: '文件夹绝对路径' })).toBeNull();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '选择文件夹' }));
+    expect(await within(dialog).findByText('/Users/me/desk-app')).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: '创建项目' }));
+
+    await waitFor(() =>
+      expect(projectPostBodies()).toContainEqual({
+        name: 'desk-app',
+        folderName: 'desk-app',
+        folderPath: '/Users/me/desk-app',
+      }),
+    );
+    expect(pickDirectory).toHaveBeenCalledTimes(1);
   });
 
   it('keeps sessions scoped to their project when switching projects', async () => {
@@ -938,6 +1004,39 @@ describe('Studio Agent Chat', () => {
     ).toBeTruthy();
     expect(screen.getAllByText('2 matches')).not.toHaveLength(0);
     expect(screen.getAllByText('{"query":"SSE"}')).not.toHaveLength(0);
+  });
+
+  it('marks a tool result returned as a recoverable failure', async () => {
+    streamAgentRunMock.mockImplementation(async (_request, handlers) => {
+      handlers.onEvent({
+        type: 'tool-call',
+        toolCall: { id: 'call-1', name: 'read_file', arguments: '{"path":"missing.md"}' },
+      });
+      handlers.onEvent({
+        type: 'tool-result',
+        result: {
+          toolCallId: 'call-1',
+          name: 'read_file',
+          content: 'Tool "read_file" failed (tool-execution-failed).',
+          truncated: false,
+        },
+        status: 'failed',
+        errorCode: 'tool-execution-failed',
+      });
+      handlers.onEvent({ type: 'text-delta', text: '文件不存在' });
+      handlers.onEvent({ type: 'completed', turnId: 'turn-3' });
+    });
+
+    await renderApp();
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '读文件' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+
+    expect(
+      await within(screen.getByRole('region', { name: '工具调用' })).findByText('失败', {
+        selector: '.status-badge',
+      }),
+    ).toBeTruthy();
+    expect(await screen.findByText('文件不存在')).toBeTruthy();
   });
 
   it('keeps conversation and activity panel as independent scroll regions', async () => {

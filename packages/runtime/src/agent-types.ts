@@ -48,7 +48,14 @@ export type AgentRuntimeEvent =
   | { readonly type: 'reasoning-delta'; readonly text: string }
   | { readonly type: 'tool-call'; readonly toolCall: ToolCall }
   | { readonly type: 'tool-executing'; readonly toolCall: ToolCall }
-  | { readonly type: 'tool-result'; readonly result: ToolExecutionResult }
+  | {
+      readonly type: 'tool-result';
+      readonly result: ToolExecutionResult;
+      /** `failed` marks a recoverable tool failure that was returned to the model. */
+      readonly status?: 'completed' | 'failed' | undefined;
+      /** Stable error code for a failed result. */
+      readonly errorCode?: string | undefined;
+    }
   | { readonly type: 'completed'; readonly turnId: string };
 
 export const agentRuntimeEventSchema: z.ZodType<AgentRuntimeEvent> = z.discriminatedUnion('type', [
@@ -64,6 +71,8 @@ export const agentRuntimeEventSchema: z.ZodType<AgentRuntimeEvent> = z.discrimin
       content: z.string(),
       truncated: z.boolean(),
     }),
+    status: z.enum(['completed', 'failed']).optional(),
+    errorCode: z.string().min(1).optional(),
   }),
   z.object({
     type: z.literal('completed'),

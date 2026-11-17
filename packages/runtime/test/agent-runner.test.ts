@@ -409,7 +409,7 @@ describe('Agent Runner contracts', () => {
     ]);
   });
 
-  it('persists a failed tool result and rethrows the pipeline error', async () => {
+  it('returns a recoverable tool failure to the model and continues the turn', async () => {
     const store = createInMemorySessionEventStore();
     const registry = createToolRegistry();
     registry.register({
@@ -421,10 +421,84 @@ describe('Agent Runner contracts', () => {
         throw new Error('permission denied');
       },
     });
+    const requests: LlmRequest[] = [];
+    const llm = sequenceClient(
+      [
+        [
+          { type: 'tool-call-start', id: 'call-1', name: 'fail' },
+          { type: 'tool-call-delta', id: 'call-1', argumentsDelta: '{}' },
+          { type: 'finish', reason: 'tool-call' },
+        ],
+        [
+          { type: 'text-delta', text: '工具失败了' },
+          { type: 'finish', reason: 'stop' },
+        ],
+      ],
+      requests,
+    );
+    const runner = createAgentRunner({
+      llm,
+      sessionStore: store,
+      toolRegistry: registry,
+      toolPipeline: createToolPipeline({ registry }),
+    });
+
+    const events = await collect(runner.run(validRequest));
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'tool-result',
+        status: 'failed',
+        errorCode: 'tool-execution-failed',
+      }),
+    );
+    expect(events.at(-1)).toMatchObject({ type: 'completed' });
+
+    const projection = projectSession(await store.read(validRequest.sessionId));
+    expect(projection.turns[0]).toMatchObject({
+      status: 'completed',
+      steps: [
+        { kind: 'model', status: 'completed' },
+        { kind: 'tool', status: 'failed' },
+        { kind: 'model', status: 'completed' },
+      ],
+      toolResults: [
+        {
+          toolCallId: 'call-1',
+          status: 'failed',
+          errorCode: 'tool-execution-failed',
+        },
+      ],
+    });
+    const toolMessage = projection.messages.find(({ message }) => message.role === 'tool');
+    expect(toolMessage?.message.content[0]).toMatchObject({
+      type: 'text',
+      text: 'Tool "fail" failed (tool-execution-failed). Tool "fail" failed',
+    });
+    expect(requests[1]?.messages.at(-1)).toMatchObject({ role: 'tool', toolCallId: 'call-1' });
+
+    await store.close();
+  });
+
+  it('still ends the turn when the tool pipeline is misconfigured', async () => {
+    const store = createInMemorySessionEventStore();
+    const registry = createToolRegistry();
+    registry.register({
+      name: 'protected',
+      description: 'Needs approval',
+      parameters: { type: 'object', properties: {} },
+      inputSchema: z.object({}),
+      approval: {
+        operation: 'test.protected',
+        risk: 'high',
+        summarize: () => ({ summary: 'protected', inputSummary: {} }),
+      },
+      execute: () => 'never',
+    });
     const runner = createAgentRunner({
       llm: recordingClient(
         [
-          { type: 'tool-call-start', id: 'call-1', name: 'fail' },
+          { type: 'tool-call-start', id: 'call-1', name: 'protected' },
           { type: 'tool-call-delta', id: 'call-1', argumentsDelta: '{}' },
           { type: 'finish', reason: 'tool-call' },
         ],
@@ -436,7 +510,7 @@ describe('Agent Runner contracts', () => {
     });
 
     await expect(collect(runner.run(validRequest))).rejects.toMatchObject({
-      code: 'tool-execution-failed',
+      code: 'tool-approval-required',
     });
 
     const projection = projectSession(await store.read(validRequest.sessionId));
@@ -447,15 +521,9 @@ describe('Agent Runner contracts', () => {
         { kind: 'tool', status: 'failed' },
       ],
       toolResults: [
-        {
-          toolCallId: 'call-1',
-          status: 'failed',
-          errorCode: 'tool-execution-failed',
-        },
+        { toolCallId: 'call-1', status: 'failed', errorCode: 'tool-approval-required' },
       ],
     });
-    expect(projection.messages).toHaveLength(2);
-    expect(projection.messages.at(-1)?.message.role).toBe('assistant');
 
     await store.close();
   });

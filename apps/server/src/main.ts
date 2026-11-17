@@ -7,6 +7,7 @@ import { createSqliteProjectStore, type ProjectStore } from '@weave/workspace';
 import { z } from 'zod';
 import { createApp } from './app.js';
 import { createSessionService } from './session-service.js';
+import { createWorkspaceRootResolver } from './workspace-root.js';
 import { createServerLlmProviders } from './llm-providers.js';
 import { resolveDatabaseFile } from './persistence-path.js';
 import type { ProviderSecretCodec } from './provider-secret-codec.js';
@@ -151,7 +152,9 @@ export async function startServer(
     await registerServerPlugins(runtime, options.plugins);
     const sessionStore = getServerSessionStore(runtime);
     const sessionService = createSessionService({ projectStore, sessionStore });
-    const agentRunner = createServerAgentRunner(runtime);
+    const agentRunner = createServerAgentRunner(runtime, {
+      resolveWorkspaceRoot: createWorkspaceRootResolver(projectStore),
+    });
 
     let resolveListening!: () => void;
     let rejectListening!: (error: unknown) => void;

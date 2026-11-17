@@ -13,6 +13,8 @@ import {
   createToolRegistry,
   createRuntime,
   createSessionEventStoreService,
+  createWorkspaceFileTools,
+  createWorkspacePolicy,
   type AgentRunner,
   type ApprovalBroker,
   type Runtime,
@@ -43,12 +45,26 @@ const sessionStoreServices = new WeakMap<Runtime, RuntimeService<SessionEventSto
 const providerRegistryServices = new WeakMap<Runtime, RuntimeService<LlmProviderRegistry>>();
 const toolRegistries = new WeakMap<Runtime, ToolRegistry>();
 const pluginRegistries = new WeakMap<Runtime, PluginRegistry>();
+const workspaceToolsRegistered = new WeakSet<ToolRegistry>();
+
+/**
+ * Upper bound for one tool call, including the time a protected tool waits for
+ * Approval. Without it an unanswered Approval would block the turn forever.
+ */
+export const defaultToolTimeoutMs = 10 * 60 * 1000;
+
+export interface ServerAgentRunnerOptions {
+  /** Returns the absolute Workspace folder of a Session, when its Project has one. */
+  readonly resolveWorkspaceRoot?: (sessionId: string) => Promise<string | undefined>;
+  /** Overrides {@link defaultToolTimeoutMs}; mainly for tests. */
+  readonly toolTimeoutMs?: number;
+}
 
 /**
  * Assembles the services used by the local server entry point.
  *
- * The default runtime intentionally uses an In-Memory Session Store so unit
- * tests remain deterministic. The process entry point injects a SQLite factory.
+ * Without a `sessionStoreFactory` the runtime uses an In-Memory Session Store so
+ * unit tests remain deterministic. The process entry point injects SQLite.
  */
 export function createServerRuntime(options: ServerRuntimeOptions = {}): Runtime {
   const sessionStoreService =
@@ -97,8 +113,15 @@ export async function registerServerPlugins(
  *
  * The composition root owns this assembly because the current Runtime service
  * factory does not declare dependencies between services.
+ *
+ * When `resolveWorkspaceRoot` is supplied, `read_file` and `write_file` are
+ * registered after trusted plugins and resolve the Workspace of each call's
+ * Session. A Session whose Project has no folder gets `workspace-file-unavailable`.
  */
-export function createServerAgentRunner(runtime: Runtime): AgentRunner {
+export function createServerAgentRunner(
+  runtime: Runtime,
+  options: ServerAgentRunnerOptions = {},
+): AgentRunner {
   const sessionStoreService = sessionStoreServices.get(runtime);
   const providerRegistryService = providerRegistryServices.get(runtime);
   const toolRegistry = toolRegistries.get(runtime);
@@ -110,9 +133,31 @@ export function createServerAgentRunner(runtime: Runtime): AgentRunner {
     throw new Error('Server Runtime was not created by createServerRuntime');
   }
 
+  const resolveWorkspaceRoot = options.resolveWorkspaceRoot;
+  if (resolveWorkspaceRoot !== undefined && !workspaceToolsRegistered.has(toolRegistry)) {
+    const fileTools = createWorkspaceFileTools({
+      resolveWorkspace: async ({ sessionId }) => {
+        if (sessionId === undefined) {
+          return undefined;
+        }
+        const root = await resolveWorkspaceRoot(sessionId);
+        return root === undefined ? undefined : createWorkspacePolicy({ root });
+      },
+    });
+    for (const tool of [fileTools.readFile, fileTools.writeFile]) {
+      if (toolRegistry.get(tool.name) !== undefined) {
+        throw new Error(`Tool "${tool.name}" is already registered by a plugin`);
+      }
+    }
+    toolRegistry.register(fileTools.readFile);
+    toolRegistry.register(fileTools.writeFile);
+    workspaceToolsRegistered.add(toolRegistry);
+  }
+
   const toolPipeline = createToolPipeline({
     registry: toolRegistry,
     approvalBroker: runtime.get(approvalBrokerService),
+    timeoutMs: options.toolTimeoutMs ?? defaultToolTimeoutMs,
   });
 
   return createAgentRunner({

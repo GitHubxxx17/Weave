@@ -46,6 +46,7 @@ import { AgentStreamError, streamAgentRun } from '../features/agent/agent-stream
 import type { AgentRuntimeEvent } from '../features/agent/agent-types.js';
 import { useAutoScroll } from '../features/conversation/use-auto-scroll.js';
 import { MarkdownMessage } from '../features/conversation/markdown-message.js';
+import { ApprovalPanel, useApprovals } from '../features/approvals/approval-panel.js';
 import { createProviderApi, ProviderApiError } from '../features/providers/provider-api.js';
 import {
   customProviderPresetId,
@@ -513,6 +514,8 @@ function workspaceErrorMessage(error: unknown): string {
       return '归档会话不能执行当前操作';
     case 'workspace-api-network':
       return '无法连接到本地服务，请确认后端已经启动';
+    case 'project-folder-invalid':
+      return '文件夹路径无效，请填写本机已存在的文件夹绝对路径';
     default:
       return error.message;
   }
@@ -533,6 +536,7 @@ export function App() {
   const [isProjectDialogOpen, setIsProjectDialogOpen] = useState(false);
   const [projectName, setProjectName] = useState('');
   const [selectedFolderName, setSelectedFolderName] = useState('');
+  const [selectedFolderPath, setSelectedFolderPath] = useState('');
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [isActivityPanelOpen, setIsActivityPanelOpen] = useState(true);
@@ -583,6 +587,7 @@ export function App() {
     providerSettings.providers[0];
   const messages = activeSession?.messages ?? [];
   const conversationScroll = useAutoScroll<HTMLDivElement>(messages, activeSessionId);
+  const approvals = useApprovals(!isLoadingWorkspace);
   const normalizedSearchQuery = searchQuery.trim().toLocaleLowerCase();
   const visibleProjects = projects
     .map((project) => ({
@@ -874,7 +879,7 @@ export function App() {
             toolCallId: event.result.toolCallId,
             name: event.result.name,
             arguments: existing?.arguments ?? '',
-            status: 'completed',
+            status: event.status === 'failed' ? 'failed' : 'completed',
             result: event.result.content,
           }),
         );
@@ -1285,6 +1290,7 @@ export function App() {
     setOpenMenu(null);
     setProjectName('');
     setSelectedFolderName('');
+    setSelectedFolderPath('');
     setIsProjectDialogOpen(true);
   }
 
@@ -1298,8 +1304,25 @@ export function App() {
     setProjectName(normalized);
   }
 
-  /** Opens the browser directory picker without claiming durable filesystem access. */
+  /**
+   * Desktop uses the system dialog and receives an absolute path. The browser
+   * picker only exposes a folder name, so the path must be typed separately.
+   */
   async function chooseProjectFolder(): Promise<void> {
+    const desktopPicker = window.weaveDesktop?.pickDirectory;
+    if (desktopPicker !== undefined) {
+      try {
+        const picked = await desktopPicker();
+        if (picked !== null) {
+          applySelectedFolder(picked.name);
+          setSelectedFolderPath(picked.path);
+        }
+      } catch {
+        setNotice('无法打开文件夹选择框，请重试');
+      }
+      return;
+    }
+
     const picker = (window as DirectoryPickerWindow).showDirectoryPicker;
     if (picker === undefined) {
       directoryInputRef.current?.click();
@@ -1335,7 +1358,12 @@ export function App() {
     }
 
     try {
-      const project = await workspaceApi.createProject({ name, folderName });
+      const folderPath = selectedFolderPath.trim();
+      const project = await workspaceApi.createProject({
+        name,
+        folderName,
+        ...(folderPath === '' ? {} : { folderPath }),
+      });
       const session = await workspaceApi.createSession(project.id);
       const nextProject: StudioProject = {
         ...toStudioProject({ ...project, sessions: [] }),
@@ -2186,6 +2214,7 @@ export function App() {
           </div>
 
           <form className="composer" onSubmit={handleSubmit}>
+            <ApprovalPanel pending={approvals.pending} onDecide={approvals.decide} />
             <div className="composer-box">
               <label className="sr-only" htmlFor="message-input">
                 发送消息
@@ -3171,8 +3200,27 @@ export function App() {
                   onChange={chooseFallbackFolder}
                 />
               </div>
+              {window.weaveDesktop?.pickDirectory === undefined ? (
+                <label className="project-name-field">
+                  <span>文件夹绝对路径（可选）</span>
+                  <div>
+                    <FolderOpen aria-hidden="true" />
+                    <input
+                      type="text"
+                      aria-label="文件夹绝对路径"
+                      placeholder="例如 /Users/me/projects/demo，填写后 Agent 可读写其中文件"
+                      value={selectedFolderPath}
+                      onChange={(event) => setSelectedFolderPath(event.target.value)}
+                    />
+                  </div>
+                </label>
+              ) : selectedFolderPath === '' ? null : (
+                <p className="project-dialog-note project-folder-path">{selectedFolderPath}</p>
+              )}
               <p className="project-dialog-note">
-                当前版本只在 Studio 前端保存项目名称和目录显示信息，不会伪造持久化文件权限。
+                {selectedFolderPath.trim() === ''
+                  ? '未设置文件夹路径时，Agent 不能读写项目文件。'
+                  : 'Agent 可以读取该文件夹中的文本文件；写入文件前会请你确认。'}
               </p>
               <footer className="project-dialog-actions">
                 <button

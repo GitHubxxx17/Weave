@@ -1321,6 +1321,94 @@ h3 {
   background: var(--surface);
 }
 
+.approval-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.approval-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  color: var(--ink);
+  background: #fff8ec;
+  border: 1px solid #f1d6a8;
+  border-radius: 8px;
+}
+
+.approval-card-icon svg {
+  width: 20px;
+  height: 20px;
+  color: var(--warning);
+}
+
+.approval-card-body {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.approval-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.84rem;
+}
+
+.approval-risk {
+  padding: 1px 7px;
+  color: var(--warning);
+  font-size: 0.72rem;
+  background: #fdecd0;
+  border-radius: 999px;
+}
+
+.approval-card-detail {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+}
+
+.approval-card-detail svg {
+  width: 14px;
+  height: 14px;
+}
+
+.approval-card-detail code {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.approval-overwrite {
+  color: var(--danger);
+}
+
+.approval-card-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.78rem;
+}
+
+.approval-card-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.project-folder-path {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 .composer-box {
   padding: 12px 12px 10px;
   background: var(--surface);

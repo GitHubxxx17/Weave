@@ -127,7 +127,7 @@ pnpm --filter @weave/studio dev
 ```
 
 Open `http://127.0.0.1:5173`. Vite serves the React Studio and proxies
-`/agent/*`, `/projects`, `/sessions`, and `/settings` to
+`/agent/*`, `/approvals`, `/projects`, `/sessions`, and `/settings` to
 `http://127.0.0.1:4317`, so the browser can call the local Server without a
 separate CORS setup. The Server `dev` script builds the TypeScript packages
 first and then starts `dist/main.js`.
@@ -144,8 +144,13 @@ Browser acceptance flow:
 
 Studio now persists Projects and Sessions through the Server, so a refresh or
 restart restores the project tree and the selected conversation from SQLite.
-It still does not include Workspace editing UI, Plugin loading, Crew
-orchestration, a Run Registry, reconnection or `Last-Event-ID`, or login. In
+When a Project is created with a folder (the system dialog on Desktop, or a
+typed absolute path in browser mode), the default Agent can call `read_file`
+and `write_file` inside that folder; every write waits for an approval card in
+Studio. Studio still does not include a file editor, Diff view, Shell tools,
+Plugin loading, Crew orchestration, a Run Registry, reconnection or
+`Last-Event-ID`, or login. Existing Projects created without a folder cannot
+yet be given one. In
 browser mode Provider configuration is local Server configuration read from
 `.env`; only Desktop mode lets the Settings page submit an API Key, and no
 mode ever returns a stored key to Studio. The page is an HTTP/SSE surface for
