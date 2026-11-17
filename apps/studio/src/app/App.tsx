@@ -45,6 +45,7 @@ import type { LucideIcon } from 'lucide-react';
 import { AgentStreamError, streamAgentRun } from '../features/agent/agent-stream.js';
 import type { AgentRuntimeEvent } from '../features/agent/agent-types.js';
 import { useAutoScroll } from '../features/conversation/use-auto-scroll.js';
+import { MarkdownMessage } from '../features/conversation/markdown-message.js';
 import { createProviderApi, ProviderApiError } from '../features/providers/provider-api.js';
 import {
   customProviderPresetId,
@@ -2157,9 +2158,13 @@ export function App() {
                           </details>
                         ) : null}
                         <div className="message">
-                          <p>
-                            {message.text || getAssistantPlaceholder(status, isLatestAssistant)}
-                          </p>
+                          {message.role === 'assistant' && message.text !== '' ? (
+                            <MarkdownMessage text={message.text} />
+                          ) : (
+                            <p>
+                              {message.text || getAssistantPlaceholder(status, isLatestAssistant)}
+                            </p>
+                          )}
                         </div>
                       </div>
                     </article>

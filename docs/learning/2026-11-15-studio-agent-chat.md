@@ -695,6 +695,28 @@ pnpm --filter @weave/studio dev
 - 点击按钮、用户自己滚回底部、发送新消息或切换会话时恢复跟随；
 - 只有"向上滚动"会关闭跟随，所以平滑滚向底部的动画中途不会把自己取消。
 
+### 12.5 助手回复的 Markdown 渲染
+
+`features/conversation/markdown-message.tsx` 用 Markdown 渲染助手正文，思考过程和
+用户消息仍是纯文本。
+
+新增依赖及原因：
+
+| 依赖             | 原因                                                                                                     |
+| ---------------- | -------------------------------------------------------------------------------------------------------- |
+| `react-markdown` | 把 Markdown 解析成 React 元素，默认不解释原始 HTML，避免模型输出注入脚本；不用 `dangerouslySetInnerHTML` |
+| `remark-gfm`     | 支持模型常用的表格、任务列表、删除线和自动链接                                                           |
+
+安全约束：
+
+- 不安装 `rehype-raw`，模型输出里的 `<script>`、`<b onclick>` 等标签不会变成真实元素；
+- 只保留 `http(s)` 和 `mailto` 链接，`javascript:` 等协议的链接只显示文字；
+- 链接用 `target="_blank"` 和 `rel="noopener noreferrer"` 打开；
+- 不渲染图片，避免模型让 Studio 加载任意远程资源。
+
+当前限制：代码块没有语法高亮；桌面端的 `setWindowOpenHandler` 会拒绝外部窗口，所以
+桌面端点击链接暂时没有反应，需要后续用系统浏览器打开。
+
 ## 13. 面试表达
 
 可以按下面的顺序回答：
