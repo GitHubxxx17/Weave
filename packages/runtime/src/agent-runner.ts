@@ -1,5 +1,5 @@
 import type { LlmClient } from '@weave/llm';
-import type { FinishReason, LlmRequest, Message, ToolCall } from '@weave/protocol';
+import type { FinishReason, LlmRequest, Message, TokenUsage, ToolCall } from '@weave/protocol';
 import type { NewSessionEvent } from '@weave/session';
 import { projectSession } from '@weave/session';
 import {
@@ -200,6 +200,8 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
       let turnId: string | undefined;
       let stepId: string | undefined;
       let activeStepStatus: 'running' | 'completed' = 'running';
+      /** Usage reported by the model step that is currently open, if any. */
+      let activeStepUsage: TokenUsage | undefined;
 
       const settlePending = (): void => {
         if (!finished) {
@@ -313,6 +315,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
               turnId: turnId as string,
               stepId: stepId as string,
               status,
+              ...(activeStepUsage === undefined ? {} : { usage: activeStepUsage }),
             },
           });
         }
@@ -356,7 +359,13 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
             { type: 'turn.started', payload: { turnId } },
             {
               type: 'step.started',
-              payload: { turnId, stepId, kind: 'model' },
+              payload: {
+                turnId,
+                stepId,
+                kind: 'model',
+                provider: validRequest.provider,
+                model: validRequest.model,
+              },
             },
           ]);
           lifecycleStarted = true;
@@ -392,10 +401,17 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
             if (modelSteps > 1) {
               stepId = crypto.randomUUID();
               activeStepStatus = 'running';
+              activeStepUsage = undefined;
               await options.sessionStore.append(validRequest.sessionId, [
                 {
                   type: 'step.started',
-                  payload: { turnId, stepId, kind: 'model' },
+                  payload: {
+                    turnId,
+                    stepId,
+                    kind: 'model',
+                    provider: validRequest.provider,
+                    model: validRequest.model,
+                  },
                 },
               ]);
             }
@@ -471,6 +487,15 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
               } else if (event.type === 'finish') {
                 finishSeen = true;
                 finishReason = event.reason;
+                if (event.usage !== undefined) {
+                  activeStepUsage = event.usage;
+                  emit({
+                    type: 'usage',
+                    usage: event.usage,
+                    provider: validRequest.provider,
+                    model: validRequest.model,
+                  });
+                }
               }
             }
             if (!finishSeen) {
@@ -545,10 +570,12 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
                   turnId,
                   stepId,
                   status: 'completed',
+                  ...(activeStepUsage === undefined ? {} : { usage: activeStepUsage }),
                 },
               },
             ]);
             activeStepStatus = 'completed';
+            activeStepUsage = undefined;
 
             for (const toolCall of completeToolCalls) {
               const toolStepId = crypto.randomUUID();

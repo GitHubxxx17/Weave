@@ -234,6 +234,17 @@ The Session projection also preserves the `occurredAt` value for each
 projected messages so clients can render message times from durable facts
 instead of replacing every timestamp with a client-side "just now" label.
 
+Token usage is a durable fact of each model step. The OpenAI-compatible adapter
+requests `stream_options.include_usage` and maps cache hits and reasoning
+tokens into `TokenUsage`; the Runner records `provider` and `model` on the
+model `step.started` event and the provider-reported `usage` on its
+`step.completed` event, and emits a transient `usage` event for live views.
+The projection keeps Turn and Step timing, attributes each message to the Turn
+that was running, and `GET /sessions/:id` returns per-Turn summaries
+(`turns`) with usage summed over model steps. Studio shows them under each
+reply and in the session overview panel; unreported counters stay absent
+rather than reading as zero.
+
 The model stream must contain exactly one `finish`, and it must be last.
 Missing, repeated, or followed-by-more-output finishes produce
 `agent-stream-protocol`. A Tool Call without the matching start event, a

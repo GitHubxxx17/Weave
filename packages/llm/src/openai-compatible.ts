@@ -61,18 +61,32 @@ const providerChoiceSchema = z
   })
   .passthrough();
 
+const tokenCountSchema = z.number().int().nonnegative().safe();
+
 const providerUsageSchema = z
   .object({
-    prompt_tokens: z.number().int().nonnegative().safe().optional(),
-    completion_tokens: z.number().int().nonnegative().safe().optional(),
-    total_tokens: z.number().int().nonnegative().safe().optional(),
+    prompt_tokens: tokenCountSchema.optional(),
+    completion_tokens: tokenCountSchema.optional(),
+    total_tokens: tokenCountSchema.optional(),
+    prompt_cache_hit_tokens: tokenCountSchema.optional(),
+    prompt_cache_miss_tokens: tokenCountSchema.optional(),
+    prompt_tokens_details: z
+      .object({ cached_tokens: tokenCountSchema.nullable().optional() })
+      .passthrough()
+      .nullable()
+      .optional(),
+    completion_tokens_details: z
+      .object({ reasoning_tokens: tokenCountSchema.nullable().optional() })
+      .passthrough()
+      .nullable()
+      .optional(),
   })
   .passthrough();
 
 const providerChunkSchema = z
   .object({
     choices: z.array(providerChoiceSchema),
-    usage: providerUsageSchema.optional(),
+    usage: providerUsageSchema.nullable().optional(),
   })
   .passthrough();
 
@@ -142,6 +156,8 @@ function toProviderRequest(request: LlmRequest): Record<string, unknown> {
     model: request.model,
     messages: request.messages.map(toProviderMessage),
     stream: true,
+    // Without this OpenAI-compatible APIs omit usage from streamed responses.
+    stream_options: { include_usage: true },
   };
 
   if (request.tools !== undefined) {
@@ -282,11 +298,24 @@ function createStreamParseState(): StreamParseState {
   };
 }
 
+/**
+ * Maps provider usage to the protocol contract.
+ *
+ * Cache hits come from DeepSeek's `prompt_cache_hit_tokens` or OpenAI's
+ * `prompt_tokens_details.cached_tokens`; reasoning tokens from
+ * `completion_tokens_details.reasoning_tokens`. Fields a provider omits stay
+ * absent instead of becoming zero.
+ */
 function toTokenUsage(usage: z.infer<typeof providerUsageSchema>): TokenUsage {
+  const cacheRead =
+    usage.prompt_cache_hit_tokens ?? usage.prompt_tokens_details?.cached_tokens ?? undefined;
+  const reasoning = usage.completion_tokens_details?.reasoning_tokens ?? undefined;
   return {
     ...(usage.prompt_tokens === undefined ? {} : { inputTokens: usage.prompt_tokens }),
     ...(usage.completion_tokens === undefined ? {} : { outputTokens: usage.completion_tokens }),
     ...(usage.total_tokens === undefined ? {} : { totalTokens: usage.total_tokens }),
+    ...(cacheRead === undefined || cacheRead === null ? {} : { cacheReadTokens: cacheRead }),
+    ...(reasoning === undefined || reasoning === null ? {} : { reasoningTokens: reasoning }),
   };
 }
 
@@ -315,7 +344,7 @@ function parseProviderChunk(data: string, state: StreamParseState, apiKey: strin
     );
   }
 
-  if (result.data.usage !== undefined) {
+  if (result.data.usage !== undefined && result.data.usage !== null) {
     state.usage = toTokenUsage(result.data.usage);
   }
 

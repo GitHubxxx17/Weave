@@ -4,6 +4,17 @@ import { z } from 'zod';
 const nonEmptyStringSchema = z.string().min(1);
 const positiveSequenceSchema = z.number().int().positive().safe();
 const completedStatusSchema = z.enum(['completed', 'failed', 'cancelled']);
+const tokenCountSchema = z.number().int().nonnegative().safe();
+
+/** Token usage persisted on a model step; unknown provider fields are dropped. */
+const stepUsageSchema = z.object({
+  inputTokens: tokenCountSchema.optional(),
+  outputTokens: tokenCountSchema.optional(),
+  totalTokens: tokenCountSchema.optional(),
+  cacheReadTokens: tokenCountSchema.optional(),
+  cacheWriteTokens: tokenCountSchema.optional(),
+  reasoningTokens: tokenCountSchema.optional(),
+});
 
 const sessionCreatedPayloadSchema = z
   .object({
@@ -49,6 +60,10 @@ const stepStartedPayloadSchema = z
     turnId: nonEmptyStringSchema,
     stepId: nonEmptyStringSchema,
     kind: nonEmptyStringSchema,
+    /** Provider id of a model step, recorded so usage can be attributed later. */
+    provider: nonEmptyStringSchema.optional(),
+    /** Model id of a model step. */
+    model: nonEmptyStringSchema.optional(),
   })
   .passthrough();
 
@@ -57,6 +72,8 @@ const stepCompletedPayloadSchema = z
     turnId: nonEmptyStringSchema,
     stepId: nonEmptyStringSchema,
     status: completedStatusSchema,
+    /** Provider-reported token usage of a model step, when the provider sent it. */
+    usage: stepUsageSchema.optional(),
   })
   .passthrough();
 

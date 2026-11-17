@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import type { Message } from '@weave/protocol';
+import type { Message, TokenUsage } from '@weave/protocol';
 import {
   projectSession,
   SessionProjectionError,
+  sumTokenUsage,
   type SessionEventStore,
   type SessionProjection,
   type SessionMessage as ProjectedSessionMessage,
@@ -42,6 +43,7 @@ export interface SessionSummary {
 /** A Session summary with its complete projected messages. */
 export interface SessionDetail extends SessionSummary {
   readonly messages: readonly SessionMessage[];
+  readonly turns: readonly SessionTurnSummary[];
 }
 
 /** A durable message with the metadata needed by Studio timelines. */
@@ -49,7 +51,27 @@ export type SessionMessage = ProjectedSessionMessage['message'] & {
   readonly messageId: string;
   readonly sequence: number;
   readonly occurredAt: string;
+  /** Turn that produced the message; absent for the user message that starts a Turn. */
+  readonly turnId?: string;
 };
+
+/** Per-Turn timing, attribution, and token usage summed over its model steps. */
+export interface SessionTurnSummary {
+  readonly turnId: string;
+  readonly status: 'running' | 'completed' | 'failed' | 'cancelled';
+  readonly startedAt: string;
+  readonly completedAt?: string;
+  readonly provider?: string;
+  readonly model?: string;
+  readonly usage?: TokenUsage;
+  readonly modelSteps: readonly {
+    readonly startedAt: string;
+    readonly completedAt?: string;
+    readonly usage?: TokenUsage;
+  }[];
+  readonly toolCalls: number;
+  readonly failedToolCalls: number;
+}
 
 /** A recoverable warning for one damaged Session in a Project list. */
 export interface ProjectListWarning {
@@ -110,7 +132,32 @@ function detailFor(sessionId: string, projection: SessionProjection): SessionDet
       messageId: item.messageId,
       sequence: item.sequence,
       occurredAt: item.occurredAt,
+      ...(item.turnId === undefined ? {} : { turnId: item.turnId }),
     })),
+    turns: projection.turns.map(turnSummaryFor),
+  };
+}
+
+/** Collapses one projected Turn into the numbers Studio shows per reply. */
+function turnSummaryFor(turn: SessionProjection['turns'][number]): SessionTurnSummary {
+  const modelSteps = turn.steps.filter((step) => step.kind === 'model');
+  const lastModelStep = modelSteps.at(-1);
+  const usage = sumTokenUsage(modelSteps.map((step) => step.usage));
+  return {
+    turnId: turn.turnId,
+    status: turn.status,
+    startedAt: turn.startedAt,
+    ...(turn.completedAt === undefined ? {} : { completedAt: turn.completedAt }),
+    ...(lastModelStep?.provider === undefined ? {} : { provider: lastModelStep.provider }),
+    ...(lastModelStep?.model === undefined ? {} : { model: lastModelStep.model }),
+    ...(usage === undefined ? {} : { usage }),
+    modelSteps: modelSteps.map((step) => ({
+      startedAt: step.startedAt,
+      ...(step.completedAt === undefined ? {} : { completedAt: step.completedAt }),
+      ...(step.usage === undefined ? {} : { usage: step.usage }),
+    })),
+    toolCalls: turn.toolCalls.length,
+    failedToolCalls: turn.toolResults.filter((result) => result.status === 'failed').length,
   };
 }
 

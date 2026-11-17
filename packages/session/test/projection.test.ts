@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   projectSession,
+  sumTokenUsage,
   type SessionEvent,
   type SessionProjection,
   type SessionEventType,
@@ -128,6 +129,63 @@ describe('Session Projection', () => {
         },
       ],
     });
+  });
+
+  it('projects step attribution, usage, timing, and the Turn of each message', () => {
+    const events: SessionEvent[] = [
+      event(1, 'session.created', {}),
+      event(2, 'message.created', {
+        messageId: 'user-1',
+        message: { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+      }),
+      event(3, 'turn.started', { turnId: 'turn-1' }),
+      event(4, 'step.started', {
+        turnId: 'turn-1',
+        stepId: 'step-1',
+        kind: 'model',
+        provider: 'deepseek',
+        model: 'deepseek-flash',
+      }),
+      event(5, 'message.created', {
+        messageId: 'assistant-1',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'hello' }] },
+      }),
+      event(6, 'step.completed', {
+        turnId: 'turn-1',
+        stepId: 'step-1',
+        status: 'completed',
+        usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 80 },
+      }),
+      event(7, 'turn.completed', { turnId: 'turn-1', status: 'completed' }),
+    ];
+
+    const projection = projectSession(events);
+
+    expect(projection.messages.map((message) => message.turnId)).toEqual([undefined, 'turn-1']);
+    expect(projection.turns[0]).toMatchObject({
+      startedAt: events[2]!.occurredAt,
+      completedAt: events[6]!.occurredAt,
+      steps: [
+        {
+          provider: 'deepseek',
+          model: 'deepseek-flash',
+          startedAt: events[3]!.occurredAt,
+          completedAt: events[5]!.occurredAt,
+          usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 80 },
+        },
+      ],
+    });
+  });
+
+  it('sums token usage without inventing unreported fields', () => {
+    expect(sumTokenUsage([undefined, undefined])).toBeUndefined();
+    expect(
+      sumTokenUsage([
+        { inputTokens: 100, outputTokens: 10, cacheReadTokens: 60 },
+        undefined,
+        { inputTokens: 50, outputTokens: 5 },
+      ]),
+    ).toEqual({ inputTokens: 150, outputTokens: 15, cacheReadTokens: 60 });
   });
 
   it('projects Session title and lifecycle timestamps', () => {

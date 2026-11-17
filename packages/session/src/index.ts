@@ -19,7 +19,7 @@ export {
 } from './sqlite-store.js';
 export type { SqliteSessionEventStoreOptions } from './sqlite-store.js';
 
-export { projectSession, SessionProjectionError } from './projection.js';
+export { projectSession, SessionProjectionError, sumTokenUsage } from './projection.js';
 export type {
   SessionMessage,
   SessionProjection,

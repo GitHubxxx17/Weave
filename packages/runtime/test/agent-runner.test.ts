@@ -276,6 +276,72 @@ describe('Agent Runner contracts', () => {
     await store.close();
   });
 
+  it('persists usage on each model step and emits it as a live event', async () => {
+    const store = createInMemorySessionEventStore();
+    const registry = createToolRegistry();
+    registry.register({
+      name: 'echo',
+      description: 'echo',
+      parameters: { type: 'object', properties: {} },
+      inputSchema: z.object({}),
+      execute: () => 'ok',
+    });
+    const requests: LlmRequest[] = [];
+    const runner = createAgentRunner({
+      llm: sequenceClient(
+        [
+          [
+            { type: 'tool-call-start', id: 'call-1', name: 'echo' },
+            { type: 'tool-call-delta', id: 'call-1', argumentsDelta: '{}' },
+            {
+              type: 'finish',
+              reason: 'tool-call',
+              usage: { inputTokens: 100, outputTokens: 10, cacheReadTokens: 0 },
+            },
+          ],
+          [
+            { type: 'text-delta', text: '完成' },
+            {
+              type: 'finish',
+              reason: 'stop',
+              usage: { inputTokens: 130, outputTokens: 5, cacheReadTokens: 100 },
+            },
+          ],
+        ],
+        requests,
+      ),
+      sessionStore: store,
+      toolRegistry: registry,
+      toolPipeline: createToolPipeline({ registry }),
+    });
+
+    const events = await collect(runner.run(validRequest));
+
+    expect(events.filter((event) => event.type === 'usage')).toEqual([
+      {
+        type: 'usage',
+        usage: { inputTokens: 100, outputTokens: 10, cacheReadTokens: 0 },
+        provider: 'mock',
+        model: 'test-model',
+      },
+      {
+        type: 'usage',
+        usage: { inputTokens: 130, outputTokens: 5, cacheReadTokens: 100 },
+        provider: 'mock',
+        model: 'test-model',
+      },
+    ]);
+    const projection = projectSession(await store.read(validRequest.sessionId));
+    expect(projection.turns[0]?.steps).toMatchObject([
+      { kind: 'model', model: 'test-model', usage: { inputTokens: 100, cacheReadTokens: 0 } },
+      { kind: 'tool' },
+      { kind: 'model', model: 'test-model', usage: { inputTokens: 130, cacheReadTokens: 100 } },
+    ]);
+    expect(projection.turns[0]?.steps[1]?.usage).toBeUndefined();
+
+    await store.close();
+  });
+
   it('routes each Agent request to the Provider selected by id', async () => {
     const requests: LlmRequest[] = [];
     const registry = createLlmProviderRegistry([
@@ -904,6 +970,8 @@ describe('Agent Runner contracts', () => {
           turnId: initializationBatch[1].payload.turnId,
           stepId: initializationBatch[2].payload.stepId,
           kind: 'model',
+          provider: 'mock',
+          model: 'test-model',
         },
       },
     ]);
@@ -1653,6 +1721,8 @@ describe('Agent Runner contracts', () => {
         turnId,
         stepId,
         kind: 'model',
+        provider: 'mock',
+        model: 'test-model',
       },
     });
     expect(failedTerminalBatch).toEqual([

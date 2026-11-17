@@ -372,7 +372,7 @@ describe('Studio Agent Chat', () => {
     expect(screen.getByRole('heading', { name: 'Agent 工作台' })).toBeTruthy();
     expect(screen.getByLabelText('Agent 工作流')).toBeTruthy();
     expect(screen.getByLabelText('运行活动')).toBeTruthy();
-    expect(screen.getByRole('heading', { name: '会话状态' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: '会话概览' })).toBeTruthy();
     expect(screen.getByText('工作区访问')).toBeTruthy();
     expect(screen.getByText('本地模型')).toBeTruthy();
     expect(screen.queryByText('SESSION CONTEXT')).toBeNull();
@@ -455,7 +455,12 @@ describe('Studio Agent Chat', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: /Weave 项目/ }));
-    expect(screen.getByText('/Users/me/weave')).toBeTruthy();
+    expect(
+      within(screen.getByRole('menu', { name: '切换项目' })).getByText('/Users/me/weave'),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByRole('region', { name: '会话概览' })).getByText('/Users/me/weave'),
+    ).toBeTruthy();
   });
 
   it('points to the thinking block when the model returns only reasoning', async () => {
@@ -773,6 +778,59 @@ describe('Studio Agent Chat', () => {
     await waitFor(() => {
       expect(screen.queryByText('Session event store')).toBeNull();
     });
+  });
+
+  it('shows per-Turn usage under the reply and in the overview, with retry and quote', async () => {
+    let run = 0;
+    streamAgentRunMock.mockImplementation(async (_request, handlers) => {
+      run += 1;
+      handlers.onEvent({
+        type: 'usage',
+        usage: { inputTokens: 12_400, outputTokens: 860, cacheReadTokens: 10_044 },
+        provider: 'mock',
+        model: 'weave-local-demo',
+      });
+      handlers.onEvent({ type: 'text-delta', text: `第 ${run} 次回答` });
+      handlers.onEvent({ type: 'completed', turnId: `turn-usage-${run}` });
+    });
+
+    await renderApp();
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '统计 token' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+
+    const firstReply = (await screen.findByText('第 1 次回答')).closest('.timeline-item');
+    expect(
+      within(firstReply as HTMLElement).getByText(
+        /weave-local-demo · 输入 12k（命中 81%） · 输出 860/,
+      ),
+    ).toBeTruthy();
+    const overview = screen.getByRole('region', { name: 'Token 用量' });
+    expect(within(overview).getByText('缓存命中 81%')).toBeTruthy();
+    expect(
+      within(screen.getByRole('list', { name: '每轮用量' })).getAllByRole('listitem'),
+    ).toHaveLength(1);
+
+    fireEvent.click(within(firstReply as HTMLElement).getByRole('button', { name: '重试' }));
+    const secondReply = (await screen.findByText('第 2 次回答')).closest('.timeline-item');
+    expect(streamAgentRunMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        userMessage: { role: 'user', content: [{ type: 'text', text: '统计 token' }] },
+      }),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(screen.getByText('第 1 次回答')).toBeTruthy();
+    expect(within(secondReply as HTMLElement).getByRole('button', { name: '重试' })).toBeTruthy();
+
+    const earlierReply = screen.getByText('第 1 次回答').closest('.timeline-item') as HTMLElement;
+    expect(within(earlierReply).queryByRole('button', { name: '重试' })).toBeNull();
+    fireEvent.click(within(earlierReply).getByRole('button', { name: '引用' }));
+    expect((screen.getByLabelText('发送消息') as HTMLTextAreaElement).value).toBe(
+      '> 第 1 次回答\n\n',
+    );
+    expect(
+      within(screen.getByRole('list', { name: '每轮用量' })).getAllByRole('listitem'),
+    ).toHaveLength(2);
   });
 
   it('submits a message and renders streamed assistant text', async () => {

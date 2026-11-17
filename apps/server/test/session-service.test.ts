@@ -30,6 +30,109 @@ async function createContext(overrides?: Partial<SessionServiceOptions>): Promis
 }
 
 describe('Session Service', () => {
+  it('returns per-Turn usage, model, timing, and the Turn of each reply', async () => {
+    const { service, projectStore, sessionStore } = await createContext();
+    const project = await projectStore.createProject({ name: 'Weave', folderName: 'weave' });
+    const session = await service.create(project.id);
+    await sessionStore.append(session.id, [
+      {
+        type: 'message.created',
+        payload: {
+          messageId: 'user-1',
+          message: { role: 'user', content: [{ type: 'text', text: '读文件' }] },
+        },
+      },
+      { type: 'turn.started', payload: { turnId: 'turn-1' } },
+      {
+        type: 'step.started',
+        payload: {
+          turnId: 'turn-1',
+          stepId: 'm1',
+          kind: 'model',
+          provider: 'deepseek',
+          model: 'flash',
+        },
+      },
+      {
+        type: 'step.completed',
+        payload: {
+          turnId: 'turn-1',
+          stepId: 'm1',
+          status: 'completed',
+          usage: { inputTokens: 100, outputTokens: 10, cacheReadTokens: 0 },
+        },
+      },
+      { type: 'step.started', payload: { turnId: 'turn-1', stepId: 't1', kind: 'tool' } },
+      {
+        type: 'tool-call.created',
+        payload: {
+          turnId: 'turn-1',
+          stepId: 't1',
+          toolCall: { id: 'call-1', name: 'read_file', arguments: '{}' },
+        },
+      },
+      {
+        type: 'tool-result.created',
+        payload: {
+          turnId: 'turn-1',
+          stepId: 't1',
+          toolCallId: 'call-1',
+          name: 'read_file',
+          content: 'missing',
+          truncated: false,
+          status: 'failed',
+          errorCode: 'tool-execution-failed',
+        },
+      },
+      { type: 'step.completed', payload: { turnId: 'turn-1', stepId: 't1', status: 'failed' } },
+      {
+        type: 'step.started',
+        payload: {
+          turnId: 'turn-1',
+          stepId: 'm2',
+          kind: 'model',
+          provider: 'deepseek',
+          model: 'flash',
+        },
+      },
+      {
+        type: 'message.created',
+        payload: {
+          messageId: 'assistant-1',
+          message: { role: 'assistant', content: [{ type: 'text', text: '文件不存在' }] },
+        },
+      },
+      {
+        type: 'step.completed',
+        payload: {
+          turnId: 'turn-1',
+          stepId: 'm2',
+          status: 'completed',
+          usage: { inputTokens: 120, outputTokens: 6, cacheReadTokens: 96 },
+        },
+      },
+      { type: 'turn.completed', payload: { turnId: 'turn-1', status: 'completed' } },
+    ]);
+
+    const detail = await service.get(session.id);
+
+    expect(detail.messages.map((message) => message.turnId)).toEqual([undefined, 'turn-1']);
+    expect(detail.turns).toEqual([
+      expect.objectContaining({
+        turnId: 'turn-1',
+        status: 'completed',
+        provider: 'deepseek',
+        model: 'flash',
+        usage: { inputTokens: 220, outputTokens: 16, cacheReadTokens: 96 },
+        toolCalls: 1,
+        failedToolCalls: 1,
+        startedAt: expect.any(String),
+        completedAt: expect.any(String),
+      }),
+    ]);
+    expect(detail.turns[0]?.modelSteps).toHaveLength(2);
+  });
+
   it('creates a Session and attaches it to a Project', async () => {
     const { service, projectStore } = await createContext();
     const project = await projectStore.createProject({ name: 'Weave', folderName: 'weave' });

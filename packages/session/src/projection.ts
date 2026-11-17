@@ -1,4 +1,4 @@
-import type { Message } from '@weave/protocol';
+import type { Message, TokenUsage } from '@weave/protocol';
 import type { ToolCall } from '@weave/protocol';
 import { sessionEventSchema, type SessionEvent } from './events.js';
 
@@ -29,6 +29,8 @@ export interface SessionMessage {
   readonly message: Message;
   readonly sequence: number;
   readonly occurredAt: string;
+  /** Turn that was running when the message was created, if any. */
+  readonly turnId?: string | undefined;
 }
 
 /**
@@ -38,6 +40,13 @@ export interface SessionStep {
   readonly stepId: string;
   readonly kind: string;
   readonly status: 'running' | 'completed' | 'failed' | 'cancelled';
+  readonly startedAt: string;
+  readonly completedAt?: string | undefined;
+  /** Provider and model of a model step, when recorded. */
+  readonly provider?: string | undefined;
+  readonly model?: string | undefined;
+  /** Provider-reported token usage of a model step, when recorded. */
+  readonly usage?: TokenUsage | undefined;
 }
 
 /** A durable Tool Call associated with a projected Turn and Step. */
@@ -65,6 +74,8 @@ export interface SessionToolResult {
 export interface SessionTurn {
   readonly turnId: string;
   readonly status: 'running' | 'completed' | 'failed' | 'cancelled';
+  readonly startedAt: string;
+  readonly completedAt?: string | undefined;
   readonly steps: readonly SessionStep[];
   readonly toolCalls: readonly SessionToolCall[];
   readonly toolResults: readonly SessionToolResult[];
@@ -87,11 +98,18 @@ interface MutableStep {
   stepId: string;
   kind: string;
   status: SessionStep['status'];
+  startedAt: string;
+  completedAt?: string | undefined;
+  provider?: string | undefined;
+  model?: string | undefined;
+  usage?: TokenUsage | undefined;
 }
 
 interface MutableTurn {
   turnId: string;
   status: SessionTurn['status'];
+  startedAt: string;
+  completedAt?: string | undefined;
   steps: MutableStep[];
   toolCalls: SessionToolCall[];
   toolResults: SessionToolResult[];
@@ -130,6 +148,7 @@ export function projectSession(events: readonly SessionEvent[]): SessionProjecti
   const messageIds = new Set<string>();
   const turns: MutableTurn[] = [];
   const turnById = new Map<string, MutableTurn>();
+  let activeTurnId: string | undefined;
   let lastSequence = 0;
 
   for (const [index, event] of parsedEvents.entries()) {
@@ -174,6 +193,7 @@ export function projectSession(events: readonly SessionEvent[]): SessionProjecti
         message: event.payload.message,
         sequence: event.sequence,
         occurredAt: event.occurredAt,
+        ...(activeTurnId === undefined ? {} : { turnId: activeTurnId }),
       });
     } else if (event.type === 'turn.started') {
       if (archivedAt !== undefined) {
@@ -185,12 +205,14 @@ export function projectSession(events: readonly SessionEvent[]): SessionProjecti
       const turn: MutableTurn = {
         turnId: event.payload.turnId,
         status: 'running',
+        startedAt: event.occurredAt,
         steps: [],
         toolCalls: [],
         toolResults: [],
       };
       turns.push(turn);
       turnById.set(turn.turnId, turn);
+      activeTurnId = turn.turnId;
     } else if (event.type === 'turn.completed') {
       const turn = turnById.get(event.payload.turnId);
       if (turn === undefined) {
@@ -200,6 +222,10 @@ export function projectSession(events: readonly SessionEvent[]): SessionProjecti
         throw invalidOrder(`Turn ${event.payload.turnId} was already completed`);
       }
       turn.status = event.payload.status;
+      turn.completedAt = event.occurredAt;
+      if (activeTurnId === turn.turnId) {
+        activeTurnId = undefined;
+      }
     } else if (event.type === 'step.started') {
       if (archivedAt !== undefined) {
         throw invalidOrder('An archived Session cannot start a Step');
@@ -218,6 +244,9 @@ export function projectSession(events: readonly SessionEvent[]): SessionProjecti
         stepId: event.payload.stepId,
         kind: event.payload.kind,
         status: 'running',
+        startedAt: event.occurredAt,
+        ...(event.payload.provider === undefined ? {} : { provider: event.payload.provider }),
+        ...(event.payload.model === undefined ? {} : { model: event.payload.model }),
       });
     } else if (event.type === 'step.completed') {
       if (archivedAt !== undefined) {
@@ -235,6 +264,10 @@ export function projectSession(events: readonly SessionEvent[]): SessionProjecti
         throw invalidOrder(`Step ${event.payload.stepId} was already completed`);
       }
       step.status = event.payload.status;
+      step.completedAt = event.occurredAt;
+      if (event.payload.usage !== undefined) {
+        step.usage = sumTokenUsage([event.payload.usage]);
+      }
     } else if (event.type === 'tool-call.created') {
       if (archivedAt !== undefined) {
         throw invalidOrder('An archived Session cannot create a Tool Call');
@@ -307,6 +340,8 @@ export function projectSession(events: readonly SessionEvent[]): SessionProjecti
     turns: turns.map((turn) => ({
       turnId: turn.turnId,
       status: turn.status,
+      startedAt: turn.startedAt,
+      ...(turn.completedAt === undefined ? {} : { completedAt: turn.completedAt }),
       steps: turn.steps.map((step) => ({ ...step })),
       toolCalls: turn.toolCalls.map((toolCall) => ({
         ...toolCall,
@@ -316,4 +351,42 @@ export function projectSession(events: readonly SessionEvent[]): SessionProjecti
     })),
     lastSequence,
   };
+}
+
+const usageFields = [
+  'inputTokens',
+  'outputTokens',
+  'totalTokens',
+  'cacheReadTokens',
+  'cacheWriteTokens',
+  'reasoningTokens',
+] as const;
+
+type UsageField = (typeof usageFields)[number];
+
+/**
+ * Adds token usage field by field. A field is present in the result only when
+ * at least one input reported it, so a missing counter never reads as zero.
+ * Returns `undefined` when no input carries usage.
+ */
+export function sumTokenUsage(
+  usages: readonly ({ readonly [Field in UsageField]?: number | undefined } | undefined)[],
+): TokenUsage | undefined {
+  const reported = usages.filter(
+    (usage): usage is { readonly [Field in UsageField]?: number | undefined } =>
+      usage !== undefined,
+  );
+  if (reported.length === 0) {
+    return undefined;
+  }
+  const total: Record<string, number> = {};
+  for (const usage of reported) {
+    for (const field of usageFields) {
+      const value = usage[field];
+      if (value !== undefined) {
+        total[field] = (total[field] ?? 0) + value;
+      }
+    }
+  }
+  return total as TokenUsage;
 }
