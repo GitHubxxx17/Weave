@@ -48,7 +48,7 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
       '*',
       cors({
         origin: studioOrigin,
-        allowMethods: ['GET', 'POST', 'OPTIONS'],
+        allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
         allowHeaders: ['Content-Type'],
       }),
     );
