@@ -59,14 +59,18 @@ the Session, Agent, Tool Pipeline, and Plugin boundaries defined for Weave.
 ## Package boundaries
 
 Tests belong in each package's or app's `test/` directory, not in `src/`.
-Internal dependencies follow `protocol -> llm -> runtime -> server`; lower
-layers must not import higher layers. Any cross-package change must update the
+Internal dependencies follow `protocol -> {llm, session} -> runtime -> plugin -> server -> desktop`;
+`workspace` has no internal dependencies and is consumed only by `server`.
+`studio` imports no `@weave/*` package and no Node or Electron module; it
+reaches the Runtime only through the Server HTTP/SSE contract. Lower layers
+must not import higher layers. Any cross-package change must update the
 design document before implementation so the affected contracts are explicit.
 The root ESLint boundary rule also requires workspace dependencies to be
 declared in the importing package, rejects relative imports into another
-workspace unit's source tree, and keeps `runtime` independent of Hono, React,
-and Node HTTP server modules. Use package names for valid cross-package
-imports.
+workspace unit's source tree, keeps `runtime` independent of Hono, React,
+and Node HTTP server modules, and keeps `studio` free of `node:*` and
+`electron` imports. Use package names for valid cross-package imports.
+Each package's `test` script runs only that package's `test/` directory.
 
 The current Foundation architecture is documented in
 `docs/architecture/foundation.md`; the decision record is in
