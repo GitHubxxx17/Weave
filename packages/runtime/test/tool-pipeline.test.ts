@@ -313,6 +313,26 @@ describe('Tool Pipeline', () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it('reports a pipeline deadline reached while waiting for approval as expired', async () => {
+    const execute = vi.fn(() => 'done');
+    const broker = createApprovalBroker();
+    const pipeline = createToolPipeline({
+      registry: createProtectedRegistry(execute),
+      approvalBroker: broker,
+      timeoutMs: 5,
+    });
+
+    await expect(
+      pipeline.execute({
+        toolCallId: 'call-protected-deadline',
+        name: 'protected',
+        arguments: '{"value":"slow"}',
+      }),
+    ).rejects.toMatchObject({ code: 'tool-approval-expired' });
+    expect(execute).not.toHaveBeenCalled();
+    expect(broker.list()[0]?.status).not.toBe('pending');
+  });
+
   it('does not silently execute a protected tool without an Approval Broker', async () => {
     const execute = vi.fn(() => 'done');
     const pipeline = createToolPipeline({

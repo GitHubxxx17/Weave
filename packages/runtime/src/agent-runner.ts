@@ -78,6 +78,50 @@ function createToolMessage(result: ToolExecutionResult): Message {
 }
 
 /**
+ * Tool failures the model can react to; the turn continues with the error as
+ * the tool result. Cancellation and assembly errors still end the turn.
+ */
+const recoverableToolErrorCodes: ReadonlySet<string> = new Set([
+  'tool-not-found',
+  'tool-invalid-json',
+  'tool-invalid-arguments',
+  'tool-execution-failed',
+  'tool-timeout',
+  'tool-result-serialization-failed',
+  'tool-approval-rejected',
+  'tool-approval-expired',
+]);
+
+function isRecoverableToolError(error: unknown): error is ToolExecutionError {
+  return error instanceof ToolExecutionError && recoverableToolErrorCodes.has(error.code);
+}
+
+function readErrorCode(value: unknown): string | undefined {
+  return typeof value === 'object' &&
+    value !== null &&
+    'code' in value &&
+    typeof value.code === 'string'
+    ? value.code
+    : undefined;
+}
+
+/**
+ * Builds the model-facing description of a failed tool call.
+ *
+ * It names the tool, the stable error code, and the error message of the tool
+ * implementation when one exists. It never includes arguments or file content.
+ */
+function describeToolFailure(toolName: string, error: ToolExecutionError): string {
+  const cause = error.cause;
+  const causeCode = readErrorCode(cause);
+  const detail =
+    cause instanceof Error && causeCode !== undefined
+      ? `${causeCode}: ${cause.message}`
+      : error.message;
+  return `Tool "${toolName}" failed (${error.code}). ${detail}`;
+}
+
+/**
  * Creates a Runner for one Session turn, with optional sequential Tool Calls.
  *
  * The queue is intentionally local to this Runner. The current
@@ -538,6 +582,45 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
                   error instanceof ToolExecutionError ? error.code : 'tool-execution-failed';
                 const errorContent =
                   error instanceof ToolExecutionError ? error.message : 'Tool execution failed';
+
+                if (!cancelled && isRecoverableToolError(error)) {
+                  const failure: ToolExecutionResult = {
+                    toolCallId: toolCall.id,
+                    name: toolCall.name,
+                    content: describeToolFailure(toolCall.name, error),
+                    truncated: false,
+                  };
+                  await options.sessionStore.append(validRequest.sessionId, [
+                    {
+                      type: 'tool-result.created',
+                      payload: {
+                        turnId,
+                        stepId: toolStepId,
+                        toolCallId: toolCall.id,
+                        name: toolCall.name,
+                        content: failure.content,
+                        truncated: false,
+                        status: 'failed',
+                        errorCode,
+                      },
+                    },
+                    {
+                      type: 'message.created',
+                      payload: {
+                        messageId: crypto.randomUUID(),
+                        message: createToolMessage(failure),
+                      },
+                    },
+                    {
+                      type: 'step.completed',
+                      payload: { turnId, stepId: toolStepId, status: 'failed' },
+                    },
+                  ]);
+                  activeStepStatus = 'completed';
+                  emit({ type: 'tool-result', result: failure, status: 'failed', errorCode });
+                  continue;
+                }
+
                 await appendTerminal(
                   [
                     {

@@ -224,6 +224,13 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
             });
           } catch (error: unknown) {
             if (error instanceof ApprovalError) {
+              if (timedOut) {
+                throw new ToolExecutionError(
+                  'tool-approval-expired',
+                  `Tool "${request.name}" approval expired`,
+                  { cause: error },
+                );
+              }
               throw mapApprovalError(request.name, error);
             }
             throw new ToolExecutionError(
