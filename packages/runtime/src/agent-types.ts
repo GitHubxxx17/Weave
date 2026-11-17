@@ -120,4 +120,15 @@ export interface AgentRunnerOptions {
   readonly toolPipeline?: ToolPipeline | undefined;
   /** Maximum number of model steps allowed in one turn; defaults to eight. */
   readonly maxSteps?: number | undefined;
+  /**
+   * Returns the system instructions for one run, resolved once before the
+   * first model step. They are sent with every model request of the run but
+   * are never written to the Session, so they can reflect current state such
+   * as the Session's Workspace folder.
+   */
+  readonly instructions?:
+    | ((context: {
+        readonly sessionId: string;
+      }) => string | undefined | Promise<string | undefined>)
+    | undefined;
 }
