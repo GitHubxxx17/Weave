@@ -46,6 +46,8 @@ export type AgentRuntimeEvent =
         readonly content: string;
         readonly truncated: boolean;
       };
+      readonly status?: 'completed' | 'failed' | undefined;
+      readonly errorCode?: string | undefined;
     }
   | { readonly type: 'completed'; readonly turnId: string };
 
@@ -73,6 +75,8 @@ export const agentRuntimeEventSchema: z.ZodType<AgentRuntimeEvent> = z.discrimin
       content: z.string(),
       truncated: z.boolean(),
     }),
+    status: z.enum(['completed', 'failed']).optional(),
+    errorCode: z.string().min(1).optional(),
   }),
   z.object({ type: z.literal('completed'), turnId: nonEmptyStringSchema }),
 ]);

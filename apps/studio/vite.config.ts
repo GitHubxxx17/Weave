@@ -8,6 +8,9 @@ export default defineConfig({
       '/agent': {
         target: 'http://127.0.0.1:4317',
       },
+      '/approvals': {
+        target: 'http://127.0.0.1:4317',
+      },
       '/projects': {
         target: 'http://127.0.0.1:4317',
       },
