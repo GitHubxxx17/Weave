@@ -205,12 +205,29 @@ The browser command `pnpm dev` remains available. `WEAVE_DATA_DIR` and
 location. The old `apps/server/.weave/` directory is kept as-is and is not
 automatically deleted or migrated.
 
-The Server validates this configuration with Zod, creates one private
-`LlmClient` per entry, and injects the shared `LlmProviderRegistry` into the
-Runtime. Studio reads `GET /settings/providers`, displays the public Provider
-metadata, and sends the selected `provider` and `model` with each Agent run.
-API Keys stay inside the Server process and are not returned by the metadata
-route, written to Session events, or sent to the browser.
+Desktop Provider configuration flow:
+
+```text
+打开桌面端
+  -> 设置
+  -> 添加 AI 服务
+  -> 保存 API Key
+  -> 选择模型
+  -> 返回工作台发送消息
+```
+
+Browser mode remains read-only for Provider settings. It reads
+`WEAVE_LLM_PROVIDERS` from `.env`, while Desktop mode stores the Provider
+metadata in the application SQLite file and encrypts API Keys with Electron
+`safeStorage` before persistence. The Desktop settings page never renders an
+existing API Key back to the user.
+
+The Server validates Provider configuration with Zod, creates one private
+`LlmClient` per configured entry, and injects the shared
+`LlmProviderRegistry` into the Runtime. Studio reads
+`GET /settings/providers`, displays public Provider metadata, and sends the
+selected `provider` and `model` with each Agent run. API Keys are excluded from
+Provider metadata, Session events, SSE payloads, logs, and error messages.
 
 The detailed learning guide is
 [LLM Provider 路由：从配置到 Studio 选择](docs/learning/2026-11-16-llm-provider-routing.md).

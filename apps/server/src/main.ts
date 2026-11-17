@@ -11,6 +11,14 @@ import { createServerLlmProviders } from './llm-providers.js';
 import { resolveDatabaseFile } from './persistence-path.js';
 import type { ProviderSecretCodec } from './provider-secret-codec.js';
 import {
+  createProviderSettingsManager,
+  type ProviderSettingsManager,
+} from './provider-settings-manager.js';
+import {
+  createSqliteProviderSettingsStore,
+  type ProviderSettingsStore,
+} from './provider-settings-store.js';
+import {
   approvalBrokerService,
   createServerAgentRunner,
   createServerRuntime,
@@ -37,6 +45,7 @@ export interface StartServerOptions {
   readonly studioOrigin?: string;
   readonly environment?: NodeJS.ProcessEnv;
   readonly fetch?: typeof globalThis.fetch;
+  readonly providerSettingsStore?: ProviderSettingsStore;
   readonly providerSecretCodec?: ProviderSecretCodec;
   readonly projectStore?: ProjectStore;
   readonly sessionStoreFactory?: () => SessionEventStore | Promise<SessionEventStore>;
@@ -73,6 +82,15 @@ async function closeProjectStore(projectStore: ProjectStore | undefined): Promis
   await projectStore.close();
 }
 
+async function closeProviderSettingsStore(
+  providerSettingsStore: ProviderSettingsStore | undefined,
+): Promise<void> {
+  if (providerSettingsStore === undefined) {
+    return;
+  }
+  await providerSettingsStore.close();
+}
+
 /**
  * Starts the local HTTP control plane and its Runtime.
  *
@@ -104,6 +122,20 @@ export async function startServer(
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
   });
 
+  const providerSettingsStore =
+    options.providerSettingsStore ??
+    (options.providerSecretCodec === undefined
+      ? undefined
+      : createSqliteProviderSettingsStore({ filename: databaseFile }));
+  const providerSettingsManager: ProviderSettingsManager | undefined =
+    providerSettingsStore === undefined || options.providerSecretCodec === undefined
+      ? undefined
+      : createProviderSettingsManager({
+          store: providerSettingsStore,
+          registry: providerSettings.registry,
+          secretCodec: options.providerSecretCodec,
+          initialDefaultProvider: providerSettings.defaultProvider,
+        });
   const projectStore = options.projectStore ?? createSqliteProjectStore({ filename: databaseFile });
   const sessionStoreFactory =
     options.sessionStoreFactory ??
@@ -112,6 +144,9 @@ export async function startServer(
   let server: ServerType | undefined;
 
   try {
+    if (providerSettingsManager !== undefined) {
+      await providerSettingsManager.refresh();
+    }
     await runtime.start();
     await registerServerPlugins(runtime, options.plugins);
     const sessionStore = getServerSessionStore(runtime);
@@ -133,6 +168,8 @@ export async function startServer(
           sessionService,
           providerRegistry: providerSettings.registry,
           defaultProvider: providerSettings.defaultProvider,
+          providerSettingsManager,
+          canManageProviders: providerSettingsManager !== undefined,
           ...(studioOrigin === undefined ? {} : { studioOrigin }),
         }).fetch,
         hostname: '127.0.0.1',
@@ -190,6 +227,7 @@ export async function startServer(
         });
         await cleanup(() => runtime.stop());
         await cleanup(() => closeProjectStore(projectStore));
+        await cleanup(() => closeProviderSettingsStore(providerSettingsStore));
 
         if (hasError) {
           throw firstError;
@@ -211,6 +249,7 @@ export async function startServer(
       .catch(() => undefined);
     await runtime.stop().catch(() => undefined);
     await closeProjectStore(projectStore).catch(() => undefined);
+    await closeProviderSettingsStore(providerSettingsStore).catch(() => undefined);
     throw error;
   }
 }

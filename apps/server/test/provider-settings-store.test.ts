@@ -11,9 +11,7 @@ import {
 const temporaryFiles: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(
-    temporaryFiles.splice(0).map((filename) => rm(filename, { force: true })),
-  );
+  await Promise.all(temporaryFiles.splice(0).map((filename) => rm(filename, { force: true })));
 });
 
 function createFilename(): string {
@@ -22,9 +20,7 @@ function createFilename(): string {
   return filename;
 }
 
-function createRecord(
-  overrides: Partial<ProviderSettingsRecord> = {},
-): ProviderSettingsRecord {
+function createRecord(overrides: Partial<ProviderSettingsRecord> = {}): ProviderSettingsRecord {
   const now = new Date().toISOString();
   return {
     id: 'deepseek',

@@ -10,14 +10,10 @@ import {
   type ProviderSettingsManager,
 } from '../src/provider-settings-manager.js';
 import type { ProviderSecretCodec } from '../src/provider-secret-codec.js';
-import type {
-  ProviderSettingsRecord,
-} from '../src/provider-settings-types.js';
+import type { ProviderSettingsRecord } from '../src/provider-settings-types.js';
 import type { ProviderSettingsStore } from '../src/provider-settings-store.js';
 
-function createRecord(
-  overrides: Partial<ProviderSettingsRecord> = {},
-): ProviderSettingsRecord {
+function createRecord(overrides: Partial<ProviderSettingsRecord> = {}): ProviderSettingsRecord {
   const now = new Date().toISOString();
   return {
     id: 'deepseek',
@@ -63,11 +59,13 @@ function createCodec(): ProviderSecretCodec {
   };
 }
 
-function createManager(options: {
-  readonly records?: readonly ProviderSettingsRecord[];
-  readonly registry?: LlmProviderRegistry;
-  readonly createdKeys?: string[];
-} = {}): {
+function createManager(
+  options: {
+    readonly records?: readonly ProviderSettingsRecord[];
+    readonly registry?: LlmProviderRegistry;
+    readonly createdKeys?: string[];
+  } = {},
+): {
   readonly manager: ProviderSettingsManager;
   readonly registry: LlmProviderRegistry;
   readonly createdKeys: string[];

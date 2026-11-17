@@ -265,9 +265,7 @@ export function createSqliteProviderSettingsStore(options: {
         try {
           database.exec('BEGIN IMMEDIATE');
           transactionStarted = true;
-          const result = database
-            .prepare('DELETE FROM provider_settings WHERE id = ?')
-            .run(id);
+          const result = database.prepare('DELETE FROM provider_settings WHERE id = ?').run(id);
           if (result.changes === 0) {
             throw new ProviderSettingsStoreError('provider-settings-not-found', notFoundMessage);
           }

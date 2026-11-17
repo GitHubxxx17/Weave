@@ -34,11 +34,7 @@ export type ProviderSettingsManagerErrorCode =
 export class ProviderSettingsManagerError extends Error {
   readonly code: ProviderSettingsManagerErrorCode;
 
-  constructor(
-    code: ProviderSettingsManagerErrorCode,
-    message: string,
-    options?: ErrorOptions,
-  ) {
+  constructor(code: ProviderSettingsManagerErrorCode, message: string, options?: ErrorOptions) {
     super(message, options);
     this.name = 'ProviderSettingsManagerError';
     this.code = code;
@@ -48,10 +44,7 @@ export class ProviderSettingsManagerError extends Error {
 export interface ProviderSettingsManager {
   list(): Promise<readonly ProviderSettingsDescriptor[]>;
   create(input: CreateProviderSettingsInput): Promise<ProviderSettingsDescriptor>;
-  update(
-    id: string,
-    input: UpdateProviderSettingsInput,
-  ): Promise<ProviderSettingsDescriptor>;
+  update(id: string, input: UpdateProviderSettingsInput): Promise<ProviderSettingsDescriptor>;
   remove(id: string): Promise<void>;
   setDefault(id: string): Promise<void>;
   getDefaultProvider(): string;
@@ -105,9 +98,7 @@ function mapStoreError(error: unknown): never {
   throw error;
 }
 
-function getDescriptor(
-  record: ProviderSettingsRecord,
-): ProviderSettingsDescriptor {
+function getDescriptor(record: ProviderSettingsRecord): ProviderSettingsDescriptor {
   return providerSettingsDescriptorSchema.parse({
     id: record.id,
     label: record.label,
