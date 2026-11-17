@@ -89,4 +89,64 @@ describe('LLM Provider Registry', () => {
     expect(descriptors[0]).not.toHaveProperty('client');
     expect(JSON.stringify(descriptors)).not.toContain('apiKey');
   });
+
+  it('replaces a client while preserving the registry object and public descriptor', () => {
+    const first = createClient();
+    const second = createClient();
+    const registry = createLlmProviderRegistry([
+      {
+        id: 'alpha',
+        label: 'Alpha',
+        type: 'openai-compatible',
+        client: first,
+        defaultModel: 'old-model',
+      },
+    ]);
+
+    registry.replace({
+      id: 'alpha',
+      label: 'Alpha',
+      type: 'openai-compatible',
+      client: second,
+      defaultModel: 'new-model',
+    });
+
+    expect(registry.get('alpha')).toBe(second);
+    expect(registry.getDescriptor('alpha')).toEqual({
+      id: 'alpha',
+      label: 'Alpha',
+      type: 'openai-compatible',
+      defaultModel: 'new-model',
+    });
+    expect(() =>
+      registry.replace({
+        id: 'missing',
+        label: 'Missing',
+        type: 'openai-compatible',
+        client: second,
+      }),
+    ).toThrow('LLM provider "missing" is not registered');
+  });
+
+  it('removes only the requested Provider', () => {
+    const registry = createLlmProviderRegistry([
+      {
+        id: 'alpha',
+        label: 'Alpha',
+        type: 'openai-compatible',
+        client: createClient(),
+      },
+      {
+        id: 'beta',
+        label: 'Beta',
+        type: 'openai-compatible',
+        client: createClient(),
+      },
+    ]);
+
+    expect(registry.remove('alpha')).toBe(true);
+    expect(registry.get('alpha')).toBeUndefined();
+    expect(registry.get('beta')).toBeDefined();
+    expect(registry.remove('alpha')).toBe(false);
+  });
 });

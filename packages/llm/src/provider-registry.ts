@@ -30,6 +30,10 @@ export interface LlmProviderDescriptor {
 export interface LlmProviderRegistry {
   /** Adds one Provider and rejects duplicate ids. */
   register(provider: LlmProviderRegistration): void;
+  /** Replaces one existing Provider while preserving Registry identity. */
+  replace(provider: LlmProviderRegistration): void;
+  /** Removes one Provider and returns whether it existed. */
+  remove(providerId: string): boolean;
   /** Resolves the private client for one Provider id. */
   get(providerId: string): LlmClient | undefined;
   /** Reads public metadata for one Provider id. */
@@ -91,12 +95,28 @@ export function createLlmProviderRegistry(
     descriptors.set(provider.id, toDescriptor(provider));
   };
 
+  const replace = (providerInput: LlmProviderRegistration): void => {
+    const provider = providerRegistrationSchema.parse(providerInput);
+    if (!clients.has(provider.id)) {
+      throw new Error(`LLM provider "${provider.id}" is not registered`);
+    }
+
+    clients.set(provider.id, provider.client);
+    descriptors.set(provider.id, toDescriptor(provider));
+  };
+
   for (const provider of providers) {
     register(provider);
   }
 
   return Object.freeze({
     register,
+    replace,
+    remove(providerId: string): boolean {
+      const existed = clients.delete(providerId);
+      descriptors.delete(providerId);
+      return existed;
+    },
     get(providerId: string): LlmClient | undefined {
       return clients.get(providerId);
     },
