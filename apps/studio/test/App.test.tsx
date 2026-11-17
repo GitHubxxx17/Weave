@@ -55,6 +55,7 @@ function sessionDetail(
 
 function createWorkspaceFetchMock(
   providerSettings?: Record<string, unknown>,
+  options?: { readonly emptyWorkspace?: boolean },
 ): ReturnType<typeof vi.fn> {
   const sessions = new Map<string, Record<string, unknown>>([
     [sessionIds.local, sessionDetail(sessionIds.local, '本地 Agent 演示')],
@@ -81,20 +82,22 @@ function createWorkspaceFetchMock(
       ]),
     ],
   ]);
-  const projects = [
-    {
-      id: projectId,
-      name: 'Weave',
-      folderName: 'weave',
-      createdAt: '2026-11-14T00:00:00.000Z',
-      updatedAt: '2026-11-14T00:00:00.000Z',
-      sessions: [
-        sessionSummary(sessionIds.local, '本地 Agent 演示'),
-        sessionSummary(sessionIds.eventStore, 'Session event store'),
-        sessionSummary(sessionIds.foundation, 'Foundation 设计'),
-      ],
-    },
-  ];
+  const projects = options?.emptyWorkspace
+    ? []
+    : [
+        {
+          id: projectId,
+          name: 'Weave',
+          folderName: 'weave',
+          createdAt: '2026-11-14T00:00:00.000Z',
+          updatedAt: '2026-11-14T00:00:00.000Z',
+          sessions: [
+            sessionSummary(sessionIds.local, '本地 Agent 演示'),
+            sessionSummary(sessionIds.eventStore, 'Session event store'),
+            sessionSummary(sessionIds.foundation, 'Foundation 设计'),
+          ],
+        },
+      ];
   let nextProjectId = 0;
   let nextSessionId = 0;
 
@@ -560,6 +563,83 @@ describe('Studio Agent Chat', () => {
       }),
       expect.objectContaining({ onEvent: expect.any(Function) }),
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it('submits with Enter and keeps Shift+Enter for a newline', async () => {
+    streamAgentRunMock.mockImplementation(async (_request, handlers) => {
+      handlers.onEvent({ type: 'text-delta', text: '已发送' });
+      handlers.onEvent({ type: 'completed', turnId: 'turn-enter' });
+    });
+
+    await renderApp();
+    const input = screen.getByLabelText('发送消息');
+    fireEvent.change(input, { target: { value: '第一行' } });
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
+    expect((input as HTMLTextAreaElement).value).toBe('第一行');
+
+    fireEvent.change(input, { target: { value: '第一行\n第二行' } });
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: false });
+
+    await waitFor(() => {
+      const userMessage = [...document.querySelectorAll('.timeline-item-user .message p')].find(
+        (element) => element.textContent === '第一行\n第二行',
+      );
+      expect(userMessage).toBeTruthy();
+    });
+    expect(await screen.findByText('已发送')).toBeTruthy();
+  });
+
+  it('creates a default project and session when starting from an empty workspace', async () => {
+    fetchMock = createWorkspaceFetchMock(undefined, { emptyWorkspace: true });
+    vi.stubGlobal('fetch', fetchMock);
+    streamAgentRunMock.mockResolvedValue(undefined);
+
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: '新建会话' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '项目：Weave' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: /未命名会话/ })).toBeTruthy();
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/projects',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ name: 'Weave', folderName: 'weave' }),
+      }),
+    );
+  });
+
+  it('creates a default project and session when sending from an empty workspace', async () => {
+    fetchMock = createWorkspaceFetchMock(undefined, { emptyWorkspace: true });
+    vi.stubGlobal('fetch', fetchMock);
+    streamAgentRunMock.mockImplementation(async (_request, handlers) => {
+      handlers.onEvent({ type: 'text-delta', text: '已从空工作区发送' });
+      handlers.onEvent({ type: 'completed', turnId: 'turn-empty-workspace' });
+    });
+
+    await renderApp();
+    fireEvent.change(screen.getByLabelText('发送消息'), {
+      target: { value: '直接开始任务' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+
+    expect(await screen.findByText('已从空工作区发送')).toBeTruthy();
+    expect(streamAgentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: 'session-created-1',
+      }),
+      expect.objectContaining({ onEvent: expect.any(Function) }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/projects',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ name: 'Weave', folderName: 'weave' }),
+      }),
     );
   });
 

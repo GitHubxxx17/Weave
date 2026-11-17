@@ -1,4 +1,11 @@
-import { ChangeEvent, FormEvent, useEffect, useRef, useState } from 'react';
+import {
+  ChangeEvent,
+  FormEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import {
   Archive,
   Bot,
@@ -513,12 +520,13 @@ export function App() {
 
   /** Applies an immutable message update to one local Studio session. */
   function updateSessionMessages(
+    projectId: string,
     sessionId: string,
     update: (messages: readonly ChatMessage[]) => readonly ChatMessage[],
   ): void {
     setProjects((current) =>
       current.map((project) =>
-        project.id === activeProjectId
+        project.id === projectId
           ? {
               ...project,
               sessions: project.sessions.map((session) =>
@@ -582,6 +590,7 @@ export function App() {
     event: AgentRuntimeEvent,
     runId: string,
     assistantId: string,
+    projectId: string,
     sessionId: string,
   ): void {
     if (activeRunId.current !== runId) {
@@ -590,7 +599,7 @@ export function App() {
 
     switch (event.type) {
       case 'text-delta':
-        updateSessionMessages(sessionId, (current) =>
+        updateSessionMessages(projectId, sessionId, (current) =>
           current.map((message) =>
             message.id === assistantId ? { ...message, text: message.text + event.text } : message,
           ),
@@ -598,7 +607,7 @@ export function App() {
         break;
       case 'reasoning-delta':
         setReasoning((current) => current + event.text);
-        updateSessionMessages(sessionId, (current) =>
+        updateSessionMessages(projectId, sessionId, (current) =>
           current.map((message) =>
             message.id === assistantId
               ? { ...message, reasoning: message.reasoning + event.text }
@@ -614,7 +623,7 @@ export function App() {
           status: 'called',
         }));
         setTools(toolsRef.current);
-        updateSessionMessages(sessionId, (messages) =>
+        updateSessionMessages(projectId, sessionId, (messages) =>
           messages.map((message) =>
             message.id === assistantId ? { ...message, tools: toolsRef.current } : message,
           ),
@@ -631,7 +640,7 @@ export function App() {
           return existing?.result === undefined ? updated : { ...updated, result: existing.result };
         });
         setTools(toolsRef.current);
-        updateSessionMessages(sessionId, (messages) =>
+        updateSessionMessages(projectId, sessionId, (messages) =>
           messages.map((message) =>
             message.id === assistantId ? { ...message, tools: toolsRef.current } : message,
           ),
@@ -650,7 +659,7 @@ export function App() {
           }),
         );
         setTools(toolsRef.current);
-        updateSessionMessages(sessionId, (messages) =>
+        updateSessionMessages(projectId, sessionId, (messages) =>
           messages.map((message) =>
             message.id === assistantId ? { ...message, tools: toolsRef.current } : message,
           ),
@@ -662,17 +671,104 @@ export function App() {
     }
   }
 
+  type ActiveSessionContext = {
+    readonly projectId: string;
+    readonly sessionId: string;
+    readonly session: StudioSession;
+  };
+
+  function activateSession(projectId: string, session: StudioSession): void {
+    setActiveProjectId(projectId);
+    activeSessionIdRef.current = session.id;
+    setActiveSessionId(session.id);
+    setActiveView('studio');
+    setExpandedProjectIds((current) =>
+      current.includes(projectId) ? current : [...current, projectId],
+    );
+  }
+
+  async function createSessionForProject(
+    projectId: string,
+    projectIfMissing?: StudioProject,
+  ): Promise<ActiveSessionContext | null> {
+    try {
+      const detail = await workspaceApi.createSession(projectId);
+      const newSession = toStudioSession(detail);
+      setProjects((current) => {
+        const project = current.find((candidate) => candidate.id === projectId);
+        if (project === undefined) {
+          return projectIfMissing === undefined
+            ? current
+            : [...current, { ...projectIfMissing, sessions: [newSession] }];
+        }
+
+        return current.map((candidate) =>
+          candidate.id === projectId
+            ? { ...candidate, sessions: [newSession, ...candidate.sessions] }
+            : candidate,
+        );
+      });
+      activateSession(projectId, newSession);
+      resetTransientState();
+      return { projectId, sessionId: newSession.id, session: newSession };
+    } catch (error: unknown) {
+      setNotice(workspaceErrorMessage(error));
+      return null;
+    }
+  }
+
+  function getActiveSessionContext(): ActiveSessionContext | null {
+    const project = projects.find((candidate) => candidate.id === activeProjectId);
+    const session = project?.sessions.find(
+      (candidate) => candidate.id === activeSessionIdRef.current && candidate.archivedAt === null,
+    );
+    return project === undefined || session === undefined
+      ? null
+      : { projectId: project.id, sessionId: session.id, session };
+  }
+
+  /**
+   * Returns the active session, creating the initial local project/session when needed.
+   * The returned IDs are used immediately so a first message does not depend on React state timing.
+   */
+  async function ensureSessionForMessage(): Promise<ActiveSessionContext | null> {
+    const activeContext = getActiveSessionContext();
+    if (activeContext !== null) {
+      return activeContext;
+    }
+
+    const project = projects.find((candidate) => candidate.id === activeProjectId);
+    if (project !== undefined) {
+      return createSessionForProject(project.id);
+    }
+
+    try {
+      const createdProject = await workspaceApi.createProject({
+        name: 'Weave',
+        folderName: 'weave',
+      });
+      const project: StudioProject = {
+        ...toStudioProject({ ...createdProject, sessions: [] }),
+        sessions: [],
+      };
+      return createSessionForProject(project.id, project);
+    } catch (error: unknown) {
+      setNotice(workspaceErrorMessage(error));
+      return null;
+    }
+  }
+
   async function submitMessage(): Promise<void> {
     const text = messageInput.trim();
     if (text === '' || status === 'streaming') {
       return;
     }
 
-    const sessionId = activeSessionIdRef.current;
-    const session = activeProject?.sessions.find((candidate) => candidate.id === sessionId);
-    if (session === undefined) {
+    const sessionContext = getActiveSessionContext() ?? (await ensureSessionForMessage());
+    if (sessionContext === null) {
       return;
     }
+    const { projectId, sessionId } = sessionContext;
 
     const userMessageId = createId('user');
     const assistantId = createId('assistant');
@@ -683,7 +779,7 @@ export function App() {
     latestAssistantMessageId.current = assistantId;
     activeRunId.current = runId;
     controller.current = requestController;
-    updateSessionMessages(sessionId, (current) => [
+    updateSessionMessages(projectId, sessionId, (current) => [
       ...current,
       {
         id: userMessageId,
@@ -704,7 +800,7 @@ export function App() {
     ]);
     setProjects((current) =>
       current.map((project) =>
-        project.id === activeProjectId
+        project.id === projectId
           ? {
               ...project,
               sessions: project.sessions.map((session) =>
@@ -740,7 +836,7 @@ export function App() {
           provider: selectedProviderId,
           model: selectedModel,
         },
-        { onEvent: (event) => handleEvent(event, runId, assistantId, sessionId) },
+        { onEvent: (event) => handleEvent(event, runId, assistantId, projectId, sessionId) },
         { signal: requestController.signal },
       );
     } catch (error: unknown) {
@@ -919,24 +1015,19 @@ export function App() {
       return;
     }
 
-    if (activeProjectId === '') {
-      return;
-    }
-
     try {
-      const detail = await workspaceApi.createSession(activeProjectId);
-      const newSession = toStudioSession(detail);
-      setProjects((current) =>
-        current.map((project) =>
-          project.id === activeProjectId
-            ? { ...project, sessions: [newSession, ...project.sessions] }
-            : project,
-        ),
-      );
-      activeSessionIdRef.current = newSession.id;
-      setActiveSessionId(newSession.id);
-      setActiveView('studio');
-      resetTransientState();
+      let project = projects.find((candidate) => candidate.id === activeProjectId);
+      if (project === undefined) {
+        const createdProject = await workspaceApi.createProject({
+          name: 'Weave',
+          folderName: 'weave',
+        });
+        project = {
+          ...toStudioProject({ ...createdProject, sessions: [] }),
+          sessions: [],
+        };
+      }
+      await createSessionForProject(project.id, project);
     } catch (error: unknown) {
       setNotice(workspaceErrorMessage(error));
     }
@@ -1078,6 +1169,15 @@ export function App() {
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    void submitMessage();
+  }
+
+  function handleMessageKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>): void {
+    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) {
+      return;
+    }
+
     event.preventDefault();
     void submitMessage();
   }
@@ -1613,6 +1713,7 @@ export function App() {
                 ref={messageInputRef}
                 value={messageInput}
                 onChange={(event) => setMessageInput(event.target.value)}
+                onKeyDown={handleMessageKeyDown}
                 placeholder="给 Agent 分配一个任务…"
               />
               <div className="composer-toolbar">
