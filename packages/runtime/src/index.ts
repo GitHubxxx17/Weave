@@ -61,8 +61,10 @@ export type {
   WriteFileInput,
   WriteFileResult,
   WorkspaceFileErrorCode,
+  WorkspaceFileToolLimits,
   WorkspaceFileToolOptions,
   WorkspaceFileTools,
+  WorkspaceResolver,
 } from './workspace-file-types.js';
 export { createWorkspaceFileTools } from './workspace-file-tools.js';
 export {

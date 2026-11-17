@@ -12,6 +12,7 @@ import {
   type WriteFileResult,
 } from './workspace-file-types.js';
 import { WorkspacePolicyError } from './workspace-types.js';
+import type { WorkspacePolicy } from './workspace-policy.js';
 import type { ToolDefinition, ToolExecutionContext } from './tool-types.js';
 
 const defaultMaxReadBytes = 1_000_000;
@@ -126,7 +127,7 @@ async function resolveRealRoot(workspaceRoot: string): Promise<string> {
 }
 
 function resolveLexicalPath(
-  workspace: WorkspaceFileToolOptions['workspace'],
+  workspace: WorkspacePolicy,
   inputPath: string,
   operation: 'read' | 'write',
 ): ResolvedWorkspacePath {
@@ -165,14 +166,33 @@ function checkSignal(context: ToolExecutionContext): void {
   context.signal.throwIfAborted();
 }
 
+/** Returns the fixed Workspace or resolves the one for this invocation. */
+async function resolvePolicy(
+  options: WorkspaceFileToolOptions,
+  context: ToolExecutionContext,
+): Promise<WorkspacePolicy> {
+  if (options.workspace !== undefined) {
+    return options.workspace;
+  }
+  const workspace = await options.resolveWorkspace(context);
+  if (workspace === undefined) {
+    throw createMappedError(
+      'workspace-file-unavailable',
+      'No Workspace folder is configured for this Session',
+    );
+  }
+  return workspace;
+}
+
 async function readWorkspaceFile(
   input: ReadFileInput,
   context: ToolExecutionContext,
   options: WorkspaceFileToolOptions,
 ): Promise<string> {
   checkSignal(context);
-  const candidate = resolveLexicalPath(options.workspace, input.path, 'read');
-  const root = await resolveRealRoot(options.workspace.root);
+  const workspace = await resolvePolicy(options, context);
+  const candidate = resolveLexicalPath(workspace, input.path, 'read');
+  const root = await resolveRealRoot(workspace.root);
   const target = await resolveExistingTarget(root, candidate, 'read');
 
   let metadata;
@@ -302,8 +322,9 @@ async function writeWorkspaceFile(
   }
 
   checkSignal(context);
-  const candidate = resolveLexicalPath(options.workspace, input.path, 'write');
-  const root = await resolveRealRoot(options.workspace.root);
+  const workspace = await resolvePolicy(options, context);
+  const candidate = resolveLexicalPath(workspace, input.path, 'write');
+  const root = await resolveRealRoot(workspace.root);
   const { target, existed } = await resolveWriteTarget(candidate, root, input.overwrite === true);
 
   checkSignal(context);
@@ -328,7 +349,10 @@ async function writeWorkspaceFile(
 export function createWorkspaceFileTools(options: WorkspaceFileToolOptions): WorkspaceFileTools {
   const maxReadBytes = validateLimit('maxReadBytes', options.maxReadBytes);
   const maxWriteBytes = validateLimit('maxWriteBytes', options.maxWriteBytes);
-  const normalizedOptions = {
+  if ((options.workspace === undefined) === (options.resolveWorkspace === undefined)) {
+    throw new TypeError('Provide exactly one of workspace or resolveWorkspace');
+  }
+  const normalizedOptions: WorkspaceFileToolOptions = {
     ...options,
     ...(maxReadBytes === undefined ? {} : { maxReadBytes }),
     ...(maxWriteBytes === undefined ? {} : { maxWriteBytes }),
