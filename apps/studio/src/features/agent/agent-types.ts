@@ -49,7 +49,20 @@ export type AgentRuntimeEvent =
       readonly status?: 'completed' | 'failed' | undefined;
       readonly errorCode?: string | undefined;
     }
-  | { readonly type: 'completed'; readonly turnId: string };
+  | { readonly type: 'completed'; readonly turnId: string }
+  | {
+      readonly type: 'usage';
+      readonly usage: {
+        readonly inputTokens?: number | undefined;
+        readonly outputTokens?: number | undefined;
+        readonly totalTokens?: number | undefined;
+        readonly cacheReadTokens?: number | undefined;
+        readonly cacheWriteTokens?: number | undefined;
+        readonly reasoningTokens?: number | undefined;
+      };
+      readonly provider: string;
+      readonly model: string;
+    };
 
 /** Validates the browser-facing request before serializing it for fetch. */
 export const agentRunRequestSchema: z.ZodType<AgentRunRequestInput> = z
@@ -79,6 +92,19 @@ export const agentRuntimeEventSchema: z.ZodType<AgentRuntimeEvent> = z.discrimin
     errorCode: z.string().min(1).optional(),
   }),
   z.object({ type: z.literal('completed'), turnId: nonEmptyStringSchema }),
+  z.object({
+    type: z.literal('usage'),
+    usage: z.object({
+      inputTokens: z.number().int().nonnegative().optional(),
+      outputTokens: z.number().int().nonnegative().optional(),
+      totalTokens: z.number().int().nonnegative().optional(),
+      cacheReadTokens: z.number().int().nonnegative().optional(),
+      cacheWriteTokens: z.number().int().nonnegative().optional(),
+      reasoningTokens: z.number().int().nonnegative().optional(),
+    }),
+    provider: nonEmptyStringSchema,
+    model: nonEmptyStringSchema,
+  }),
 ]);
 
 /** Shape of an error event emitted after the SSE stream has started. */

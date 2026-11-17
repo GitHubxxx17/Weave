@@ -5,6 +5,7 @@ const messageMetadataSchema = z.object({
   messageId: nonEmptyStringSchema.optional(),
   sequence: z.number().int().positive().optional(),
   occurredAt: z.string().datetime().optional(),
+  turnId: nonEmptyStringSchema.optional(),
 });
 
 const contentPartSchema = z.discriminatedUnion('type', [
@@ -79,10 +80,47 @@ export const projectListResponseSchema = z.object({
   warnings: z.array(projectListWarningSchema),
 });
 
+/** Token usage as reported by the Server; absent counters were not reported. */
+const tokenCountSchema = z.number().int().nonnegative();
+export const turnUsageSchema = z.object({
+  inputTokens: tokenCountSchema.optional(),
+  outputTokens: tokenCountSchema.optional(),
+  totalTokens: tokenCountSchema.optional(),
+  cacheReadTokens: tokenCountSchema.optional(),
+  cacheWriteTokens: tokenCountSchema.optional(),
+  reasoningTokens: tokenCountSchema.optional(),
+});
+
+/** Per-Turn timing, attribution, and token usage summed over its model steps. */
+export const turnSummarySchema = z.object({
+  turnId: nonEmptyStringSchema,
+  status: z.enum(['running', 'completed', 'failed', 'cancelled']),
+  startedAt: z.string().datetime(),
+  completedAt: z.string().datetime().optional(),
+  provider: nonEmptyStringSchema.optional(),
+  model: nonEmptyStringSchema.optional(),
+  usage: turnUsageSchema.optional(),
+  modelSteps: z
+    .array(
+      z.object({
+        startedAt: z.string().datetime(),
+        completedAt: z.string().datetime().optional(),
+        usage: turnUsageSchema.optional(),
+      }),
+    )
+    .default([]),
+  toolCalls: z.number().int().nonnegative().default(0),
+  failedToolCalls: z.number().int().nonnegative().default(0),
+});
+
 /** A complete Session returned by `GET /sessions/:sessionId`. */
 export const sessionDetailSchema = sessionSummarySchema.extend({
   messages: z.array(messageSchema),
+  turns: z.array(turnSummarySchema).default([]),
 });
+
+export type TurnUsage = z.infer<typeof turnUsageSchema>;
+export type TurnSummary = z.infer<typeof turnSummarySchema>;
 
 export type ContentPart = z.infer<typeof contentPartSchema>;
 export type WorkspaceMessage = z.infer<typeof messageSchema>;

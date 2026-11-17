@@ -37,7 +37,6 @@ import {
   TerminalSquare,
   Trash2,
   RotateCcw,
-  Wrench,
   X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -46,6 +45,9 @@ import { AgentStreamError, streamAgentRun } from '../features/agent/agent-stream
 import type { AgentRuntimeEvent } from '../features/agent/agent-types.js';
 import { useAutoScroll } from '../features/conversation/use-auto-scroll.js';
 import { MarkdownMessage } from '../features/conversation/markdown-message.js';
+import { MessageFooter } from '../features/conversation/message-footer.js';
+import { SessionOverview } from '../features/conversation/session-overview.js';
+import { sumUsage } from '../features/conversation/turn-stats.js';
 import { ApprovalPanel, useApprovals } from '../features/approvals/approval-panel.js';
 import { createProviderApi, ProviderApiError } from '../features/providers/provider-api.js';
 import {
@@ -60,6 +62,8 @@ import type {
   ProjectWithSessions,
   SessionDetail,
   SessionSummary,
+  TurnSummary,
+  TurnUsage,
   WorkspaceMessage,
 } from '../features/workspace/workspace-types.js';
 
@@ -74,6 +78,8 @@ type ChatMessage = {
   readonly reasoning: string;
   readonly tools: readonly ToolActivity[];
   readonly occurredAt: string;
+  /** Turn that produced an assistant reply; live runs use a temporary id. */
+  readonly turnId?: string | undefined;
 };
 
 type StudioSession = {
@@ -82,6 +88,7 @@ type StudioSession = {
   readonly lastUsedLabel: string;
   readonly archivedAt: string | null;
   readonly messages: readonly ChatMessage[];
+  readonly turns: readonly TurnSummary[];
 };
 
 type StudioProject = {
@@ -386,6 +393,13 @@ function updateToolActivity(
   return activities.map((activity) => (activity.toolCallId === toolCallId ? updated : activity));
 }
 
+const emptyTurns: readonly TurnSummary[] = [];
+
+/** Temporary Turn id used while a run streams, replaced by the durable id on completion. */
+function liveTurnIdFor(assistantMessageId: string): string {
+  return `live-${assistantMessageId}`;
+}
+
 /** Shown when a provider put the whole answer into its reasoning stream. */
 const reasoningOnlyPlaceholder =
   '模型没有单独输出正文，回答写在了上方的「思考过程」里，展开即可查看。';
@@ -466,6 +480,7 @@ function toChatMessages(sessionId: string, messages: readonly WorkspaceMessage[]
         reasoning: messageReasoning(message),
         tools,
         occurredAt: message.occurredAt ?? '',
+        ...(message.turnId === undefined ? {} : { turnId: message.turnId }),
       },
     ];
   });
@@ -498,6 +513,7 @@ function toStudioSession(session: SessionSummary | SessionDetail): StudioSession
     lastUsedLabel: '最近使用',
     archivedAt: session.archivedAt ?? null,
     messages: 'messages' in session ? toChatMessages(session.id, session.messages) : [],
+    turns: 'turns' in session ? session.turns : [],
   };
 }
 
@@ -583,8 +599,6 @@ export function App() {
     readonly sessionId: string;
     readonly title: string;
   } | null>(null);
-  const [tools, setTools] = useState<readonly ToolActivity[]>([]);
-  const [reasoning, setReasoning] = useState('');
   const [expandedMessageIds, setExpandedMessageIds] = useState<readonly string[]>([]);
   const [status, setStatus] = useState<RunStatus>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -604,6 +618,40 @@ export function App() {
   const messages = activeSession?.messages ?? [];
   const conversationScroll = useAutoScroll<HTMLDivElement>(messages, activeSessionId);
   const approvals = useApprovals(!isLoadingWorkspace);
+  const turns = activeSession?.turns ?? emptyTurns;
+  const turnById = new Map(turns.map((turn) => [turn.turnId, turn]));
+  const lastTurnId = turns.at(-1)?.turnId;
+  const lastReplyIdByTurn = new Map<string, string>();
+  for (const message of messages) {
+    if (message.role === 'assistant' && message.turnId !== undefined) {
+      lastReplyIdByTurn.set(message.turnId, message.id);
+    }
+  }
+
+  /** Runs the last user message again as a new Turn; history is kept. */
+  function retryLastTurn(): void {
+    const lastUserMessage = [...messages].reverse().find((message) => message.role === 'user');
+    if (lastUserMessage !== undefined && lastUserMessage.text.trim() !== '') {
+      void submitMessage(lastUserMessage.text);
+    }
+  }
+
+  /** Inserts a reply as a Markdown quote at the top of the draft. */
+  function quoteReply(text: string): void {
+    const quoted = text
+      .split('\n')
+      .map((line) => `> ${line}`)
+      .join('\n');
+    setMessageInput((current) => (current === '' ? `${quoted}\n\n` : `${quoted}\n\n${current}`));
+    messageInputRef.current?.focus();
+  }
+
+  function jumpToMessage(messageId: string): void {
+    const element = document.getElementById(`message-${messageId}`);
+    if (element !== null && typeof element.scrollIntoView === 'function') {
+      element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
   const normalizedSearchQuery = searchQuery.trim().toLocaleLowerCase();
   const visibleProjects = projects
     .map((project) => ({
@@ -781,12 +829,47 @@ export function App() {
     );
   }
 
+  /** Applies a change to one Session's Turn summaries, including live ones. */
+  function updateSessionTurns(
+    projectId: string,
+    sessionId: string,
+    update: (turns: readonly TurnSummary[]) => readonly TurnSummary[],
+  ): void {
+    setProjects((current) =>
+      current.map((project) =>
+        project.id === projectId
+          ? {
+              ...project,
+              sessions: project.sessions.map((session) =>
+                session.id === sessionId ? { ...session, turns: update(session.turns) } : session,
+              ),
+            }
+          : project,
+      ),
+    );
+  }
+
+  /** Closes a live Turn that ended without a `completed` event. */
+  function finishLiveTurn(
+    projectId: string,
+    sessionId: string,
+    liveTurnId: string,
+    finalStatus: 'failed' | 'cancelled',
+  ): void {
+    const completedAt = new Date().toISOString();
+    updateSessionTurns(projectId, sessionId, (turns) =>
+      turns.map((turn) =>
+        turn.turnId === liveTurnId && turn.status === 'running'
+          ? { ...turn, status: finalStatus, completedAt }
+          : turn,
+      ),
+    );
+  }
+
   /** Clears run-scoped state when the active session changes. */
   function resetTransientState(): void {
     latestAssistantMessageId.current = null;
     toolsRef.current = [];
-    setTools([]);
-    setReasoning('');
     setExpandedMessageIds([]);
     setErrorMessage(null);
     setStatus('idle');
@@ -847,7 +930,6 @@ export function App() {
         );
         break;
       case 'reasoning-delta':
-        setReasoning((current) => current + event.text);
         updateSessionMessages(projectId, sessionId, (current) =>
           current.map((message) =>
             message.id === assistantId
@@ -863,7 +945,6 @@ export function App() {
           arguments: event.toolCall.arguments,
           status: 'called',
         }));
-        setTools(toolsRef.current);
         updateSessionMessages(projectId, sessionId, (messages) =>
           messages.map((message) =>
             message.id === assistantId ? { ...message, tools: toolsRef.current } : message,
@@ -880,7 +961,6 @@ export function App() {
           };
           return existing?.result === undefined ? updated : { ...updated, result: existing.result };
         });
-        setTools(toolsRef.current);
         updateSessionMessages(projectId, sessionId, (messages) =>
           messages.map((message) =>
             message.id === assistantId ? { ...message, tools: toolsRef.current } : message,
@@ -899,16 +979,69 @@ export function App() {
             result: event.result.content,
           }),
         );
-        setTools(toolsRef.current);
         updateSessionMessages(projectId, sessionId, (messages) =>
           messages.map((message) =>
             message.id === assistantId ? { ...message, tools: toolsRef.current } : message,
           ),
         );
+        updateSessionTurns(projectId, sessionId, (turns) =>
+          turns.map((turn) =>
+            turn.turnId === liveTurnIdFor(assistantId)
+              ? {
+                  ...turn,
+                  toolCalls: turn.toolCalls + 1,
+                  failedToolCalls: turn.failedToolCalls + (event.status === 'failed' ? 1 : 0),
+                }
+              : turn,
+          ),
+        );
         break;
-      case 'completed':
+      case 'usage': {
+        const completedAt = new Date().toISOString();
+        updateSessionTurns(projectId, sessionId, (turns) =>
+          turns.map((turn) => {
+            if (turn.turnId !== liveTurnIdFor(assistantId)) {
+              return turn;
+            }
+            const usage = Object.fromEntries(
+              Object.entries(event.usage).filter(([, value]) => value !== undefined),
+            ) as TurnUsage;
+            return {
+              ...turn,
+              provider: event.provider,
+              model: event.model,
+              usage: sumUsage([turn.usage, usage]),
+              modelSteps: [
+                ...turn.modelSteps,
+                {
+                  startedAt: turn.modelSteps.at(-1)?.completedAt ?? turn.startedAt,
+                  completedAt,
+                  usage,
+                },
+              ],
+            };
+          }),
+        );
+        break;
+      }
+      case 'completed': {
         setStatus('completed');
+        const liveTurnId = liveTurnIdFor(assistantId);
+        const completedAt = new Date().toISOString();
+        updateSessionTurns(projectId, sessionId, (turns) =>
+          turns.map((turn) =>
+            turn.turnId === liveTurnId
+              ? { ...turn, turnId: event.turnId, status: 'completed', completedAt }
+              : turn,
+          ),
+        );
+        updateSessionMessages(projectId, sessionId, (messages) =>
+          messages.map((message) =>
+            message.turnId === liveTurnId ? { ...message, turnId: event.turnId } : message,
+          ),
+        );
         break;
+      }
     }
   }
 
@@ -999,8 +1132,12 @@ export function App() {
     }
   }
 
-  async function submitMessage(): Promise<void> {
-    const text = messageInput.trim();
+  /**
+   * Sends a message. `retryText` resends an earlier message as a new Turn
+   * (the previous Turn stays in history) without touching the draft input.
+   */
+  async function submitMessage(retryText?: string): Promise<void> {
+    const text = (retryText ?? messageInput).trim();
     if (text === '' || status === 'streaming') {
       return;
     }
@@ -1013,6 +1150,7 @@ export function App() {
 
     const userMessageId = createId('user');
     const assistantId = createId('assistant');
+    const liveTurnId = liveTurnIdFor(assistantId);
     const runId = createId('run');
     const requestController = new AbortController();
     const occurredAt = new Date().toISOString();
@@ -1038,6 +1176,20 @@ export function App() {
         reasoning: '',
         tools: [],
         occurredAt,
+        turnId: liveTurnId,
+      },
+    ]);
+    updateSessionTurns(projectId, sessionId, (current) => [
+      ...current,
+      {
+        turnId: liveTurnId,
+        status: 'running',
+        startedAt: occurredAt,
+        provider: selectedProviderId,
+        model: selectedModel,
+        modelSteps: [],
+        toolCalls: 0,
+        failedToolCalls: 0,
       },
     ]);
     setProjects((current) =>
@@ -1059,10 +1211,10 @@ export function App() {
           : project,
       ),
     );
-    setMessageInput('');
-    setReasoning('');
+    if (retryText === undefined) {
+      setMessageInput('');
+    }
     toolsRef.current = [];
-    setTools([]);
     setExpandedMessageIds([assistantId]);
     setErrorMessage(null);
     setStatus('streaming');
@@ -1088,9 +1240,11 @@ export function App() {
 
       if (error instanceof DOMException && error.name === 'AbortError') {
         setStatus('cancelled');
+        finishLiveTurn(projectId, sessionId, liveTurnId, 'cancelled');
       } else {
         setErrorMessage(safeErrorMessage(error));
         setStatus('error');
+        finishLiveTurn(projectId, sessionId, liveTurnId, 'failed');
       }
     } finally {
       if (activeRunId.current === runId) {
@@ -1702,6 +1856,10 @@ export function App() {
     controller.current = null;
     requestController.abort();
     setStatus('cancelled');
+    const assistantId = latestAssistantMessageId.current;
+    if (assistantId !== null && activeProjectId !== '' && activeSessionId !== '') {
+      finishLiveTurn(activeProjectId, activeSessionId, liveTurnIdFor(assistantId), 'cancelled');
+    }
   }
 
   if (isLoadingWorkspace) {
@@ -2166,6 +2324,7 @@ export function App() {
                   return (
                     <article
                       className={`timeline-item timeline-item-${message.role}`}
+                      id={`message-${message.id}`}
                       key={message.id}
                     >
                       <div className="timeline-content">
@@ -2273,6 +2432,20 @@ export function App() {
                             </p>
                           )}
                         </div>
+                        {message.role === 'assistant' &&
+                        message.turnId !== undefined &&
+                        lastReplyIdByTurn.get(message.turnId) === message.id &&
+                        !(isLatestAssistant && status === 'streaming') ? (
+                          <MessageFooter
+                            turn={turnById.get(message.turnId)}
+                            timeLabel={formatMessageTime(message.occurredAt)}
+                            text={message.text}
+                            canRetry={message.turnId === lastTurnId}
+                            disabled={status === 'streaming'}
+                            onRetry={() => retryLastTurn()}
+                            onQuote={() => quoteReply(message.text)}
+                          />
+                        ) : null}
                       </div>
                     </article>
                   );
@@ -2714,7 +2887,7 @@ export function App() {
         <aside className="activity-panel activity-scroll" aria-label="运行活动">
           <header className="activity-header">
             <div>
-              <h2>会话状态</h2>
+              <h2>会话概览</h2>
             </div>
             <button
               className="icon-button"
@@ -2726,81 +2899,24 @@ export function App() {
               <PanelRight aria-hidden="true" />
             </button>
           </header>
-          <div className="context-summary">
-            <div className="context-status">
-              <span className={`status-pulse status-pulse-${status}`} aria-hidden="true" />
-              <div>
-                <strong className={`run-status run-status-${status}`}>
-                  {statusLabels[status]}
-                </strong>
-                <small aria-label={`会话 #${getSessionLabel(activeSessionId)}`}>
-                  会话 #{getSessionLabel(activeSessionId)}
-                </small>
-              </div>
-            </div>
-            <div className="context-stat">
-              <strong>{tools.length}</strong>
-              <small>工具调用</small>
-            </div>
-          </div>
-
-          {errorMessage !== null ? (
-            <section className="activity-section error-section" aria-label="运行错误">
-              <div className="activity-section-heading">
-                <h3>运行错误</h3>
-                <span className="status-badge status-failed">错误</span>
-              </div>
-              <p className="error-message">{errorMessage}</p>
-            </section>
-          ) : null}
-
-          <section className="activity-section reasoning-section" aria-label="思考过程">
-            <div className="activity-section-heading">
-              <h3>思考过程</h3>
-              <span className="activity-state">{reasoning === '' ? '等待中' : '实时'}</span>
-            </div>
-            <p className="reasoning-text">
-              {reasoning || 'Agent 开始运行后，思考过程会显示在这里。'}
-            </p>
-          </section>
-
-          <section className="activity-section" aria-label="工具调用">
-            <div className="activity-section-heading">
-              <h3>工具调用</h3>
-              <span className="activity-state">{tools.length} 次</span>
-            </div>
-            {tools.length === 0 ? (
-              <div className="activity-empty">
-                <span className="activity-empty-icon" aria-hidden="true">
-                  <Wrench aria-hidden="true" />
-                </span>
-                <p>当前还没有工具调用</p>
-              </div>
-            ) : (
-              <div className="tool-list">
-                {tools.map((tool) => (
-                  <article className="tool-activity" key={tool.toolCallId}>
-                    <div className="tool-heading">
-                      <strong>{tool.name}</strong>
-                      <span className={`status-badge status-${tool.status}`}>
-                        {tool.status === 'called'
-                          ? '已调用'
-                          : tool.status === 'executing'
-                            ? '执行中'
-                            : tool.status === 'completed'
-                              ? '已完成'
-                              : '失败'}
-                      </span>
-                    </div>
-                    <pre>{tool.arguments}</pre>
-                    {tool.result !== undefined ? (
-                      <p className="tool-result">{tool.result}</p>
-                    ) : null}
-                  </article>
-                ))}
-              </div>
-            )}
-          </section>
+          <SessionOverview
+            statusKey={status}
+            statusLabel={statusLabels[status]}
+            isRunning={status === 'streaming'}
+            sessionLabel={getSessionLabel(activeSessionId)}
+            folderPath={activeProject?.folderPath}
+            modelLabel={`${selectedProvider?.label ?? selectedProviderId} · ${selectedModel}`}
+            turns={turns}
+            messages={messages}
+            errorMessage={errorMessage}
+            formatTime={formatMessageTime}
+            onSetFolder={() => {
+              if (activeProject !== undefined) {
+                openFolderDialog(activeProject);
+              }
+            }}
+            onJumpToMessage={jumpToMessage}
+          />
         </aside>
       ) : null}
       {notice !== null ? (
