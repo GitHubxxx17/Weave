@@ -12,6 +12,8 @@ const workspacePackageNames = new Set([
   '@weave/runtime',
   '@weave/plugin',
   '@weave/server',
+  '@weave/desktop',
+  '@weave/studio',
 ]);
 
 const packageLayers = new Map([
@@ -71,6 +73,21 @@ const packageLayers = new Map([
       layer: 'server',
     },
   ],
+  [
+    '@weave/desktop',
+    {
+      allowedDependencies: ['@weave/server'],
+      layer: 'desktop',
+    },
+  ],
+  [
+    '@weave/studio',
+    {
+      // Studio is a browser client: it reaches the Runtime only through HTTP/SSE.
+      allowedDependencies: [],
+      layer: 'studio',
+    },
+  ],
 ]);
 
 const runtimeForbiddenImportPatterns = [
@@ -80,6 +97,8 @@ const runtimeForbiddenImportPatterns = [
   /^react-dom(?:\/|$)/,
   /^(?:node:)?(?:http|https|http2)(?:\/|$)/,
 ];
+
+const studioForbiddenImportPatterns = [/^node:/, /^electron(?:\/|$)/];
 
 const packageManifestCache = new Map();
 
@@ -190,6 +209,8 @@ function createBoundaryRule() {
           'Package boundary violation: {{currentPackage}} imports {{packageName}}, but it is not a declared workspace dependency. Add the package to the current package manifest only when the dependency direction allows it.',
         forbiddenRuntimeImport:
           'Runtime boundary violation: @weave/runtime must remain independent of HTTP frameworks, React, and Node HTTP servers; do not import {{specifier}}. Keep adapters in apps/server.',
+        forbiddenStudioImport:
+          'Studio boundary violation: @weave/studio runs in the browser and must not import {{specifier}}. Call the local Server through HTTP/SSE instead.',
         relativeWorkspaceImport:
           'Package boundary violation: {{currentPackage}} reaches {{targetPackage}} through relative import {{specifier}}. Import the published workspace package name instead of another package source path.',
       },
@@ -217,6 +238,18 @@ function createBoundaryRule() {
           context.report({
             node,
             messageId: 'forbiddenRuntimeImport',
+            data: { specifier },
+          });
+          return;
+        }
+
+        if (
+          layer.layer === 'studio' &&
+          studioForbiddenImportPatterns.some((pattern) => pattern.test(specifier))
+        ) {
+          context.report({
+            node,
+            messageId: 'forbiddenStudioImport',
             data: { specifier },
           });
           return;

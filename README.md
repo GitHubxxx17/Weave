@@ -68,6 +68,7 @@ weave/
 │   ├── protocol/     # Shared data types and Zod schemas
 │   ├── llm/          # Model client interface and provider adapters
 │   ├── session/      # Append-only Session events and projections
+│   ├── workspace/    # Project metadata and Project/Session references
 │   ├── runtime/      # Service assembly, Agent Runner, and Tool Pipeline
 │   └── plugin/       # Plugin Manifest, Context, Registry, and lifecycle
 ├── docs/              # Architecture, ADR, and learning material
@@ -75,13 +76,16 @@ weave/
 ```
 
 The package dependency direction is
-`protocol -> {llm, session} -> runtime -> plugin -> server`. `protocol` owns
-stable public contracts, `llm` isolates provider differences, `session` stores
-durable facts and rebuilds read models, `runtime` assembles services and
-lifecycle state, `plugin` validates trusted extensions and registers their
-capabilities, and `server` exposes the control plane. ESLint rejects
-undeclared workspace dependencies, reverse layer imports, cross-package
-relative source imports, and HTTP/UI imports from `runtime`.
+`protocol -> {llm, session} -> runtime -> plugin -> server -> desktop`.
+`protocol` owns stable public contracts, `llm` isolates provider differences,
+`session` stores durable facts and rebuilds read models, `workspace` stores
+Project metadata, `runtime` assembles services and lifecycle state, `plugin`
+validates trusted extensions and registers their capabilities, `server`
+exposes the control plane, and `desktop` hosts the Server inside Electron.
+`studio` depends on no `@weave/*` package and talks to the Server only over
+HTTP/SSE. ESLint rejects undeclared workspace dependencies, reverse layer
+imports, cross-package relative source imports, HTTP/UI imports from
+`runtime`, and Node or Electron imports from `studio`.
 
 The first Plugin phase accepts explicitly provided trusted in-process plugins:
 
@@ -138,13 +142,14 @@ Browser acceptance flow:
    hidden while the conversation and input area remain usable without
    horizontal overflow.
 
-This first Studio slice intentionally does not include Session history,
-Workspace editing, Plugin loading, Crew orchestration, Run Registry,
-reconnection or `Last-Event-ID`, login, or persistent browser state. Provider
-configuration is local Server configuration; Studio only receives public
-Provider metadata and never accepts an API Key. The page is an HTTP/SSE
-acceptance surface for the existing Runtime, not a replacement for the
-Runtime.
+Studio now persists Projects and Sessions through the Server, so a refresh or
+restart restores the project tree and the selected conversation from SQLite.
+It still does not include Workspace editing UI, Plugin loading, Crew
+orchestration, a Run Registry, reconnection or `Last-Event-ID`, or login. In
+browser mode Provider configuration is local Server configuration read from
+`.env`; only Desktop mode lets the Settings page submit an API Key, and no
+mode ever returns a stored key to Studio. The page is an HTTP/SSE surface for
+the existing Runtime, not a replacement for the Runtime.
 
 ### LLM Provider routing
 
@@ -197,8 +202,12 @@ SQLite at Electron's `app.getPath('userData')/weave.sqlite`:
 
 - macOS: `~/Library/Application Support/Weave/weave.sqlite`
 - Windows: `%APPDATA%/Weave/weave.sqlite`
-- Linux: `$XDG_DATA_HOME/weave/weave.sqlite` or
-  `~/.local/share/weave/weave.sqlite`
+- Linux: `$XDG_CONFIG_HOME/Weave/weave.sqlite` or
+  `~/.config/Weave/weave.sqlite` (Electron's default `userData` location)
+
+On macOS and Windows this is the same file the browser-mode Server uses by
+default, so both modes see the same Projects and Sessions. On Linux the browser
+Server defaults to `$XDG_DATA_HOME/weave` or `~/.local/share/weave` instead.
 
 The browser command `pnpm dev` remains available. `WEAVE_DATA_DIR` and
 `WEAVE_DATABASE_FILE` continue to override the browser Server's storage

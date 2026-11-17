@@ -17,8 +17,8 @@ flowchart LR
     A[HTTP GET /health] --> B[apps/server main]
     B --> C[createServerRuntime]
     C --> D[createRuntime]
-    D --> E[Mock LLM service]
-    D --> F[In-Memory Session Store]
+    D --> E[LLM Provider Registry]
+    D --> F[SQLite Session Event Store]
     A --> G[Hono createApp]
     G --> H[Read Runtime status]
     H --> I[Zod health response]
@@ -355,9 +355,11 @@ cancellation state machine.
 
 ```text
                          ┌── @weave/llm ──┐
-@weave/protocol ──────────┤                ├── @weave/runtime -> @weave/server
- stable contracts         └ @weave/session┘      lifecycle       HTTP adapter
+@weave/protocol ──────────┤                ├── @weave/runtime -> @weave/plugin -> @weave/server -> @weave/desktop
+ stable contracts         └ @weave/session┘      lifecycle        trusted ext.     HTTP adapter     Electron host
                             durable facts
+@weave/workspace (Project metadata, no internal deps) ───────────────────────────> @weave/server
+@weave/studio (browser, no @weave/* imports) ── HTTP/SSE ──> @weave/server
 ```
 
 ### Why `protocol` Does Not Execute Behavior
@@ -558,16 +560,18 @@ storage selection in Server, CLI, desktop, or test composition roots.
 The first request path needs a real service assembly point, but it should not
 depend on an API key, provider uptime, or network behavior. The Mock Provider
 proves the `LlmClient` contract and makes lifecycle and server tests
-deterministic. The OpenAI-compatible adapter is already isolated behind the
-same interface, but it is not used by the default server startup.
+deterministic. The Server always registers `mock`; OpenAI-compatible Providers
+from `WEAVE_LLM_PROVIDERS` or Desktop settings are registered beside it and
+become the default selection when configured.
 
-### Why the Default Server Uses an In-Memory Session Store
+### Why Tests Use an In-Memory Session Store
 
-The server now proves that Session persistence participates in Runtime startup
-and shutdown without making health tests depend on a database file. The
-In-Memory implementation is a composition choice, not a limitation of the
-Runtime contract. A caller that needs local durability can pass
-`createSqliteSessionEventStore` to the same Runtime service adapter.
+`apps/server/src/main.ts` opens a SQLite Session Event Store and Project Store
+by default, so a normal Server start persists Projects and Sessions. Health
+and HTTP adapter tests inject In-Memory stores instead, so they prove that
+Session persistence participates in Runtime startup and shutdown without
+depending on a database file. The In-Memory implementation is a composition
+choice for tests, not a limitation of the Runtime contract.
 
 ### Why the Server Binds to `127.0.0.1`
 

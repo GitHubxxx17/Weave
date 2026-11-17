@@ -21,7 +21,7 @@
     "dev": "pnpm --filter @weave/server... build && node --env-file-if-exists=../../.env dist/main.js",
     "build": "tsc -p tsconfig.json",
     "lint": "eslint src test",
-    "test": "vitest run --root ../.. --config vitest.config.ts",
+    "test": "vitest run --root ../.. --config vitest.config.ts apps/server/test",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
