@@ -134,9 +134,12 @@ const fallbackProviderSettings: ProviderSettings = {
       label: '本地模型',
       type: 'mock',
       defaultModel: 'weave-local-demo',
+      hasApiKey: false,
+      editable: false,
     },
   ],
   defaultProvider: 'mock',
+  canManage: false,
 };
 
 let nextId = 0;

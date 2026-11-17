@@ -571,15 +571,21 @@ describe('Studio Agent Chat', () => {
           label: '本地演示',
           type: 'mock',
           defaultModel: 'weave-local-demo',
+          hasApiKey: false,
+          editable: false,
         },
         {
           id: 'deepseek',
           label: 'DeepSeek',
           type: 'openai-compatible',
+          baseUrl: 'https://api.deepseek.com',
           defaultModel: 'deepseek-chat',
+          hasApiKey: true,
+          editable: true,
         },
       ],
       defaultProvider: 'deepseek',
+      canManage: false,
     });
     vi.stubGlobal('fetch', fetchMock);
     streamAgentRunMock.mockResolvedValue(undefined);
@@ -881,15 +887,21 @@ describe('Studio Agent Chat', () => {
           label: '本地演示',
           type: 'mock',
           defaultModel: 'weave-local-demo',
+          hasApiKey: false,
+          editable: false,
         },
         {
           id: 'deepseek',
           label: 'DeepSeek',
           type: 'openai-compatible',
+          baseUrl: 'https://api.deepseek.com',
           defaultModel: 'deepseek-chat',
+          hasApiKey: true,
+          editable: true,
         },
       ],
       defaultProvider: 'mock',
+      canManage: false,
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -921,15 +933,21 @@ describe('Studio Agent Chat', () => {
           label: '本地演示',
           type: 'mock',
           defaultModel: 'weave-local-demo',
+          hasApiKey: false,
+          editable: false,
         },
         {
           id: 'deepseek',
           label: 'DeepSeek',
           type: 'openai-compatible',
+          baseUrl: 'https://api.deepseek.com',
           defaultModel: 'deepseek-chat',
+          hasApiKey: true,
+          editable: true,
         },
       ],
       defaultProvider: 'mock',
+      canManage: false,
     });
     vi.stubGlobal('fetch', fetchMock);
 
