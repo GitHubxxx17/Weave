@@ -89,6 +89,18 @@ type ToolActivity = {
   readonly result?: string;
 };
 
+type ProviderFormState = {
+  readonly mode: 'create' | 'edit';
+  readonly editingId: string | null;
+  readonly id: string;
+  readonly label: string;
+  readonly baseUrl: string;
+  readonly apiKey: string;
+  readonly defaultModel: string;
+  readonly makeDefault: boolean;
+  readonly clearApiKey: boolean;
+};
+
 const statusLabels: Record<RunStatus, string> = {
   idle: '就绪',
   streaming: '运行中',
@@ -348,6 +360,12 @@ export function App() {
   );
   const [selectedContexts, setSelectedContexts] = useState<readonly string[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
+  const [providerForm, setProviderForm] = useState<ProviderFormState | null>(null);
+  const [providerFormError, setProviderFormError] = useState<string | null>(null);
+  const [providerMutation, setProviderMutation] = useState<
+    'idle' | 'saving' | 'deleting' | 'defaulting'
+  >('idle');
+  const [providerToDelete, setProviderToDelete] = useState<ProviderDescriptor | null>(null);
   const [editingSession, setEditingSession] = useState<{
     readonly projectId: string;
     readonly sessionId: string;
@@ -395,6 +413,24 @@ export function App() {
       sessions: project.sessions.filter((session) => session.archivedAt !== null),
     }))
     .filter((project) => project.sessions.length > 0);
+
+  function applyProviderSettings(settings: ProviderSettings): void {
+    setProviderSettings(settings);
+    const nextProvider =
+      settings.providers.find((provider) => provider.id === selectedProviderId) ??
+      settings.providers.find((provider) => provider.id === settings.defaultProvider) ??
+      settings.providers[0];
+    if (nextProvider !== undefined) {
+      setSelectedProviderId(nextProvider.id);
+      setSelectedModel(nextProvider.defaultModel ?? '');
+    }
+  }
+
+  async function refreshProviderSettings(): Promise<ProviderSettings> {
+    const settings = await providerApi.listProviders();
+    applyProviderSettings(settings);
+    return settings;
+  }
 
   useEffect(() => {
     let disposed = false;
@@ -1051,6 +1087,152 @@ export function App() {
     setActiveView(view);
     setOpenMenu(null);
     setNotice(null);
+  }
+
+  function openProviderForm(provider?: ProviderDescriptor): void {
+    setProviderFormError(null);
+    setProviderForm(
+      provider === undefined
+        ? {
+            mode: 'create',
+            editingId: null,
+            id: '',
+            label: '',
+            baseUrl: '',
+            apiKey: '',
+            defaultModel: '',
+            makeDefault: providerSettings.providers.length === 0,
+            clearApiKey: false,
+          }
+        : {
+            mode: 'edit',
+            editingId: provider.id,
+            id: provider.id,
+            label: provider.label,
+            baseUrl: provider.baseUrl ?? '',
+            apiKey: '',
+            defaultModel: provider.defaultModel ?? '',
+            makeDefault: provider.id === providerSettings.defaultProvider,
+            clearApiKey: false,
+          },
+    );
+  }
+
+  function closeProviderForm(): void {
+    if (providerMutation === 'saving') {
+      return;
+    }
+    setProviderForm(null);
+    setProviderFormError(null);
+  }
+
+  function updateProviderForm<K extends keyof ProviderFormState>(
+    key: K,
+    value: ProviderFormState[K],
+  ): void {
+    setProviderForm((current) => (current === null ? current : { ...current, [key]: value }));
+  }
+
+  function providerErrorMessage(error: unknown): string {
+    if (!(error instanceof ProviderApiError)) {
+      return 'Provider 配置暂时不可用，请稍后重试';
+    }
+    switch (error.code) {
+      case 'provider-settings-secret-unavailable':
+        return '系统密钥存储不可用，请在桌面端重试';
+      case 'provider-settings-duplicate':
+        return 'Provider ID 已存在，请换一个 ID';
+      case 'provider-settings-protected':
+        return '这个 Provider 由系统或插件管理，不能从此处修改';
+      case 'provider-settings-provider-invalid':
+        return 'Provider 客户端创建失败，请检查地址和配置';
+      case 'provider-api-network':
+        return '无法连接到本地服务，请确认后端已经启动';
+      default:
+        return error.message;
+    }
+  }
+
+  async function saveProvider(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    const form = providerForm;
+    if (form === null) {
+      return;
+    }
+    if (
+      form.id.trim() === '' ||
+      form.label.trim() === '' ||
+      form.baseUrl.trim() === '' ||
+      form.defaultModel.trim() === '' ||
+      (form.mode === 'create' && form.apiKey.trim() === '')
+    ) {
+      setProviderFormError('请填写完整的 Provider 信息');
+      return;
+    }
+
+    setProviderMutation('saving');
+    setProviderFormError(null);
+    try {
+      if (form.mode === 'create') {
+        await providerApi.createProvider({
+          id: form.id.trim(),
+          label: form.label.trim(),
+          type: 'openai-compatible',
+          baseUrl: form.baseUrl.trim(),
+          apiKey: form.apiKey,
+          defaultModel: form.defaultModel.trim(),
+          makeDefault: form.makeDefault,
+        });
+      } else if (form.editingId !== null) {
+        await providerApi.updateProvider(form.editingId, {
+          label: form.label.trim(),
+          baseUrl: form.baseUrl.trim(),
+          apiKey: form.apiKey,
+          defaultModel: form.defaultModel.trim(),
+          makeDefault: form.makeDefault,
+          ...(form.clearApiKey ? { clearApiKey: true } : {}),
+        });
+      }
+      await refreshProviderSettings();
+      setProviderForm(null);
+      setNotice('Provider 已保存');
+    } catch (error: unknown) {
+      setProviderFormError(providerErrorMessage(error));
+    } finally {
+      setProviderMutation('idle');
+    }
+  }
+
+  async function setDefaultProvider(providerId: string): Promise<void> {
+    setProviderMutation('defaulting');
+    setNotice(null);
+    try {
+      const settings = await providerApi.setDefaultProvider(providerId);
+      applyProviderSettings(settings);
+      setNotice('默认 Provider 已更新');
+    } catch (error: unknown) {
+      setNotice(providerErrorMessage(error));
+    } finally {
+      setProviderMutation('idle');
+    }
+  }
+
+  async function deleteProvider(): Promise<void> {
+    const provider = providerToDelete;
+    if (provider === null) {
+      return;
+    }
+    setProviderMutation('deleting');
+    try {
+      await providerApi.deleteProvider(provider.id);
+      await refreshProviderSettings();
+      setProviderToDelete(null);
+      setNotice('Provider 已删除');
+    } catch (error: unknown) {
+      setNotice(providerErrorMessage(error));
+    } finally {
+      setProviderMutation('idle');
+    }
   }
 
   function toggleMenu(menu: Exclude<OpenMenu, null>): void {
@@ -1887,12 +2069,23 @@ export function App() {
               </>
             ) : activeView === 'settings' ? (
               <div className="provider-settings-view">
-                <div className="product-view-heading">
+                <div className="product-view-heading provider-settings-heading">
                   <div>
                     <p>WEAVE STUDIO</p>
                     <h2>设置</h2>
-                    <span>查看当前 Server 已配置的模型 Provider。</span>
+                    <span>在桌面端管理模型服务和 API Key。</span>
                   </div>
+                  {providerSettings.canManage ? (
+                    <button
+                      className="primary-button"
+                      type="button"
+                      onClick={() => openProviderForm()}
+                      disabled={providerMutation !== 'idle'}
+                    >
+                      <Plus aria-hidden="true" />
+                      添加 AI 服务
+                    </button>
+                  ) : null}
                 </div>
                 <div className="provider-settings-list" aria-label="Provider 列表">
                   {providerSettings.providers.map((provider) => (
@@ -1905,14 +2098,58 @@ export function App() {
                         <span>{provider.id}</span>
                       </div>
                       <div className="provider-settings-meta">
-                        <span>{provider.type === 'mock' ? '本地演示' : 'OpenAI 兼容'}</span>
+                        <span>
+                          {provider.id === providerSettings.defaultProvider ? '默认 Provider' : ''}
+                        </span>
+                        <small>{provider.hasApiKey ? 'API Key 已配置' : '未配置 API Key'}</small>
                         <small>{provider.defaultModel ?? '未设置默认模型'}</small>
                       </div>
+                      {providerSettings.canManage && provider.editable ? (
+                        <div className="provider-settings-actions">
+                          {provider.id !== providerSettings.defaultProvider ? (
+                            <button
+                              className="provider-action-button"
+                              type="button"
+                              onClick={() => void setDefaultProvider(provider.id)}
+                              disabled={providerMutation !== 'idle' || !provider.hasApiKey}
+                            >
+                              设为默认
+                            </button>
+                          ) : (
+                            <span className="provider-default-mark">
+                              <Check aria-hidden="true" />
+                              当前默认
+                            </span>
+                          )}
+                          <button
+                            className="provider-action-button"
+                            type="button"
+                            aria-label={`编辑 Provider ${provider.label}`}
+                            onClick={() => openProviderForm(provider)}
+                            disabled={providerMutation !== 'idle'}
+                          >
+                            <Pencil aria-hidden="true" />
+                            编辑
+                          </button>
+                          <button
+                            className="provider-action-button provider-action-button-danger"
+                            type="button"
+                            aria-label={`删除 Provider ${provider.label}`}
+                            onClick={() => setProviderToDelete(provider)}
+                            disabled={providerMutation !== 'idle'}
+                          >
+                            <Trash2 aria-hidden="true" />
+                            删除
+                          </button>
+                        </div>
+                      ) : null}
                     </article>
                   ))}
                 </div>
                 <p className="provider-settings-note">
-                  API Key 由本地 Server 配置管理，浏览器只接收 Provider 的公开信息。
+                  {providerSettings.canManage
+                    ? 'API Key 只保存在本机的系统密钥存储中，页面不会回显已保存的密钥。'
+                    : '浏览器开发模式下，Provider 通过 .env 只读配置；需要管理 API Key 时请使用 Desktop。'}
                 </p>
               </div>
             ) : (
@@ -2028,6 +2265,199 @@ export function App() {
           <button type="button" aria-label="关闭提示" onClick={() => setNotice(null)}>
             <X aria-hidden="true" />
           </button>
+        </div>
+      ) : null}
+      {providerForm !== null ? (
+        <div
+          className="dialog-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              closeProviderForm();
+            }
+          }}
+        >
+          <section
+            className="project-dialog provider-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="provider-dialog-title"
+          >
+            <header className="project-dialog-header">
+              <div>
+                <p>模型服务</p>
+                <h2 id="provider-dialog-title">
+                  {providerForm.mode === 'create' ? '添加 AI 服务' : '编辑 Provider'}
+                </h2>
+              </div>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="关闭 Provider 表单"
+                onClick={closeProviderForm}
+                disabled={providerMutation === 'saving'}
+              >
+                <X aria-hidden="true" />
+              </button>
+            </header>
+            <form className="project-dialog-form" onSubmit={(event) => void saveProvider(event)}>
+              <div className="provider-form-grid">
+                <label className="provider-form-field">
+                  <span>显示名称</span>
+                  <input
+                    aria-label="显示名称"
+                    value={providerForm.label}
+                    onChange={(event) => updateProviderForm('label', event.target.value)}
+                    placeholder="例如 DeepSeek"
+                    autoFocus
+                  />
+                </label>
+                <label className="provider-form-field">
+                  <span>Provider ID</span>
+                  <input
+                    aria-label="Provider ID"
+                    value={providerForm.id}
+                    onChange={(event) => updateProviderForm('id', event.target.value)}
+                    placeholder="例如 deepseek"
+                    disabled={providerForm.mode === 'edit'}
+                  />
+                </label>
+              </div>
+              <label className="provider-form-field">
+                <span>API 地址</span>
+                <input
+                  aria-label="API 地址"
+                  type="url"
+                  value={providerForm.baseUrl}
+                  onChange={(event) => updateProviderForm('baseUrl', event.target.value)}
+                  placeholder="https://api.deepseek.com"
+                />
+              </label>
+              <label className="provider-form-field">
+                <span>API Key</span>
+                <input
+                  aria-label="API Key"
+                  type="password"
+                  value={providerForm.apiKey}
+                  onChange={(event) => updateProviderForm('apiKey', event.target.value)}
+                  placeholder={
+                    providerForm.mode === 'edit' ? '留空表示保持当前密钥' : '输入 API Key'
+                  }
+                  autoComplete="new-password"
+                />
+              </label>
+              <label className="provider-form-field">
+                <span>默认模型</span>
+                <input
+                  aria-label="默认模型"
+                  value={providerForm.defaultModel}
+                  onChange={(event) => updateProviderForm('defaultModel', event.target.value)}
+                  placeholder="例如 deepseek-chat"
+                />
+              </label>
+              <label className="provider-checkbox-field">
+                <input
+                  type="checkbox"
+                  checked={providerForm.makeDefault}
+                  onChange={(event) => updateProviderForm('makeDefault', event.target.checked)}
+                />
+                <span>设为默认 Provider</span>
+              </label>
+              {providerForm.mode === 'edit' ? (
+                <label className="provider-checkbox-field provider-checkbox-danger">
+                  <input
+                    type="checkbox"
+                    checked={providerForm.clearApiKey}
+                    onChange={(event) => updateProviderForm('clearApiKey', event.target.checked)}
+                  />
+                  <span>清除当前密钥</span>
+                </label>
+              ) : null}
+              {providerForm.mode === 'edit' ? (
+                <p className="project-dialog-note">
+                  留空表示保持当前密钥，清除密钥后 Provider 将不能用于对话。
+                </p>
+              ) : null}
+              {providerFormError !== null ? (
+                <p className="provider-form-error" role="alert">
+                  {providerFormError}
+                </p>
+              ) : null}
+              <footer className="project-dialog-actions">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={closeProviderForm}
+                  disabled={providerMutation === 'saving'}
+                >
+                  取消
+                </button>
+                <button
+                  className="primary-button"
+                  type="submit"
+                  disabled={providerMutation === 'saving'}
+                >
+                  {providerMutation === 'saving' ? '保存中...' : '保存 Provider'}
+                </button>
+              </footer>
+            </form>
+          </section>
+        </div>
+      ) : null}
+      {providerToDelete !== null ? (
+        <div
+          className="dialog-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setProviderToDelete(null);
+            }
+          }}
+        >
+          <section
+            className="project-dialog session-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-provider-dialog-title"
+          >
+            <header className="project-dialog-header">
+              <div>
+                <p>删除确认</p>
+                <h2 id="delete-provider-dialog-title">删除 Provider</h2>
+              </div>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="关闭删除确认"
+                onClick={() => setProviderToDelete(null)}
+                disabled={providerMutation === 'deleting'}
+              >
+                <X aria-hidden="true" />
+              </button>
+            </header>
+            <div className="project-dialog-form">
+              <p className="delete-session-warning">
+                确定删除「{providerToDelete.label}」吗？已保存的密钥和配置会从本机移除。
+              </p>
+              <footer className="project-dialog-actions">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => setProviderToDelete(null)}
+                  disabled={providerMutation === 'deleting'}
+                >
+                  取消
+                </button>
+                <button
+                  className="danger-button"
+                  type="button"
+                  onClick={() => void deleteProvider()}
+                  disabled={providerMutation === 'deleting'}
+                >
+                  <Trash2 aria-hidden="true" />
+                  {providerMutation === 'deleting' ? '删除中...' : '确认删除'}
+                </button>
+              </footer>
+            </div>
+          </section>
         </div>
       ) : null}
       {editingSession !== null ? (
