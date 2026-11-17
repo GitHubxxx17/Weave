@@ -22,6 +22,11 @@ function getServerUrlArgument(serverUrl: string): string {
   return `${serverUrlArgumentPrefix}${encodeURIComponent(serverUrl)}`;
 }
 
+/** Returns the standard Fetch implementation used by the desktop Server. */
+export function createDesktopFetch(): typeof globalThis.fetch {
+  return (input, init) => globalThis.fetch(input, init);
+}
+
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -105,6 +110,7 @@ export async function startDesktopServer(
     databaseFile: config.databaseFile,
     studioOrigin: config.studioOrigin,
     providerSecretCodec,
+    fetch: createDesktopFetch(),
   });
 
   return {

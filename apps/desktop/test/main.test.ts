@@ -49,7 +49,7 @@ vi.mock('@weave/server/main', () => ({
   startServer: mocks.startServer,
 }));
 
-const { createMainWindow, startDesktopApplication, startDesktopServer } =
+const { createDesktopFetch, createMainWindow, startDesktopApplication, startDesktopServer } =
   await import('../src/main.js');
 
 const config = {
@@ -81,9 +81,24 @@ describe('desktop main process', () => {
       databaseFile: config.databaseFile,
       studioOrigin: config.studioOrigin,
       providerSecretCodec,
+      fetch: expect.any(Function),
     });
     expect(result.port).toBe(46321);
     expect(result.stop).toBe(stop);
+  });
+
+  it('uses the standard Node Fetch contract for provider requests', async () => {
+    const response = new Response('ok');
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn<typeof fetch>(async () => response);
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      await expect(createDesktopFetch()('https://api.deepseek.com')).resolves.toBe(response);
+      expect(fetchMock).toHaveBeenCalledWith('https://api.deepseek.com', undefined);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it('creates a hardened BrowserWindow and blocks external navigation', () => {

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -37,9 +38,15 @@ function startStudio(repositoryRoot: string, studioUrl: string): ChildProcess {
 }
 
 function startElectron(repositoryRoot: string): ChildProcess {
+  const caFile = process.env.NODE_EXTRA_CA_CERTS ?? process.env.SSL_CERT_FILE;
+  const environment =
+    caFile !== undefined && existsSync(caFile)
+      ? { ...process.env, NODE_EXTRA_CA_CERTS: caFile }
+      : process.env;
+
   return spawn(pnpmCommand, ['exec', 'electron', 'dist/main.js'], {
     cwd: resolve(repositoryRoot, 'apps/desktop'),
-    env: process.env,
+    env: environment,
     stdio: 'inherit',
   });
 }

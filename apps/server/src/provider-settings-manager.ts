@@ -29,6 +29,7 @@ export type ProviderSettingsManagerErrorCode =
   | 'provider-settings-secret-unavailable'
   | 'provider-settings-secret-invalid'
   | 'provider-settings-provider-invalid'
+  | 'provider-settings-api-key-required'
   | 'provider-settings-storage';
 
 export class ProviderSettingsManagerError extends Error {
@@ -69,6 +70,11 @@ const defaultCreateClient = (options: {
 
 function normalizeId(id: string): string {
   return id.trim();
+}
+
+/** Compares endpoints without treating a trailing slash as a different service. */
+function normalizeBaseUrl(baseUrl: string): string {
+  return new URL(baseUrl.trim()).href.replace(/\/+$/, '');
 }
 
 function throwInvalid(cause?: unknown): never {
@@ -353,12 +359,30 @@ export function createProviderSettingsManager(
         );
       }
 
+      const hasNewApiKey =
+        parsedInput.data.apiKey !== undefined && parsedInput.data.apiKey.trim() !== '';
+      const baseUrlChanged =
+        parsedInput.data.baseUrl !== undefined &&
+        normalizeBaseUrl(parsedInput.data.baseUrl) !== normalizeBaseUrl(current.baseUrl);
+      // A retained secret belongs to the old endpoint; never forward it to a new one.
+      if (
+        baseUrlChanged &&
+        current.encryptedApiKey !== null &&
+        !hasNewApiKey &&
+        parsedInput.data.clearApiKey !== true
+      ) {
+        throw new ProviderSettingsManagerError(
+          'provider-settings-api-key-required',
+          '修改 API 地址时需要重新填写 API Key',
+        );
+      }
+
       const apiKey =
         parsedInput.data.clearApiKey === true
           ? null
-          : parsedInput.data.apiKey === undefined || parsedInput.data.apiKey.trim() === ''
+          : !hasNewApiKey
             ? current.encryptedApiKey
-            : options.secretCodec.encrypt(parsedInput.data.apiKey);
+            : options.secretCodec.encrypt(parsedInput.data.apiKey ?? '');
       const record: ProviderSettingsRecord = {
         ...current,
         label: parsedInput.data.label ?? current.label,
