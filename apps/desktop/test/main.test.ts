@@ -32,6 +32,11 @@ const mocks = vi.hoisted(() => {
     },
     dialog: {
       showErrorBox: vi.fn(),
+      showOpenDialog: vi.fn(),
+    },
+    ipcMain: {
+      handle: vi.fn(),
+      removeHandler: vi.fn(),
     },
     FakeBrowserWindow,
     startServer: vi.fn(),
@@ -39,9 +44,10 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock('electron', () => ({
-  BrowserWindow: mocks.FakeBrowserWindow,
+  BrowserWindow: Object.assign(mocks.FakeBrowserWindow, { fromWebContents: vi.fn(() => null) }),
   app: mocks.app,
   dialog: mocks.dialog,
+  ipcMain: mocks.ipcMain,
   safeStorage: mocks.safeStorage,
 }));
 
@@ -49,8 +55,13 @@ vi.mock('@weave/server/main', () => ({
   startServer: mocks.startServer,
 }));
 
-const { createDesktopFetch, createMainWindow, startDesktopApplication, startDesktopServer } =
-  await import('../src/main.js');
+const {
+  createDesktopFetch,
+  createMainWindow,
+  handlePickDirectory,
+  startDesktopApplication,
+  startDesktopServer,
+} = await import('../src/main.js');
 
 const config = {
   userDataDirectory: '/tmp/weave-user-data',
@@ -139,5 +150,47 @@ describe('desktop main process', () => {
       'SQLite 初始化失败',
     );
     expect(mocks.app.exit).toHaveBeenCalledWith(1);
+  });
+});
+
+describe('desktop folder picker IPC', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function invokeEvent(url: string) {
+    return { senderFrame: { url }, sender: {} } as never;
+  }
+
+  it('returns the folder chosen in the system dialog', async () => {
+    mocks.dialog.showOpenDialog.mockResolvedValue({
+      canceled: false,
+      filePaths: ['/Users/mi/projects/demo'],
+    });
+
+    await expect(
+      handlePickDirectory(invokeEvent('http://127.0.0.1:5173/'), config.studioOrigin),
+    ).resolves.toEqual({ path: '/Users/mi/projects/demo', name: 'demo' });
+    expect(mocks.dialog.showOpenDialog).toHaveBeenCalledWith(
+      expect.objectContaining({ properties: ['openDirectory', 'createDirectory'] }),
+    );
+  });
+
+  it('returns null when the user cancels', async () => {
+    mocks.dialog.showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
+
+    await expect(
+      handlePickDirectory(invokeEvent('http://127.0.0.1:5173/'), config.studioOrigin),
+    ).resolves.toBeNull();
+  });
+
+  it('ignores requests from an untrusted origin without opening a dialog', async () => {
+    await expect(
+      handlePickDirectory(invokeEvent('https://evil.example/'), config.studioOrigin),
+    ).resolves.toBeNull();
+    await expect(handlePickDirectory(invokeEvent('not a url'), config.studioOrigin)).resolves.toBe(
+      null,
+    );
+    expect(mocks.dialog.showOpenDialog).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,7 @@
-import { contextBridge } from 'electron';
+import { contextBridge, ipcRenderer } from 'electron';
 
 const serverUrlArgumentPrefix = '--weave-server-url=';
+const pickDirectoryChannel = 'weave:pick-directory';
 const serverUrlArgument = process.argv.find((argument) =>
   argument.startsWith(serverUrlArgumentPrefix),
 );
@@ -16,4 +17,7 @@ if (serverUrl === undefined || serverUrl.length === 0) {
 contextBridge.exposeInMainWorld('weaveDesktop', {
   isDesktop: true as const,
   serverUrl,
+  /** Opens the system folder dialog; resolves to null when the user cancels. */
+  pickDirectory: (): Promise<{ path: string; name: string } | null> =>
+    ipcRenderer.invoke(pickDirectoryChannel),
 });
