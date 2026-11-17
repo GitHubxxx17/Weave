@@ -252,6 +252,31 @@ function createWorkspaceFetchMock(
       });
     }
     const projectSessionMatch = requestPath.match(/^\/projects\/([^/]+)\/sessions$/);
+    const projectUpdateMatch = requestPath.match(/^\/projects\/([^/]+)$/);
+    if (projectUpdateMatch !== null && method === 'PATCH') {
+      const body = JSON.parse(String(init?.body)) as { folderPath: string | null };
+      const project = projects.find(
+        (candidate) => candidate.id === decodeURIComponent(projectUpdateMatch[1]!),
+      );
+      if (project === undefined) {
+        return new Response(
+          JSON.stringify({ error: { code: 'workspace-project-not-found', message: 'missing' } }),
+          { status: 404, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      const updated = {
+        id: project.id,
+        name: project.name,
+        folderName: project.folderName,
+        createdAt: project.createdAt,
+        updatedAt: project.updatedAt,
+        ...(body.folderPath === null ? {} : { folderPath: body.folderPath }),
+      };
+      return new Response(JSON.stringify(updated), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
     if (projectSessionMatch !== null && method === 'POST') {
       const body = JSON.parse(String(init?.body)) as { title?: string };
       const id = `session-created-${++nextSessionId}`;
@@ -403,6 +428,53 @@ describe('Studio Agent Chat', () => {
       )
       .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as unknown);
   }
+
+  it('sets the folder of an existing project from the project menu', async () => {
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: /Weave 项目/ }));
+    expect(screen.getByText('未设置，Agent 不能读写文件')).toBeTruthy();
+    fireEvent.click(screen.getByRole('menuitem', { name: /设置文件夹/ }));
+
+    const dialog = screen.getByRole('dialog', { name: '设置项目文件夹' });
+    const save = within(dialog).getByRole('button', { name: '保存' }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    fireEvent.change(within(dialog).getByRole('textbox', { name: '项目文件夹绝对路径' }), {
+      target: { value: '/Users/me/weave' },
+    });
+    fireEvent.click(save);
+
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: '设置项目文件夹' })).toBeNull(),
+    );
+    const patch = fetchMock.mock.calls.find(
+      ([, init]) => (init as RequestInit | undefined)?.method === 'PATCH',
+    );
+    expect(String(patch?.[0])).toMatch(/\/projects\/[^/]+$/);
+    expect(JSON.parse(String((patch?.[1] as RequestInit).body))).toEqual({
+      folderPath: '/Users/me/weave',
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Weave 项目/ }));
+    expect(screen.getByText('/Users/me/weave')).toBeTruthy();
+  });
+
+  it('points to the thinking block when the model returns only reasoning', async () => {
+    streamAgentRunMock.mockImplementation(async (_request, handlers) => {
+      handlers.onEvent({ type: 'reasoning-delta', text: 'Final answer: 可以读取。' });
+      handlers.onEvent({ type: 'completed', turnId: 'turn-reasoning-only' });
+    });
+
+    await renderApp();
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '能读文件吗' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+
+    expect(
+      await screen.findByText(
+        '模型没有单独输出正文，回答写在了上方的「思考过程」里，展开即可查看。',
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText('Agent 没有返回文本')).toBeNull();
+  });
 
   it('submits an absolute folder path typed in browser mode', async () => {
     Object.defineProperty(window, 'showDirectoryPicker', {

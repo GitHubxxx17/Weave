@@ -104,6 +104,8 @@ export interface WorkspaceApi {
   listProjects(options?: { readonly includeArchived?: boolean }): Promise<ProjectListResponse>;
   getSession(sessionId: string): Promise<SessionDetail>;
   createProject(input: CreateProjectInput): Promise<Project>;
+  /** Sets the absolute local folder of a Project; `null` clears it. */
+  updateProjectFolder(projectId: string, folderPath: string | null): Promise<Project>;
   createSession(projectId: string, title?: string): Promise<SessionDetail>;
   renameSession(sessionId: string, title: string): Promise<SessionDetail>;
   archiveSession(sessionId: string): Promise<SessionDetail>;
@@ -134,6 +136,14 @@ export function createWorkspaceApi(): WorkspaceApi {
 
     createProject(input) {
       return requestJson(runtimeApiUrl('/projects'), jsonRequest('POST', input), projectSchema);
+    },
+
+    updateProjectFolder(projectId, folderPath) {
+      return requestJson(
+        runtimeApiUrl(`/projects/${encodeURIComponent(projectId)}`),
+        jsonRequest('PATCH', { folderPath }),
+        projectSchema,
+      );
     },
 
     createSession(projectId, title) {
