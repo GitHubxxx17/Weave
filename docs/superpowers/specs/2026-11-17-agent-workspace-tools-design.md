@@ -23,7 +23,6 @@ Approval Broker，Server 也有审批 REST/SSE 接口，但三处缺口让默认
 ## 3. 非目标
 
 - 不做目录列表、搜索、Shell、Diff 和回滚；
-- 不支持为已有项目补设目录（需要 Project Store 更新接口，后续单独设计）；
 - 审批仍是进程内临时状态，不做持久化审计和重启恢复；
 - 不做 Sandbox，文件工具已有的 TOCTOU 残余风险不变。
 
@@ -103,6 +102,25 @@ Preload 暴露 `pickDirectory(): Promise<{ path: string; name: string } | null>`
 - 订阅 `GET /approvals/stream`，在输入框上方显示待审批卡片（摘要、风险、路径、
   字节数、是否覆盖），提供"同意写入"和"拒绝"；
 - Vite 开发代理增加 `/approvals`。
+
+### 4.6 补充（真实 DeepSeek 验收后）
+
+真实对话中暴露了三个问题，在同一分支修复：
+
+1. **默认项目没有文件夹**：PR #31 之前创建的项目没有 `folderPath`，只能新建项目才能用文件工具。
+   - `@weave/workspace` 的 `ProjectStore` 增加
+     `updateProjectFolder(projectId, folderPath | undefined)`，内存版和 SQLite 版都实现；
+   - Server 增加 `PATCH /projects/:projectId`，请求体 `{ folderPath: string | null }`，
+     `null` 清除，字符串按 `POST /projects` 相同规则校验，不存在的项目返回 404；
+   - Studio 项目菜单增加"设置文件夹"，桌面端用系统对话框，浏览器模式手填路径。
+2. **模型不知道自己有工具**：Runner 原来不发送 system 消息。
+   - `AgentRunnerOptions` 增加 `instructions({ sessionId })`，每轮解析一次，作为首条
+     system 消息随每次模型请求发送，**不写入 Session**；
+   - Server 的默认说明包含：身份、本轮工具名、当前项目文件夹（或"未设置"及设置方法）、
+     路径使用相对路径、写入需要用户确认、工具出错时应调整或说明。
+3. **回答被写进思考过程**：部分 Provider 会把最终回答放在 `reasoning_content`，正文为空。
+   Studio 不再显示"Agent 没有返回文本"，改为提示回答在思考过程中。Runtime 不尝试从思考
+   内容中拆分正文，因为没有可靠的分隔依据。
 
 ## 5. 安全边界
 
