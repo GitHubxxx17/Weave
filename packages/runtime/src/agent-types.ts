@@ -2,6 +2,7 @@ import type { LlmClient, LlmProviderRegistry } from '@weave/llm';
 import {
   toolCallSchema,
   userMessageSchema,
+  type TokenUsage,
   type ToolCall,
   type UserMessage,
 } from '@weave/protocol';
@@ -56,7 +57,27 @@ export type AgentRuntimeEvent =
       /** Stable error code for a failed result. */
       readonly errorCode?: string | undefined;
     }
-  | { readonly type: 'completed'; readonly turnId: string };
+  | { readonly type: 'completed'; readonly turnId: string }
+  | {
+      /** Usage of one finished model step; a Turn may emit several. */
+      readonly type: 'usage';
+      readonly usage: AgentTokenUsage;
+      readonly provider: string;
+      readonly model: string;
+    };
+
+/** Token usage carried by the `usage` runtime event. */
+export type AgentTokenUsage = { readonly [Field in keyof TokenUsage]?: number | undefined };
+
+const tokenCountSchema = z.number().int().nonnegative().safe();
+const agentTokenUsageSchema = z.object({
+  inputTokens: tokenCountSchema.optional(),
+  outputTokens: tokenCountSchema.optional(),
+  totalTokens: tokenCountSchema.optional(),
+  cacheReadTokens: tokenCountSchema.optional(),
+  cacheWriteTokens: tokenCountSchema.optional(),
+  reasoningTokens: tokenCountSchema.optional(),
+});
 
 export const agentRuntimeEventSchema: z.ZodType<AgentRuntimeEvent> = z.discriminatedUnion('type', [
   z.object({ type: z.literal('text-delta'), text: z.string() }),
@@ -77,6 +98,12 @@ export const agentRuntimeEventSchema: z.ZodType<AgentRuntimeEvent> = z.discrimin
   z.object({
     type: z.literal('completed'),
     turnId: nonEmptyStringSchema,
+  }),
+  z.object({
+    type: z.literal('usage'),
+    usage: agentTokenUsageSchema,
+    provider: nonEmptyStringSchema,
+    model: nonEmptyStringSchema,
   }),
 ]);
 
