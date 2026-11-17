@@ -2,10 +2,12 @@ import {
   ChangeEvent,
   FormEvent,
   KeyboardEvent as ReactKeyboardEvent,
+  type ReactElement,
   useEffect,
   useRef,
   useState,
 } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Archive,
   Bot,
@@ -42,6 +44,12 @@ import type { LucideIcon } from 'lucide-react';
 import { AgentStreamError, streamAgentRun } from '../features/agent/agent-stream.js';
 import type { AgentRuntimeEvent } from '../features/agent/agent-types.js';
 import { createProviderApi, ProviderApiError } from '../features/providers/provider-api.js';
+import {
+  customProviderPresetId,
+  findModelPresetId,
+  findProviderPreset,
+  providerPresets,
+} from '../features/providers/provider-presets.js';
 import type { ProviderDescriptor, ProviderSettings } from '../features/providers/provider-types.js';
 import { createWorkspaceApi, WorkspaceApiError } from '../features/workspace/workspace-api.js';
 import type {
@@ -99,6 +107,8 @@ type ToolActivity = {
 type ProviderFormState = {
   readonly mode: 'create' | 'edit';
   readonly editingId: string | null;
+  readonly providerPresetId: string;
+  readonly modelPresetId: string;
   readonly id: string;
   readonly label: string;
   readonly baseUrl: string;
@@ -107,6 +117,173 @@ type ProviderFormState = {
   readonly makeDefault: boolean;
   readonly clearApiKey: boolean;
 };
+
+type FormSelectOption = {
+  readonly value: string;
+  readonly label: string;
+};
+
+type FormSelectProps = {
+  readonly label: string;
+  readonly value: string;
+  readonly placeholder: string;
+  readonly options: readonly FormSelectOption[];
+  readonly onChange: (value: string) => void;
+};
+
+type FormSelectMenuPosition = {
+  readonly top: number;
+  readonly left: number;
+  readonly width: number;
+  readonly maxHeight: number;
+};
+
+/**
+ * Renders a keyboard-friendly select menu that matches the Studio visual
+ * language instead of relying on the operating system's native select popup.
+ */
+function FormSelect({
+  label,
+  value,
+  placeholder,
+  options,
+  onChange,
+}: FormSelectProps): ReactElement {
+  const [isOpen, setIsOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState<FormSelectMenuPosition | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const selectedOption = options.find((option) => option.value === value);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setMenuPosition(null);
+      return;
+    }
+
+    function updateMenuPosition(): void {
+      const trigger = triggerRef.current;
+      if (trigger === null) {
+        return;
+      }
+
+      const triggerRect = trigger.getBoundingClientRect();
+      const viewportPadding = 12;
+      const optionHeight = 42;
+      const desiredHeight = Math.min(240, options.length * optionHeight + 10);
+      const spaceBelow = window.innerHeight - triggerRect.bottom - viewportPadding;
+      const spaceAbove = triggerRect.top - viewportPadding;
+      const shouldOpenAbove = spaceBelow < desiredHeight && spaceAbove > spaceBelow;
+      const maxHeight = Math.max(
+        120,
+        Math.min(desiredHeight, shouldOpenAbove ? spaceAbove : spaceBelow),
+      );
+      const left = Math.min(
+        triggerRect.left,
+        Math.max(viewportPadding, window.innerWidth - triggerRect.width - viewportPadding),
+      );
+
+      setMenuPosition({
+        top: shouldOpenAbove
+          ? Math.max(viewportPadding, triggerRect.top - maxHeight - 6)
+          : triggerRect.bottom + 6,
+        left,
+        width: triggerRect.width,
+        maxHeight,
+      });
+    }
+
+    function handlePointerDown(event: PointerEvent): void {
+      const target = event.target as Node;
+      if (
+        containerRef.current?.contains(target) !== true &&
+        menuRef.current?.contains(target) !== true
+      ) {
+        setIsOpen(false);
+      }
+    }
+
+    function handleKeyDown(event: globalThis.KeyboardEvent): void {
+      if (event.key === 'Escape') {
+        setIsOpen(false);
+      }
+    }
+
+    updateMenuPosition();
+    window.addEventListener('resize', updateMenuPosition);
+    window.addEventListener('scroll', updateMenuPosition, true);
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('resize', updateMenuPosition);
+      window.removeEventListener('scroll', updateMenuPosition, true);
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, options.length]);
+
+  function handleButtonKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>): void {
+    if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      setIsOpen(true);
+    }
+  }
+
+  return (
+    <div className={`form-select${isOpen ? ' form-select-open' : ''}`} ref={containerRef}>
+      <button
+        className="form-select-trigger"
+        type="button"
+        ref={triggerRef}
+        aria-label={label}
+        aria-expanded={isOpen}
+        aria-haspopup="menu"
+        onClick={() => setIsOpen((current) => !current)}
+        onKeyDown={handleButtonKeyDown}
+      >
+        <span className={selectedOption === undefined ? 'form-select-placeholder' : undefined}>
+          {selectedOption?.label ?? placeholder}
+        </span>
+        <ChevronDown aria-hidden="true" />
+      </button>
+      {isOpen && menuPosition !== null
+        ? createPortal(
+            <div
+              className="form-select-menu"
+              ref={menuRef}
+              role="menu"
+              aria-label={label}
+              onPointerDown={(event) => event.stopPropagation()}
+              style={{
+                top: menuPosition.top,
+                left: menuPosition.left,
+                width: menuPosition.width,
+                maxHeight: menuPosition.maxHeight,
+              }}
+            >
+              {options.map((option) => (
+                <button
+                  className={`form-select-option${option.value === value ? ' form-select-option-selected' : ''}`}
+                  type="button"
+                  role="menuitem"
+                  key={option.value}
+                  onClick={() => {
+                    onChange(option.value);
+                    setIsOpen(false);
+                  }}
+                >
+                  <span>{option.label}</span>
+                  {option.value === value ? <Check aria-hidden="true" /> : null}
+                </button>
+              ))}
+            </div>,
+            document.body,
+          )
+        : null}
+    </div>
+  );
+}
 
 const statusLabels: Record<RunStatus, string> = {
   idle: '就绪',
@@ -215,7 +392,7 @@ function getAssistantPlaceholder(status: RunStatus, isLatest: boolean): string {
     case 'cancelled':
       return '本次运行已取消';
     case 'error':
-      return '暂无回复';
+      return '本次运行失败，请查看运行错误';
     case 'completed':
       return 'Agent 没有返回文本';
     case 'idle':
@@ -1182,11 +1359,14 @@ export function App() {
 
   function openProviderForm(provider?: ProviderDescriptor): void {
     setProviderFormError(null);
+    const providerPreset = provider === undefined ? undefined : findProviderPreset(provider.id);
     setProviderForm(
       provider === undefined
         ? {
             mode: 'create',
             editingId: null,
+            providerPresetId: '',
+            modelPresetId: customProviderPresetId,
             id: '',
             label: '',
             baseUrl: '',
@@ -1198,6 +1378,8 @@ export function App() {
         : {
             mode: 'edit',
             editingId: provider.id,
+            providerPresetId: providerPreset?.id ?? customProviderPresetId,
+            modelPresetId: findModelPresetId(providerPreset, provider.defaultModel ?? ''),
             id: provider.id,
             label: provider.label,
             baseUrl: provider.baseUrl ?? '',
@@ -1224,6 +1406,55 @@ export function App() {
     setProviderForm((current) => (current === null ? current : { ...current, [key]: value }));
   }
 
+  function chooseProviderPreset(presetId: string): void {
+    setProviderForm((current) => {
+      if (current === null) {
+        return current;
+      }
+
+      if (presetId === customProviderPresetId) {
+        return {
+          ...current,
+          providerPresetId: customProviderPresetId,
+          modelPresetId: customProviderPresetId,
+          id: current.mode === 'create' ? '' : current.id,
+          label: current.mode === 'create' ? '' : current.label,
+          baseUrl: current.mode === 'create' ? '' : current.baseUrl,
+          defaultModel: current.mode === 'create' ? '' : current.defaultModel,
+        };
+      }
+
+      const preset = findProviderPreset(presetId);
+      if (preset === undefined) {
+        return current;
+      }
+
+      return {
+        ...current,
+        providerPresetId: preset.id,
+        modelPresetId: preset.models[0] ?? customProviderPresetId,
+        id: current.mode === 'create' ? preset.id : current.id,
+        label: preset.label,
+        baseUrl: preset.baseUrl,
+        defaultModel: preset.models[0] ?? '',
+      };
+    });
+  }
+
+  function chooseModelPreset(modelPresetId: string): void {
+    setProviderForm((current) => {
+      if (current === null) {
+        return current;
+      }
+
+      return {
+        ...current,
+        modelPresetId,
+        defaultModel: modelPresetId === customProviderPresetId ? '' : modelPresetId,
+      };
+    });
+  }
+
   function providerErrorMessage(error: unknown): string {
     if (!(error instanceof ProviderApiError)) {
       return 'Provider 配置暂时不可用，请稍后重试';
@@ -1237,6 +1468,8 @@ export function App() {
         return '这个 Provider 由系统或插件管理，不能从此处修改';
       case 'provider-settings-provider-invalid':
         return 'Provider 客户端创建失败，请检查地址和配置';
+      case 'provider-settings-api-key-required':
+        return '修改了 API 地址，请重新填写 API Key';
       case 'provider-api-network':
         return '无法连接到本地服务，请确认后端已经启动';
       default:
@@ -1733,10 +1966,6 @@ export function App() {
               </div>
             </div>
             <div className="header-actions">
-              <span className="branch-chip">
-                <GitBranch aria-hidden="true" />
-                feat/studio-ui-polish
-              </span>
               <div className={`menu-anchor${openMenu === 'more' ? ' menu-anchor-open' : ''}`}>
                 <button
                   className="icon-button"
@@ -2248,66 +2477,79 @@ export function App() {
                       className={`provider-settings-item${provider.id === providerSettings.defaultProvider ? ' provider-settings-item-default' : ''}`}
                       key={provider.id}
                     >
-                      <div className="provider-settings-icon" aria-hidden="true">
-                        <Bot />
+                      <div className="provider-settings-main">
+                        <div className="provider-settings-icon" aria-hidden="true">
+                          <Bot />
+                        </div>
+                        <div className="provider-settings-copy">
+                          <strong>{provider.label}</strong>
+                          <span>{provider.id}</span>
+                        </div>
                       </div>
-                      <div className="provider-settings-copy">
-                        <strong>{provider.label}</strong>
-                        <span>{provider.id}</span>
+                      <div className="provider-settings-details">
+                        <div className="provider-detail-row">
+                          <span>模型</span>
+                          <strong>{provider.defaultModel ?? '未设置默认模型'}</strong>
+                        </div>
+                        <div className="provider-detail-row">
+                          <span>接口</span>
+                          <strong>{provider.baseUrl ?? '本地运行时'}</strong>
+                        </div>
                       </div>
-                      <div className="provider-settings-meta">
-                        <span
-                          className={
-                            provider.hasApiKey ? 'provider-status-ready' : 'provider-status-warning'
-                          }
-                        >
-                          <span className="provider-status-dot" aria-hidden="true" />
-                          {provider.hasApiKey ? '可用' : '需要配置 API Key'}
-                        </span>
-                        <small>模型 · {provider.defaultModel ?? '未设置默认模型'}</small>
-                        <small className="provider-settings-endpoint">
-                          {provider.baseUrl ?? '本地运行时'}
-                        </small>
-                      </div>
-                      {providerSettings.canManage && provider.editable ? (
-                        <div className="provider-settings-actions">
-                          {provider.id !== providerSettings.defaultProvider ? (
+                      <div className="provider-settings-side">
+                        <div className="provider-settings-status">
+                          <span
+                            className={
+                              provider.hasApiKey
+                                ? 'provider-status-ready'
+                                : 'provider-status-warning'
+                            }
+                          >
+                            <span className="provider-status-dot" aria-hidden="true" />
+                            {provider.hasApiKey ? '可用' : '需要配置 API Key'}
+                          </span>
+                          {provider.id === providerSettings.defaultProvider ? (
+                            <span className="provider-default-mark">
+                              <Check aria-hidden="true" />
+                              默认
+                            </span>
+                          ) : null}
+                        </div>
+                        {providerSettings.canManage && provider.editable ? (
+                          <div className="provider-settings-actions">
+                            {provider.id !== providerSettings.defaultProvider ? (
+                              <button
+                                className="provider-action-button"
+                                type="button"
+                                onClick={() => void setDefaultProvider(provider.id)}
+                                disabled={providerMutation !== 'idle' || !provider.hasApiKey}
+                              >
+                                设为默认
+                              </button>
+                            ) : null}
                             <button
                               className="provider-action-button"
                               type="button"
-                              onClick={() => void setDefaultProvider(provider.id)}
-                              disabled={providerMutation !== 'idle' || !provider.hasApiKey}
+                              aria-label={`编辑 Provider ${provider.label}`}
+                              onClick={() => openProviderForm(provider)}
+                              disabled={providerMutation !== 'idle'}
                             >
-                              设为默认
+                              <Pencil aria-hidden="true" />
+                              编辑
                             </button>
-                          ) : (
-                            <span className="provider-default-mark">
-                              <Check aria-hidden="true" />
-                              当前默认
-                            </span>
-                          )}
-                          <button
-                            className="provider-action-button"
-                            type="button"
-                            aria-label={`编辑 Provider ${provider.label}`}
-                            onClick={() => openProviderForm(provider)}
-                            disabled={providerMutation !== 'idle'}
-                          >
-                            <Pencil aria-hidden="true" />
-                            编辑
-                          </button>
-                          <button
-                            className="provider-action-button provider-action-button-danger"
-                            type="button"
-                            aria-label={`删除 Provider ${provider.label}`}
-                            onClick={() => setProviderToDelete(provider)}
-                            disabled={providerMutation !== 'idle'}
-                          >
-                            <Trash2 aria-hidden="true" />
-                            删除
-                          </button>
-                        </div>
-                      ) : null}
+                            <button
+                              className="provider-action-button provider-action-button-danger"
+                              type="button"
+                              aria-label={`删除 Provider ${provider.label}`}
+                              onClick={() => setProviderToDelete(provider)}
+                              disabled={providerMutation !== 'idle'}
+                            >
+                              <Trash2 aria-hidden="true" />
+                              删除
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
                     </article>
                   ))}
                 </div>
@@ -2465,11 +2707,35 @@ export function App() {
               </button>
             </header>
             <form className="project-dialog-form" onSubmit={(event) => void saveProvider(event)}>
+              <label className="provider-form-field">
+                <span>供应商</span>
+                <FormSelect
+                  label="供应商"
+                  value={providerForm.providerPresetId}
+                  placeholder="选择常见供应商"
+                  options={[
+                    ...providerPresets.map((preset) => ({
+                      value: preset.id,
+                      label: preset.label,
+                    })),
+                    { value: customProviderPresetId, label: '自定义供应商' },
+                  ]}
+                  onChange={chooseProviderPreset}
+                />
+              </label>
               <div className="provider-form-grid">
                 <label className="provider-form-field">
-                  <span>显示名称</span>
+                  <span>
+                    {providerForm.providerPresetId === customProviderPresetId
+                      ? '自定义供应商名称'
+                      : '显示名称'}
+                  </span>
                   <input
-                    aria-label="显示名称"
+                    aria-label={
+                      providerForm.providerPresetId === customProviderPresetId
+                        ? '自定义供应商名称'
+                        : '显示名称'
+                    }
                     value={providerForm.label}
                     onChange={(event) => updateProviderForm('label', event.target.value)}
                     placeholder="例如 DeepSeek"
@@ -2510,15 +2776,57 @@ export function App() {
                   autoComplete="new-password"
                 />
               </label>
-              <label className="provider-form-field">
-                <span>默认模型</span>
-                <input
-                  aria-label="默认模型"
-                  value={providerForm.defaultModel}
-                  onChange={(event) => updateProviderForm('defaultModel', event.target.value)}
-                  placeholder="例如 deepseek-chat"
-                />
-              </label>
+              {findProviderPreset(providerForm.providerPresetId) !== undefined ? (
+                <label className="provider-form-field">
+                  <span>默认模型</span>
+                  <FormSelect
+                    label="默认模型"
+                    value={providerForm.modelPresetId}
+                    placeholder="选择默认模型"
+                    options={[
+                      ...(findProviderPreset(providerForm.providerPresetId)?.models ?? []).map(
+                        (model) => ({
+                          value: model,
+                          label: model,
+                        }),
+                      ),
+                      { value: customProviderPresetId, label: '自定义模型' },
+                    ]}
+                    onChange={chooseModelPreset}
+                  />
+                </label>
+              ) : null}
+              {findProviderPreset(providerForm.providerPresetId) !== undefined &&
+              providerForm.modelPresetId === customProviderPresetId ? (
+                <label className="provider-form-field">
+                  <span>自定义模型</span>
+                  <input
+                    aria-label="自定义模型"
+                    value={providerForm.defaultModel}
+                    onChange={(event) => updateProviderForm('defaultModel', event.target.value)}
+                    placeholder="输入模型名称"
+                  />
+                </label>
+              ) : null}
+              {findProviderPreset(providerForm.providerPresetId) === undefined ? (
+                <label className="provider-form-field">
+                  <span>
+                    {providerForm.providerPresetId === customProviderPresetId
+                      ? '自定义模型'
+                      : '默认模型'}
+                  </span>
+                  <input
+                    aria-label={
+                      providerForm.providerPresetId === customProviderPresetId
+                        ? '自定义模型'
+                        : '默认模型'
+                    }
+                    value={providerForm.defaultModel}
+                    onChange={(event) => updateProviderForm('defaultModel', event.target.value)}
+                    placeholder="例如 deepseek-flash"
+                  />
+                </label>
+              ) : null}
               <label className="provider-checkbox-field">
                 <input
                   type="checkbox"
@@ -2539,7 +2847,8 @@ export function App() {
               ) : null}
               {providerForm.mode === 'edit' ? (
                 <p className="project-dialog-note">
-                  留空表示保持当前密钥，清除密钥后 Provider 将不能用于对话。
+                  留空表示保持当前密钥，修改 API 地址时需要重新填写；清除密钥后 Provider
+                  将不能用于对话。
                 </p>
               ) : null}
               {providerFormError !== null ? (

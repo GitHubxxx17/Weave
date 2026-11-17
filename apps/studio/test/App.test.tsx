@@ -352,6 +352,7 @@ describe('Studio Agent Chat', () => {
     expect(screen.queryByText('SESSION CONTEXT')).toBeNull();
     expect(screen.queryByText('LIVE TRACE')).toBeNull();
     expect(screen.queryByText('TOOL PIPELINE')).toBeNull();
+    expect(screen.queryByText('feat/studio-ui-polish')).toBeNull();
     expect(screen.getByLabelText('发送消息')).toBeTruthy();
     expect(screen.getByRole('button', { name: '发送' })).toBeTruthy();
     expect(screen.getByText('今天想完成什么？')).toBeTruthy();
@@ -964,6 +965,7 @@ describe('Studio Agent Chat', () => {
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
 
     expect(await screen.findByText('Agent run failed')).toBeTruthy();
+    expect(screen.getByText('本次运行失败，请查看运行错误')).toBeTruthy();
     expect(screen.queryByText(/secret\.ts|\/Users\/mi\/private/)).toBeNull();
     expect(
       within(screen.getByRole('region', { name: '运行错误' })).getByText('错误', {
@@ -1207,6 +1209,78 @@ describe('Studio Agent Chat', () => {
     });
     await waitFor(() => expect(screen.getByText('DeepSeek')).toBeTruthy());
     expect(screen.queryByDisplayValue('deepseek-secret')).toBeNull();
+  });
+
+  it('prefills common Provider and model choices while keeping custom input available', async () => {
+    window.weaveDesktop = {
+      isDesktop: true,
+      serverUrl: 'http://127.0.0.1:46321',
+    };
+    fetchMock = createWorkspaceFetchMock({
+      providers: [
+        {
+          id: 'mock',
+          label: '本地演示',
+          type: 'mock',
+          defaultModel: 'weave-local-demo',
+          hasApiKey: false,
+          editable: false,
+        },
+      ],
+      defaultProvider: 'mock',
+      canManage: true,
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: '设置' }));
+    fireEvent.click(screen.getByRole('button', { name: '添加 AI 服务' }));
+
+    fireEvent.click(screen.getByRole('button', { name: '供应商' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'DeepSeek' }));
+
+    expect((screen.getByLabelText('显示名称') as HTMLInputElement).value).toBe('DeepSeek');
+    expect((screen.getByLabelText('Provider ID') as HTMLInputElement).value).toBe('deepseek');
+    expect((screen.getByLabelText('API 地址') as HTMLInputElement).value).toBe(
+      'https://api.deepseek.com',
+    );
+    expect(screen.getByRole('button', { name: '默认模型' }).textContent).toContain(
+      'deepseek-flash',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '默认模型' }));
+    expect(screen.getByRole('menu', { name: '默认模型' }).parentElement).toBe(document.body);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'deepseek-v4-pro' }));
+    expect(screen.getByRole('button', { name: '默认模型' }).textContent).toContain(
+      'deepseek-v4-pro',
+    );
+    expect(screen.queryByLabelText('自定义模型')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '默认模型' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '自定义模型' }));
+    fireEvent.change(screen.getByLabelText('自定义模型'), {
+      target: { value: 'deepseek-experimental' },
+    });
+    expect((screen.getByLabelText('自定义模型') as HTMLInputElement).value).toBe(
+      'deepseek-experimental',
+    );
+    expect((screen.getByLabelText('API 地址') as HTMLInputElement).value).toBe(
+      'https://api.deepseek.com',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '供应商' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '自定义供应商' }));
+    expect(screen.getByLabelText('自定义供应商名称')).toBeTruthy();
+    expect(screen.getByLabelText('自定义模型')).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('自定义供应商名称'), {
+      target: { value: '内网模型' },
+    });
+    fireEvent.change(screen.getByLabelText('自定义模型'), {
+      target: { value: 'internal-chat' },
+    });
+    expect((screen.getByLabelText('自定义供应商名称') as HTMLInputElement).value).toBe('内网模型');
+    expect((screen.getByLabelText('自定义模型') as HTMLInputElement).value).toBe('internal-chat');
   });
 
   it('edits an existing Provider with an empty API key to keep the old secret', async () => {
