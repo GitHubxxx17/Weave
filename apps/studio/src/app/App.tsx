@@ -10,6 +10,7 @@ import {
 import { createPortal } from 'react-dom';
 import {
   Archive,
+  ArrowDown,
   Bot,
   Check,
   ChevronDown,
@@ -43,6 +44,7 @@ import type { LucideIcon } from 'lucide-react';
 
 import { AgentStreamError, streamAgentRun } from '../features/agent/agent-stream.js';
 import type { AgentRuntimeEvent } from '../features/agent/agent-types.js';
+import { useAutoScroll } from '../features/conversation/use-auto-scroll.js';
 import { createProviderApi, ProviderApiError } from '../features/providers/provider-api.js';
 import {
   customProviderPresetId,
@@ -579,6 +581,7 @@ export function App() {
     providerSettings.providers.find((provider) => provider.id === selectedProviderId) ??
     providerSettings.providers[0];
   const messages = activeSession?.messages ?? [];
+  const conversationScroll = useAutoScroll<HTMLDivElement>(messages, activeSessionId);
   const normalizedSearchQuery = searchQuery.trim().toLocaleLowerCase();
   const visibleProjects = projects
     .map((project) => ({
@@ -995,6 +998,7 @@ export function App() {
     latestAssistantMessageId.current = assistantId;
     activeRunId.current = runId;
     controller.current = requestController;
+    conversationScroll.scrollToBottom('auto');
     updateSessionMessages(projectId, sessionId, (current) => [
       ...current,
       {
@@ -2019,141 +2023,161 @@ export function App() {
             </div>
           </header>
 
-          <div
-            className="message-list conversation-scroll"
-            aria-label="Agent 工作流"
-            aria-live="polite"
-          >
-            {messages.length === 0 ? (
-              <div className="empty-chat">
-                <div className="empty-orbit" aria-hidden="true">
-                  <Sparkles aria-hidden="true" />
-                </div>
-                <p className="empty-kicker">WEAVE</p>
-                <h3>今天想完成什么？</h3>
-                <p>当前项目 {activeProject?.name ?? 'Weave'} · 本地运行时已连接</p>
-                <div className="suggestion-list" aria-label="对话示例">
-                  <button type="button" onClick={() => fillSuggestion('介绍一下 Weave 的架构')}>
+          <div className="conversation-viewport">
+            <div
+              className="message-list conversation-scroll"
+              aria-label="Agent 工作流"
+              aria-live="polite"
+              ref={conversationScroll.ref}
+              onScroll={conversationScroll.onScroll}
+            >
+              {messages.length === 0 ? (
+                <div className="empty-chat">
+                  <div className="empty-orbit" aria-hidden="true">
                     <Sparkles aria-hidden="true" />
-                    介绍一下 Weave 的架构
-                  </button>
-                  <button type="button" onClick={() => fillSuggestion('帮我梳理当前项目状态')}>
-                    <TerminalSquare aria-hidden="true" />
-                    梳理当前项目状态
-                  </button>
+                  </div>
+                  <p className="empty-kicker">WEAVE</p>
+                  <h3>今天想完成什么？</h3>
+                  <p>当前项目 {activeProject?.name ?? 'Weave'} · 本地运行时已连接</p>
+                  <div className="suggestion-list" aria-label="对话示例">
+                    <button type="button" onClick={() => fillSuggestion('介绍一下 Weave 的架构')}>
+                      <Sparkles aria-hidden="true" />
+                      介绍一下 Weave 的架构
+                    </button>
+                    <button type="button" onClick={() => fillSuggestion('帮我梳理当前项目状态')}>
+                      <TerminalSquare aria-hidden="true" />
+                      梳理当前项目状态
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ) : (
-              messages.map((message) => {
-                const isLatestAssistant =
-                  message.role === 'assistant' && message.id === latestAssistantMessageId.current;
-                const hasProcess =
-                  message.role === 'assistant' &&
-                  (message.reasoning !== '' ||
-                    message.tools.length > 0 ||
-                    (isLatestAssistant && status === 'streaming'));
+              ) : (
+                messages.map((message) => {
+                  const isLatestAssistant =
+                    message.role === 'assistant' && message.id === latestAssistantMessageId.current;
+                  const hasProcess =
+                    message.role === 'assistant' &&
+                    (message.reasoning !== '' ||
+                      message.tools.length > 0 ||
+                      (isLatestAssistant && status === 'streaming'));
 
-                return (
-                  <article
-                    className={`timeline-item timeline-item-${message.role}`}
-                    key={message.id}
-                  >
-                    <div className="timeline-content">
-                      <div className="message-meta">
-                        {message.role === 'assistant' ? (
-                          <span className="message-avatar" aria-hidden="true">
-                            <Sparkles />
-                          </span>
+                  return (
+                    <article
+                      className={`timeline-item timeline-item-${message.role}`}
+                      key={message.id}
+                    >
+                      <div className="timeline-content">
+                        <div className="message-meta">
+                          {message.role === 'assistant' ? (
+                            <span className="message-avatar" aria-hidden="true">
+                              <Sparkles />
+                            </span>
+                          ) : null}
+                          {message.role === 'user' ? '你' : 'Weave Agent'}
+                          <time dateTime={message.occurredAt}>
+                            {formatMessageTime(message.occurredAt)}
+                          </time>
+                        </div>
+                        {hasProcess ? (
+                          <details
+                            className="message-process"
+                            role="group"
+                            aria-label="本轮过程"
+                            open={expandedMessageIds.includes(message.id)}
+                            onToggle={(event) => {
+                              const isOpen = event.currentTarget.open;
+                              setExpandedMessageIds((current) =>
+                                isOpen
+                                  ? current.includes(message.id)
+                                    ? current
+                                    : [...current, message.id]
+                                  : current.filter((id) => id !== message.id),
+                              );
+                            }}
+                          >
+                            <summary>
+                              <span className="message-process-title">
+                                <TerminalSquare aria-hidden="true" />
+                                {message.tools.length > 0
+                                  ? `${message.tools.length} 次工具调用`
+                                  : '思考过程'}
+                              </span>
+                              <span className="message-process-state">
+                                {isLatestAssistant && status === 'streaming' ? '进行中' : '已完成'}
+                              </span>
+                            </summary>
+                            <div className="message-process-content">
+                              {message.reasoning !== '' ? (
+                                <section className="message-process-section" aria-label="思考内容">
+                                  <div className="message-process-heading">
+                                    <span>思考</span>
+                                    {isLatestAssistant && status === 'streaming' ? (
+                                      <span className="message-process-live">实时</span>
+                                    ) : null}
+                                  </div>
+                                  <p className="message-process-text">{message.reasoning}</p>
+                                </section>
+                              ) : null}
+                              {message.tools.length > 0 ? (
+                                <section className="message-process-section" aria-label="工具步骤">
+                                  <div className="message-process-heading">
+                                    <span>工具调用</span>
+                                    <span>{message.tools.length} 次</span>
+                                  </div>
+                                  <div className="message-process-tools">
+                                    {message.tools.map((tool) => (
+                                      <article
+                                        className="message-process-tool"
+                                        key={tool.toolCallId}
+                                      >
+                                        <div className="message-process-tool-heading">
+                                          <strong>{tool.name}</strong>
+                                          <span className={`status-badge status-${tool.status}`}>
+                                            {tool.status === 'called'
+                                              ? '已调用'
+                                              : tool.status === 'executing'
+                                                ? '执行中'
+                                                : tool.status === 'completed'
+                                                  ? '已完成'
+                                                  : '失败'}
+                                          </span>
+                                        </div>
+                                        <pre>{tool.arguments}</pre>
+                                        {tool.result !== undefined ? (
+                                          <p className="message-process-text">{tool.result}</p>
+                                        ) : null}
+                                      </article>
+                                    ))}
+                                  </div>
+                                </section>
+                              ) : null}
+                              {message.reasoning === '' && message.tools.length === 0 ? (
+                                <p className="message-process-placeholder">Agent 正在准备回复…</p>
+                              ) : null}
+                            </div>
+                          </details>
                         ) : null}
-                        {message.role === 'user' ? '你' : 'Weave Agent'}
-                        <time dateTime={message.occurredAt}>
-                          {formatMessageTime(message.occurredAt)}
-                        </time>
+                        <div className="message">
+                          <p>
+                            {message.text || getAssistantPlaceholder(status, isLatestAssistant)}
+                          </p>
+                        </div>
                       </div>
-                      {hasProcess ? (
-                        <details
-                          className="message-process"
-                          role="group"
-                          aria-label="本轮过程"
-                          open={expandedMessageIds.includes(message.id)}
-                          onToggle={(event) => {
-                            const isOpen = event.currentTarget.open;
-                            setExpandedMessageIds((current) =>
-                              isOpen
-                                ? current.includes(message.id)
-                                  ? current
-                                  : [...current, message.id]
-                                : current.filter((id) => id !== message.id),
-                            );
-                          }}
-                        >
-                          <summary>
-                            <span className="message-process-title">
-                              <TerminalSquare aria-hidden="true" />
-                              {message.tools.length > 0
-                                ? `${message.tools.length} 次工具调用`
-                                : '思考过程'}
-                            </span>
-                            <span className="message-process-state">
-                              {isLatestAssistant && status === 'streaming' ? '进行中' : '已完成'}
-                            </span>
-                          </summary>
-                          <div className="message-process-content">
-                            {message.reasoning !== '' ? (
-                              <section className="message-process-section" aria-label="思考内容">
-                                <div className="message-process-heading">
-                                  <span>思考</span>
-                                  {isLatestAssistant && status === 'streaming' ? (
-                                    <span className="message-process-live">实时</span>
-                                  ) : null}
-                                </div>
-                                <p className="message-process-text">{message.reasoning}</p>
-                              </section>
-                            ) : null}
-                            {message.tools.length > 0 ? (
-                              <section className="message-process-section" aria-label="工具步骤">
-                                <div className="message-process-heading">
-                                  <span>工具调用</span>
-                                  <span>{message.tools.length} 次</span>
-                                </div>
-                                <div className="message-process-tools">
-                                  {message.tools.map((tool) => (
-                                    <article className="message-process-tool" key={tool.toolCallId}>
-                                      <div className="message-process-tool-heading">
-                                        <strong>{tool.name}</strong>
-                                        <span className={`status-badge status-${tool.status}`}>
-                                          {tool.status === 'called'
-                                            ? '已调用'
-                                            : tool.status === 'executing'
-                                              ? '执行中'
-                                              : tool.status === 'completed'
-                                                ? '已完成'
-                                                : '失败'}
-                                        </span>
-                                      </div>
-                                      <pre>{tool.arguments}</pre>
-                                      {tool.result !== undefined ? (
-                                        <p className="message-process-text">{tool.result}</p>
-                                      ) : null}
-                                    </article>
-                                  ))}
-                                </div>
-                              </section>
-                            ) : null}
-                            {message.reasoning === '' && message.tools.length === 0 ? (
-                              <p className="message-process-placeholder">Agent 正在准备回复…</p>
-                            ) : null}
-                          </div>
-                        </details>
-                      ) : null}
-                      <div className="message">
-                        <p>{message.text || getAssistantPlaceholder(status, isLatestAssistant)}</p>
-                      </div>
-                    </div>
-                  </article>
-                );
-              })
-            )}
+                    </article>
+                  );
+                })
+              )}
+            </div>
+            {!conversationScroll.isAtBottom && messages.length > 0 ? (
+              <button
+                className="scroll-to-bottom"
+                type="button"
+                aria-label="回到底部"
+                onClick={() => conversationScroll.scrollToBottom()}
+              >
+                <ArrowDown aria-hidden="true" />
+                {status === 'streaming' ? '有新内容' : '回到底部'}
+              </button>
+            ) : null}
           </div>
 
           <form className="composer" onSubmit={handleSubmit}>

@@ -844,6 +844,43 @@ h3 {
   gap: 4px;
 }
 
+.conversation-viewport {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.scroll-to-bottom {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  box-shadow: var(--shadow-popover);
+  cursor: pointer;
+  transform: translateX(-50%);
+}
+
+.scroll-to-bottom:hover {
+  color: var(--accent-dark);
+  border-color: var(--accent);
+}
+
+.scroll-to-bottom svg {
+  width: 15px;
+  height: 15px;
+}
+
 .message-list {
   display: flex;
   min-height: 0;
