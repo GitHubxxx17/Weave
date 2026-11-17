@@ -80,6 +80,35 @@ function describeProjectStore(name: string, createStore: StoreFactory): void {
       }
     });
 
+    it('sets, changes and clears a Project folder', async () => {
+      const { store, cleanup } = await createStore();
+
+      try {
+        const project = await store.createProject({ name: 'Weave', folderName: 'weave' });
+        expect(project.folderPath).toBeUndefined();
+
+        const withFolder = await store.updateProjectFolder(project.id, '/tmp/weave');
+        expect(withFolder.folderPath).toBe('/tmp/weave');
+        expect(withFolder.updatedAt >= project.updatedAt).toBe(true);
+        expect((await store.getProject(project.id))?.folderPath).toBe('/tmp/weave');
+
+        await store.updateProjectFolder(project.id, '/tmp/other');
+        expect((await store.getProject(project.id))?.folderPath).toBe('/tmp/other');
+
+        const cleared = await store.updateProjectFolder(project.id, undefined);
+        expect(cleared.folderPath).toBeUndefined();
+
+        await expect(store.updateProjectFolder(project.id, 'relative')).rejects.toMatchObject({
+          code: 'workspace-store-invalid-input',
+        });
+        await expect(store.updateProjectFolder('missing', '/tmp/x')).rejects.toMatchObject({
+          code: 'workspace-project-not-found',
+        });
+      } finally {
+        await cleanup();
+      }
+    });
+
     it('rejects invalid input and operations after close', async () => {
       const { store, cleanup } = await createStore();
 
@@ -131,6 +160,7 @@ describe('SQLite Project Store persistence', () => {
     const first = createSqliteProjectStore({ filename });
     const project = await first.createProject({ name: 'Weave', folderName: 'weave' });
     await first.attachSession(project.id, 'session-1');
+    await first.updateProjectFolder(project.id, '/tmp/weave-persisted');
     await first.close();
 
     const reopened = createSqliteProjectStore({ filename });
@@ -138,6 +168,7 @@ describe('SQLite Project Store persistence', () => {
       id: project.id,
       name: 'Weave',
       folderName: 'weave',
+      folderPath: '/tmp/weave-persisted',
     });
     expect(await reopened.listSessionRefs(project.id)).toMatchObject([
       { projectId: project.id, sessionId: 'session-1' },

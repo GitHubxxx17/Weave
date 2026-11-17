@@ -37,6 +37,13 @@ export interface ProjectStore {
   /** Reads one Project, returning undefined when it does not exist. */
   getProject(projectId: string): Promise<Project | undefined>;
 
+  /**
+   * Sets or clears the absolute local folder of a Project and refreshes
+   * `updatedAt`. The Store only checks that the path is absolute; callers
+   * validate that it exists on disk.
+   */
+  updateProjectFolder(projectId: string, folderPath: string | undefined): Promise<Project>;
+
   /** Associates one Session with a Project exactly once. */
   attachSession(projectId: string, sessionId: string): Promise<ProjectSessionRef>;
 

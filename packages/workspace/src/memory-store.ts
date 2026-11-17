@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   createProjectInputSchema,
+  projectFolderPathSchema,
   projectIdSchema,
   projectSessionIdSchema,
   type CreateProjectInput,
@@ -86,6 +87,28 @@ export function createInMemoryProjectStore(): ProjectStore {
       validateIds(projectIdInput);
       const project = projects.get(projectIdInput);
       return project === undefined ? undefined : clone(project);
+    },
+
+    async updateProjectFolder(
+      projectIdInput: string,
+      folderPathInput: string | undefined,
+    ): Promise<Project> {
+      requireOpen(closed);
+      validateIds(projectIdInput);
+      if (!projectFolderPathSchema.optional().safeParse(folderPathInput).success) {
+        throw invalidInput();
+      }
+      const project = projects.get(projectIdInput);
+      if (project === undefined) {
+        throw projectNotFound();
+      }
+      const updated: Project = {
+        ...project,
+        folderPath: folderPathInput,
+        updatedAt: new Date().toISOString(),
+      };
+      projects.set(projectIdInput, updated);
+      return clone(updated);
     },
 
     async attachSession(

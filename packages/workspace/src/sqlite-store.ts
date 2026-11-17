@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
 import {
   createProjectInputSchema,
+  projectFolderPathSchema,
   projectIdSchema,
   projectSchema,
   projectSessionIdSchema,
@@ -219,6 +220,41 @@ export function createSqliteProjectStore(options: { readonly filename: string })
           )
           .get(projectIdInput);
         return row === undefined ? undefined : parseProject(row);
+      } catch (error) {
+        if (error instanceof WorkspaceStoreError) {
+          throw error;
+        }
+        throw new WorkspaceStoreError('workspace-store-io', ioMessage, { cause: error });
+      }
+    },
+
+    async updateProjectFolder(
+      projectIdInput: string,
+      folderPathInput: string | undefined,
+    ): Promise<Project> {
+      requireOpen(closed);
+      validateIds(projectIdInput);
+      if (!projectFolderPathSchema.optional().safeParse(folderPathInput).success) {
+        throw invalidInput();
+      }
+      try {
+        const result = database
+          .prepare('UPDATE projects SET folder_path = ?, updated_at = ? WHERE project_id = ?')
+          .run(folderPathInput ?? null, new Date().toISOString(), projectIdInput);
+        if (result.changes === 0) {
+          throw projectNotFound();
+        }
+        const row = database
+          .prepare(
+            `SELECT project_id, name, folder_name, folder_path, created_at, updated_at
+             FROM projects
+             WHERE project_id = ?`,
+          )
+          .get(projectIdInput);
+        if (row === undefined) {
+          throw projectNotFound();
+        }
+        return parseProject(row);
       } catch (error) {
         if (error instanceof WorkspaceStoreError) {
           throw error;
