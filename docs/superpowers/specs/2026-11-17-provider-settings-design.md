@@ -2,7 +2,7 @@
 
 **日期：** 2026-11-17
 **功能分支：** `feat/provider-settings`
-**状态：** 已获用户确认，等待实现前评审
+**状态：** 已实现
 
 ## 1. 背景
 
@@ -117,6 +117,7 @@ Server 和测试不依赖 Electron，而是依赖一个很小的接口：
 
 ```ts
 interface SecretCodec {
+  isAvailable(): boolean;
   encrypt(value: string): string;
   decrypt(value: string): string;
 }
@@ -403,8 +404,8 @@ sequenceDiagram
 ```
 
 如果某个 Provider 的密钥解密失败，Server 不应把整个应用打挂。该 Provider
-应标记为不可用并返回明确的配置错误状态，其他 Provider 和本地 Mock 仍然可以
-启动。用户可以在设置页重新配置该 Provider。
+仍保留在设置列表中并显示为已配置密钥，但不会注册到可调用 Registry，默认
+Provider 回退到可用的 Mock。用户可以在设置页重新保存密钥，让它恢复可调用状态。
 
 ## 9. 测试策略
 

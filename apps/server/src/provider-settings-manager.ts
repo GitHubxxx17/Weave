@@ -239,11 +239,25 @@ export function createProviderSettingsManager(
       }
       const record = parsed.data;
       managedRecords.set(record.id, record);
-      registerRecord(record);
+      try {
+        registerRecord(record);
+      } catch (error: unknown) {
+        if (
+          error instanceof ProviderSettingsManagerError &&
+          (error.code === 'provider-settings-secret-invalid' ||
+            error.code === 'provider-settings-provider-invalid')
+        ) {
+          continue;
+        }
+        throw error;
+      }
     }
 
     const savedDefault = records.find(
-      (record) => record.isDefault && record.encryptedApiKey !== null,
+      (record) =>
+        record.isDefault &&
+        record.encryptedApiKey !== null &&
+        options.registry.get(record.id) !== undefined,
     );
     if (savedDefault !== undefined) {
       defaultProvider = savedDefault.id;

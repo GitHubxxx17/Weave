@@ -119,7 +119,7 @@ shape, and returns `200` only when the Runtime is running; otherwise it returns
 `503`.
 
 The desktop composition root is `apps/desktop`. Electron Main calls
-`startServer(0, { databaseFile, studioOrigin })`, so the operating system
+`startServer(0, { databaseFile, studioOrigin, providerSecretCodec })`, so the operating system
 chooses an available local port and the Server can allow the exact Studio
 origin through CORS. The Renderer never opens SQLite or reads an API Key. Its
 Workspace, Provider, and Agent clients use the same `runtimeApiUrl()` helper in
@@ -136,8 +136,8 @@ The persistence path is:
 Studio
   -> Project/Session HTTP API
   -> Server SessionService
-  -> Workspace ProjectStore + SessionEventStore
-  -> SQLite (.weave/weave.sqlite)
+  -> Workspace ProjectStore + SessionEventStore + Provider Settings Store
+  -> SQLite (Desktop userData/weave.sqlite)
 ```
 
 Project metadata and Session events remain separate. The Project Store keeps
@@ -455,9 +455,29 @@ that do not need a Registry; Server uses Registry mode.
 Studio calls `GET /settings/providers` and validates the response with its own
 Zod schema. It uses the selected descriptor's default model when the user
 changes Provider, then sends `provider` and `model` in
-`POST /agent/runs/stream`. The browser never receives or submits an API Key.
-The Settings view shows Provider label, id, type, and default model, while the
-Server remains the only owner of secret configuration.
+`POST /agent/runs/stream`. Browser mode only reads `.env` configuration.
+Desktop mode can submit a new API Key through the loopback settings API; the
+Server immediately encrypts it with the injected Electron `safeStorage` Codec
+before writing SQLite. The Settings view never receives an existing secret and
+only displays `hasApiKey`.
+
+The complete Desktop Provider path is:
+
+```text
+Studio form
+  -> POST/PATCH /settings/providers
+  -> Server Zod boundary
+  -> ProviderSettingsManager
+  -> Electron safeStorage Codec
+  -> Provider Settings Store
+  -> shared LlmProviderRegistry
+  -> Agent Runner
+```
+
+The Manager keeps the same Registry object used by the Agent Runner. Saving a
+Provider therefore affects later runs without rebuilding Runtime. It tracks the
+ids it owns, so deleting or refreshing settings cannot remove a Provider
+registered by a trusted plugin.
 
 ### Plugin Manifest and controlled registration
 

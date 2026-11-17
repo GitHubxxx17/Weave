@@ -174,4 +174,36 @@ describe('Provider Settings Manager', () => {
       expect.objectContaining({ id: 'deepseek', hasApiKey: false }),
     );
   });
+
+  it('keeps the Mock Provider available when a saved key cannot be decrypted', async () => {
+    const codec: ProviderSecretCodec = {
+      isAvailable: () => true,
+      encrypt: (value) => `cipher:${value}`,
+      decrypt: () => {
+        throw new Error('invalid ciphertext');
+      },
+    };
+    const isolatedManager = createProviderSettingsManager({
+      store: {
+        ...createStore([createRecord({ encryptedApiKey: 'cipher:broken', isDefault: true })]),
+      },
+      registry: createLlmProviderRegistry([
+        {
+          id: 'mock',
+          label: '本地演示',
+          type: 'mock',
+          client: createMockLlmClient([]),
+          defaultModel: 'weave-local-demo',
+        },
+      ]),
+      secretCodec: codec,
+    });
+
+    await isolatedManager.refresh();
+
+    expect(isolatedManager.getDefaultProvider()).toBe('mock');
+    await expect(isolatedManager.list()).resolves.toContainEqual(
+      expect.objectContaining({ id: 'deepseek', hasApiKey: true }),
+    );
+  });
 });
