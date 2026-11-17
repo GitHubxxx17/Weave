@@ -1313,7 +1313,7 @@ export function App() {
 
   return (
     <main
-      className={`studio-shell studio-shell-fixed${!isActivityPanelOpen || activeView !== 'studio' ? ' studio-shell-context-collapsed' : ''}`}
+      className={`studio-shell studio-shell-fixed${!isActivityPanelOpen || activeView !== 'studio' ? ' studio-shell-context-collapsed' : ''}${activeView === 'settings' ? ' studio-shell-settings' : ''}`}
     >
       {openMenu !== null ? (
         <button
@@ -1376,201 +1376,242 @@ export function App() {
         </button>
       </aside>
 
-      <aside className="session-rail" aria-label="会话列表">
-        <div className={`menu-anchor${openMenu === 'project' ? ' menu-anchor-open' : ''}`}>
-          <button
-            className="project-switcher"
-            type="button"
-            aria-label={`${activeProject?.name ?? '当前'} 项目`}
-            aria-expanded={openMenu === 'project'}
-            disabled={status === 'streaming'}
-            onClick={() => toggleMenu('project')}
-          >
-            <span className="project-avatar" aria-hidden="true">
-              {(activeProject?.name ?? 'W').slice(0, 1).toLocaleUpperCase()}
-            </span>
-            <span className="project-switcher-copy">
-              <small>当前项目</small>
-              <strong>{activeProject?.name ?? 'Weave'}</strong>
-              <span className="project-folder-name">{activeProject?.folderName ?? 'weave'}</span>
-            </span>
-            <span className="project-chevron" aria-hidden="true">
-              <ChevronDown aria-hidden="true" />
-            </span>
-          </button>
-          {openMenu === 'project' ? (
-            <div
-              className="popup-menu popup-menu-rail project-menu"
-              role="menu"
-              aria-label="切换项目"
-            >
-              <p className="menu-section-label">项目</p>
-              {projects.map((project) => (
-                <button
-                  type="button"
-                  role="menuitem"
-                  key={project.id}
-                  onClick={() => selectProject(project.id)}
-                >
-                  <span className="menu-icon">
-                    <FolderOpen aria-hidden="true" />
-                  </span>
-                  <span>
-                    <strong>{project.name}</strong>
-                    <small>{project.folderName}</small>
-                  </span>
-                </button>
-              ))}
-              <div className="menu-divider" />
-              <button type="button" role="menuitem" onClick={openProjectDialog}>
-                <span className="menu-icon menu-icon-accent">
-                  <Plus aria-hidden="true" />
-                </span>
-                创建项目
-              </button>
-            </div>
-          ) : null}
-        </div>
-        <button
-          className="new-session-button"
-          type="button"
-          onClick={() => void createSession()}
-          disabled={status === 'streaming'}
-        >
-          <Plus aria-hidden="true" />
-          新建会话
-        </button>
-        {isSearchOpen ? (
-          <div className="session-search">
+      {activeView === 'settings' ? (
+        <aside className="settings-sidebar" aria-label="设置分类">
+          <header className="settings-sidebar-header">
+            <Settings aria-hidden="true" />
+            <h2>设置</h2>
+          </header>
+          <div className="settings-sidebar-search">
             <Search aria-hidden="true" />
-            <input
-              type="search"
-              aria-label="搜索会话"
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              autoFocus
-            />
-            <button
-              type="button"
-              aria-label="关闭搜索"
-              onClick={() => {
-                setIsSearchOpen(false);
-                setSearchQuery('');
-              }}
-            >
-              <X aria-hidden="true" />
-            </button>
+            <span>搜索设置</span>
           </div>
-        ) : (
-          <button className="search-sessions" type="button" onClick={() => setIsSearchOpen(true)}>
-            <Search aria-hidden="true" />
-            搜索会话
-            <kbd>⌘ K</kbd>
-          </button>
-        )}
-        <nav className="project-tree" aria-label="项目树" role="tree">
-          <p className="section-label">项目</p>
-          {visibleProjects.map((project) => {
-            const isExpanded =
-              normalizedSearchQuery !== '' || expandedProjectIds.includes(project.id);
-
-            return (
-              <div className="project-tree-node" role="treeitem" key={project.id}>
-                <div className="project-tree-row">
+          <nav className="settings-sidebar-nav" aria-label="设置分类导航">
+            <p className="settings-sidebar-label">配置</p>
+            <button className="settings-sidebar-item settings-sidebar-item-active" type="button">
+              <Bot aria-hidden="true" />
+              <span>模型服务</span>
+            </button>
+            <button className="settings-sidebar-item" type="button" disabled>
+              <ShieldCheck aria-hidden="true" />
+              <span>运行权限</span>
+              <small>即将推出</small>
+            </button>
+            <p className="settings-sidebar-label">系统</p>
+            <button className="settings-sidebar-item" type="button" disabled>
+              <FolderOpen aria-hidden="true" />
+              <span>数据存储</span>
+              <small>即将推出</small>
+            </button>
+            <button className="settings-sidebar-item" type="button" disabled>
+              <Settings aria-hidden="true" />
+              <span>界面外观</span>
+              <small>即将推出</small>
+            </button>
+          </nav>
+          <div className="settings-sidebar-footer">
+            <span className="connection-dot" aria-hidden="true" />
+            <span>本地运行时</span>
+            <small>已连接</small>
+          </div>
+        </aside>
+      ) : (
+        <aside className="session-rail" aria-label="会话列表">
+          <div className={`menu-anchor${openMenu === 'project' ? ' menu-anchor-open' : ''}`}>
+            <button
+              className="project-switcher"
+              type="button"
+              aria-label={`${activeProject?.name ?? '当前'} 项目`}
+              aria-expanded={openMenu === 'project'}
+              disabled={status === 'streaming'}
+              onClick={() => toggleMenu('project')}
+            >
+              <span className="project-avatar" aria-hidden="true">
+                {(activeProject?.name ?? 'W').slice(0, 1).toLocaleUpperCase()}
+              </span>
+              <span className="project-switcher-copy">
+                <small>当前项目</small>
+                <strong>{activeProject?.name ?? 'Weave'}</strong>
+                <span className="project-folder-name">{activeProject?.folderName ?? 'weave'}</span>
+              </span>
+              <span className="project-chevron" aria-hidden="true">
+                <ChevronDown aria-hidden="true" />
+              </span>
+            </button>
+            {openMenu === 'project' ? (
+              <div
+                className="popup-menu popup-menu-rail project-menu"
+                role="menu"
+                aria-label="切换项目"
+              >
+                <p className="menu-section-label">项目</p>
+                {projects.map((project) => (
                   <button
-                    className="project-tree-toggle"
                     type="button"
-                    aria-label={`${isExpanded ? '收起' : '展开'}项目 ${project.name}`}
-                    aria-expanded={isExpanded}
-                    onClick={() => toggleProjectExpanded(project.id)}
-                    disabled={status === 'streaming'}
-                  >
-                    {isExpanded ? (
-                      <ChevronDown aria-hidden="true" />
-                    ) : (
-                      <ChevronRight aria-hidden="true" />
-                    )}
-                  </button>
-                  <button
-                    className="project-tree-project"
-                    type="button"
-                    aria-label={`项目：${project.name}`}
+                    role="menuitem"
+                    key={project.id}
                     onClick={() => selectProject(project.id)}
-                    disabled={status === 'streaming'}
                   >
-                    <FolderOpen aria-hidden="true" />
+                    <span className="menu-icon">
+                      <FolderOpen aria-hidden="true" />
+                    </span>
                     <span>
                       <strong>{project.name}</strong>
                       <small>{project.folderName}</small>
                     </span>
-                    <small className="project-session-count">
-                      {project.sessions.length} 个会话
-                    </small>
                   </button>
-                </div>
-                {isExpanded ? (
-                  <div className="project-tree-sessions" role="group">
-                    {project.sessions.length > 0 ? (
-                      project.sessions.map((session) => (
-                        <div
-                          className={`session-tree-item${session.id === activeSessionId && project.id === activeProjectId ? ' session-tree-item-active' : ''}`}
-                          key={session.id}
-                        >
-                          <button
-                            className="session-item"
-                            type="button"
-                            aria-label={`会话：${session.title}`}
-                            onClick={() => selectProjectSession(project.id, session.id)}
-                            disabled={status === 'streaming'}
-                          >
-                            <span>
-                              <strong>{session.title}</strong>
-                              <small>{session.lastUsedLabel}</small>
-                            </span>
-                          </button>
-                          {session.id === activeSessionId && project.id === activeProjectId ? (
-                            <span className="session-dot" aria-hidden="true" />
-                          ) : null}
-                          <div className="session-actions" role="group" aria-label="会话操作">
-                            <button
-                              className="session-action-button"
-                              type="button"
-                              aria-label="编辑会话"
-                              title="编辑会话标题"
-                              onClick={() => openSessionEditor(project.id, session.id)}
-                              disabled={status === 'streaming'}
-                            >
-                              <Pencil aria-hidden="true" />
-                            </button>
-                            <button
-                              className="session-action-button session-action-button-danger"
-                              type="button"
-                              aria-label="归档会话"
-                              title="归档会话"
-                              onClick={() => void archiveSession(project.id, session.id)}
-                              disabled={status === 'streaming'}
-                            >
-                              <Archive aria-hidden="true" />
-                            </button>
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="session-empty">暂无聊天</p>
-                    )}
-                  </div>
-                ) : null}
+                ))}
+                <div className="menu-divider" />
+                <button type="button" role="menuitem" onClick={openProjectDialog}>
+                  <span className="menu-icon menu-icon-accent">
+                    <Plus aria-hidden="true" />
+                  </span>
+                  创建项目
+                </button>
               </div>
-            );
-          })}
-          {visibleProjects.length === 0 ? <p className="session-empty">没有匹配的会话</p> : null}
-        </nav>
-        <div className="rail-footer">
-          <span className="connection-dot" aria-hidden="true" />
-          <span>本地运行时</span>
-          <small>已连接</small>
-        </div>
-      </aside>
+            ) : null}
+          </div>
+          <button
+            className="new-session-button"
+            type="button"
+            onClick={() => void createSession()}
+            disabled={status === 'streaming'}
+          >
+            <Plus aria-hidden="true" />
+            新建会话
+          </button>
+          {isSearchOpen ? (
+            <div className="session-search">
+              <Search aria-hidden="true" />
+              <input
+                type="search"
+                aria-label="搜索会话"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                autoFocus
+              />
+              <button
+                type="button"
+                aria-label="关闭搜索"
+                onClick={() => {
+                  setIsSearchOpen(false);
+                  setSearchQuery('');
+                }}
+              >
+                <X aria-hidden="true" />
+              </button>
+            </div>
+          ) : (
+            <button className="search-sessions" type="button" onClick={() => setIsSearchOpen(true)}>
+              <Search aria-hidden="true" />
+              搜索会话
+              <kbd>⌘ K</kbd>
+            </button>
+          )}
+          <nav className="project-tree" aria-label="项目树" role="tree">
+            <p className="section-label">项目</p>
+            {visibleProjects.map((project) => {
+              const isExpanded =
+                normalizedSearchQuery !== '' || expandedProjectIds.includes(project.id);
+
+              return (
+                <div className="project-tree-node" role="treeitem" key={project.id}>
+                  <div className="project-tree-row">
+                    <button
+                      className="project-tree-toggle"
+                      type="button"
+                      aria-label={`${isExpanded ? '收起' : '展开'}项目 ${project.name}`}
+                      aria-expanded={isExpanded}
+                      onClick={() => toggleProjectExpanded(project.id)}
+                      disabled={status === 'streaming'}
+                    >
+                      {isExpanded ? (
+                        <ChevronDown aria-hidden="true" />
+                      ) : (
+                        <ChevronRight aria-hidden="true" />
+                      )}
+                    </button>
+                    <button
+                      className="project-tree-project"
+                      type="button"
+                      aria-label={`项目：${project.name}`}
+                      onClick={() => selectProject(project.id)}
+                      disabled={status === 'streaming'}
+                    >
+                      <FolderOpen aria-hidden="true" />
+                      <span>
+                        <strong>{project.name}</strong>
+                        <small>{project.folderName}</small>
+                      </span>
+                      <small className="project-session-count">
+                        {project.sessions.length} 个会话
+                      </small>
+                    </button>
+                  </div>
+                  {isExpanded ? (
+                    <div className="project-tree-sessions" role="group">
+                      {project.sessions.length > 0 ? (
+                        project.sessions.map((session) => (
+                          <div
+                            className={`session-tree-item${session.id === activeSessionId && project.id === activeProjectId ? ' session-tree-item-active' : ''}`}
+                            key={session.id}
+                          >
+                            <button
+                              className="session-item"
+                              type="button"
+                              aria-label={`会话：${session.title}`}
+                              onClick={() => selectProjectSession(project.id, session.id)}
+                              disabled={status === 'streaming'}
+                            >
+                              <span>
+                                <strong>{session.title}</strong>
+                                <small>{session.lastUsedLabel}</small>
+                              </span>
+                            </button>
+                            {session.id === activeSessionId && project.id === activeProjectId ? (
+                              <span className="session-dot" aria-hidden="true" />
+                            ) : null}
+                            <div className="session-actions" role="group" aria-label="会话操作">
+                              <button
+                                className="session-action-button"
+                                type="button"
+                                aria-label="编辑会话"
+                                title="编辑会话标题"
+                                onClick={() => openSessionEditor(project.id, session.id)}
+                                disabled={status === 'streaming'}
+                              >
+                                <Pencil aria-hidden="true" />
+                              </button>
+                              <button
+                                className="session-action-button session-action-button-danger"
+                                type="button"
+                                aria-label="归档会话"
+                                title="归档会话"
+                                onClick={() => void archiveSession(project.id, session.id)}
+                                disabled={status === 'streaming'}
+                              >
+                                <Archive aria-hidden="true" />
+                              </button>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="session-empty">暂无聊天</p>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+            {visibleProjects.length === 0 ? <p className="session-empty">没有匹配的会话</p> : null}
+          </nav>
+          <div className="rail-footer">
+            <span className="connection-dot" aria-hidden="true" />
+            <span>本地运行时</span>
+            <small>已连接</small>
+          </div>
+        </aside>
+      )}
 
       {activeView === 'studio' ? (
         <section className="chat-column" aria-label="智能对话">
@@ -1963,7 +2004,10 @@ export function App() {
           </form>
         </section>
       ) : (
-        <section className="product-view" aria-label={viewLabels[activeView].title}>
+        <section
+          className={`product-view${activeView === 'settings' ? ' product-view-settings' : ''}`}
+          aria-label={viewLabels[activeView].title}
+        >
           <div className="product-view-content">
             {activeView === 'projects' ? (
               <>
@@ -2071,9 +2115,9 @@ export function App() {
               <div className="provider-settings-view">
                 <div className="product-view-heading provider-settings-heading">
                   <div>
-                    <p>WEAVE STUDIO</p>
-                    <h2>设置</h2>
-                    <span>在桌面端管理模型服务和 API Key。</span>
+                    <p>配置</p>
+                    <h2>模型服务</h2>
+                    <span>管理 Weave 使用的 AI 服务和默认模型。</span>
                   </div>
                   {providerSettings.canManage ? (
                     <button
@@ -2087,9 +2131,22 @@ export function App() {
                     </button>
                   ) : null}
                 </div>
+                <div className="provider-settings-section-heading">
+                  <div>
+                    <h3>已配置的服务</h3>
+                    <span>{providerSettings.providers.length} 个服务</span>
+                  </div>
+                  <span className="provider-settings-section-status">
+                    <span className="connection-dot" aria-hidden="true" />
+                    本地配置
+                  </span>
+                </div>
                 <div className="provider-settings-list" aria-label="Provider 列表">
                   {providerSettings.providers.map((provider) => (
-                    <article className="provider-settings-item" key={provider.id}>
+                    <article
+                      className={`provider-settings-item${provider.id === providerSettings.defaultProvider ? ' provider-settings-item-default' : ''}`}
+                      key={provider.id}
+                    >
                       <div className="provider-settings-icon" aria-hidden="true">
                         <Bot />
                       </div>
@@ -2098,11 +2155,18 @@ export function App() {
                         <span>{provider.id}</span>
                       </div>
                       <div className="provider-settings-meta">
-                        <span>
-                          {provider.id === providerSettings.defaultProvider ? '默认 Provider' : ''}
+                        <span
+                          className={
+                            provider.hasApiKey ? 'provider-status-ready' : 'provider-status-warning'
+                          }
+                        >
+                          <span className="provider-status-dot" aria-hidden="true" />
+                          {provider.hasApiKey ? '可用' : '需要配置 API Key'}
                         </span>
-                        <small>{provider.hasApiKey ? 'API Key 已配置' : '未配置 API Key'}</small>
-                        <small>{provider.defaultModel ?? '未设置默认模型'}</small>
+                        <small>模型 · {provider.defaultModel ?? '未设置默认模型'}</small>
+                        <small className="provider-settings-endpoint">
+                          {provider.baseUrl ?? '本地运行时'}
+                        </small>
                       </div>
                       {providerSettings.canManage && provider.editable ? (
                         <div className="provider-settings-actions">

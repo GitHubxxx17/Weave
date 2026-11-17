@@ -1064,9 +1064,13 @@ describe('Studio Agent Chat', () => {
     fireEvent.click(screen.getByRole('button', { name: '设置' }));
 
     const settings = screen.getByRole('region', { name: '设置' });
-    expect(within(settings).getByRole('heading', { name: '设置' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: '设置' })).toBeTruthy();
+    expect(screen.getByRole('complementary', { name: '设置分类' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '模型服务' })).toBeTruthy();
+    expect(within(settings).getByRole('heading', { name: '模型服务' })).toBeTruthy();
+    expect(within(settings).getByText('已配置的服务')).toBeTruthy();
     expect(within(settings).getByText('DeepSeek')).toBeTruthy();
-    expect(within(settings).getByText('deepseek-chat')).toBeTruthy();
+    expect(within(settings).getByText(/deepseek-chat/)).toBeTruthy();
     expect(within(settings).getByText(/浏览器开发模式下/)).toBeTruthy();
     expect(within(settings).queryByText('server-only-key')).toBeNull();
   });
