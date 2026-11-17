@@ -161,6 +161,54 @@ describe('Provider Settings Manager', () => {
     expect(registry.get('plugin-provider')).toBe(pluginClient);
   });
 
+  it('requires a new API key before an existing key is used with a different endpoint', async () => {
+    const createdKeys: string[] = [];
+    const { manager, registry } = createManager({ createdKeys, records: [createRecord()] });
+    await manager.refresh();
+    const clientBefore = registry.get('deepseek');
+
+    await expect(
+      manager.update('deepseek', { baseUrl: 'https://api.openai.com/v1', apiKey: '' }),
+    ).rejects.toMatchObject({ code: 'provider-settings-api-key-required' });
+    await expect(
+      manager.update('deepseek', { baseUrl: 'https://api.openai.com/v1' }),
+    ).rejects.toMatchObject({ code: 'provider-settings-api-key-required' });
+
+    expect(registry.get('deepseek')).toBe(clientBefore);
+    await expect(manager.list()).resolves.toContainEqual(
+      expect.objectContaining({ id: 'deepseek', baseUrl: 'https://api.deepseek.com' }),
+    );
+
+    await manager.update('deepseek', { baseUrl: 'https://api.openai.com/v1', apiKey: 'new-key' });
+    expect(createdKeys).toEqual(['first-key', 'new-key']);
+  });
+
+  it('keeps the existing API key when the endpoint only differs by a trailing slash', async () => {
+    const createdKeys: string[] = [];
+    const { manager } = createManager({ createdKeys, records: [createRecord()] });
+    await manager.refresh();
+
+    await manager.update('deepseek', {
+      baseUrl: 'https://api.deepseek.com/',
+      apiKey: '',
+      label: 'DeepSeek 主账号',
+    });
+
+    expect(createdKeys).toEqual(['first-key', 'first-key']);
+  });
+
+  it('allows changing the endpoint while explicitly clearing the old API key', async () => {
+    const { manager, registry } = createManager({ records: [createRecord()] });
+    await manager.refresh();
+
+    await manager.update('deepseek', { baseUrl: 'https://api.openai.com/v1', clearApiKey: true });
+
+    expect(registry.get('deepseek')).toBeUndefined();
+    await expect(manager.list()).resolves.toContainEqual(
+      expect.objectContaining({ baseUrl: 'https://api.openai.com/v1', hasApiKey: false }),
+    );
+  });
+
   it('clearing a key keeps metadata but removes the Provider from the callable Registry', async () => {
     const { manager, registry } = createManager({
       records: [createRecord({ encryptedApiKey: 'cipher:key' })],

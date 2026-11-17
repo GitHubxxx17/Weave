@@ -309,6 +309,13 @@ Content-Type: application/json
 密钥时，使用明确的 `clearApiKey: true` 字段，避免把“未填写”和“删除密钥”混为
 一谈。
 
+保留旧密钥只适用于 API 地址不变的编辑。如果请求修改了 `baseUrl`（比较时忽略
+末尾斜杠），而 Provider 已经保存过密钥，请求必须同时提供新的非空 `apiKey`，
+或者明确提交 `clearApiKey: true`；否则 Server 返回
+`provider-settings-api-key-required`，不写入任何配置。这样可以防止用户在表单中
+切换供应商预设或改错地址后，把原供应商的 API Key 发送到另一家服务。这条规则
+由 Server 校验，Studio 只负责展示错误提示，不能作为唯一防线。
+
 ### 6.4 删除 Provider
 
 ```http
@@ -339,6 +346,7 @@ POST /settings/providers/deepseek/default
 | `provider-settings-secret-invalid` | 密钥解密失败 |
 | `provider-settings-storage` | SQLite 配置存储失败 |
 | `provider-settings-provider-invalid` | Provider 客户端创建失败 |
+| `provider-settings-api-key-required` | 修改 API 地址时未重新提供 API Key |
 
 错误消息可以告诉用户失败阶段，但不能包含 API Key、完整 Authorization Header
 或上游响应中的密钥内容。
