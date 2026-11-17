@@ -13,6 +13,7 @@ const createTableSql = `
     base_url TEXT NOT NULL,
     encrypted_api_key TEXT,
     default_model TEXT NOT NULL,
+    is_default INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -41,6 +42,15 @@ export class ProviderSettingsStoreError extends Error {
   }
 }
 
+export interface ProviderSettingsStore {
+  list(): Promise<readonly ProviderSettingsRecord[]>;
+  get(id: string): Promise<ProviderSettingsRecord | undefined>;
+  create(record: ProviderSettingsRecord): Promise<void>;
+  update(record: ProviderSettingsRecord): Promise<void>;
+  delete(id: string): Promise<void>;
+  close(): Promise<void>;
+}
+
 const optionsSchema = z.object({
   filename: z.string().min(1),
 });
@@ -52,6 +62,7 @@ interface ProviderSettingsRow {
   readonly base_url: unknown;
   readonly encrypted_api_key: unknown;
   readonly default_model: unknown;
+  readonly is_default: unknown;
   readonly created_at: unknown;
   readonly updated_at: unknown;
 }
@@ -70,6 +81,7 @@ function parseRecord(row: Record<string, unknown>): ProviderSettingsRecord {
     base_url: row.base_url,
     encrypted_api_key: row.encrypted_api_key,
     default_model: row.default_model,
+    is_default: row.is_default,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -81,6 +93,7 @@ function parseRecord(row: Record<string, unknown>): ProviderSettingsRecord {
     baseUrl: stored.base_url,
     encryptedApiKey: stored.encrypted_api_key,
     defaultModel: stored.default_model,
+    isDefault: stored.is_default === 1,
     createdAt: stored.created_at,
     updatedAt: stored.updated_at,
   });
@@ -145,7 +158,7 @@ export function createSqliteProviderSettingsStore(options: {
         const rows = database
           .prepare(
             `SELECT id, label, type, base_url, encrypted_api_key,
-                    default_model, created_at, updated_at
+                    default_model, is_default, created_at, updated_at
              FROM provider_settings
              ORDER BY created_at ASC, rowid ASC`,
           )
@@ -164,7 +177,7 @@ export function createSqliteProviderSettingsStore(options: {
         const row = database
           .prepare(
             `SELECT id, label, type, base_url, encrypted_api_key,
-                    default_model, created_at, updated_at
+                    default_model, is_default, created_at, updated_at
              FROM provider_settings
              WHERE id = ?`,
           )
@@ -180,8 +193,9 @@ export function createSqliteProviderSettingsStore(options: {
         database
           .prepare(
             `INSERT INTO provider_settings
-              (id, label, type, base_url, encrypted_api_key, default_model, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+              (id, label, type, base_url, encrypted_api_key, default_model, is_default,
+               created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             record.id,
@@ -190,6 +204,7 @@ export function createSqliteProviderSettingsStore(options: {
             record.baseUrl,
             record.encryptedApiKey,
             record.defaultModel,
+            record.isDefault ? 1 : 0,
             record.createdAt,
             record.updatedAt,
           );
@@ -208,7 +223,7 @@ export function createSqliteProviderSettingsStore(options: {
             .prepare(
               `UPDATE provider_settings
                SET label = ?, type = ?, base_url = ?, encrypted_api_key = ?,
-                   default_model = ?, created_at = ?, updated_at = ?
+                   default_model = ?, is_default = ?, created_at = ?, updated_at = ?
                WHERE id = ?`,
             )
             .run(
@@ -217,6 +232,7 @@ export function createSqliteProviderSettingsStore(options: {
               record.baseUrl,
               record.encryptedApiKey,
               record.defaultModel,
+              record.isDefault ? 1 : 0,
               record.createdAt,
               record.updatedAt,
               record.id,

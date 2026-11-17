@@ -10,6 +10,7 @@ export const providerSettingsRecordSchema = z
     baseUrl: z.string().url(),
     encryptedApiKey: z.string().min(1).nullable(),
     defaultModel: nonEmptyStringSchema,
+    isDefault: z.boolean(),
     createdAt: nonEmptyStringSchema,
     updatedAt: nonEmptyStringSchema,
   })

@@ -33,6 +33,7 @@ function createRecord(
     baseUrl: 'https://api.deepseek.com',
     encryptedApiKey: 'encrypted-secret',
     defaultModel: 'deepseek-chat',
+    isDefault: false,
     createdAt: now,
     updatedAt: now,
     ...overrides,
