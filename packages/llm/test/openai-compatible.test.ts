@@ -147,6 +147,7 @@ describe('OpenAI-compatible provider', () => {
       max_tokens: 128,
       reasoning_effort: 'high',
       stream: true,
+      stream_options: { include_usage: true },
     });
   });
 
@@ -225,6 +226,50 @@ describe('OpenAI-compatible provider', () => {
         type: 'finish',
         reason: 'stop',
         usage: { inputTokens: 5, outputTokens: 6, totalTokens: 11 },
+      },
+    ]);
+  });
+
+  it('maps DeepSeek cache hits and reasoning tokens into usage', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      streamingResponse(
+        'data: {"choices":[{"finish_reason":"stop"}]}',
+        'data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":30,"total_tokens":130,"prompt_cache_hit_tokens":80,"prompt_cache_miss_tokens":20,"completion_tokens_details":{"reasoning_tokens":12}}}',
+        'data: [DONE]',
+      ),
+    );
+
+    await expect(collectEvents(createClient(fetchMock))).resolves.toEqual([
+      {
+        type: 'finish',
+        reason: 'stop',
+        usage: {
+          inputTokens: 100,
+          outputTokens: 30,
+          totalTokens: 130,
+          cacheReadTokens: 80,
+          reasoningTokens: 12,
+        },
+      },
+    ]);
+  });
+
+  it('falls back to OpenAI cached_tokens and tolerates a null usage chunk', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      streamingResponse(
+        'data: {"choices":[{"delta":{"content":"hi"}}],"usage":null}',
+        'data: {"choices":[{"finish_reason":"stop"}]}',
+        'data: {"choices":[],"usage":{"prompt_tokens":40,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":32}}}',
+        'data: [DONE]',
+      ),
+    );
+
+    await expect(collectEvents(createClient(fetchMock))).resolves.toEqual([
+      { type: 'text-delta', text: 'hi' },
+      {
+        type: 'finish',
+        reason: 'stop',
+        usage: { inputTokens: 40, outputTokens: 2, cacheReadTokens: 32 },
       },
     ]);
   });
