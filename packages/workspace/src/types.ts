@@ -9,16 +9,18 @@ export const projectIdSchema = nonEmptyStringSchema;
 /** Runtime validation for a Session identifier stored in a Project relation. */
 export const projectSessionIdSchema = nonEmptyStringSchema;
 
+/** Runtime validation for an absolute local Project folder. */
+export const projectFolderPathSchema = z
+  .string()
+  .min(1)
+  .refine(isAbsolute, { message: 'folderPath must be absolute' });
+
 /** Runtime validation for caller-provided Project fields. */
 export const createProjectInputSchema = z
   .object({
     name: nonEmptyStringSchema,
     folderName: nonEmptyStringSchema,
-    folderPath: z
-      .string()
-      .min(1)
-      .refine(isAbsolute, { message: 'folderPath must be absolute' })
-      .optional(),
+    folderPath: projectFolderPathSchema.optional(),
   })
   .strict();
 

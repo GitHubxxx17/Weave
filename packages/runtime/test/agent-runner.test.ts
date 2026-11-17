@@ -228,6 +228,54 @@ describe('Agent Runner contracts', () => {
     ).toThrowError(/toolRegistry and toolPipeline must be provided together/);
   });
 
+  it('sends per-run instructions as a leading system message without persisting them', async () => {
+    const store = createInMemorySessionEventStore();
+    const requests: LlmRequest[] = [];
+    const seen: string[] = [];
+    const runner = createAgentRunner({
+      llm: recordingClient(
+        [
+          { type: 'text-delta', text: '好的' },
+          { type: 'finish', reason: 'stop' },
+        ],
+        requests,
+      ),
+      sessionStore: store,
+      instructions: ({ sessionId }) => {
+        seen.push(sessionId);
+        return '你是 Weave Agent。';
+      },
+    });
+
+    await collect(runner.run(validRequest));
+
+    expect(seen).toEqual(['session-1']);
+    expect(requests[0]?.messages[0]).toEqual({
+      role: 'system',
+      content: [{ type: 'text', text: '你是 Weave Agent。' }],
+    });
+    expect(requests[0]?.messages[1]).toMatchObject({ role: 'user' });
+    const projection = projectSession(await store.read(validRequest.sessionId));
+    expect(projection.messages.map(({ message }) => message.role)).toEqual(['user', 'assistant']);
+
+    await store.close();
+  });
+
+  it('omits the system message when instructions are empty', async () => {
+    const store = createInMemorySessionEventStore();
+    const requests: LlmRequest[] = [];
+    const runner = createAgentRunner({
+      llm: recordingClient([{ type: 'finish', reason: 'stop' }], requests),
+      sessionStore: store,
+      instructions: () => undefined,
+    });
+
+    await collect(runner.run(validRequest));
+
+    expect(requests[0]?.messages.map((message) => message.role)).toEqual(['user']);
+    await store.close();
+  });
+
   it('routes each Agent request to the Provider selected by id', async () => {
     const requests: LlmRequest[] = [];
     const registry = createLlmProviderRegistry([

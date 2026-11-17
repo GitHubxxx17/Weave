@@ -88,6 +88,7 @@ type StudioProject = {
   readonly id: string;
   readonly name: string;
   readonly folderName: string;
+  readonly folderPath?: string | undefined;
   readonly sessions: readonly StudioSession[];
 };
 
@@ -385,7 +386,18 @@ function updateToolActivity(
   return activities.map((activity) => (activity.toolCallId === toolCallId ? updated : activity));
 }
 
-function getAssistantPlaceholder(status: RunStatus, isLatest: boolean): string {
+/** Shown when a provider put the whole answer into its reasoning stream. */
+const reasoningOnlyPlaceholder =
+  '模型没有单独输出正文，回答写在了上方的「思考过程」里，展开即可查看。';
+
+function getAssistantPlaceholder(
+  status: RunStatus,
+  isLatest: boolean,
+  hasReasoning = false,
+): string {
+  if (hasReasoning && !(isLatest && status === 'streaming')) {
+    return reasoningOnlyPlaceholder;
+  }
   if (!isLatest) {
     return '暂无回复';
   }
@@ -494,6 +506,7 @@ function toStudioProject(project: ProjectWithSessions): StudioProject {
     id: project.id,
     name: project.name,
     folderName: project.folderName,
+    folderPath: project.folderPath,
     sessions: project.sessions.map(toStudioSession),
   };
 }
@@ -534,6 +547,9 @@ export function App() {
   const [activeView, setActiveView] = useState<ProductView>('studio');
   const [openMenu, setOpenMenu] = useState<OpenMenu>(null);
   const [isProjectDialogOpen, setIsProjectDialogOpen] = useState(false);
+  const [folderDialogProjectId, setFolderDialogProjectId] = useState<string | null>(null);
+  const [folderDialogPath, setFolderDialogPath] = useState('');
+  const [folderDialogError, setFolderDialogError] = useState<string | null>(null);
   const [projectName, setProjectName] = useState('');
   const [selectedFolderName, setSelectedFolderName] = useState('');
   const [selectedFolderPath, setSelectedFolderPath] = useState('');
@@ -1383,6 +1399,49 @@ export function App() {
     }
   }
 
+  function openFolderDialog(project: StudioProject): void {
+    setOpenMenu(null);
+    setFolderDialogProjectId(project.id);
+    setFolderDialogPath(project.folderPath ?? '');
+    setFolderDialogError(null);
+  }
+
+  async function pickFolderForDialog(): Promise<void> {
+    const desktopPicker = window.weaveDesktop?.pickDirectory;
+    if (desktopPicker === undefined) {
+      return;
+    }
+    try {
+      const picked = await desktopPicker();
+      if (picked !== null) {
+        setFolderDialogPath(picked.path);
+        setFolderDialogError(null);
+      }
+    } catch {
+      setFolderDialogError('无法打开文件夹选择框，请重试');
+    }
+  }
+
+  /** Saves or clears the folder of an existing Project; the Server validates the path. */
+  async function saveProjectFolder(folderPath: string | null): Promise<void> {
+    const projectId = folderDialogProjectId;
+    if (projectId === null) {
+      return;
+    }
+    try {
+      const updated = await workspaceApi.updateProjectFolder(projectId, folderPath);
+      setProjects((current) =>
+        current.map((project) =>
+          project.id === projectId ? { ...project, folderPath: updated.folderPath } : project,
+        ),
+      );
+      setFolderDialogProjectId(null);
+      setNotice(folderPath === null ? '已清除项目文件夹' : '项目文件夹已更新');
+    } catch (error: unknown) {
+      setFolderDialogError(workspaceErrorMessage(error));
+    }
+  }
+
   /** Switches the visible Studio product area without changing session state. */
   function selectProductView(view: ProductView): void {
     setActiveView(view);
@@ -1828,6 +1887,21 @@ export function App() {
                   </button>
                 ))}
                 <div className="menu-divider" />
+                {activeProject === undefined ? null : (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => openFolderDialog(activeProject)}
+                  >
+                    <span className="menu-icon">
+                      <FolderOpen aria-hidden="true" />
+                    </span>
+                    <span>
+                      <strong>设置文件夹</strong>
+                      <small>{activeProject.folderPath ?? '未设置，Agent 不能读写文件'}</small>
+                    </span>
+                  </button>
+                )}
                 <button type="button" role="menuitem" onClick={openProjectDialog}>
                   <span className="menu-icon menu-icon-accent">
                     <Plus aria-hidden="true" />
@@ -2190,7 +2264,12 @@ export function App() {
                             <MarkdownMessage text={message.text} />
                           ) : (
                             <p>
-                              {message.text || getAssistantPlaceholder(status, isLatestAssistant)}
+                              {message.text ||
+                                getAssistantPlaceholder(
+                                  status,
+                                  isLatestAssistant,
+                                  message.role === 'assistant' && message.reasoning !== '',
+                                )}
                             </p>
                           )}
                         </div>
@@ -3117,6 +3196,119 @@ export function App() {
           </section>
         </div>
       ) : null}
+      {folderDialogProjectId === null ? null : (
+        <div
+          className="dialog-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setFolderDialogProjectId(null);
+            }
+          }}
+        >
+          <section
+            className="project-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label="设置项目文件夹"
+          >
+            <header className="project-dialog-header">
+              <div>
+                <p>本地项目</p>
+                <h2>设置项目文件夹</h2>
+              </div>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="关闭设置项目文件夹"
+                onClick={() => setFolderDialogProjectId(null)}
+              >
+                <X aria-hidden="true" />
+              </button>
+            </header>
+            <form
+              className="project-dialog-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const folderPath = folderDialogPath.trim();
+                if (folderPath !== '') {
+                  void saveProjectFolder(folderPath);
+                }
+              }}
+            >
+              {window.weaveDesktop?.pickDirectory === undefined ? (
+                <label className="project-name-field">
+                  <span>文件夹绝对路径</span>
+                  <div>
+                    <FolderOpen aria-hidden="true" />
+                    <input
+                      type="text"
+                      aria-label="项目文件夹绝对路径"
+                      placeholder="例如 /Users/me/projects/demo"
+                      value={folderDialogPath}
+                      onChange={(event) => setFolderDialogPath(event.target.value)}
+                    />
+                  </div>
+                </label>
+              ) : (
+                <div className="project-folder-field">
+                  <span>项目文件夹</span>
+                  <button
+                    className={`folder-picker${folderDialogPath === '' ? '' : ' folder-picker-selected'}`}
+                    type="button"
+                    aria-label="选择项目文件夹"
+                    onClick={() => void pickFolderForDialog()}
+                  >
+                    <span className="folder-picker-icon" aria-hidden="true">
+                      <FolderOpen />
+                    </span>
+                    <span>
+                      <strong className="selected-folder-name">
+                        {folderDialogPath === '' ? '选择本地文件夹' : folderDialogPath}
+                      </strong>
+                      <small>Agent 将在该文件夹中读写文件</small>
+                    </span>
+                    <ChevronRight aria-hidden="true" />
+                  </button>
+                </div>
+              )}
+              <p className="project-dialog-note">
+                Agent 可以读取该文件夹中的文本文件；写入文件前会请你确认。
+              </p>
+              {folderDialogError === null ? null : (
+                <p className="project-dialog-note approval-card-error" role="alert">
+                  {folderDialogError}
+                </p>
+              )}
+              <footer className="project-dialog-actions">
+                {projects.find((project) => project.id === folderDialogProjectId)?.folderPath ===
+                undefined ? null : (
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => void saveProjectFolder(null)}
+                  >
+                    清除文件夹
+                  </button>
+                )}
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => setFolderDialogProjectId(null)}
+                >
+                  取消
+                </button>
+                <button
+                  className="primary-button"
+                  type="submit"
+                  disabled={folderDialogPath.trim() === ''}
+                >
+                  保存
+                </button>
+              </footer>
+            </form>
+          </section>
+        </div>
+      )}
       {isProjectDialogOpen ? (
         <div
           className="dialog-backdrop"

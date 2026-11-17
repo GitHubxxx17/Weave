@@ -339,7 +339,16 @@ existing absolute directory. The Server Tool Pipeline uses a ten-minute
 timeout that also bounds the wait for Approval, so an unanswered request
 expires instead of blocking the turn. Studio subscribes to
 `GET /approvals/stream` and shows pending requests as cards above the
-composer; the Broker remains the only Approval state.
+composer; the Broker remains the only Approval state. An existing Project's
+folder can be set, replaced, or cleared through `PATCH /projects/:projectId`
+(`ProjectStore.updateProjectFolder()`), which applies the same validation.
+
+`AgentRunnerOptions.instructions({ sessionId })` returns system instructions
+that the Runner resolves once per run and prepends to every model request as a
+`system` message. They are never appended to the Session, so they always
+describe current state. The Server's default instructions name the Agent, list
+the registered tools, and state the Session's Project folder (or that none is
+set), so the model neither denies having tools nor passes absolute paths.
 
 Approval does not replace Workspace policy or filesystem validation. The file
 tool still resolves the real root and target after approval, so a stale or

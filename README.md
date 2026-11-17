@@ -149,8 +149,8 @@ typed absolute path in browser mode), the default Agent can call `read_file`
 and `write_file` inside that folder; every write waits for an approval card in
 Studio. Studio still does not include a file editor, Diff view, Shell tools,
 Plugin loading, Crew orchestration, a Run Registry, reconnection or
-`Last-Event-ID`, or login. Existing Projects created without a folder cannot
-yet be given one. In
+`Last-Event-ID`, or login. An existing Project can be given a folder from the
+project menu ("设置文件夹"). In
 browser mode Provider configuration is local Server configuration read from
 `.env`; only Desktop mode lets the Settings page submit an API Key, and no
 mode ever returns a stored key to Studio. The page is an HTTP/SSE surface for

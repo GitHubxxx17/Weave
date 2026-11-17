@@ -24,6 +24,7 @@ import {
 } from '@weave/runtime';
 import { createInMemorySessionEventStore } from '@weave/session';
 import { createServerLlmProviders, type ServerLlmProviderSettings } from './llm-providers.js';
+import { createAgentInstructions } from './agent-instructions.js';
 
 /** Approval Broker used by the local HTTP control plane. */
 export const approvalBrokerService: RuntimeService<ApprovalBroker> = {
@@ -165,6 +166,10 @@ export function createServerAgentRunner(
     sessionStore: runtime.get(sessionStoreService),
     toolRegistry,
     toolPipeline,
+    instructions: createAgentInstructions({
+      toolNames: () => toolRegistry.list().map((tool) => tool.name),
+      resolveWorkspaceRoot,
+    }),
   });
 }
 

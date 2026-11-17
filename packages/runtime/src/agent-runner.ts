@@ -371,6 +371,14 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
             options.toolRegistry === undefined
               ? undefined
               : protocolToolDefinitions(options.toolRegistry);
+          const instructionText =
+            options.instructions === undefined
+              ? undefined
+              : await options.instructions({ sessionId: validRequest.sessionId });
+          const systemMessages: readonly Message[] =
+            instructionText === undefined || instructionText.trim() === ''
+              ? []
+              : [{ role: 'system', content: [{ type: 'text', text: instructionText }] }];
 
           while (true) {
             if (modelSteps >= maxSteps) {
@@ -400,7 +408,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
             const llmRequest: LlmRequest = {
               provider: validRequest.provider,
               model: validRequest.model,
-              messages,
+              messages: [...systemMessages, ...messages],
               ...(tools === undefined ? {} : { tools }),
               ...(validRequest.temperature === undefined
                 ? {}

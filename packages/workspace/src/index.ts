@@ -2,6 +2,7 @@
 
 export {
   createProjectInputSchema,
+  projectFolderPathSchema,
   projectIdSchema,
   projectSchema,
   projectSessionIdSchema,

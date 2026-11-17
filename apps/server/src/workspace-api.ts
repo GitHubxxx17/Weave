@@ -25,6 +25,13 @@ const createSessionRequestSchema = z
   })
   .strict();
 
+/** `folderPath: null` clears the folder; a string sets or replaces it. */
+const updateProjectRequestSchema = z
+  .object({
+    folderPath: z.string().min(1).nullable(),
+  })
+  .strict();
+
 const includeArchivedSchema = z.enum(['true', 'false']).transform((value) => value === 'true');
 
 /** The Agent can only use a Project folder that the Server can see as a directory. */
@@ -166,6 +173,42 @@ export function registerWorkspaceRoutes(app: Hono, options: WorkspaceAppOptions)
 
     try {
       return context.json(await dependencies.projectStore.createProject(parsed.data), 201);
+    } catch (error) {
+      return mapError(context, error);
+    }
+  });
+
+  app.patch('/projects/:projectId', async (context) => {
+    const dependencies = getDependencies(context, options);
+    if (dependencies instanceof Response) {
+      return dependencies;
+    }
+
+    const body = await readJson(context);
+    if (body instanceof Response) {
+      return body;
+    }
+    const parsed = updateProjectRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      return jsonError(context, 'workspace-store-invalid-input', 'Project input is invalid');
+    }
+    const folderPath = parsed.data.folderPath ?? undefined;
+    if (folderPath !== undefined && !(await isExistingDirectory(folderPath))) {
+      return jsonError(
+        context,
+        'project-folder-invalid',
+        'Project folder must be an existing absolute directory',
+      );
+    }
+
+    try {
+      return context.json(
+        await dependencies.projectStore.updateProjectFolder(
+          context.req.param('projectId'),
+          folderPath,
+        ),
+        200,
+      );
     } catch (error) {
       return mapError(context, error);
     }
