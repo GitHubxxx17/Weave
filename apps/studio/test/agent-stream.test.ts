@@ -147,6 +147,17 @@ describe('SSE frame parsing', () => {
     expect(() => parseAgentEvent('tool-result', '{"type":"tool-result"}')).toThrowError(
       'agent-stream-protocol: Agent stream event is invalid',
     );
+    expect(
+      parseAgentEvent(
+        'usage',
+        '{"type":"usage","usage":{"inputTokens":120,"cacheReadTokens":96},"provider":"deepseek","model":"deepseek-flash"}',
+      ),
+    ).toEqual({
+      type: 'usage',
+      usage: { inputTokens: 120, cacheReadTokens: 96 },
+      provider: 'deepseek',
+      model: 'deepseek-flash',
+    });
     expect(() =>
       parseAgentEvent('text-delta', '{"type":"reasoning-delta","text":"错位"}'),
     ).toThrowError('agent-stream-protocol: Agent stream event is invalid');
