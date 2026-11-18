@@ -17,9 +17,13 @@ import {
   type AgentRuntimeEvent,
 } from './agent-types.js';
 import { buildModelContext, type ContextBudget } from './context/build-context.js';
-import { ToolExecutionError, type ToolExecutionResult } from './tool-types.js';
+import {
+  ToolExecutionError,
+  type ToolExecutionResult,
+  type ToolPermissionMode,
+} from './tool-types.js';
 
-const defaultMaxSteps = 8;
+const defaultMaxSteps = 50;
 
 /** Context window used when a Provider descriptor does not declare one. */
 const defaultContextWindowTokens = 128_000;
@@ -139,12 +143,16 @@ function createAbortError(): DOMException {
 
 function protocolToolDefinitions(
   registry: NonNullable<AgentRunnerOptions['toolRegistry']>,
+  permissionMode: ToolPermissionMode,
 ): NonNullable<LlmRequest['tools']> {
-  return registry.list().map(({ name, description, parameters }) => ({
-    name,
-    description,
-    parameters,
-  }));
+  return registry
+    .list()
+    .filter((tool) => permissionMode !== 'read-only' || tool.readOnly === true)
+    .map(({ name, description, parameters }) => ({
+      name,
+      description,
+      parameters,
+    }));
 }
 
 interface ToolCallState {
@@ -167,6 +175,7 @@ function createToolMessage(result: ToolExecutionResult): Message {
  */
 const recoverableToolErrorCodes: ReadonlySet<string> = new Set([
   'tool-not-found',
+  'tool-not-permitted',
   'tool-invalid-json',
   'tool-invalid-arguments',
   'tool-execution-failed',
@@ -463,14 +472,18 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
           let messages: readonly Message[] = projectedSession.messages.map(
             ({ message }) => message,
           );
+          const permissionMode: ToolPermissionMode = validRequest.permissionMode ?? 'workspace';
           const tools =
             options.toolRegistry === undefined
               ? undefined
-              : protocolToolDefinitions(options.toolRegistry);
+              : protocolToolDefinitions(options.toolRegistry, permissionMode);
           const instructionText =
             options.instructions === undefined
               ? undefined
-              : await options.instructions({ sessionId: validRequest.sessionId });
+              : await options.instructions({
+                  sessionId: validRequest.sessionId,
+                  permissionMode,
+                });
           const systemMessages: readonly Message[] =
             instructionText === undefined || instructionText.trim() === ''
               ? []
@@ -478,10 +491,17 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
 
           while (true) {
             if (modelSteps >= maxSteps) {
-              throw new AgentRunError(
-                'agent-step-limit',
-                `Agent reached the maximum of ${maxSteps} model steps`,
+              // Completed tool results stay in the Session; the user can ask the
+              // Agent to continue instead of losing the turn to a failure.
+              await appendTerminal(
+                terminalEvents('completed', 'agent-step-limit'),
+                undefined,
+                false,
+                'completed',
               );
+              emit({ type: 'completed', turnId, reason: 'agent-step-limit' });
+              finish();
+              return;
             }
             modelSteps += 1;
 
@@ -760,6 +780,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
                   name: toolCall.name,
                   arguments: toolCall.arguments,
                   sessionId: validRequest.sessionId,
+                  permissionMode,
                   signal,
                 });
               } catch (error: unknown) {

@@ -63,6 +63,21 @@ describe('Session Projection', () => {
       kind: 'model',
       status: 'completed',
     });
+    expect(state.turns[0]).not.toHaveProperty('reason');
+  });
+
+  it('keeps the reason a Turn completed with', () => {
+    const state = projectSession([
+      event(1, 'session.created', {}),
+      event(2, 'turn.started', { turnId: 'turn-1' }),
+      event(3, 'turn.completed', {
+        turnId: 'turn-1',
+        status: 'completed',
+        reason: 'agent-step-limit',
+      }),
+    ]);
+
+    expect(state.turns[0]).toMatchObject({ status: 'completed', reason: 'agent-step-limit' });
   });
 
   it('projects durable tool calls and tool results onto a Turn', () => {
