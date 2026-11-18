@@ -9,6 +9,9 @@ export const projectIdSchema = nonEmptyStringSchema;
 /** Runtime validation for a Session identifier stored in a Project relation. */
 export const projectSessionIdSchema = nonEmptyStringSchema;
 
+/** Runtime validation for a Project display name. */
+export const projectNameSchema = nonEmptyStringSchema;
+
 /** Runtime validation for an absolute local Project folder. */
 export const projectFolderPathSchema = z
   .string()
@@ -18,7 +21,7 @@ export const projectFolderPathSchema = z
 /** Runtime validation for caller-provided Project fields. */
 export const createProjectInputSchema = z
   .object({
-    name: nonEmptyStringSchema,
+    name: projectNameSchema,
     folderName: nonEmptyStringSchema,
     folderPath: projectFolderPathSchema.optional(),
   })

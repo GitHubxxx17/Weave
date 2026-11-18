@@ -106,6 +106,8 @@ export interface WorkspaceApi {
   createProject(input: CreateProjectInput): Promise<Project>;
   /** Sets the absolute local folder of a Project; `null` clears it. */
   updateProjectFolder(projectId: string, folderPath: string | null): Promise<Project>;
+  /** Changes the display name of a Project; its folder is unchanged. */
+  renameProject(projectId: string, name: string): Promise<Project>;
   createSession(projectId: string, title?: string): Promise<SessionDetail>;
   renameSession(sessionId: string, title: string): Promise<SessionDetail>;
   archiveSession(sessionId: string): Promise<SessionDetail>;
@@ -142,6 +144,14 @@ export function createWorkspaceApi(): WorkspaceApi {
       return requestJson(
         runtimeApiUrl(`/projects/${encodeURIComponent(projectId)}`),
         jsonRequest('PATCH', { folderPath }),
+        projectSchema,
+      );
+    },
+
+    renameProject(projectId, name) {
+      return requestJson(
+        runtimeApiUrl(`/projects/${encodeURIComponent(projectId)}`),
+        jsonRequest('PATCH', { name }),
         projectSchema,
       );
     },

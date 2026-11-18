@@ -3,6 +3,7 @@ import {
   createProjectInputSchema,
   projectFolderPathSchema,
   projectIdSchema,
+  projectNameSchema,
   projectSessionIdSchema,
   type CreateProjectInput,
   type Project,
@@ -105,6 +106,25 @@ export function createInMemoryProjectStore(): ProjectStore {
       const updated: Project = {
         ...project,
         folderPath: folderPathInput,
+        updatedAt: new Date().toISOString(),
+      };
+      projects.set(projectIdInput, updated);
+      return clone(updated);
+    },
+
+    async renameProject(projectIdInput: string, nameInput: string): Promise<Project> {
+      requireOpen(closed);
+      validateIds(projectIdInput);
+      if (!projectNameSchema.safeParse(nameInput).success) {
+        throw invalidInput();
+      }
+      const project = projects.get(projectIdInput);
+      if (project === undefined) {
+        throw projectNotFound();
+      }
+      const updated: Project = {
+        ...project,
+        name: nameInput,
         updatedAt: new Date().toISOString(),
       };
       projects.set(projectIdInput, updated);

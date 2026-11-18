@@ -44,6 +44,12 @@ export interface ProjectStore {
    */
   updateProjectFolder(projectId: string, folderPath: string | undefined): Promise<Project>;
 
+  /**
+   * Changes the display name of a Project and refreshes `updatedAt`.
+   * `folderName` keeps describing the folder on disk and does not change.
+   */
+  renameProject(projectId: string, name: string): Promise<Project>;
+
   /** Associates one Session with a Project exactly once. */
   attachSession(projectId: string, sessionId: string): Promise<ProjectSessionRef>;
 

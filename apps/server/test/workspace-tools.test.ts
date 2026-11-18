@@ -404,4 +404,51 @@ describe('Project folder update API', () => {
     const unknown = await patchFolder(app, 'missing-project', folder);
     expect(unknown.status).toBe(404);
   });
+
+  function patchProject(
+    app: Awaited<ReturnType<typeof createApiApp>>['app'],
+    projectId: string,
+    body: unknown,
+  ) {
+    return app.request(`/projects/${projectId}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it('renames a Project, alone or together with its folder', async () => {
+    const folder = await createTemporaryFolder();
+    const { app, project, projectStore } = await createApiApp();
+
+    const renamed = await patchProject(app, project.id, { name: 'New' });
+    expect(renamed.status).toBe(200);
+    expect(await renamed.json()).toMatchObject({ id: project.id, name: 'New', folderName: 'old' });
+
+    const both = await patchProject(app, project.id, { name: 'Both', folderPath: folder });
+    expect(both.status).toBe(200);
+    expect(await projectStore.getProject(project.id)).toMatchObject({
+      name: 'Both',
+      folderPath: folder,
+    });
+  });
+
+  it('rejects an empty update and keeps the name when the folder is invalid', async () => {
+    const folder = await createTemporaryFolder();
+    const { app, project, projectStore } = await createApiApp();
+
+    const empty = await patchProject(app, project.id, {});
+    expect(empty.status).toBe(400);
+    expect(await empty.json()).toMatchObject({ error: { code: 'workspace-store-invalid-input' } });
+
+    const blankName = await patchProject(app, project.id, { name: '' });
+    expect(blankName.status).toBe(400);
+
+    const badFolder = await patchProject(app, project.id, {
+      name: 'Renamed',
+      folderPath: join(folder, 'missing'),
+    });
+    expect(badFolder.status).toBe(400);
+    expect((await projectStore.getProject(project.id))?.name).toBe('Old');
+  });
 });
