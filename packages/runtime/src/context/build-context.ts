@@ -55,13 +55,22 @@ function messageTokens(message: Message): number {
   return total;
 }
 
-/** Pulls a `path` argument out of a tool call's JSON arguments, when present. */
+/**
+ * Pulls the target of a tool call out of its JSON arguments, when present:
+ * a search `pattern`, else the `path`, else a shortened shell `command`.
+ */
 function toolCallPath(argumentsText: string): string | undefined {
   try {
     const parsed = JSON.parse(argumentsText) as unknown;
-    if (typeof parsed === 'object' && parsed !== null && 'path' in parsed) {
-      const value = (parsed as { path: unknown }).path;
-      return typeof value === 'string' ? value : undefined;
+    if (typeof parsed !== 'object' || parsed === null) {
+      return undefined;
+    }
+    const record = parsed as Record<string, unknown>;
+    for (const key of ['pattern', 'path', 'command'] as const) {
+      const value = record[key];
+      if (typeof value === 'string' && value !== '') {
+        return value.length > 80 ? `${value.slice(0, 80)}…` : value;
+      }
     }
   } catch {
     return undefined;

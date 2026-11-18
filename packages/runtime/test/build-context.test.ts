@@ -160,6 +160,26 @@ describe('buildModelContext fidelity compression', () => {
     expect(result.messages.slice(0, -1).some((message) => message.role === 'tool')).toBe(false);
   });
 
+  it('names a search pattern or a shortened command when a tool call has no path', () => {
+    const longCommand = `pnpm --filter @weave/runtime test ${'x'.repeat(120)}`;
+    const history = [
+      user('old'),
+      assistantCall('', [
+        { id: 'c1', name: 'grep', arguments: '{"pattern":"createAgentRunner","path":"src"}' },
+        { id: 'c2', name: 'run_command', arguments: JSON.stringify({ command: longCommand }) },
+      ]),
+      toolResult('c1', 'Y'.repeat(300)),
+      toolResult('c2', 'Z'.repeat(300)),
+      user('current'),
+    ];
+    const result = buildModelContext({ ...base, history, budget: budget(40) });
+    const skeleton = textOf(result.messages[0]!);
+
+    expect(skeleton).toContain('grep createAgentRunner');
+    expect(skeleton).toContain('run_command pnpm --filter @weave/runtime test');
+    expect(skeleton).not.toContain(longCommand);
+  });
+
   it('keeps the error text of a failed tool result in the skeleton', () => {
     const failure = 'Tool "read_file" failed (workspace-file-not-found). missing path';
     const history = [
