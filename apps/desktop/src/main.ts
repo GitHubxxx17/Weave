@@ -5,6 +5,7 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  type BrowserWindowConstructorOptions,
   type IpcMainInvokeEvent,
   type OpenDialogOptions,
 } from 'electron';
@@ -19,6 +20,29 @@ interface DesktopServer {
 }
 
 const serverUrlArgumentPrefix = '--weave-server-url=';
+const windowChromeArgumentPrefix = '--weave-window-chrome=';
+
+/** Matches the Studio page background so the window never flashes white. */
+const studioBackgroundColor = '#f7f8fc';
+
+/**
+ * How the desktop window draws its title bar. The Renderer reads the value
+ * from the Preload bridge and adapts its layout (drag regions, traffic lights).
+ */
+export type WindowChrome = 'hidden-inset' | 'native';
+
+/** macOS hides the system title bar; other platforms keep the native frame. */
+export function getWindowChrome(platform: NodeJS.Platform = process.platform): WindowChrome {
+  return platform === 'darwin' ? 'hidden-inset' : 'native';
+}
+
+function getWindowChromeOptions(chrome: WindowChrome): BrowserWindowConstructorOptions {
+  if (chrome === 'native') {
+    return {};
+  }
+  // Traffic lights sit in the top band of Studio's 76px navigation column.
+  return { titleBarStyle: 'hidden', trafficLightPosition: { x: 12, y: 16 } };
+}
 
 app.setName('Weave');
 
@@ -130,13 +154,22 @@ function showWindowError(window: BrowserWindow, error: unknown): void {
   });
 }
 
-export function createMainWindow(config: DesktopConfig, serverUrl: string): BrowserWindow {
+export function createMainWindow(
+  config: DesktopConfig,
+  serverUrl: string,
+  chrome: WindowChrome = getWindowChrome(),
+): BrowserWindow {
   const window = new BrowserWindow({
+    backgroundColor: studioBackgroundColor,
+    ...getWindowChromeOptions(chrome),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
       preload: getPreloadPath(),
-      additionalArguments: [getServerUrlArgument(serverUrl)],
+      additionalArguments: [
+        getServerUrlArgument(serverUrl),
+        `${windowChromeArgumentPrefix}${chrome}`,
+      ],
     },
   });
 

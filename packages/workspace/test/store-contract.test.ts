@@ -109,6 +109,38 @@ function describeProjectStore(name: string, createStore: StoreFactory): void {
       }
     });
 
+    it('renames a Project without changing its folder', async () => {
+      const { store, cleanup } = await createStore();
+
+      try {
+        const project = await store.createProject({
+          name: 'Weave',
+          folderName: 'weave',
+          folderPath: '/tmp/weave',
+        });
+
+        const renamed = await store.renameProject(project.id, 'Weave Studio');
+        expect(renamed).toMatchObject({
+          id: project.id,
+          name: 'Weave Studio',
+          folderName: 'weave',
+          folderPath: '/tmp/weave',
+        });
+        expect(renamed.updatedAt >= project.updatedAt).toBe(true);
+        expect((await store.getProject(project.id))?.name).toBe('Weave Studio');
+
+        await expect(store.renameProject(project.id, '')).rejects.toMatchObject({
+          code: 'workspace-store-invalid-input',
+        });
+        await expect(store.renameProject('missing', 'Other')).rejects.toMatchObject({
+          code: 'workspace-project-not-found',
+        });
+        expect((await store.getProject(project.id))?.name).toBe('Weave Studio');
+      } finally {
+        await cleanup();
+      }
+    });
+
     it('rejects invalid input and operations after close', async () => {
       const { store, cleanup } = await createStore();
 

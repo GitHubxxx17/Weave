@@ -2,7 +2,11 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { getRuntimeServerUrl, runtimeApiUrl } from '../src/features/runtime/runtime-bridge.js';
+import {
+  applyWindowChrome,
+  getRuntimeServerUrl,
+  runtimeApiUrl,
+} from '../src/features/runtime/runtime-bridge.js';
 
 afterEach(() => {
   delete window.weaveDesktop;
@@ -42,5 +46,24 @@ describe('runtime bridge', () => {
     };
 
     expect(runtimeApiUrl('//projects?includeArchived=true')).toBe('/projects?includeArchived=true');
+  });
+
+  it('marks the document root with the desktop title bar style', () => {
+    const root = document.createElement('div');
+
+    applyWindowChrome(root);
+    expect(root.dataset.windowChrome).toBeUndefined();
+
+    window.weaveDesktop = {
+      isDesktop: true,
+      serverUrl: 'http://127.0.0.1:46321',
+      windowChrome: 'hidden-inset',
+    };
+    applyWindowChrome(root);
+    expect(root.dataset.windowChrome).toBe('hidden-inset');
+
+    window.weaveDesktop = { isDesktop: true, serverUrl: 'http://127.0.0.1:46321' };
+    applyWindowChrome(root);
+    expect(root.dataset.windowChrome).toBeUndefined();
   });
 });

@@ -25,12 +25,17 @@ const createSessionRequestSchema = z
   })
   .strict();
 
-/** `folderPath: null` clears the folder; a string sets or replaces it. */
+/**
+ * Partial Project update with at least one field. `name` renames the Project;
+ * `folderPath: null` clears the folder and a string sets or replaces it.
+ */
 const updateProjectRequestSchema = z
   .object({
-    folderPath: z.string().min(1).nullable(),
+    name: z.string().min(1).optional(),
+    folderPath: z.string().min(1).nullable().optional(),
   })
-  .strict();
+  .strict()
+  .refine((value) => value.name !== undefined || value.folderPath !== undefined);
 
 const includeArchivedSchema = z.enum(['true', 'false']).transform((value) => value === 'true');
 
@@ -192,8 +197,10 @@ export function registerWorkspaceRoutes(app: Hono, options: WorkspaceAppOptions)
     if (!parsed.success) {
       return jsonError(context, 'workspace-store-invalid-input', 'Project input is invalid');
     }
-    const folderPath = parsed.data.folderPath ?? undefined;
-    if (folderPath !== undefined && !(await isExistingDirectory(folderPath))) {
+    const { name, folderPath } = parsed.data;
+    // Validate the folder before writing anything so a bad path cannot leave a
+    // half-applied rename behind.
+    if (typeof folderPath === 'string' && !(await isExistingDirectory(folderPath))) {
       return jsonError(
         context,
         'project-folder-invalid',
@@ -202,13 +209,17 @@ export function registerWorkspaceRoutes(app: Hono, options: WorkspaceAppOptions)
     }
 
     try {
-      return context.json(
-        await dependencies.projectStore.updateProjectFolder(
-          context.req.param('projectId'),
-          folderPath,
-        ),
-        200,
-      );
+      const projectId = context.req.param('projectId');
+      const store = dependencies.projectStore;
+      const renamed = name === undefined ? undefined : await store.renameProject(projectId, name);
+      const project =
+        folderPath === undefined
+          ? renamed
+          : await store.updateProjectFolder(projectId, folderPath ?? undefined);
+      if (project === undefined) {
+        return jsonError(context, 'workspace-store-invalid-input', 'Project input is invalid');
+      }
+      return context.json(project, 200);
     } catch (error) {
       return mapError(context, error);
     }

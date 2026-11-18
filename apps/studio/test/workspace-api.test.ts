@@ -224,6 +224,22 @@ describe('Workspace API client', () => {
     );
   });
 
+  it('renames a Project with a PATCH that only carries the name', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ...project, name: 'Weave Studio' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const renamed = await createWorkspaceApi().renameProject('project/1', 'Weave Studio');
+
+    expect(renamed.name).toBe('Weave Studio');
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/projects/project%2F1',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ name: 'Weave Studio' }),
+      }),
+    );
+  });
+
   it('encodes project and session identifiers in URL paths', async () => {
     const fetchMock = vi
       .fn()

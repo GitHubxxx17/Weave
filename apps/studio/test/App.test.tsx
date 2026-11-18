@@ -74,7 +74,7 @@ function sessionDetail(
 
 function createWorkspaceFetchMock(
   providerSettings?: Record<string, unknown>,
-  options?: { readonly emptyWorkspace?: boolean },
+  options?: { readonly emptyWorkspace?: boolean; readonly emptyProject?: boolean },
 ): ReturnType<typeof vi.fn> {
   const sessions = new Map<string, Record<string, unknown>>([
     [sessionIds.local, sessionDetail(sessionIds.local, '本地 Agent 演示')],
@@ -122,6 +122,18 @@ function createWorkspaceFetchMock(
             sessionSummary(sessionIds.foundation, 'Foundation 设计'),
           ],
         },
+        ...(options?.emptyProject === true
+          ? [
+              {
+                id: 'project-empty',
+                name: 'Orbit',
+                folderName: 'orbit',
+                createdAt: '2026-11-15T00:00:00.000Z',
+                updatedAt: '2026-11-15T00:00:00.000Z',
+                sessions: [] as ReturnType<typeof sessionSummary>[],
+              },
+            ]
+          : []),
       ];
   let nextProjectId = 0;
   let nextSessionId = 0;
@@ -279,7 +291,10 @@ function createWorkspaceFetchMock(
     const projectSessionMatch = requestPath.match(/^\/projects\/([^/]+)\/sessions$/);
     const projectUpdateMatch = requestPath.match(/^\/projects\/([^/]+)$/);
     if (projectUpdateMatch !== null && method === 'PATCH') {
-      const body = JSON.parse(String(init?.body)) as { folderPath: string | null };
+      const body = JSON.parse(String(init?.body)) as {
+        name?: string;
+        folderPath?: string | null;
+      };
       const project = projects.find(
         (candidate) => candidate.id === decodeURIComponent(projectUpdateMatch[1]!),
       );
@@ -289,13 +304,18 @@ function createWorkspaceFetchMock(
           { status: 404, headers: { 'content-type': 'application/json' } },
         );
       }
+      if (body.name !== undefined) {
+        project.name = body.name;
+      }
       const updated = {
         id: project.id,
         name: project.name,
         folderName: project.folderName,
         createdAt: project.createdAt,
         updatedAt: project.updatedAt,
-        ...(body.folderPath === null ? {} : { folderPath: body.folderPath }),
+        ...(body.folderPath === null || body.folderPath === undefined
+          ? {}
+          : { folderPath: body.folderPath }),
       };
       return new Response(JSON.stringify(updated), {
         status: 200,
@@ -369,7 +389,7 @@ let fetchMock = createWorkspaceFetchMock();
 
 async function renderApp(): Promise<void> {
   render(<App />);
-  await waitFor(() => expect(screen.getByRole('heading', { name: 'Agent 工作台' })).toBeTruthy());
+  await waitFor(() => expect(screen.getByRole('region', { name: '智能对话' })).toBeTruthy());
 }
 
 beforeEach(() => {
@@ -381,6 +401,7 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   fetchMock.mockClear();
+  localStorage.clear();
   Reflect.deleteProperty(window, 'showDirectoryPicker');
   Reflect.deleteProperty(window, 'weaveDesktop');
 });
@@ -394,10 +415,11 @@ describe('Studio Agent Chat', () => {
     expect(screen.getByRole('button', { name: /Weave 项目/ })).toBeTruthy();
     expect(screen.getByText('weave', { selector: '.project-folder-name' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '新建会话' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Agent 工作台' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: '智能对话' })).toBeTruthy();
     expect(screen.getByLabelText('Agent 工作流')).toBeTruthy();
     expect(screen.getByLabelText('运行活动')).toBeTruthy();
-    expect(screen.getByRole('heading', { name: '会话概览' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: '概览' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: '用量' })).toBeTruthy();
     expect(screen.getByText('工作区访问')).toBeTruthy();
     expect(screen.getByText('本地模型')).toBeTruthy();
     expect(screen.queryByText('SESSION CONTEXT')).toBeNull();
@@ -484,7 +506,7 @@ describe('Studio Agent Chat', () => {
       within(screen.getByRole('menu', { name: '切换项目' })).getByText('/Users/me/weave'),
     ).toBeTruthy();
     expect(
-      within(screen.getByRole('region', { name: '会话概览' })).getByText('/Users/me/weave'),
+      within(screen.getByRole('region', { name: '概览' })).getByText('/Users/me/weave'),
     ).toBeTruthy();
   });
 
@@ -606,7 +628,7 @@ describe('Studio Agent Chat', () => {
         .classList.contains('project-tree-project'),
     ).toBe(true);
     expect(screen.getByRole('button', { name: /client-app 项目/ })).toBeTruthy();
-    expect(screen.getByText(/会话 #/)).toBeTruthy();
+    expect(screen.getByLabelText(/会话 #/)).toBeTruthy();
   });
 
   it('renders all projects as an expandable tree with sessions nested beneath each project', async () => {
@@ -643,7 +665,7 @@ describe('Studio Agent Chat', () => {
     fireEvent.click(within(projectTree).getByRole('button', { name: '展开项目 Weave' }));
     fireEvent.click(within(projectTree).getByRole('button', { name: /Session event store/ }));
 
-    expect(screen.getByText('会话 #event-store')).toBeTruthy();
+    expect(screen.getByLabelText('会话 #event-store')).toBeTruthy();
     expect(screen.getByRole('button', { name: /Weave 项目/ })).toBeTruthy();
   });
 
@@ -805,7 +827,7 @@ describe('Studio Agent Chat', () => {
     });
   });
 
-  it('shows per-Turn usage under the reply and in the overview, with retry and quote', async () => {
+  it('shows per-Turn usage under the reply and in the usage panel, with retry and quote', async () => {
     let run = 0;
     streamAgentRunMock.mockImplementation(async (_request, handlers) => {
       run += 1;
@@ -829,11 +851,14 @@ describe('Studio Agent Chat', () => {
         /weave-local-demo · 输入 12k（命中 81%） · 输出 860/,
       ),
     ).toBeTruthy();
-    const overview = screen.getByRole('region', { name: 'Token 用量' });
-    expect(within(overview).getByText('缓存命中 81%')).toBeTruthy();
-    expect(
-      within(screen.getByRole('list', { name: '每轮用量' })).getAllByRole('listitem'),
-    ).toHaveLength(1);
+
+    // The usage panel opens from its tab and shows the session-wide cache hit.
+    fireEvent.click(screen.getByRole('tab', { name: '用量' }));
+    const usage = screen.getByRole('region', { name: '用量' });
+    expect(within(usage).getByText('缓存命中')).toBeTruthy();
+    expect(within(within(usage).getByLabelText('用量趋势')).getAllByRole('listitem')).toHaveLength(
+      1,
+    );
 
     fireEvent.click(within(firstReply as HTMLElement).getByRole('button', { name: '重试' }));
     const secondReply = (await screen.findByText('第 2 次回答')).closest('.timeline-item');
@@ -853,8 +878,11 @@ describe('Studio Agent Chat', () => {
     expect((screen.getByLabelText('发送消息') as HTMLTextAreaElement).value).toBe(
       '> 第 1 次回答\n\n',
     );
+    fireEvent.click(screen.getByRole('tab', { name: '用量' }));
     expect(
-      within(screen.getByRole('list', { name: '每轮用量' })).getAllByRole('listitem'),
+      within(
+        within(screen.getByRole('region', { name: '用量' })).getByLabelText('用量趋势'),
+      ).getAllByRole('listitem'),
     ).toHaveLength(2);
   });
 
@@ -1041,7 +1069,7 @@ describe('Studio Agent Chat', () => {
     await renderApp();
     fireEvent.click(screen.getByRole('button', { name: /Session event store/ }));
 
-    expect(screen.getByText('会话 #event-store')).toBeTruthy();
+    expect(screen.getByLabelText('会话 #event-store')).toBeTruthy();
     await waitFor(() => {
       expect(screen.getByText('今天想完成什么？')).toBeTruthy();
     });
@@ -1060,7 +1088,7 @@ describe('Studio Agent Chat', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /本地 Agent 演示/ }));
 
-    expect(screen.getByText('会话 #local')).toBeTruthy();
+    expect(screen.getByLabelText('会话 #local')).toBeTruthy();
     expect(screen.queryByText('当前会话的回复')).toBeNull();
     expect(screen.getByText('今天想完成什么？')).toBeTruthy();
   });
@@ -1072,7 +1100,7 @@ describe('Studio Agent Chat', () => {
 
     expect(await screen.findByText('历史项目问题')).toBeTruthy();
     expect(screen.getByText('历史项目回答')).toBeTruthy();
-    expect(screen.getByText('会话 #foundation')).toBeTruthy();
+    expect(screen.getByLabelText('会话 #foundation')).toBeTruthy();
 
     // Two assistant steps of the same turn collapse into a single card.
     const assistantCards = document.querySelectorAll('.timeline-item-assistant');
@@ -1099,7 +1127,7 @@ describe('Studio Agent Chat', () => {
       .getByText('workspace.search')
       .closest('details') as HTMLDetailsElement;
     expect(toolStep.open).toBe(false);
-    expect(within(toolStep).getByText('{"query":"历史"}')).toBeTruthy();
+    expect(within(toolStep).getByText(/"query": "历史"/)).toBeTruthy();
   });
 
   it('renders durable message timestamps instead of a fixed relative label', async () => {
@@ -1174,13 +1202,12 @@ describe('Studio Agent Chat', () => {
       within(assistantItem as HTMLElement).getByRole('group', { name: '本轮过程' }),
     ).toBeTruthy();
     expect(within(assistantItem as HTMLElement).getByText('workspace.search')).toBeTruthy();
+    fireEvent.click(screen.getByRole('tab', { name: '工具' }));
     expect(
-      within(screen.getByRole('region', { name: '工具调用' })).getByText('已完成', {
-        selector: '.status-badge',
-      }),
+      within(screen.getByRole('region', { name: '工具调用' })).getByTitle('已完成'),
     ).toBeTruthy();
     expect(screen.getAllByText('2 matches')).not.toHaveLength(0);
-    expect(screen.getAllByText('{"query":"SSE"}')).not.toHaveLength(0);
+    expect(screen.getAllByText(/"query": "SSE"/)).not.toHaveLength(0);
   });
 
   it('marks a tool result returned as a recoverable failure', async () => {
@@ -1208,12 +1235,11 @@ describe('Studio Agent Chat', () => {
     fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '读文件' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
 
-    expect(
-      await within(screen.getByRole('region', { name: '工具调用' })).findByText('失败', {
-        selector: '.status-badge',
-      }),
-    ).toBeTruthy();
     expect(await screen.findByText('文件不存在')).toBeTruthy();
+    fireEvent.click(screen.getByRole('tab', { name: '工具' }));
+    expect(
+      within(screen.getByRole('region', { name: '工具调用' })).getByTitle('失败'),
+    ).toBeTruthy();
   });
 
   it('keeps conversation and activity panel as independent scroll regions', async () => {
@@ -1225,7 +1251,65 @@ describe('Studio Agent Chat', () => {
     expect(screen.getByLabelText('Agent 工作流').classList.contains('conversation-scroll')).toBe(
       true,
     );
-    expect(screen.getByLabelText('运行活动').classList.contains('activity-scroll')).toBe(true);
+    expect(screen.getByLabelText('运行活动').querySelector('.activity-scroll')).toBeTruthy();
+  });
+
+  it('resizes the side panel by dragging or with the keyboard and remembers the width', async () => {
+    localStorage.removeItem('weave.studio.sidePanelWidth');
+    await renderApp();
+    const shell = document.querySelector('.studio-shell') as HTMLElement;
+    const resizer = screen.getByRole('separator', { name: '调整面板宽度' });
+    expect(shell.style.getPropertyValue('--panel-width')).toBe('292px');
+
+    // Dragging left widens the panel; the width is committed on release.
+    fireEvent.pointerDown(resizer, { button: 0, clientX: 900, pointerId: 1 });
+    fireEvent.pointerMove(resizer, { clientX: 800, pointerId: 1 });
+    expect(shell.style.getPropertyValue('--panel-width')).toBe('392px');
+    fireEvent.pointerUp(resizer, { clientX: 800, pointerId: 1 });
+    expect(resizer.getAttribute('aria-valuenow')).toBe('392');
+    expect(localStorage.getItem('weave.studio.sidePanelWidth')).toBe('392');
+
+    fireEvent.keyDown(resizer, { key: 'ArrowRight' });
+    expect(resizer.getAttribute('aria-valuenow')).toBe('376');
+    fireEvent.keyDown(resizer, { key: 'Home' });
+    expect(resizer.getAttribute('aria-valuenow')).toBe('260');
+    fireEvent.doubleClick(resizer);
+    expect(shell.style.getPropertyValue('--panel-width')).toBe('292px');
+  });
+
+  it('opens a panel tab from the add menu, closes it, and remembers the layout', async () => {
+    await renderApp();
+
+    // Four data tabs are pinned by default, so none shows a close button.
+    expect(screen.getByRole('tab', { name: '概览' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: '工具' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^关闭概览$/ })).toBeNull();
+
+    // The add menu lists coming-soon panels as disabled.
+    fireEvent.click(screen.getByRole('button', { name: '添加面板' }));
+    const addMenu = screen.getByRole('menu', { name: '添加面板' });
+    expect(within(addMenu).getAllByText('即将推出')).toHaveLength(2);
+    const previewItem = within(addMenu).getByRole('menuitem', { name: /预览/ });
+    expect((previewItem as HTMLButtonElement).disabled).toBe(true);
+
+    // Unpin the 工具 tab via its context menu, then it can be closed.
+    const toolsTab = screen.getByRole('tab', { name: '工具' }).closest('.panel-tab') as HTMLElement;
+    fireEvent.contextMenu(toolsTab);
+    fireEvent.click(screen.getByRole('menuitem', { name: '取消固定' }));
+    fireEvent.click(within(toolsTab).getByRole('button', { name: '关闭工具' }));
+    expect(screen.queryByRole('tab', { name: '工具' })).toBeNull();
+    expect(
+      JSON.parse(localStorage.getItem('weave.studio.panelTabs.v1') ?? '{}').open,
+    ).not.toContain('tools');
+
+    // Reopening from the add menu restores the tab and makes it active.
+    fireEvent.click(screen.getByRole('button', { name: '添加面板' }));
+    fireEvent.click(
+      within(screen.getByRole('menu', { name: '添加面板' })).getByRole('menuitem', {
+        name: /工具/,
+      }),
+    );
+    expect(screen.getByRole('tab', { name: '工具' }).getAttribute('aria-selected')).toBe('true');
   });
 
   it('shows a safe error without leaking implementation details', async () => {
@@ -1325,10 +1409,57 @@ describe('Studio Agent Chat', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '工作台' }));
 
-    expect(screen.getByRole('heading', { name: 'Agent 工作台' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: '智能对话' })).toBeTruthy();
     await waitFor(() => {
       expect(screen.getByText('今天想完成什么？')).toBeTruthy();
     });
+  });
+
+  it('renames a project from the projects page without touching its folder', async () => {
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: '项目' }));
+    const projectView = screen.getByRole('region', { name: '项目' });
+    fireEvent.click(within(projectView).getByRole('button', { name: '重命名项目 Weave' }));
+
+    const dialog = screen.getByRole('dialog', { name: '重命名项目' });
+    const input = within(dialog).getByRole('textbox', { name: '新的项目名称' });
+    expect((input as HTMLInputElement).value).toBe('Weave');
+    fireEvent.change(input, { target: { value: '  Weave Studio  ' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存项目名称' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '重命名项目' })).toBeNull());
+    const patch = fetchMock.mock.calls.find(
+      ([, init]) => (init as RequestInit | undefined)?.method === 'PATCH',
+    );
+    expect(JSON.parse(String((patch?.[1] as RequestInit).body))).toEqual({
+      name: 'Weave Studio',
+    });
+    expect(
+      within(projectView).getByText('Weave Studio', { selector: '.project-overview-item strong' }),
+    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: '项目：Weave Studio' })).toBeTruthy();
+  });
+
+  it('starts a session or opens a project from the projects page', async () => {
+    fetchMock = createWorkspaceFetchMock(undefined, { emptyProject: true });
+    vi.stubGlobal('fetch', fetchMock);
+    await renderApp();
+
+    fireEvent.click(screen.getByRole('button', { name: '项目' }));
+    fireEvent.click(screen.getByRole('button', { name: '在 Weave 中新建会话' }));
+    await waitFor(() => expect(screen.getByRole('region', { name: '智能对话' })).toBeTruthy());
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringMatching(/\/projects\/[^/]+\/sessions$/),
+      expect.objectContaining({ method: 'POST' }),
+    );
+
+    // A project without sessions still opens, on a blank workbench.
+    fireEvent.click(screen.getByRole('button', { name: '项目' }));
+    expect(screen.getAllByText('未设置文件夹路径')).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: '打开项目 Orbit' }));
+    expect(screen.getByRole('region', { name: '智能对话' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Orbit 项目/ })).toBeTruthy();
+    expect(screen.getByText('今天想完成什么？')).toBeTruthy();
   });
 
   it('filters sessions from the search control', async () => {
@@ -1376,13 +1507,17 @@ describe('Studio Agent Chat', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '收起上下文' }));
 
-    expect(screen.queryByLabelText('运行活动')).toBeNull();
+    // The panel stays mounted but is hidden and inert so it can animate out.
+    const shell = document.querySelector('.studio-shell');
+    expect(shell?.classList.contains('studio-shell-panel-collapsed')).toBe(true);
+    expect(document.querySelector('.activity-panel')?.getAttribute('aria-hidden')).toBe('true');
     const headerActions = document.querySelector('.header-actions');
     expect(headerActions).toBeTruthy();
     const headerButtons = within(headerActions as HTMLElement).getAllByRole('button');
     expect(headerButtons.at(-1)?.getAttribute('aria-label')).toBe('显示上下文');
 
     fireEvent.click(screen.getByRole('button', { name: '显示上下文' }));
+    expect(shell?.classList.contains('studio-shell-panel-collapsed')).toBe(false);
     fireEvent.click(screen.getByRole('button', { name: '本地演示' }));
 
     expect(screen.getByRole('menu', { name: '选择模型' })).toBeTruthy();

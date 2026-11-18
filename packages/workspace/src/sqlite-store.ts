@@ -5,6 +5,7 @@ import {
   createProjectInputSchema,
   projectFolderPathSchema,
   projectIdSchema,
+  projectNameSchema,
   projectSchema,
   projectSessionIdSchema,
   projectSessionRefSchema,
@@ -241,6 +242,38 @@ export function createSqliteProjectStore(options: { readonly filename: string })
         const result = database
           .prepare('UPDATE projects SET folder_path = ?, updated_at = ? WHERE project_id = ?')
           .run(folderPathInput ?? null, new Date().toISOString(), projectIdInput);
+        if (result.changes === 0) {
+          throw projectNotFound();
+        }
+        const row = database
+          .prepare(
+            `SELECT project_id, name, folder_name, folder_path, created_at, updated_at
+             FROM projects
+             WHERE project_id = ?`,
+          )
+          .get(projectIdInput);
+        if (row === undefined) {
+          throw projectNotFound();
+        }
+        return parseProject(row);
+      } catch (error) {
+        if (error instanceof WorkspaceStoreError) {
+          throw error;
+        }
+        throw new WorkspaceStoreError('workspace-store-io', ioMessage, { cause: error });
+      }
+    },
+
+    async renameProject(projectIdInput: string, nameInput: string): Promise<Project> {
+      requireOpen(closed);
+      validateIds(projectIdInput);
+      if (!projectNameSchema.safeParse(nameInput).success) {
+        throw invalidInput();
+      }
+      try {
+        const result = database
+          .prepare('UPDATE projects SET name = ?, updated_at = ? WHERE project_id = ?')
+          .run(nameInput, new Date().toISOString(), projectIdInput);
         if (result.changes === 0) {
           throw projectNotFound();
         }

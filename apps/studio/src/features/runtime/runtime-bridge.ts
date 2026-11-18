@@ -15,3 +15,16 @@ export function runtimeApiUrl(path: string): string {
 
   return serverUrl === '' ? normalizedPath : `${serverUrl}${normalizedPath}`;
 }
+
+/**
+ * Marks the document root with the desktop title bar style so CSS can add
+ * drag regions and room for the macOS traffic lights. Browsers get no marker.
+ */
+export function applyWindowChrome(root: HTMLElement): void {
+  const chrome = globalThis.window?.weaveDesktop?.windowChrome;
+  if (chrome === 'hidden-inset' || chrome === 'native') {
+    root.dataset.windowChrome = chrome;
+  } else {
+    delete root.dataset.windowChrome;
+  }
+}
