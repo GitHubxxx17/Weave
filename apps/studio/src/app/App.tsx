@@ -45,6 +45,7 @@ import { AgentStreamError, streamAgentRun } from '../features/agent/agent-stream
 import type { AgentRuntimeEvent } from '../features/agent/agent-types.js';
 import { useAutoScroll } from '../features/conversation/use-auto-scroll.js';
 import { MarkdownMessage } from '../features/conversation/markdown-message.js';
+import { ToolStep } from '../features/conversation/tool-step.js';
 import { MessageFooter } from '../features/conversation/message-footer.js';
 import { SessionOverview } from '../features/conversation/session-overview.js';
 import { sumUsage } from '../features/conversation/turn-stats.js';
@@ -454,36 +455,84 @@ function messageToolResult(
   return toolMessage === undefined ? undefined : messageText(toolMessage);
 }
 
-function toChatMessages(sessionId: string, messages: readonly WorkspaceMessage[]): ChatMessage[] {
-  return messages.flatMap((message, index) => {
-    if (message.role !== 'user' && message.role !== 'assistant') {
-      return [];
-    }
-    const tools =
-      message.role !== 'assistant'
-        ? []
-        : (message.toolCalls ?? []).map((toolCall) => {
-            const result = messageToolResult(messages, toolCall.id);
-            return {
-              toolCallId: toolCall.id,
-              name: toolCall.name,
-              arguments: toolCall.arguments,
-              status: 'completed' as const,
-              ...(result === undefined ? {} : { result }),
-            };
-          });
-    return [
-      {
-        id: message.messageId ?? `${sessionId}-message-${index + 1}`,
-        role: message.role,
-        text: messageText(message),
-        reasoning: messageReasoning(message),
-        tools,
-        occurredAt: message.occurredAt ?? '',
-        ...(message.turnId === undefined ? {} : { turnId: message.turnId }),
-      },
-    ];
+function toToolActivities(
+  message: Extract<WorkspaceMessage, { role: 'assistant' }>,
+  messages: readonly WorkspaceMessage[],
+): ToolActivity[] {
+  return (message.toolCalls ?? []).map((toolCall) => {
+    const result = messageToolResult(messages, toolCall.id);
+    return {
+      toolCallId: toolCall.id,
+      name: toolCall.name,
+      arguments: toolCall.arguments,
+      status: 'completed' as const,
+      ...(result === undefined ? {} : { result }),
+    };
   });
+}
+
+/**
+ * Builds the conversation view from durable messages.
+ *
+ * A Turn can span several model steps, each stored as its own assistant
+ * message. They are merged into one card per Turn so a refreshed conversation
+ * matches what the live run showed: reasoning and tool calls from every step
+ * together, with the final step's text as the answer.
+ */
+function toChatMessages(sessionId: string, messages: readonly WorkspaceMessage[]): ChatMessage[] {
+  const result: ChatMessage[] = [];
+  const turnCard = new Map<string, ChatMessage>();
+
+  messages.forEach((message, index) => {
+    if (message.role === 'user') {
+      result.push({
+        id: message.messageId ?? `${sessionId}-message-${index + 1}`,
+        role: 'user',
+        text: messageText(message),
+        reasoning: '',
+        tools: [],
+        occurredAt: message.occurredAt ?? '',
+      });
+      return;
+    }
+    if (message.role !== 'assistant') {
+      return;
+    }
+
+    const text = messageText(message);
+    const reasoning = messageReasoning(message);
+    const tools = toToolActivities(message, messages);
+    const existing = message.turnId === undefined ? undefined : turnCard.get(message.turnId);
+
+    if (existing !== undefined) {
+      // Append this step onto the Turn's single card.
+      const merged: ChatMessage = {
+        ...existing,
+        text: existing.text + text,
+        reasoning: existing.reasoning + reasoning,
+        tools: [...existing.tools, ...tools],
+      };
+      turnCard.set(existing.turnId as string, merged);
+      result.splice(result.indexOf(existing), 1, merged);
+      return;
+    }
+
+    const card: ChatMessage = {
+      id: message.turnId ?? message.messageId ?? `${sessionId}-message-${index + 1}`,
+      role: 'assistant',
+      text,
+      reasoning,
+      tools,
+      occurredAt: message.occurredAt ?? '',
+      ...(message.turnId === undefined ? {} : { turnId: message.turnId }),
+    };
+    result.push(card);
+    if (message.turnId !== undefined) {
+      turnCard.set(message.turnId, card);
+    }
+  });
+
+  return result;
 }
 
 function formatMessageTime(occurredAt: string): string {
@@ -2387,27 +2436,7 @@ export function App() {
                                   </div>
                                   <div className="message-process-tools">
                                     {message.tools.map((tool) => (
-                                      <article
-                                        className="message-process-tool"
-                                        key={tool.toolCallId}
-                                      >
-                                        <div className="message-process-tool-heading">
-                                          <strong>{tool.name}</strong>
-                                          <span className={`status-badge status-${tool.status}`}>
-                                            {tool.status === 'called'
-                                              ? '已调用'
-                                              : tool.status === 'executing'
-                                                ? '执行中'
-                                                : tool.status === 'completed'
-                                                  ? '已完成'
-                                                  : '失败'}
-                                          </span>
-                                        </div>
-                                        <pre>{tool.arguments}</pre>
-                                        {tool.result !== undefined ? (
-                                          <p className="message-process-text">{tool.result}</p>
-                                        ) : null}
-                                      </article>
+                                      <ToolStep tool={tool} key={tool.toolCallId} />
                                     ))}
                                   </div>
                                 </section>

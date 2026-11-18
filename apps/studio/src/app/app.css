@@ -318,7 +318,6 @@ svg {
 .chat-header,
 .activity-header,
 .activity-section-heading,
-.tool-heading,
 .composer-toolbar,
 .chat-title-row,
 .rail-footer {
@@ -1063,8 +1062,7 @@ h3 {
 
 .message-process-title,
 .message-process-state,
-.message-process-heading,
-.message-process-tool-heading {
+.message-process-heading {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1127,38 +1125,6 @@ h3 {
 .message-process-tools {
   display: grid;
   gap: 8px;
-}
-
-.message-process-tool {
-  min-width: 0;
-  padding: 8px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-}
-
-.message-process-tool-heading {
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.message-process-tool-heading strong {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  color: var(--ink-soft);
-  font-size: 0.67rem;
-}
-
-.message-process-tool pre {
-  max-width: 100%;
-  margin: 7px 0 0;
-  overflow-x: auto;
-  color: var(--muted);
-  font-family: 'SFMono-Regular', Consolas, monospace;
-  font-size: 0.61rem;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 
 .message p {
@@ -1766,8 +1732,7 @@ h3 {
   white-space: nowrap;
 }
 
-.error-message,
-.tool-result {
+.error-message {
   margin-bottom: 0;
   color: var(--muted);
   font-size: 0.71rem;
@@ -1801,28 +1766,18 @@ h3 {
   display: grid;
 }
 
-.tool-activity {
+.tool-step {
   min-width: 0;
-  padding: 12px 0;
+  padding: 10px 0;
   border-top: 1px solid var(--line);
 }
 
-.tool-activity:first-child {
+.tool-step:first-child {
   padding-top: 0;
   border-top: 0;
 }
 
-.tool-heading {
-  align-items: flex-start;
-}
-
-.tool-heading strong {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  font-size: 0.7rem;
-}
-
-.tool-activity summary {
+.tool-step-heading {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1830,35 +1785,63 @@ h3 {
   list-style: none;
 }
 
-.tool-activity summary::-webkit-details-marker {
+.tool-step-heading::-webkit-details-marker {
   display: none;
 }
 
-.tool-time {
+.tool-step-heading strong {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+}
+
+.tool-step-time {
+  flex: 0 0 auto;
   color: var(--subtle);
   font-size: 0.6rem;
   font-variant-numeric: tabular-nums;
 }
 
-.tool-target {
+.tool-step-target {
   min-width: 0;
   flex: 1;
   overflow: hidden;
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.62rem;
+  font-size: 0.64rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.tool-jump {
-  margin-top: 6px;
-  padding: 0;
-  color: var(--accent-dark);
-  font-size: 0.64rem;
-  background: none;
-  border: 0;
-  cursor: pointer;
+.tool-step-heading .status-badge {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.tool-step-body {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.tool-step-args,
+.tool-step-result {
+  max-width: 100%;
+  max-height: 220px;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  color: var(--ink-soft);
+  font-size: 0.68rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.tool-step-result {
+  color: var(--muted);
 }
 
 .message-footer {
@@ -1913,18 +1896,6 @@ h3 {
 .message-action svg {
   width: 15px;
   height: 15px;
-}
-
-.tool-activity pre {
-  max-width: 100%;
-  margin: 9px 0;
-  overflow-x: auto;
-  color: var(--muted);
-  font-family: 'SFMono-Regular', Consolas, monospace;
-  font-size: 0.62rem;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 
 .run-status {

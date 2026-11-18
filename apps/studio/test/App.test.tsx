@@ -42,13 +42,32 @@ function sessionDetail(
   messages: readonly Record<string, unknown>[] = [],
   archivedAt?: string,
 ): Record<string, unknown> {
+  const builtMessages = messages.map((message, index) => ({
+    ...message,
+    messageId: `${id}-message-${index + 1}`,
+    sequence: index + 2,
+    occurredAt: `2026-11-16T${String(index + 8).padStart(2, '0')}:30:00.000Z`,
+  }));
+  const turnIds = [
+    ...new Set(
+      builtMessages
+        .map((message) => message.turnId)
+        .filter((turnId): turnId is string => typeof turnId === 'string'),
+    ),
+  ];
   return {
     ...sessionSummary(id, title, archivedAt),
-    messages: messages.map((message, index) => ({
-      ...message,
-      messageId: `${id}-message-${index + 1}`,
-      sequence: index + 2,
-      occurredAt: `2026-11-16T${String(index + 8).padStart(2, '0')}:30:00.000Z`,
+    messages: builtMessages,
+    turns: turnIds.map((turnId) => ({
+      turnId,
+      status: 'completed',
+      startedAt: '2026-11-16T08:30:00.000Z',
+      completedAt: '2026-11-16T08:30:18.600Z',
+      model: 'deepseek-flash',
+      usage: { inputTokens: 12400, outputTokens: 860, cacheReadTokens: 10044 },
+      modelSteps: [],
+      toolCalls: 0,
+      failedToolCalls: 0,
     })),
   };
 }
@@ -66,10 +85,8 @@ function createWorkspaceFetchMock(
         { role: 'user', content: [{ type: 'text', text: '历史项目问题' }] },
         {
           role: 'assistant',
-          content: [
-            { type: 'reasoning', text: '历史思考过程' },
-            { type: 'text', text: '历史项目回答' },
-          ],
+          turnId: 'turn-foundation',
+          content: [{ type: 'reasoning', text: '历史思考过程' }],
           toolCalls: [
             { id: 'history-call', name: 'workspace.search', arguments: '{"query":"历史"}' },
           ],
@@ -78,6 +95,14 @@ function createWorkspaceFetchMock(
           role: 'tool',
           toolCallId: 'history-call',
           content: [{ type: 'text', text: '找到 2 个结果' }],
+        },
+        {
+          role: 'assistant',
+          turnId: 'turn-foundation',
+          content: [
+            { type: 'reasoning', text: '第二步思考' },
+            { type: 'text', text: '历史项目回答' },
+          ],
         },
       ]),
     ],
@@ -1040,7 +1065,7 @@ describe('Studio Agent Chat', () => {
     expect(screen.getByText('今天想完成什么？')).toBeTruthy();
   });
 
-  it('loads persisted messages when switching to another session', async () => {
+  it('merges a multi-step turn into one card with a footer after refresh', async () => {
     await renderApp();
 
     fireEvent.click(screen.getByRole('button', { name: /Foundation 设计/ }));
@@ -1048,11 +1073,33 @@ describe('Studio Agent Chat', () => {
     expect(await screen.findByText('历史项目问题')).toBeTruthy();
     expect(screen.getByText('历史项目回答')).toBeTruthy();
     expect(screen.getByText('会话 #foundation')).toBeTruthy();
-    const assistantItem = screen.getByText('历史项目回答').closest('.timeline-item');
-    expect(assistantItem).toBeTruthy();
-    expect(within(assistantItem as HTMLElement).getByText('历史思考过程')).toBeTruthy();
-    expect(within(assistantItem as HTMLElement).getByText('workspace.search')).toBeTruthy();
-    expect(within(assistantItem as HTMLElement).getByText('找到 2 个结果')).toBeTruthy();
+
+    // Two assistant steps of the same turn collapse into a single card.
+    const assistantCards = document.querySelectorAll('.timeline-item-assistant');
+    expect(assistantCards).toHaveLength(1);
+    const assistantItem = assistantCards[0] as HTMLElement;
+    expect(within(assistantItem).getByText(/历史思考过程/)).toBeTruthy();
+    expect(within(assistantItem).getByText(/第二步思考/)).toBeTruthy();
+    expect(within(assistantItem).getByText('workspace.search')).toBeTruthy();
+    expect(within(assistantItem).getByText('找到 2 个结果')).toBeTruthy();
+
+    // The merged card carries a footer with model, usage and actions.
+    expect(within(assistantItem).getByText(/deepseek-flash · 输入 12k/)).toBeTruthy();
+    expect(within(assistantItem).getByRole('button', { name: '复制' })).toBeTruthy();
+    expect(within(assistantItem).getByRole('button', { name: '重试' })).toBeTruthy();
+  });
+
+  it('keeps tool steps collapsed until expanded', async () => {
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: /Foundation 设计/ }));
+    await screen.findByText('历史项目回答');
+
+    const card = document.querySelector('.timeline-item-assistant') as HTMLElement;
+    const toolStep = within(card)
+      .getByText('workspace.search')
+      .closest('details') as HTMLDetailsElement;
+    expect(toolStep.open).toBe(false);
+    expect(within(toolStep).getByText('{"query":"历史"}')).toBeTruthy();
   });
 
   it('renders durable message timestamps instead of a fixed relative label', async () => {
