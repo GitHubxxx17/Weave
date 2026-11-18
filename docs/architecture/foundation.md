@@ -126,6 +126,14 @@ Workspace, Provider, and Agent clients use the same `runtimeApiUrl()` helper in
 browser and desktop modes: the browser uses Vite-relative paths, while the
 desktop Preload supplies the local Server base URL.
 
+On macOS the desktop window hides the system title bar
+(`titleBarStyle: 'hidden'` with inset traffic lights); other platforms keep the
+native frame. Main passes `--weave-window-chrome=hidden-inset|native` to the
+Preload, which exposes only that value as `window.weaveDesktop.windowChrome`.
+Studio writes it to `<html data-window-chrome>`, and CSS widens the navigation
+column for the traffic lights and marks header areas as window drag regions
+while their controls, menus, and dialogs stay `no-drag`.
+
 The old `apps/server/.weave/` directory is not automatically deleted or
 migrated. It is a legacy local runtime artifact; migration requires a separate
 backup, confirmation, copy, and rollback flow.
@@ -352,7 +360,11 @@ expires instead of blocking the turn. Studio subscribes to
 `GET /approvals/stream` and shows pending requests as cards above the
 composer; the Broker remains the only Approval state. An existing Project's
 folder can be set, replaced, or cleared through `PATCH /projects/:projectId`
-(`ProjectStore.updateProjectFolder()`), which applies the same validation.
+(`ProjectStore.updateProjectFolder()`), which applies the same validation. The
+same route renames a Project when the body carries `name`
+(`ProjectStore.renameProject()`); the body needs at least one field, and the
+folder is validated before anything is written. `folderName` does not change on
+rename because it describes the folder on disk, not the display name.
 
 `AgentRunnerOptions.instructions({ sessionId })` returns system instructions
 that the Runner resolves once per run and prepends to every model request as a
