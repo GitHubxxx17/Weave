@@ -132,6 +132,15 @@ export const turnSummarySchema = z.object({
       }),
     )
     .default([]),
+  toolResults: z
+    .array(
+      z.object({
+        toolCallId: nonEmptyStringSchema,
+        status: z.enum(['completed', 'failed']),
+        errorCode: nonEmptyStringSchema.optional(),
+      }),
+    )
+    .default([]),
   toolCalls: z.number().int().nonnegative().default(0),
   failedToolCalls: z.number().int().nonnegative().default(0),
 });

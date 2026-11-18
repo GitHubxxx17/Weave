@@ -41,6 +41,7 @@ function sessionDetail(
   title: string,
   messages: readonly Record<string, unknown>[] = [],
   archivedAt?: string,
+  failedToolCallIds: ReadonlySet<string> = new Set(),
 ): Record<string, unknown> {
   const builtMessages = messages.map((message, index) => ({
     ...message,
@@ -55,6 +56,17 @@ function sessionDetail(
         .filter((turnId): turnId is string => typeof turnId === 'string'),
     ),
   ];
+  const toolResultsFor = (turnId: string): { toolCallId: string; status: string }[] =>
+    builtMessages
+      .filter((message) => message.role === 'assistant' && message.turnId === turnId)
+      .flatMap((message) =>
+        (((message as { toolCalls?: { id: string }[] }).toolCalls ?? []) as { id: string }[]).map(
+          (toolCall) => ({
+            toolCallId: toolCall.id,
+            status: failedToolCallIds.has(toolCall.id) ? 'failed' : 'completed',
+          }),
+        ),
+      );
   return {
     ...sessionSummary(id, title, archivedAt),
     messages: builtMessages,
@@ -82,6 +94,7 @@ function sessionDetail(
         },
       },
       modelSteps: [],
+      toolResults: toolResultsFor(turnId),
       toolCalls: 0,
       failedToolCalls: 0,
     })),
@@ -97,30 +110,36 @@ function createWorkspaceFetchMock(
     [sessionIds.eventStore, sessionDetail(sessionIds.eventStore, 'Session event store')],
     [
       sessionIds.foundation,
-      sessionDetail(sessionIds.foundation, 'Foundation 设计', [
-        { role: 'user', content: [{ type: 'text', text: '历史项目问题' }] },
-        {
-          role: 'assistant',
-          turnId: 'turn-foundation',
-          content: [{ type: 'reasoning', text: '历史思考过程' }],
-          toolCalls: [
-            { id: 'history-call', name: 'workspace.search', arguments: '{"query":"历史"}' },
-          ],
-        },
-        {
-          role: 'tool',
-          toolCallId: 'history-call',
-          content: [{ type: 'text', text: '找到 2 个结果' }],
-        },
-        {
-          role: 'assistant',
-          turnId: 'turn-foundation',
-          content: [
-            { type: 'reasoning', text: '第二步思考' },
-            { type: 'text', text: '历史项目回答' },
-          ],
-        },
-      ]),
+      sessionDetail(
+        sessionIds.foundation,
+        'Foundation 设计',
+        [
+          { role: 'user', content: [{ type: 'text', text: '历史项目问题' }] },
+          {
+            role: 'assistant',
+            turnId: 'turn-foundation',
+            content: [{ type: 'reasoning', text: '历史思考过程' }],
+            toolCalls: [
+              { id: 'history-call', name: 'workspace.search', arguments: '{"query":"历史"}' },
+            ],
+          },
+          {
+            role: 'tool',
+            toolCallId: 'history-call',
+            content: [{ type: 'text', text: '找到 2 个结果' }],
+          },
+          {
+            role: 'assistant',
+            turnId: 'turn-foundation',
+            content: [
+              { type: 'reasoning', text: '第二步思考' },
+              { type: 'text', text: '历史项目回答' },
+            ],
+          },
+        ],
+        undefined,
+        new Set(['history-call']),
+      ),
     ],
   ]);
   const projects = options?.emptyWorkspace
@@ -132,10 +151,13 @@ function createWorkspaceFetchMock(
           folderName: 'weave',
           createdAt: '2026-11-14T00:00:00.000Z',
           updatedAt: '2026-11-14T00:00:00.000Z',
+          // Server returns sessions in creation order (oldest first); the UI
+          // reverses to newest-first, so "local" here is the most recent and
+          // becomes the default-selected session.
           sessions: [
-            sessionSummary(sessionIds.local, '本地 Agent 演示'),
-            sessionSummary(sessionIds.eventStore, 'Session event store'),
             sessionSummary(sessionIds.foundation, 'Foundation 设计'),
+            sessionSummary(sessionIds.eventStore, 'Session event store'),
+            sessionSummary(sessionIds.local, '本地 Agent 演示'),
           ],
         },
         ...(options?.emptyProject === true
@@ -1076,6 +1098,29 @@ describe('Studio Agent Chat', () => {
     });
   });
 
+  it('persists a generated title on the first message of an untitled session', async () => {
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: '新建会话' }));
+    await screen.findByText('今天想完成什么？');
+
+    fireEvent.change(screen.getByLabelText('发送消息'), {
+      target: { value: '写一个博客网站' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+
+    await waitFor(() => {
+      const patch = fetchMock.mock.calls.find(
+        ([url, init]) =>
+          /\/sessions\/[^/]+$/.test(String(url)) &&
+          (init as RequestInit | undefined)?.method === 'PATCH',
+      );
+      expect(patch).toBeDefined();
+      expect(JSON.parse(String((patch![1] as RequestInit).body))).toEqual({
+        title: '写一个博客网站',
+      });
+    });
+  });
+
   it('switches sessions and sends the request with the selected session id', async () => {
     streamAgentRunMock.mockImplementation(async (_request, handlers) => {
       handlers.onEvent({ type: 'text-delta', text: '当前会话的回复' });
@@ -1134,6 +1179,21 @@ describe('Studio Agent Chat', () => {
 
     // The composer shows an inline context-window meter from the turn breakdown.
     expect(screen.getByRole('button', { name: /上下文窗口占用 19%/ })).toBeTruthy();
+
+    // A tool that failed shows as failed after reload (status comes from the server,
+    // no longer hardcoded to completed).
+    expect(within(assistantItem).getByText('失败')).toBeTruthy();
+  });
+
+  it('lists sessions with the most recently created first', async () => {
+    await renderApp();
+    const eventStore = screen.getByRole('button', { name: /Session event store/ });
+    const foundation = screen.getByRole('button', { name: /Foundation 设计/ });
+    // The server returns creation order (foundation, eventStore, local); the UI
+    // reverses it, so the newer eventStore appears above the older foundation.
+    expect(
+      eventStore.compareDocumentPosition(foundation) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it('keeps tool steps collapsed until expanded', async () => {
@@ -1161,11 +1221,11 @@ describe('Studio Agent Chat', () => {
     expect(messageTimes[0]?.getAttribute('datetime')).toBeTruthy();
   });
 
-  it('keeps a new session unavailable for switching while a run is active', async () => {
+  it('runs sessions concurrently and keeps run state independent across switches', async () => {
     streamAgentRunMock.mockImplementation(
       () =>
         new Promise<void>(() => {
-          // Keep the run active so session controls remain disabled.
+          // Keep the first session's run active in the background.
         }),
     );
 
@@ -1175,15 +1235,74 @@ describe('Studio Agent Chat', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
 
+    // The active session is running, yet switching controls stay enabled.
+    expect(screen.getByRole('button', { name: '停止运行' })).toBeTruthy();
     expect((screen.getByRole('button', { name: '新建会话' }) as HTMLButtonElement).disabled).toBe(
-      true,
+      false,
     );
     expect(
       (screen.getByRole('button', { name: /Session event store/ }) as HTMLButtonElement).disabled,
-    ).toBe(true);
+    ).toBe(false);
     expect((screen.getByRole('button', { name: /Weave 项目/ }) as HTMLButtonElement).disabled).toBe(
-      true,
+      false,
     );
+    // The running session shows a run indicator in the rail.
+    expect(screen.getByTitle('运行中')).toBeTruthy();
+
+    // Switching to another session shows it as idle (ready to send), not blocked.
+    fireEvent.click(screen.getByRole('button', { name: /Session event store/ }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '发送' })).toBeTruthy();
+    });
+    expect(streamAgentRunMock).toHaveBeenCalledTimes(1);
+
+    // Switching back shows the first session's run still in progress.
+    fireEvent.click(screen.getByRole('button', { name: /本地 Agent 演示/ }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '停止运行' })).toBeTruthy();
+    });
+  });
+
+  it('streams two concurrent runs into their own sessions', async () => {
+    const emitters = new Map<string, AgentStreamHandlers['onEvent']>();
+    streamAgentRunMock.mockImplementation(
+      (request, handlers) =>
+        new Promise<void>(() => {
+          emitters.set(request.sessionId, handlers.onEvent);
+        }),
+    );
+
+    await renderApp();
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: 'A 消息' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+
+    // Switch to a second session and start a concurrent run there.
+    fireEvent.click(screen.getByRole('button', { name: /Session event store/ }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '发送' })).toBeTruthy();
+    });
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: 'B 消息' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+
+    await waitFor(() => {
+      expect(emitters.size).toBe(2);
+    });
+    expect(streamAgentRunMock).toHaveBeenCalledTimes(2);
+
+    // Each run's deltas land in its own session, regardless of which is viewed.
+    act(() => {
+      emitters.get(sessionIds.local)?.({ type: 'text-delta', text: 'A 的回复' });
+      emitters.get(sessionIds.eventStore)?.({ type: 'text-delta', text: 'B 的回复' });
+    });
+
+    // Viewing the second session shows only its own reply.
+    expect(await screen.findByText('B 的回复')).toBeTruthy();
+    expect(screen.queryByText('A 的回复')).toBeNull();
+
+    // Switching back shows the first run's reply (its live stream was not clobbered).
+    fireEvent.click(screen.getByRole('button', { name: /本地 Agent 演示/ }));
+    expect(await screen.findByText('A 的回复')).toBeTruthy();
+    expect(screen.queryByText('B 的回复')).toBeNull();
   });
 
   it('renders tool lifecycle state in order', async () => {
