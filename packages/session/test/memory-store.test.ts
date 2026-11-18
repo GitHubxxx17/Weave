@@ -19,6 +19,30 @@ describe('In-Memory Session Event Store', () => {
     await store.close();
   });
 
+  it('ignores caller-supplied store-owned fields so sequences stay authoritative', async () => {
+    const store = createInMemorySessionEventStore();
+
+    await store.append('session-1', [{ type: 'session.created', payload: {} }]);
+    const written = await store.append('session-1', [
+      {
+        type: 'session.renamed',
+        payload: { title: 'x' },
+        // A caller must not be able to forge these; the store overrides them.
+        sequence: 99,
+        eventId: 'forged',
+        occurredAt: '2000-01-01T00:00:00.000Z',
+        sessionId: 'other-session',
+      } as never,
+    ]);
+
+    expect(written[0]?.sequence).toBe(2);
+    expect(written[0]?.eventId).not.toBe('forged');
+    expect(written[0]?.sessionId).toBe('session-1');
+    expect(written[0]?.occurredAt).not.toBe('2000-01-01T00:00:00.000Z');
+
+    await store.close();
+  });
+
   it('isolates sessions and supports incremental reads', async () => {
     const store = createInMemorySessionEventStore();
 

@@ -58,12 +58,15 @@ export function createInMemorySessionEventStore(): SessionEventStore {
 
       const existingEvents = eventsBySession.get(sessionIdInput) ?? [];
       const nextEvents = eventsInput.map((event, index) =>
+        // Store-owned fields come last so a caller cannot override the
+        // sequence, event id, or timestamp by including them in the payload.
         sessionEventSchema.parse({
+          type: event.type,
+          payload: event.payload,
           eventId: randomUUID(),
           sessionId: sessionIdInput,
           sequence: existingEvents.length + index + 1,
           occurredAt: new Date().toISOString(),
-          ...event,
         }),
       );
 
