@@ -8,6 +8,9 @@ import {
 import type { StreamEvent } from '@weave/protocol';
 import { z } from 'zod';
 
+/** A stalled model stream aborts after this many ms of silence (two minutes). */
+export const defaultProviderIdleTimeoutMs = 120_000;
+
 const defaultMockScript: readonly StreamEvent[] = [
   { type: 'text-delta', text: '这是 Weave 的本地 Agent 演示。' },
   { type: 'text-delta', text: ' 当前消息通过 SSE 增量传输。' },
@@ -101,6 +104,7 @@ export function createServerLlmProviders(options?: {
       client: createOpenAiCompatibleClient({
         baseUrl: config.baseUrl,
         apiKey: config.apiKey,
+        idleTimeoutMs: defaultProviderIdleTimeoutMs,
         ...(options?.fetch === undefined ? {} : { fetch: options.fetch }),
       }),
       defaultModel: config.defaultModel,
