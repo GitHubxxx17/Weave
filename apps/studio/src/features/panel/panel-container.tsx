@@ -200,7 +200,21 @@ export function PanelContainer({
           </button>
         </div>
       </div>
-      <div className="activity-body activity-scroll">{active?.render?.(context) ?? null}</div>
+      <div className="activity-body activity-scroll">
+        {tabs.layout.open.map((kind) => {
+          const descriptor = panelDescriptor(kind);
+          if (descriptor?.keepAlive !== true || descriptor.render === undefined) {
+            return null;
+          }
+          const isActive = kind === tabs.layout.active;
+          return (
+            <div className="panel-pane" key={kind} hidden={!isActive}>
+              {descriptor.render(context)}
+            </div>
+          );
+        })}
+        {active?.keepAlive === false ? (active.render?.(context) ?? null) : null}
+      </div>
     </aside>
   );
 }

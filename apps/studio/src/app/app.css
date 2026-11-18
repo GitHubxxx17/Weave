@@ -1737,6 +1737,140 @@ summary:hover > .disclosure-icon {
   min-width: 0;
 }
 
+/* A kept-alive panel stays mounted; only the active one is shown. */
+.panel-pane {
+  min-width: 0;
+  height: 100%;
+}
+
+.panel-pane[hidden] {
+  display: none;
+}
+
+/* Preview panel: address bar on top, iframe filling the rest. */
+.preview-panel {
+  display: flex;
+  min-width: 0;
+  height: 100%;
+  flex-direction: column;
+}
+
+.preview-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.preview-address {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  background: var(--surface-muted);
+  border: 1px solid transparent;
+  border-radius: 7px;
+}
+
+.preview-address:focus-within {
+  background: var(--surface);
+  border-color: #a9a4ff;
+}
+
+.preview-address svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.preview-address input {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 0;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font-size: 0.7rem;
+}
+
+.preview-go {
+  flex: 0 0 auto;
+  padding: 7px 12px;
+  color: #ffffff;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  font-size: 0.7rem;
+  font-weight: 650;
+}
+
+.preview-go:hover {
+  background: var(--accent-dark);
+  border-color: var(--accent-dark);
+}
+
+.preview-error {
+  margin: 0;
+  padding: 7px 12px;
+  color: var(--danger);
+  font-size: 0.66rem;
+  background: #fdf0f2;
+}
+
+.preview-frame {
+  min-height: 0;
+  flex: 1;
+  width: 100%;
+  border: 0;
+  background: #ffffff;
+}
+
+.preview-empty {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 6px;
+  min-height: 0;
+  flex: 1;
+  padding: 32px 24px;
+  text-align: center;
+}
+
+.preview-empty-icon {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 6px;
+  place-items: center;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 10px;
+}
+
+.preview-empty-icon svg {
+  width: 19px;
+  height: 19px;
+}
+
+.preview-empty strong {
+  color: var(--ink);
+  font-size: 0.8rem;
+}
+
+.preview-empty p {
+  margin: 0;
+  max-width: 240px;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.6;
+}
+
 .activity-body {
   min-height: 0;
   flex: 1;
