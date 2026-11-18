@@ -5,6 +5,7 @@ import {
   type LlmProviderRegistration,
   type LlmProviderRegistry,
 } from '@weave/llm';
+import { defaultProviderIdleTimeoutMs } from './llm-providers.js';
 import {
   createProviderSettingsInputSchema,
   providerSettingsDescriptorSchema,
@@ -66,7 +67,8 @@ export interface CreateProviderSettingsManagerOptions {
 const defaultCreateClient = (options: {
   readonly baseUrl: string;
   readonly apiKey: string;
-}): LlmClient => createOpenAiCompatibleClient(options);
+}): LlmClient =>
+  createOpenAiCompatibleClient({ ...options, idleTimeoutMs: defaultProviderIdleTimeoutMs });
 
 function normalizeId(id: string): string {
   return id.trim();

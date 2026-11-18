@@ -41,7 +41,10 @@ function responseWithBody(body: ReadableStream<Uint8Array>, status = 200): Respo
   });
 }
 
-function createClient(fetchMock: typeof fetch, options?: { readonly defaultTimeoutMs?: number }) {
+function createClient(
+  fetchMock: typeof fetch,
+  options?: { readonly defaultTimeoutMs?: number; readonly idleTimeoutMs?: number },
+) {
   return createOpenAiCompatibleClient({
     baseUrl: 'https://provider.test/v1/',
     apiKey: 'secret-for-test-only',
@@ -51,6 +54,65 @@ function createClient(fetchMock: typeof fetch, options?: { readonly defaultTimeo
 }
 
 describe('OpenAI-compatible provider', () => {
+  it('drops reasoning parts from history sent back to the provider', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => streamingResponse('data: [DONE]'));
+    await collectEvents(createClient(fetchMock), {
+      provider: 'openai-compatible',
+      model: 'test-model',
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'reasoning', text: '模型的内心独白，不应回传' },
+            { type: 'text', text: '正式回答' },
+          ],
+        },
+        { role: 'user', content: [{ type: 'text', text: '继续' }] },
+      ],
+    });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+      messages: { role: string; content: string }[];
+    };
+    expect(body.messages[0]).toEqual({ role: 'assistant', content: '正式回答' });
+    expect(JSON.stringify(body)).not.toContain('内心独白');
+  });
+
+  it('maps an in-stream error frame to a stable, retryable error', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      streamingResponse(
+        'data: {"choices":[{"delta":{"content":"部分"}}]}',
+        'data: {"error":{"message":"Rate limit reached, please retry later","type":"rate_limit_error","code":"rate_limit"}}',
+      ),
+    );
+
+    await expect(collectEvents(createClient(fetchMock))).rejects.toMatchObject({
+      code: 'rate-limit',
+      retryable: true,
+      message: 'Rate limit reached, please retry later',
+    });
+  });
+
+  it('aborts a stalled stream after the idle timeout', async () => {
+    const fetchMock = vi.fn<typeof fetch>(
+      async (_url, init) =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              (init?.signal as AbortSignal | undefined)?.addEventListener('abort', () => {
+                controller.error(new Error('aborted'));
+              });
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'text/event-stream' } },
+        ),
+    );
+
+    await expect(
+      collectEvents(createClient(fetchMock, { idleTimeoutMs: 20 })),
+    ).rejects.toMatchObject({ code: 'timeout' });
+  });
+
   it('maps text streaming response into Weave events', async () => {
     const fetchMock = vi.fn<typeof fetch>(async () =>
       streamingResponse(
@@ -119,7 +181,7 @@ describe('OpenAI-compatible provider', () => {
     expect(JSON.parse(String(init?.body))).toEqual({
       model: 'test-model',
       messages: [
-        { role: 'system', content: 'System context' },
+        { role: 'system', content: 'System ' },
         {
           role: 'assistant',
           content: 'Answer',

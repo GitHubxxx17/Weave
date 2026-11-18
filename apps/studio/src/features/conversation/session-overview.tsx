@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactElement } from 'react';
 import { FileText, FolderOpen, Wrench } from 'lucide-react';
 
 import type { TurnSummary } from '../workspace/workspace-types.js';
+import { ToolStep } from './tool-step.js';
 import {
   cacheHitRate,
   formatDuration,
@@ -44,13 +45,6 @@ export interface SessionOverviewProps {
   readonly onSetFolder: () => void;
   readonly onJumpToMessage: (messageId: string) => void;
 }
-
-const toolStatusLabels: Record<OverviewToolStatus, string> = {
-  called: '已调用',
-  executing: '执行中',
-  completed: '已完成',
-  failed: '失败',
-};
 
 function toolPath(tool: OverviewTool): string | undefined {
   try {
@@ -290,25 +284,11 @@ export function SessionOverview(props: SessionOverviewProps): ReactElement {
         ) : (
           <div className="tool-list">
             {timeline.map(({ tool, message }) => (
-              <details className="tool-activity" key={tool.toolCallId}>
-                <summary className="tool-heading">
-                  <span className="tool-time">{props.formatTime(message.occurredAt)}</span>
-                  <strong>{tool.name}</strong>
-                  <span className="tool-target">{toolPath(tool) ?? ''}</span>
-                  <span className={`status-badge status-${tool.status}`}>
-                    {toolStatusLabels[tool.status]}
-                  </span>
-                </summary>
-                <pre>{tool.arguments}</pre>
-                {tool.result !== undefined ? <p className="tool-result">{tool.result}</p> : null}
-                <button
-                  className="tool-jump"
-                  type="button"
-                  onClick={() => props.onJumpToMessage(message.id)}
-                >
-                  在对话中查看
-                </button>
-              </details>
+              <ToolStep
+                key={tool.toolCallId}
+                tool={tool}
+                showTime={props.formatTime(message.occurredAt)}
+              />
             ))}
           </div>
         )}

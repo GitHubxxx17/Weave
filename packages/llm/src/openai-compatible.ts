@@ -13,8 +13,15 @@ export interface OpenAiCompatibleClientOptions {
   readonly apiKey: string;
   /** Injectable fetch implementation for tests and alternate runtimes. */
   readonly fetch?: typeof globalThis.fetch;
-  /** Default timeout applied when a stream does not provide one. */
+  /** Default total-request timeout applied when a stream does not provide one. */
   readonly defaultTimeoutMs?: number;
+  /**
+   * Maximum silence between received chunks (and before the first chunk)
+   * before the request is aborted. Unlike `defaultTimeoutMs` this resets on
+   * every chunk, so it bounds a stalled stream without cutting off a long but
+   * healthy response.
+   */
+  readonly idleTimeoutMs?: number;
 }
 
 interface ProviderMessage {
@@ -90,6 +97,37 @@ const providerChunkSchema = z
   })
   .passthrough();
 
+/** Some providers return HTTP 200 and report failures inside a stream frame. */
+const providerStreamErrorSchema = z
+  .object({
+    error: z
+      .object({
+        message: z.string().optional(),
+        type: z.string().optional(),
+        code: z.union([z.string(), z.number()]).optional(),
+      })
+      .passthrough(),
+  })
+  .passthrough();
+
+/** Maps an in-stream provider error body to a stable error code. */
+function classifyStreamError(error: {
+  readonly type?: string | undefined;
+  readonly code?: string | number | undefined;
+}): { readonly code: LlmError['code']; readonly retryable: boolean } {
+  const marker = `${error.type ?? ''} ${String(error.code ?? '')}`.toLowerCase();
+  if (marker.includes('rate') || marker.includes('429') || marker.includes('quota')) {
+    return { code: 'rate-limit', retryable: true };
+  }
+  if (marker.includes('auth') || marker.includes('401') || marker.includes('403')) {
+    return { code: 'authentication', retryable: false };
+  }
+  if (marker.includes('context') || marker.includes('length') || marker.includes('token')) {
+    return { code: 'context-overflow', retryable: false };
+  }
+  return { code: 'provider', retryable: true };
+}
+
 const maxDiagnosticLength = 4_000;
 const adapterErrorMarker = Symbol('openai-compatible-adapter-error');
 
@@ -117,8 +155,18 @@ function validateTimeout(timeoutMs: number | undefined): void {
   }
 }
 
+/**
+ * Flattens message content for the provider's `content` string.
+ *
+ * Reasoning parts are dropped: providers regenerate reasoning each call and
+ * DeepSeek-style APIs reject `reasoning_content` echoed back in history, so
+ * sending it again only wastes input tokens and confuses the model.
+ */
 function contentToText(content: LlmRequest['messages'][number]['content']): string {
-  return content.map((part) => part.text).join('');
+  return content
+    .filter((part) => part.type !== 'reasoning')
+    .map((part) => part.text)
+    .join('');
 }
 
 function toProviderMessage(message: LlmRequest['messages'][number]): ProviderMessage {
@@ -333,6 +381,18 @@ function parseProviderChunk(data: string, state: StreamParseState, apiKey: strin
     );
   }
 
+  const streamError = providerStreamErrorSchema.safeParse(parsed);
+  if (streamError.success) {
+    const { code, retryable } = classifyStreamError(streamError.data.error);
+    throw createProviderError(
+      code,
+      streamError.data.error.message ?? 'Provider reported an error in the response stream',
+      undefined,
+      retryable,
+      apiKey,
+    );
+  }
+
   const result = providerChunkSchema.safeParse(parsed);
   if (!result.success) {
     throw createProviderError(
@@ -478,6 +538,7 @@ function parseFrames(
  */
 export function createOpenAiCompatibleClient(options: OpenAiCompatibleClientOptions): LlmClient {
   validateTimeout(options.defaultTimeoutMs);
+  validateTimeout(options.idleTimeoutMs);
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const endpoint = `${options.baseUrl.replace(/\/+$/, '')}/chat/completions`;
 
@@ -490,6 +551,7 @@ export function createOpenAiCompatibleClient(options: OpenAiCompatibleClientOpti
       validateTimeout(streamOptions?.timeoutMs);
 
       const timeoutMs = streamOptions?.timeoutMs ?? options.defaultTimeoutMs;
+      const idleTimeoutMs = options.idleTimeoutMs;
       const controller = new AbortController();
       const externalSignal = streamOptions?.signal;
       let timedOut = false;
@@ -508,6 +570,20 @@ export function createOpenAiCompatibleClient(options: OpenAiCompatibleClientOpti
               timedOut = true;
               controller.abort();
             }, timeoutMs);
+      let idleTimer: ReturnType<typeof setTimeout> | undefined;
+      const armIdleTimer = (): void => {
+        if (idleTimeoutMs === undefined) {
+          return;
+        }
+        if (idleTimer !== undefined) {
+          clearTimeout(idleTimer);
+        }
+        idleTimer = setTimeout(() => {
+          timedOut = true;
+          controller.abort();
+        }, idleTimeoutMs);
+      };
+      armIdleTimer();
 
       try {
         let response: Response;
@@ -610,6 +686,7 @@ export function createOpenAiCompatibleClient(options: OpenAiCompatibleClientOpti
             if (done) {
               break;
             }
+            armIdleTimer();
             const pushed = pushSseChunk(parserState, decoder.decode(value, { stream: true }));
             parserState = pushed.state;
             const parsed = parseFrames(pushed.frames, streamState, options.apiKey);
@@ -696,6 +773,9 @@ export function createOpenAiCompatibleClient(options: OpenAiCompatibleClientOpti
       } finally {
         if (timer !== undefined) {
           clearTimeout(timer);
+        }
+        if (idleTimer !== undefined) {
+          clearTimeout(idleTimer);
         }
         controller.abort();
         externalSignal?.removeEventListener('abort', onAbort);

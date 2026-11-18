@@ -13,6 +13,39 @@ import { ToolExecutionError, type ToolExecutionResult } from './tool-types.js';
 
 const defaultMaxSteps = 8;
 
+/** Retry attempts for a model step that fails before emitting any output. */
+const maxModelRetries = 2;
+
+/** Reads the retry hint off a normalized LlmError without importing its type. */
+function isRetryableLlmError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'retryable' in error &&
+    (error as { retryable?: unknown }).retryable === true
+  );
+}
+
+/** Exponential backoff that resolves early if the run is aborted. */
+function backoffDelay(attempt: number, signal: AbortSignal): Promise<void> {
+  const delayMs = Math.min(2000, 250 * 2 ** attempt);
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(resolve, delayMs);
+    signal.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+}
+
 function resolveLlm(options: AgentRunnerOptions, provider: string): LlmClient {
   if (options.llmRegistry !== undefined) {
     const client = options.llmRegistry.get(provider);
@@ -420,7 +453,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
             let assistantReasoning = '';
             let finishSeen = false;
             let finishReason: FinishReason | undefined;
-            const toolCalls = new Map<string, ToolCallState>();
+            let toolCalls = new Map<string, ToolCallState>();
             const llmRequest: LlmRequest = {
               provider: validRequest.provider,
               model: validRequest.model,
@@ -437,69 +470,97 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
                 : { reasoningEffort: validRequest.reasoningEffort }),
             };
 
-            signal.throwIfAborted();
-            for await (const event of llm.stream(llmRequest, { signal })) {
-              if (finishSeen) {
-                throw new AgentRunError(
-                  'agent-stream-protocol',
-                  'Agent stream emitted events after finish',
-                );
+            // Retry a model step only while nothing has reached the consumer or
+            // been persisted; once a delta is emitted a retry would duplicate it.
+            for (let attempt = 0; ; attempt += 1) {
+              assistantText = '';
+              assistantReasoning = '';
+              finishSeen = false;
+              finishReason = undefined;
+              toolCalls = new Map<string, ToolCallState>();
+              activeStepUsage = undefined;
+              let emittedDelta = false;
+
+              signal.throwIfAborted();
+              try {
+                for await (const event of llm.stream(llmRequest, { signal })) {
+                  if (finishSeen) {
+                    throw new AgentRunError(
+                      'agent-stream-protocol',
+                      'Agent stream emitted events after finish',
+                    );
+                  }
+                  if (event.type === 'text-delta') {
+                    assistantText += event.text;
+                    emittedDelta = true;
+                    emit(event);
+                  } else if (event.type === 'reasoning-delta') {
+                    assistantReasoning += event.text;
+                    emittedDelta = true;
+                    emit(event);
+                  } else if (event.type === 'tool-call-start') {
+                    if (options.toolPipeline === undefined || options.toolRegistry === undefined) {
+                      throw new AgentRunError(
+                        'agent-tool-call-unsupported',
+                        'Agent tool calls are not supported',
+                      );
+                    }
+                    if (toolCalls.has(event.id)) {
+                      throw new AgentRunError(
+                        'agent-tool-call-invalid',
+                        `Tool call "${event.id}" was started more than once`,
+                      );
+                    }
+                    toolCalls.set(event.id, {
+                      id: event.id,
+                      name: event.name,
+                      arguments: '',
+                    });
+                  } else if (event.type === 'tool-call-delta') {
+                    if (options.toolPipeline === undefined || options.toolRegistry === undefined) {
+                      throw new AgentRunError(
+                        'agent-tool-call-unsupported',
+                        'Agent tool calls are not supported',
+                      );
+                    }
+                    const toolCall = toolCalls.get(event.id);
+                    if (toolCall === undefined) {
+                      throw new AgentRunError(
+                        'agent-tool-call-invalid',
+                        `Tool call "${event.id}" received a delta before start`,
+                      );
+                    }
+                    toolCall.arguments += event.argumentsDelta;
+                  } else if (event.type === 'finish') {
+                    finishSeen = true;
+                    finishReason = event.reason;
+                    if (event.usage !== undefined) {
+                      activeStepUsage = event.usage;
+                      emit({
+                        type: 'usage',
+                        usage: event.usage,
+                        provider: validRequest.provider,
+                        model: validRequest.model,
+                      });
+                    }
+                  }
+                }
+                if (!finishSeen) {
+                  throw new AgentRunError('agent-stream-protocol', 'Agent stream did not finish');
+                }
+                break;
+              } catch (streamError: unknown) {
+                if (
+                  !emittedDelta &&
+                  !signal.aborted &&
+                  attempt < maxModelRetries &&
+                  isRetryableLlmError(streamError)
+                ) {
+                  await backoffDelay(attempt, signal);
+                  continue;
+                }
+                throw streamError;
               }
-              if (event.type === 'text-delta') {
-                assistantText += event.text;
-                emit(event);
-              } else if (event.type === 'reasoning-delta') {
-                assistantReasoning += event.text;
-                emit(event);
-              } else if (event.type === 'tool-call-start') {
-                if (options.toolPipeline === undefined || options.toolRegistry === undefined) {
-                  throw new AgentRunError(
-                    'agent-tool-call-unsupported',
-                    'Agent tool calls are not supported',
-                  );
-                }
-                if (toolCalls.has(event.id)) {
-                  throw new AgentRunError(
-                    'agent-tool-call-invalid',
-                    `Tool call "${event.id}" was started more than once`,
-                  );
-                }
-                toolCalls.set(event.id, {
-                  id: event.id,
-                  name: event.name,
-                  arguments: '',
-                });
-              } else if (event.type === 'tool-call-delta') {
-                if (options.toolPipeline === undefined || options.toolRegistry === undefined) {
-                  throw new AgentRunError(
-                    'agent-tool-call-unsupported',
-                    'Agent tool calls are not supported',
-                  );
-                }
-                const toolCall = toolCalls.get(event.id);
-                if (toolCall === undefined) {
-                  throw new AgentRunError(
-                    'agent-tool-call-invalid',
-                    `Tool call "${event.id}" received a delta before start`,
-                  );
-                }
-                toolCall.arguments += event.argumentsDelta;
-              } else if (event.type === 'finish') {
-                finishSeen = true;
-                finishReason = event.reason;
-                if (event.usage !== undefined) {
-                  activeStepUsage = event.usage;
-                  emit({
-                    type: 'usage',
-                    usage: event.usage,
-                    provider: validRequest.provider,
-                    model: validRequest.model,
-                  });
-                }
-              }
-            }
-            if (!finishSeen) {
-              throw new AgentRunError('agent-stream-protocol', 'Agent stream did not finish');
             }
 
             const completeToolCalls: ToolCall[] = [...toolCalls.values()].map((toolCall) => ({

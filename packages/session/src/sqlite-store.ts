@@ -169,11 +169,12 @@ export function createSqliteSessionEventStore(
 
         for (const [index, event] of eventsInput.entries()) {
           const persistedEvent = sessionEventSchema.parse({
+            type: event.type,
+            payload: event.payload,
             eventId: randomUUID(),
             sessionId: sessionIdInput,
             sequence: currentSequence + index + 1,
             occurredAt: new Date().toISOString(),
-            ...event,
           });
           nextEvents.push(persistedEvent);
 

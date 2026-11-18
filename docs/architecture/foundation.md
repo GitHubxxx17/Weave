@@ -425,9 +425,12 @@ the `SessionEventStore` interface; Runtime consumes that interface instead of
 knowing which persistence implementation was selected.
 
 The Store is append-only: it assigns each event an ID, an increasing sequence
-within its Session, and an ISO timestamp. The In-Memory implementation gives
-Agent and Projection tests a deterministic store; the SQLite implementation
-proves local persistence without adding a database dependency.
+within its Session, and an ISO timestamp. These Store-owned fields always win:
+`append()` reads only `type` and `payload` from a caller's event, so a caller
+cannot override the sequence, event id, or timestamp and leave a Session that
+can never project again. The In-Memory implementation gives Agent and
+Projection tests a deterministic store; the SQLite implementation proves local
+persistence without adding a database dependency.
 
 The Store does not enforce Agent business order. `projectSession()` validates
 that the event list starts with `session.created`, that sequences are
@@ -456,7 +459,21 @@ leaking provider-specific types into the Runtime contract.
 Provider failures do not become `StreamEvent` values. LLM clients reject with a
 normalized `LlmError`; successful streams must receive the provider's terminal
 `[DONE]` marker, while a response body that reaches EOF first is a protocol
-failure.
+failure. A provider that returns HTTP 200 but reports an error inside a stream
+frame (`data: {"error":{...}}`) is classified from that error body rather than
+rejected as an opaque protocol failure, so a rate limit or context overflow
+keeps its stable code and retry hint.
+
+The adapter also strips `reasoning` content from history messages before
+sending them: providers regenerate reasoning each call, DeepSeek-style APIs
+reject echoed `reasoning_content`, and resending it only wastes input tokens
+and teaches the model to answer inside its reasoning. Besides the total
+`timeoutMs`, the adapter accepts an `idleTimeoutMs` that resets on every chunk,
+so the Server can bound a stalled stream (default two minutes) without cutting
+off a long but healthy response. When a model step fails before emitting any
+delta with a retryable `LlmError`, the Agent Runner retries it with exponential
+backoff (up to twice); once a delta has reached the consumer it does not retry,
+to avoid duplicate output.
 
 ### Provider Registry and Server Routing
 
