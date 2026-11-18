@@ -342,6 +342,70 @@ describe('Agent Runner contracts', () => {
     await store.close();
   });
 
+  it('retries a model step that fails before emitting output, then succeeds', async () => {
+    const store = createInMemorySessionEventStore();
+    let attempts = 0;
+    const llm: LlmClient = {
+      async *stream(): AsyncIterable<StreamEvent> {
+        attempts += 1;
+        if (attempts < 3) {
+          throw { code: 'rate-limit', message: 'slow down', retryable: true };
+        }
+        yield { type: 'text-delta', text: '终于成功' };
+        yield { type: 'finish', reason: 'stop' };
+      },
+    };
+    const runner = createAgentRunner({ llm, sessionStore: store });
+
+    const events = await collect(runner.run(validRequest));
+
+    expect(attempts).toBe(3);
+    expect(events.at(-1)).toMatchObject({ type: 'completed' });
+    const projection = projectSession(await store.read(validRequest.sessionId));
+    expect(projection.messages.at(-1)?.message).toMatchObject({
+      role: 'assistant',
+      content: [{ type: 'text', text: '终于成功' }],
+    });
+
+    await store.close();
+  });
+
+  it('does not retry once a delta has reached the consumer', async () => {
+    const store = createInMemorySessionEventStore();
+    let attempts = 0;
+    const llm: LlmClient = {
+      async *stream(): AsyncIterable<StreamEvent> {
+        attempts += 1;
+        yield { type: 'text-delta', text: '已经发出的内容' };
+        throw { code: 'network', message: 'dropped mid-stream', retryable: true };
+      },
+    };
+    const runner = createAgentRunner({ llm, sessionStore: store });
+
+    await expect(collect(runner.run(validRequest))).rejects.toMatchObject({ code: 'network' });
+    expect(attempts).toBe(1);
+
+    await store.close();
+  });
+
+  it('gives up after the retry limit on a persistent retryable error', async () => {
+    const store = createInMemorySessionEventStore();
+    let attempts = 0;
+    const llm: LlmClient = {
+      // eslint-disable-next-line require-yield
+      async *stream(): AsyncIterable<StreamEvent> {
+        attempts += 1;
+        throw { code: 'rate-limit', message: 'always limited', retryable: true };
+      },
+    };
+    const runner = createAgentRunner({ llm, sessionStore: store });
+
+    await expect(collect(runner.run(validRequest))).rejects.toMatchObject({ code: 'rate-limit' });
+    expect(attempts).toBe(3);
+
+    await store.close();
+  });
+
   it('routes each Agent request to the Provider selected by id', async () => {
     const requests: LlmRequest[] = [];
     const registry = createLlmProviderRegistry([
