@@ -100,6 +100,28 @@ describe('Server LLM Provider configuration', () => {
     expect(settings.registry.get('deepseek')).toBeDefined();
   });
 
+  it('carries an optional context window from configuration to the descriptor', () => {
+    const settings = createServerLlmProviders({
+      environment: {
+        WEAVE_LLM_PROVIDERS: JSON.stringify([
+          {
+            id: 'deepseek',
+            label: 'DeepSeek',
+            type: 'openai-compatible',
+            baseUrl: 'https://api.deepseek.com/v1',
+            apiKey: 'server-secret',
+            defaultModel: 'deepseek-chat',
+            contextWindowTokens: 64000,
+          },
+        ]),
+      },
+    });
+
+    expect(settings.registry.getDescriptor('deepseek')?.contextWindowTokens).toBe(64000);
+    // Providers that omit it leave the field absent so the Runner uses its default.
+    expect(settings.registry.getDescriptor('mock')?.contextWindowTokens).toBeUndefined();
+  });
+
   it.each([
     ['not-json', 'Provider configuration is invalid'],
     [

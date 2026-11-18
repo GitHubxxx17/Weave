@@ -347,7 +347,11 @@ describe('Default Agent instructions', () => {
 
     expect(requests[0]?.messages[0]?.role).toBe('system');
     expect(JSON.stringify(requests[0]?.messages[0])).toContain(`当前项目文件夹：${folder}`);
-    expect(requests[0]?.tools?.map((tool) => tool.name)).toEqual(['read_file', 'write_file']);
+    expect(requests[0]?.tools?.map((tool) => tool.name)).toEqual([
+      'read_file',
+      'write_file',
+      'recall',
+    ]);
   });
 });
 

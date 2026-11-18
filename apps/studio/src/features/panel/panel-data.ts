@@ -1,4 +1,9 @@
-import type { TurnSummary, TurnUsage } from '../workspace/workspace-types.js';
+import type {
+  ContextBreakdown,
+  ContextCategories,
+  TurnSummary,
+  TurnUsage,
+} from '../workspace/workspace-types.js';
 
 export type OverviewToolStatus = 'called' | 'executing' | 'completed' | 'failed';
 
@@ -161,3 +166,29 @@ export const usageCategories = [
   { key: 'output', label: '输出' },
   { key: 'reasoning', label: '思考' },
 ] as const satisfies readonly { key: keyof UsageComposition; label: string }[];
+
+/** Fraction of the model window at which the context panel warns. */
+export const contextWarnThreshold = 0.7;
+
+/** Category metadata for the context composition bar and legend, in stack order. */
+export const contextCategories = [
+  { key: 'system', label: '系统指令' },
+  { key: 'tools', label: '工具定义' },
+  { key: 'userMessages', label: '用户消息' },
+  { key: 'assistantText', label: '助手回复' },
+  { key: 'toolCalls', label: '工具调用' },
+  { key: 'toolResults', label: '工具结果' },
+  { key: 'skeleton', label: '压缩骨架' },
+  { key: 'assistantReasoning', label: '思考' },
+] as const satisfies readonly { key: keyof ContextCategories; label: string }[];
+
+/** The most recent Turn that recorded a context breakdown, if any. */
+export function latestContext(turns: readonly TurnSummary[]): ContextBreakdown | undefined {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const context = turns[index]?.context;
+    if (context !== undefined) {
+      return context;
+    }
+  }
+  return undefined;
+}

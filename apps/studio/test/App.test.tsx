@@ -65,6 +65,22 @@ function sessionDetail(
       completedAt: '2026-11-16T08:30:18.600Z',
       model: 'deepseek-flash',
       usage: { inputTokens: 12400, outputTokens: 860, cacheReadTokens: 10044 },
+      context: {
+        windowTokens: 128000,
+        sentTokens: 24000,
+        ratio: 24000 / 128000,
+        trimmed: false,
+        categories: {
+          system: 500,
+          tools: 300,
+          userMessages: 1200,
+          assistantText: 1800,
+          assistantReasoning: 0,
+          toolCalls: 200,
+          toolResults: 20000,
+          skeleton: 0,
+        },
+      },
       modelSteps: [],
       toolCalls: 0,
       failedToolCalls: 0,
@@ -1115,6 +1131,9 @@ describe('Studio Agent Chat', () => {
     expect(within(assistantItem).getByText(/deepseek-flash · 输入 12k/)).toBeTruthy();
     expect(within(assistantItem).getByRole('button', { name: '复制' })).toBeTruthy();
     expect(within(assistantItem).getByRole('button', { name: '重试' })).toBeTruthy();
+
+    // The composer shows an inline context-window meter from the turn breakdown.
+    expect(screen.getByRole('button', { name: /上下文窗口占用 19%/ })).toBeTruthy();
   });
 
   it('keeps tool steps collapsed until expanded', async () => {

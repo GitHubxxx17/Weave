@@ -24,3 +24,6 @@ export type { LlmError, LlmErrorCode } from './errors.js';
 
 export { llmRequestSchema, streamEventSchema, tokenUsageSchema } from './llm.js';
 export type { FinishReason, LlmRequest, StreamEvent, TokenUsage } from './llm.js';
+
+export { contextBreakdownSchema, contextCategoryBreakdownSchema } from './context.js';
+export type { ContextBreakdown, ContextCategoryBreakdown } from './context.js';

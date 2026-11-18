@@ -16,6 +16,8 @@ export interface LlmProviderRegistration {
   readonly client: LlmClient;
   /** Default model shown when Studio selects this Provider. */
   readonly defaultModel?: string;
+  /** Context window in tokens, used to budget the request send window. */
+  readonly contextWindowTokens?: number;
 }
 
 /** Public Provider metadata safe to return to browser callers. */
@@ -24,6 +26,8 @@ export interface LlmProviderDescriptor {
   readonly label: string;
   readonly type: LlmProviderType;
   readonly defaultModel?: string;
+  /** Context window in tokens, when the Provider declares one. */
+  readonly contextWindowTokens?: number;
 }
 
 /** Registry used by Runtime to resolve model clients without vendor coupling. */
@@ -56,6 +60,7 @@ const providerRegistrationSchema = z
         typeof value.stream === 'function',
     ),
     defaultModel: z.string().trim().min(1).optional(),
+    contextWindowTokens: z.number().int().positive().safe().optional(),
   })
   .strict();
 
@@ -64,12 +69,16 @@ function toDescriptor(provider: {
   readonly label: string;
   readonly type: LlmProviderType;
   readonly defaultModel?: string | undefined;
+  readonly contextWindowTokens?: number | undefined;
 }): LlmProviderDescriptor {
   return Object.freeze({
     id: provider.id,
     label: provider.label,
     type: provider.type,
     ...(provider.defaultModel === undefined ? {} : { defaultModel: provider.defaultModel }),
+    ...(provider.contextWindowTokens === undefined
+      ? {}
+      : { contextWindowTokens: provider.contextWindowTokens }),
   });
 }
 

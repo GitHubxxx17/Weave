@@ -29,6 +29,19 @@ async function collect(
   return result;
 }
 
+/** Drops the transient `context` events so assertions can target other events. */
+function withoutContext(events: readonly AgentRuntimeEvent[]): AgentRuntimeEvent[] {
+  return events.filter((event) => event.type !== 'context');
+}
+
+/** Asserts the next streamed event is the pre-stream `context` breakdown. */
+async function expectContextEvent(iterator: AsyncIterator<AgentRuntimeEvent>): Promise<void> {
+  await expect(iterator.next()).resolves.toMatchObject({
+    done: false,
+    value: { type: 'context' },
+  });
+}
+
 function recordingClient(script: readonly StreamEvent[], requests: LlmRequest[]): LlmClient {
   return {
     async *stream(request): AsyncIterable<StreamEvent> {
@@ -529,7 +542,7 @@ describe('Agent Runner contracts', () => {
     });
 
     const events = await collect(runner.run(validRequest));
-    expect(events.map((event) => event.type)).toEqual([
+    expect(withoutContext(events).map((event) => event.type)).toEqual([
       'tool-call',
       'tool-executing',
       'tool-result',
@@ -871,7 +884,7 @@ describe('Agent Runner contracts', () => {
     const events = await collect(runner.run(validRequest));
 
     expect(executions).toEqual(['echo:x', 'upper:y']);
-    expect(events.map((event) => event.type)).toEqual([
+    expect(withoutContext(events).map((event) => event.type)).toEqual([
       'tool-call',
       'tool-executing',
       'tool-result',
@@ -965,7 +978,7 @@ describe('Agent Runner contracts', () => {
     const runtimeEvents = await collect(runner.run(validRequest));
     const projection = projectSession(await store.read('session-1'));
 
-    expect(runtimeEvents).toEqual([
+    expect(withoutContext(runtimeEvents)).toEqual([
       { type: 'text-delta', text: '分析' },
       { type: 'reasoning-delta', text: '内部推理' },
       { type: 'text-delta', text: '完成' },
@@ -1117,7 +1130,7 @@ describe('Agent Runner contracts', () => {
       sessionStore: store,
     });
 
-    expect(await collect(runner.run(validRequest))).toEqual([
+    expect(withoutContext(await collect(runner.run(validRequest)))).toEqual([
       { type: 'reasoning-delta', text: '只进行推理' },
       { type: 'completed', turnId: expect.any(String) },
     ]);
@@ -1211,6 +1224,7 @@ describe('Agent Runner contracts', () => {
     });
     const iterator = stream[Symbol.asyncIterator]();
 
+    await expectContextEvent(iterator);
     expect((await iterator.next()).value).toEqual({
       type: 'text-delta',
       text: 'partial',
@@ -1232,13 +1246,16 @@ describe('Agent Runner contracts', () => {
       async *stream(_request, options): AsyncIterable<StreamEvent> {
         receivedSignal = options?.signal;
         yield { type: 'text-delta', text: 'first' };
-        yield { type: 'text-delta', text: 'second' };
-        yield { type: 'finish', reason: 'stop' };
+        // Stay in-flight until the consumer stops reading and the run aborts.
+        await new Promise<void>((_resolve, reject) => {
+          options?.signal?.addEventListener('abort', () => reject(abortError()), { once: true });
+        });
       },
     };
     const runner = createAgentRunner({ llm, sessionStore: store });
     const iterator = runner.run(validRequest)[Symbol.asyncIterator]();
 
+    await expectContextEvent(iterator);
     expect((await iterator.next()).value).toEqual({
       type: 'text-delta',
       text: 'first',
@@ -1268,6 +1285,7 @@ describe('Agent Runner contracts', () => {
     });
     const iterator = runner.run(validRequest)[Symbol.asyncIterator]();
 
+    await expectContextEvent(iterator);
     await expect(iterator.next()).resolves.toEqual({
       done: false,
       value: { type: 'text-delta', text: '完成' },
@@ -1344,6 +1362,7 @@ describe('Agent Runner contracts', () => {
     const runner = createAgentRunner({ llm, sessionStore: store });
     const iterator = runner.run(validRequest)[Symbol.asyncIterator]();
 
+    await expectContextEvent(iterator);
     await expect(iterator.next()).resolves.toEqual({
       done: false,
       value: { type: 'text-delta', text: 'first' },
@@ -1451,6 +1470,7 @@ describe('Agent Runner contracts', () => {
     const runner = createAgentRunner({ llm, sessionStore: store });
     const iterator = runner.run(validRequest)[Symbol.asyncIterator]();
 
+    await expectContextEvent(iterator);
     await expect(iterator.next()).resolves.toMatchObject({
       value: { type: 'text-delta', text: 'partial' },
     });
@@ -1657,6 +1677,7 @@ describe('Agent Runner contracts', () => {
       sessionStore: store,
     });
     const iterator = runner.run(validRequest)[Symbol.asyncIterator]();
+    await expectContextEvent(iterator);
     const pendingNext = iterator.next();
     await completionAppendReady;
 
@@ -1715,6 +1736,7 @@ describe('Agent Runner contracts', () => {
     });
     const iterator = runner.run(validRequest)[Symbol.asyncIterator]();
 
+    await expectContextEvent(iterator);
     await expect(iterator.next()).resolves.toEqual({
       done: false,
       value: { type: 'text-delta', text: 'first' },
@@ -1796,6 +1818,7 @@ describe('Agent Runner contracts', () => {
           turnId,
           stepId,
           status: 'failed',
+          context: expect.any(Object),
         },
       },
       {
@@ -2097,7 +2120,10 @@ describe('Agent Runner contracts', () => {
     await new Promise<void>((resolve) => queueMicrotask(resolve));
     releaseFirst?.();
 
-    await expect(firstRun).resolves.toEqual([{ type: 'completed', turnId: expect.any(String) }]);
+    await expect(firstRun).resolves.toEqual([
+      { type: 'context', breakdown: expect.any(Object), provider: 'mock', model: 'test-model' },
+      { type: 'completed', turnId: expect.any(String) },
+    ]);
     await expect(queuedNext).resolves.toMatchObject({ done: true });
     await expect(queuedReturn).resolves.toEqual({ done: true, value: undefined });
     expect(streamCalls).toBe(1);
@@ -2161,7 +2187,7 @@ describe('Agent Runner contracts', () => {
         sessionStore: store,
       });
 
-      await expect(collect(runner.run(validRequest))).resolves.toEqual([
+      await expect(collect(runner.run(validRequest)).then(withoutContext)).resolves.toEqual([
         { type: 'completed', turnId: expect.any(String) },
       ]);
       expect(projectSession(await store.read('session-1')).turns[0]?.status).toBe('completed');
@@ -2169,4 +2195,114 @@ describe('Agent Runner contracts', () => {
       await store.close();
     },
   );
+});
+
+describe('Agent Runner context management', () => {
+  it('emits a context event before the model stream with a well-formed breakdown', async () => {
+    const store = createInMemorySessionEventStore();
+    const runner = createAgentRunner({
+      llm: recordingClient(
+        [
+          { type: 'text-delta', text: '好的' },
+          { type: 'finish', reason: 'stop' },
+        ],
+        [],
+      ),
+      sessionStore: store,
+    });
+
+    const events = await collect(runner.run(validRequest));
+    const first = events[0];
+    expect(first?.type).toBe('context');
+    if (first?.type !== 'context') {
+      throw new Error('Expected a context event first');
+    }
+    expect(first.provider).toBe('mock');
+    expect(first.breakdown.windowTokens).toBe(128_000);
+    expect(first.breakdown.sentTokens).toBeGreaterThan(0);
+    expect(first.breakdown.ratio).toBeGreaterThanOrEqual(0);
+    expect(first.breakdown.ratio).toBeLessThanOrEqual(1);
+    expect(first.breakdown.categories.userMessages).toBeGreaterThan(0);
+
+    await store.close();
+  });
+
+  it('persists the context breakdown on the completed model step', async () => {
+    const store = createInMemorySessionEventStore();
+    const runner = createAgentRunner({
+      llm: recordingClient([{ type: 'finish', reason: 'stop' }], []),
+      sessionStore: store,
+    });
+
+    await collect(runner.run(validRequest));
+    const step = projectSession(await store.read('session-1')).turns[0]?.steps[0];
+    expect(step?.context).toBeDefined();
+    expect(step?.context?.windowTokens).toBe(128_000);
+    expect(step?.context?.categories.userMessages).toBeGreaterThan(0);
+
+    await store.close();
+  });
+
+  it('reads the context window from the Provider descriptor', async () => {
+    const store = createInMemorySessionEventStore();
+    const registry = createLlmProviderRegistry();
+    registry.register({
+      id: 'mock',
+      label: '本地演示',
+      type: 'mock',
+      client: recordingClient([{ type: 'finish', reason: 'stop' }], []),
+      contextWindowTokens: 50_000,
+    });
+    const runner = createAgentRunner({ llmRegistry: registry, sessionStore: store });
+
+    const events = await collect(runner.run(validRequest));
+    const context = events.find((event) => event.type === 'context');
+    expect(context?.type).toBe('context');
+    if (context?.type !== 'context') {
+      throw new Error('Expected a context event');
+    }
+    expect(context.breakdown.windowTokens).toBe(50_000);
+
+    await store.close();
+  });
+
+  it('fails with agent-context-overflow when the window cannot fit the turn', async () => {
+    const store = createInMemorySessionEventStore();
+    const runner = createAgentRunner({
+      llm: recordingClient([{ type: 'finish', reason: 'stop' }], []),
+      sessionStore: store,
+      context: { defaultWindowTokens: 1 },
+    });
+    const iterator = runner.run(validRequest)[Symbol.asyncIterator]();
+
+    await expect(iterator.next()).resolves.toMatchObject({
+      done: false,
+      value: { type: 'context', breakdown: { trimmed: expect.any(Boolean) } },
+    });
+    await expect(iterator.next()).rejects.toMatchObject({ code: 'agent-context-overflow' });
+    expect(projectSession(await store.read('session-1')).turns[0]).toMatchObject({
+      status: 'failed',
+      steps: [{ status: 'failed' }],
+    });
+
+    await store.close();
+  });
+
+  it('maps a provider context-overflow error to agent-context-overflow', async () => {
+    const store = createInMemorySessionEventStore();
+    const runner = createAgentRunner({
+      llm: throwingClient({ code: 'context-overflow', message: 'too long', retryable: false }),
+      sessionStore: store,
+    });
+
+    await expect(collect(runner.run(validRequest))).rejects.toMatchObject({
+      code: 'agent-context-overflow',
+    });
+    expect(projectSession(await store.read('session-1')).turns[0]).toMatchObject({
+      status: 'failed',
+      steps: [{ status: 'failed' }],
+    });
+
+    await store.close();
+  });
 });

@@ -51,7 +51,8 @@ import { ToolStep } from '../features/conversation/tool-step.js';
 import { MessageFooter } from '../features/conversation/message-footer.js';
 import { PanelContainer } from '../features/panel/panel-container.js';
 import { useSidePanelWidth } from '../features/panel/panel-resizer.js';
-import { sumUsage } from '../features/conversation/turn-stats.js';
+import { contextWarnThreshold, latestContext } from '../features/panel/panel-data.js';
+import { formatTokens, sumUsage } from '../features/conversation/turn-stats.js';
 import { ApprovalPanel, useApprovals } from '../features/approvals/approval-panel.js';
 import { createProviderApi, ProviderApiError } from '../features/providers/provider-api.js';
 import {
@@ -683,6 +684,7 @@ export function App() {
   const conversationScroll = useAutoScroll<HTMLDivElement>(messages, activeSessionId);
   const approvals = useApprovals(!isLoadingWorkspace);
   const turns = activeSession?.turns ?? emptyTurns;
+  const currentContext = latestContext(turns);
   const turnById = new Map(turns.map((turn) => [turn.turnId, turn]));
   const lastTurnId = turns.at(-1)?.turnId;
   const lastReplyIdByTurn = new Map<string, string>();
@@ -1085,6 +1087,16 @@ export function App() {
               ],
             };
           }),
+        );
+        break;
+      }
+      case 'context': {
+        updateSessionTurns(projectId, sessionId, (turns) =>
+          turns.map((turn) =>
+            turn.turnId === liveTurnIdFor(assistantId)
+              ? { ...turn, provider: event.provider, model: event.model, context: event.breakdown }
+              : turn,
+          ),
         );
         break;
       }
@@ -2680,6 +2692,33 @@ export function App() {
                   ))}
                 </div>
                 <div className="composer-controls">
+                  {currentContext !== undefined ? (
+                    <button
+                      type="button"
+                      className={`composer-context${
+                        currentContext.ratio >= contextWarnThreshold ? ' composer-context-warn' : ''
+                      }`}
+                      aria-label={`上下文窗口占用 ${Math.round(
+                        currentContext.ratio * 100,
+                      )}%，点击查看详情`}
+                      title={`上下文窗口 ${Math.round(currentContext.ratio * 100)}% · ${formatTokens(
+                        currentContext.sentTokens,
+                      )} / ${formatTokens(currentContext.windowTokens)} tokens${
+                        currentContext.trimmed ? ' · 已压缩' : ''
+                      }`}
+                      onClick={() => setIsActivityPanelOpen(true)}
+                    >
+                      <span className="composer-context-track" aria-hidden="true">
+                        <span
+                          className="composer-context-fill"
+                          style={{ width: `${Math.round(currentContext.ratio * 100)}%` }}
+                        />
+                      </span>
+                      <span className="composer-context-value">
+                        {Math.round(currentContext.ratio * 100)}%
+                      </span>
+                    </button>
+                  ) : null}
                   <div className={`menu-anchor${openMenu === 'model' ? ' menu-anchor-open' : ''}`}>
                     <button
                       className="model-button"

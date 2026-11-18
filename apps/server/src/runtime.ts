@@ -9,6 +9,8 @@ import type { SessionEventStore } from '@weave/session';
 import {
   createApprovalBroker,
   createAgentRunner,
+  createRecallTool,
+  createSessionRecallResolver,
   createToolPipeline,
   createToolRegistry,
   createRuntime,
@@ -47,6 +49,7 @@ const providerRegistryServices = new WeakMap<Runtime, RuntimeService<LlmProvider
 const toolRegistries = new WeakMap<Runtime, ToolRegistry>();
 const pluginRegistries = new WeakMap<Runtime, PluginRegistry>();
 const workspaceToolsRegistered = new WeakSet<ToolRegistry>();
+const recallToolRegistered = new WeakSet<ToolRegistry>();
 
 /**
  * Upper bound for one tool call, including the time a protected tool waits for
@@ -153,6 +156,16 @@ export function createServerAgentRunner(
     toolRegistry.register(fileTools.readFile);
     toolRegistry.register(fileTools.writeFile);
     workspaceToolsRegistered.add(toolRegistry);
+  }
+
+  if (!recallToolRegistered.has(toolRegistry)) {
+    const recallTool = createRecallTool({
+      resolve: createSessionRecallResolver(runtime.get(sessionStoreService)),
+    });
+    if (toolRegistry.get(recallTool.name) === undefined) {
+      toolRegistry.register(recallTool);
+    }
+    recallToolRegistered.add(toolRegistry);
   }
 
   const toolPipeline = createToolPipeline({

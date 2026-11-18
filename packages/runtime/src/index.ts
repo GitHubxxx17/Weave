@@ -16,6 +16,7 @@ export type {
   AgentRunErrorCode,
   AgentRunner,
   AgentRunnerOptions,
+  AgentContextOptions,
   AgentRunRequest,
   AgentRuntimeEvent,
 } from './agent-types.js';
@@ -36,6 +37,12 @@ export type {
 } from './tool-types.js';
 export { createToolRegistry } from './tool-registry.js';
 export type { ToolRegistry } from './tool-registry.js';
+export {
+  createRecallTool,
+  createSessionRecallResolver,
+  recallInputSchema,
+} from './context/recall-tool.js';
+export type { RecallInput, RecallResolver, RecallToolResult } from './context/recall-tool.js';
 export { createToolPipeline } from './tool-pipeline.js';
 export type { ToolPipeline, ToolPipelineOptions } from './tool-pipeline.js';
 export {

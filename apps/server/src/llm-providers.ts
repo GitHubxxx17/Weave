@@ -25,6 +25,7 @@ const externalProviderSchema = z
     baseUrl: z.string().url(),
     apiKey: z.string().min(1),
     defaultModel: z.string().trim().min(1),
+    contextWindowTokens: z.number().int().positive().safe().optional(),
   })
   .strict();
 
@@ -38,6 +39,8 @@ export interface ServerLlmProviderConfig {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly defaultModel: string;
+  /** Model context window in tokens, used to budget the request send window. */
+  readonly contextWindowTokens?: number | undefined;
 }
 
 /** Error raised when the Server Provider environment is invalid. */
@@ -108,6 +111,9 @@ export function createServerLlmProviders(options?: {
         ...(options?.fetch === undefined ? {} : { fetch: options.fetch }),
       }),
       defaultModel: config.defaultModel,
+      ...(config.contextWindowTokens === undefined
+        ? {}
+        : { contextWindowTokens: config.contextWindowTokens }),
     });
   }
 

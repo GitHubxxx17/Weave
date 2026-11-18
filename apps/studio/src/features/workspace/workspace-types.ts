@@ -91,6 +91,27 @@ export const turnUsageSchema = z.object({
   reasoningTokens: tokenCountSchema.optional(),
 });
 
+/** Estimated send-window composition of one model step, by source category. */
+export const contextCategoriesSchema = z.object({
+  system: tokenCountSchema,
+  tools: tokenCountSchema,
+  userMessages: tokenCountSchema,
+  assistantText: tokenCountSchema,
+  assistantReasoning: tokenCountSchema,
+  toolCalls: tokenCountSchema,
+  toolResults: tokenCountSchema,
+  skeleton: tokenCountSchema,
+});
+
+/** The deterministic context breakdown recorded for a model request. */
+export const contextBreakdownSchema = z.object({
+  windowTokens: tokenCountSchema,
+  sentTokens: tokenCountSchema,
+  ratio: z.number().min(0).max(1),
+  trimmed: z.boolean(),
+  categories: contextCategoriesSchema,
+});
+
 /** Per-Turn timing, attribution, and token usage summed over its model steps. */
 export const turnSummarySchema = z.object({
   turnId: nonEmptyStringSchema,
@@ -100,12 +121,14 @@ export const turnSummarySchema = z.object({
   provider: nonEmptyStringSchema.optional(),
   model: nonEmptyStringSchema.optional(),
   usage: turnUsageSchema.optional(),
+  context: contextBreakdownSchema.optional(),
   modelSteps: z
     .array(
       z.object({
         startedAt: z.string().datetime(),
         completedAt: z.string().datetime().optional(),
         usage: turnUsageSchema.optional(),
+        context: contextBreakdownSchema.optional(),
       }),
     )
     .default([]),
@@ -121,6 +144,8 @@ export const sessionDetailSchema = sessionSummarySchema.extend({
 
 export type TurnUsage = z.infer<typeof turnUsageSchema>;
 export type TurnSummary = z.infer<typeof turnSummarySchema>;
+export type ContextCategories = z.infer<typeof contextCategoriesSchema>;
+export type ContextBreakdown = z.infer<typeof contextBreakdownSchema>;
 
 export type ContentPart = z.infer<typeof contentPartSchema>;
 export type WorkspaceMessage = z.infer<typeof messageSchema>;

@@ -2,6 +2,7 @@ import { type ReactElement } from 'react';
 import {
   Coins,
   FileText,
+  Gauge,
   Globe,
   LayoutGrid,
   SquareTerminal,
@@ -14,11 +15,13 @@ import { OverviewPanel } from './overview-panel.js';
 import { FilesPanel } from './files-panel.js';
 import { ToolsPanel } from './tools-panel.js';
 import { UsagePanel } from './usage-panel.js';
+import { ContextPanel } from './context-panel.js';
 import { PreviewPanel } from './preview-panel.js';
 import { TerminalPanel } from './terminal-panel.js';
 
 /** Every side-panel kind. */
-export type PanelKind = 'overview' | 'files' | 'tools' | 'usage' | 'preview' | 'terminal';
+export type PanelKind =
+  'overview' | 'files' | 'tools' | 'usage' | 'context' | 'preview' | 'terminal';
 
 export interface PanelDescriptor {
   readonly kind: PanelKind;
@@ -73,6 +76,15 @@ export const panelDescriptors: readonly PanelDescriptor[] = [
     comingSoon: false,
     keepAlive: false,
     render: (context) => <UsagePanel {...context} />,
+  },
+  {
+    kind: 'context',
+    label: '上下文',
+    Icon: Gauge,
+    defaultPinned: true,
+    comingSoon: false,
+    keepAlive: false,
+    render: (context) => <ContextPanel {...context} />,
   },
   {
     kind: 'preview',
