@@ -70,6 +70,7 @@ export function parseAgentEvent(eventName: string, dataText: string): AgentRunti
     'tool-executing',
     'tool-result',
     'usage',
+    'context',
     'completed',
   ]);
   if (!knownEventNames.has(eventName)) {

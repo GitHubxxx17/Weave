@@ -1,4 +1,4 @@
-import type { Message, TokenUsage } from '@weave/protocol';
+import type { ContextBreakdown, Message, TokenUsage } from '@weave/protocol';
 import type { ToolCall } from '@weave/protocol';
 import { sessionEventSchema, type SessionEvent } from './events.js';
 
@@ -47,6 +47,8 @@ export interface SessionStep {
   readonly model?: string | undefined;
   /** Provider-reported token usage of a model step, when recorded. */
   readonly usage?: TokenUsage | undefined;
+  /** Deterministic send-window composition of a model step, when recorded. */
+  readonly context?: ContextBreakdown | undefined;
 }
 
 /** A durable Tool Call associated with a projected Turn and Step. */
@@ -103,6 +105,7 @@ interface MutableStep {
   provider?: string | undefined;
   model?: string | undefined;
   usage?: TokenUsage | undefined;
+  context?: ContextBreakdown | undefined;
 }
 
 interface MutableTurn {
@@ -267,6 +270,9 @@ export function projectSession(events: readonly SessionEvent[]): SessionProjecti
       step.completedAt = event.occurredAt;
       if (event.payload.usage !== undefined) {
         step.usage = sumTokenUsage([event.payload.usage]);
+      }
+      if (event.payload.context !== undefined) {
+        step.context = event.payload.context;
       }
     } else if (event.type === 'tool-call.created') {
       if (archivedAt !== undefined) {

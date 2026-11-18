@@ -1,5 +1,12 @@
 import type { LlmClient } from '@weave/llm';
-import type { FinishReason, LlmRequest, Message, TokenUsage, ToolCall } from '@weave/protocol';
+import type {
+  ContextBreakdown,
+  FinishReason,
+  LlmRequest,
+  Message,
+  TokenUsage,
+  ToolCall,
+} from '@weave/protocol';
 import type { NewSessionEvent } from '@weave/session';
 import { projectSession } from '@weave/session';
 import {
@@ -9,9 +16,19 @@ import {
   type AgentRunnerOptions,
   type AgentRuntimeEvent,
 } from './agent-types.js';
+import { buildModelContext, type ContextBudget } from './context/build-context.js';
 import { ToolExecutionError, type ToolExecutionResult } from './tool-types.js';
 
 const defaultMaxSteps = 8;
+
+/** Context window used when a Provider descriptor does not declare one. */
+const defaultContextWindowTokens = 128_000;
+/** Tokens reserved for model output when a request sets no `maxTokens`. */
+const defaultReserveOutputTokens = 4096;
+/** Safety margin kept free below the window, as a fraction of the window. */
+const defaultContextMarginRatio = 0.05;
+/** A single tool result above this many tokens is head/tail truncated. */
+const defaultMaxToolResultTokens = 8000;
 
 /** Retry attempts for a model step that fails before emitting any output. */
 const maxModelRetries = 2;
@@ -61,6 +78,40 @@ function resolveLlm(options: AgentRunnerOptions, provider: string): LlmClient {
     return options.llm;
   }
   throw new AgentRunError('agent-provider-unavailable', 'No LLM provider is configured');
+}
+
+/** Resolves the context window for one Provider, descriptor first then default. */
+function resolveContextWindowTokens(options: AgentRunnerOptions, provider: string): number {
+  const descriptor = options.llmRegistry?.getDescriptor(provider);
+  const configured = descriptor?.contextWindowTokens;
+  if (configured !== undefined && Number.isFinite(configured) && configured > 0) {
+    return configured;
+  }
+  return options.context?.defaultWindowTokens ?? defaultContextWindowTokens;
+}
+
+/** Builds the send-window budget for one model step from options and request. */
+function resolveContextBudget(
+  options: AgentRunnerOptions,
+  provider: string,
+  maxTokens: number | undefined,
+): ContextBudget {
+  return {
+    windowTokens: resolveContextWindowTokens(options, provider),
+    reserveOutputTokens:
+      maxTokens ?? options.context?.reserveOutputTokens ?? defaultReserveOutputTokens,
+    marginRatio: options.context?.marginRatio ?? defaultContextMarginRatio,
+  };
+}
+
+/** True when a thrown value carries the given stable LLM error code. */
+function hasLlmErrorCode(error: unknown, code: string): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code?: unknown }).code === code
+  );
 }
 
 function isCancellation(error: unknown, signal: AbortSignal): boolean {
@@ -235,6 +286,8 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
       let activeStepStatus: 'running' | 'completed' = 'running';
       /** Usage reported by the model step that is currently open, if any. */
       let activeStepUsage: TokenUsage | undefined;
+      /** Estimated send-window composition of the currently open model step. */
+      let activeStepContext: ContextBreakdown | undefined;
 
       const settlePending = (): void => {
         if (!finished) {
@@ -349,6 +402,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
               stepId: stepId as string,
               status,
               ...(activeStepUsage === undefined ? {} : { usage: activeStepUsage }),
+              ...(activeStepContext === undefined ? {} : { context: activeStepContext }),
             },
           });
         }
@@ -435,6 +489,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
               stepId = crypto.randomUUID();
               activeStepStatus = 'running';
               activeStepUsage = undefined;
+              activeStepContext = undefined;
               await options.sessionStore.append(validRequest.sessionId, [
                 {
                   type: 'step.started',
@@ -454,10 +509,36 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
             let finishSeen = false;
             let finishReason: FinishReason | undefined;
             let toolCalls = new Map<string, ToolCallState>();
+            const budget = resolveContextBudget(
+              options,
+              validRequest.provider,
+              validRequest.maxTokens,
+            );
+            const built = buildModelContext({
+              system: systemMessages,
+              history: messages,
+              tools,
+              budget,
+              maxToolResultTokens:
+                options.context?.maxToolResultTokens ?? defaultMaxToolResultTokens,
+            });
+            activeStepContext = built.breakdown;
+            emit({
+              type: 'context',
+              breakdown: built.breakdown,
+              provider: validRequest.provider,
+              model: validRequest.model,
+            });
+            if (built.overflow) {
+              throw new AgentRunError(
+                'agent-context-overflow',
+                'The conversation exceeds the selected model context window',
+              );
+            }
             const llmRequest: LlmRequest = {
               provider: validRequest.provider,
               model: validRequest.model,
-              messages: [...systemMessages, ...messages],
+              messages: [...systemMessages, ...built.messages],
               ...(tools === undefined ? {} : { tools }),
               ...(validRequest.temperature === undefined
                 ? {}
@@ -559,6 +640,13 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
                   await backoffDelay(attempt, signal);
                   continue;
                 }
+                if (hasLlmErrorCode(streamError, 'context-overflow')) {
+                  throw new AgentRunError(
+                    'agent-context-overflow',
+                    'The selected model rejected the request as too large for its context window',
+                    { cause: streamError },
+                  );
+                }
                 throw streamError;
               }
             }
@@ -632,11 +720,13 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
                   stepId,
                   status: 'completed',
                   ...(activeStepUsage === undefined ? {} : { usage: activeStepUsage }),
+                  ...(activeStepContext === undefined ? {} : { context: activeStepContext }),
                 },
               },
             ]);
             activeStepStatus = 'completed';
             activeStepUsage = undefined;
+            activeStepContext = undefined;
 
             for (const toolCall of completeToolCalls) {
               const toolStepId = crypto.randomUUID();

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Message, TokenUsage } from '@weave/protocol';
+import type { ContextBreakdown, Message, TokenUsage } from '@weave/protocol';
 import {
   projectSession,
   SessionProjectionError,
@@ -64,10 +64,13 @@ export interface SessionTurnSummary {
   readonly provider?: string;
   readonly model?: string;
   readonly usage?: TokenUsage;
+  /** Deterministic send-window composition of the Turn's last model step. */
+  readonly context?: ContextBreakdown;
   readonly modelSteps: readonly {
     readonly startedAt: string;
     readonly completedAt?: string;
     readonly usage?: TokenUsage;
+    readonly context?: ContextBreakdown;
   }[];
   readonly toolCalls: number;
   readonly failedToolCalls: number;
@@ -143,6 +146,11 @@ function turnSummaryFor(turn: SessionProjection['turns'][number]): SessionTurnSu
   const modelSteps = turn.steps.filter((step) => step.kind === 'model');
   const lastModelStep = modelSteps.at(-1);
   const usage = sumTokenUsage(modelSteps.map((step) => step.usage));
+  // The representative context is the most recent model step that recorded one.
+  const context = modelSteps.reduceRight<ContextBreakdown | undefined>(
+    (found, step) => found ?? step.context,
+    undefined,
+  );
   return {
     turnId: turn.turnId,
     status: turn.status,
@@ -151,10 +159,12 @@ function turnSummaryFor(turn: SessionProjection['turns'][number]): SessionTurnSu
     ...(lastModelStep?.provider === undefined ? {} : { provider: lastModelStep.provider }),
     ...(lastModelStep?.model === undefined ? {} : { model: lastModelStep.model }),
     ...(usage === undefined ? {} : { usage }),
+    ...(context === undefined ? {} : { context }),
     modelSteps: modelSteps.map((step) => ({
       startedAt: step.startedAt,
       ...(step.completedAt === undefined ? {} : { completedAt: step.completedAt }),
       ...(step.usage === undefined ? {} : { usage: step.usage }),
+      ...(step.context === undefined ? {} : { context: step.context }),
     })),
     toolCalls: turn.toolCalls.length,
     failedToolCalls: turn.toolResults.filter((result) => result.status === 'failed').length,

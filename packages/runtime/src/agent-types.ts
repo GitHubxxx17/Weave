@@ -1,7 +1,9 @@
 import type { LlmClient, LlmProviderRegistry } from '@weave/llm';
 import {
+  contextBreakdownSchema,
   toolCallSchema,
   userMessageSchema,
+  type ContextBreakdown,
   type TokenUsage,
   type ToolCall,
   type UserMessage,
@@ -64,6 +66,13 @@ export type AgentRuntimeEvent =
       readonly usage: AgentTokenUsage;
       readonly provider: string;
       readonly model: string;
+    }
+  | {
+      /** Estimated send-window composition for one model step, before streaming. */
+      readonly type: 'context';
+      readonly breakdown: ContextBreakdown;
+      readonly provider: string;
+      readonly model: string;
     };
 
 /** Token usage carried by the `usage` runtime event. */
@@ -105,6 +114,12 @@ export const agentRuntimeEventSchema: z.ZodType<AgentRuntimeEvent> = z.discrimin
     provider: nonEmptyStringSchema,
     model: nonEmptyStringSchema,
   }),
+  z.object({
+    type: z.literal('context'),
+    breakdown: contextBreakdownSchema,
+    provider: nonEmptyStringSchema,
+    model: nonEmptyStringSchema,
+  }),
 ]);
 
 /** Stable failure categories exposed by the Agent Runner boundary. */
@@ -114,7 +129,8 @@ export type AgentRunErrorCode =
   | 'agent-stream-protocol'
   | 'agent-tool-call-unsupported'
   | 'agent-tool-call-invalid'
-  | 'agent-step-limit';
+  | 'agent-step-limit'
+  | 'agent-context-overflow';
 
 /** Error raised when an Agent Runner execution cannot continue. */
 export class AgentRunError extends Error {
@@ -158,4 +174,23 @@ export interface AgentRunnerOptions {
         readonly sessionId: string;
       }) => string | undefined | Promise<string | undefined>)
     | undefined;
+  /**
+   * Tuning for deterministic, fidelity-preserving context compression applied
+   * before every model request. The per-Provider context window comes from the
+   * Provider descriptor (`contextWindowTokens`) and falls back to
+   * `defaultWindowTokens` here.
+   */
+  readonly context?: AgentContextOptions | undefined;
+}
+
+/** Budget knobs for the Agent Runner's send-window builder. */
+export interface AgentContextOptions {
+  /** Window used when the Provider descriptor omits one; defaults to 128000. */
+  readonly defaultWindowTokens?: number | undefined;
+  /** Tokens reserved for model output when the request sets no `maxTokens`. */
+  readonly reserveOutputTokens?: number | undefined;
+  /** Safety margin as a fraction of the window; defaults to 0.05. */
+  readonly marginRatio?: number | undefined;
+  /** A single tool result above this many tokens is head/tail truncated. */
+  readonly maxToolResultTokens?: number | undefined;
 }

@@ -14,6 +14,7 @@ export function createAgentInstructions(options: {
   return async ({ sessionId }) => {
     const toolNames = options.toolNames();
     const hasFileTools = toolNames.includes('read_file') || toolNames.includes('write_file');
+    const hasRecall = toolNames.includes('recall');
     const folder =
       options.resolveWorkspaceRoot === undefined
         ? undefined
@@ -36,6 +37,12 @@ export function createAgentInstructions(options: {
               'write_file 默认不覆盖已有文件，覆盖时需要传 overwrite: true；每次写入都要等用户在界面上确认。',
               '工具返回错误时，根据错误信息调整后重试，或向用户说明原因。',
             ].join('\n'),
+      );
+    }
+
+    if (hasRecall) {
+      lines.push(
+        '较早的对话可能被压缩成骨架摘要，其中的工具结果会标注 [recall id=...]。需要被省略的原文时，调用 recall 工具（传 toolCallId 或 path）取回完整内容，不要臆测。',
       );
     }
 

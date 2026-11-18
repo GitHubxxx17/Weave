@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { contextBreakdownSchema, type ContextBreakdown } from '../workspace/workspace-types.js';
 
 const nonEmptyStringSchema = z.string().min(1);
 
@@ -62,6 +63,12 @@ export type AgentRuntimeEvent =
       };
       readonly provider: string;
       readonly model: string;
+    }
+  | {
+      readonly type: 'context';
+      readonly breakdown: ContextBreakdown;
+      readonly provider: string;
+      readonly model: string;
     };
 
 /** Validates the browser-facing request before serializing it for fetch. */
@@ -102,6 +109,12 @@ export const agentRuntimeEventSchema: z.ZodType<AgentRuntimeEvent> = z.discrimin
       cacheWriteTokens: z.number().int().nonnegative().optional(),
       reasoningTokens: z.number().int().nonnegative().optional(),
     }),
+    provider: nonEmptyStringSchema,
+    model: nonEmptyStringSchema,
+  }),
+  z.object({
+    type: z.literal('context'),
+    breakdown: contextBreakdownSchema,
     provider: nonEmptyStringSchema,
     model: nonEmptyStringSchema,
   }),

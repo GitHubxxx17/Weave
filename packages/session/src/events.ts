@@ -1,4 +1,4 @@
-import { messageSchema, toolCallSchema } from '@weave/protocol';
+import { contextBreakdownSchema, messageSchema, toolCallSchema } from '@weave/protocol';
 import { z } from 'zod';
 
 const nonEmptyStringSchema = z.string().min(1);
@@ -74,6 +74,8 @@ const stepCompletedPayloadSchema = z
     status: completedStatusSchema,
     /** Provider-reported token usage of a model step, when the provider sent it. */
     usage: stepUsageSchema.optional(),
+    /** Deterministic send-window composition of a model step, when computed. */
+    context: contextBreakdownSchema.optional(),
   })
   .passthrough();
 

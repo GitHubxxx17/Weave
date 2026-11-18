@@ -177,6 +177,44 @@ describe('Session Projection', () => {
     });
   });
 
+  it('projects the deterministic context breakdown of a model step', () => {
+    const breakdown = {
+      windowTokens: 128_000,
+      sentTokens: 1200,
+      ratio: 1200 / 128_000,
+      trimmed: true,
+      categories: {
+        system: 100,
+        tools: 50,
+        userMessages: 200,
+        assistantText: 300,
+        assistantReasoning: 0,
+        toolCalls: 150,
+        toolResults: 350,
+        skeleton: 50,
+      },
+    };
+    const events: SessionEvent[] = [
+      event(1, 'session.created', {}),
+      event(2, 'message.created', {
+        messageId: 'user-1',
+        message: { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+      }),
+      event(3, 'turn.started', { turnId: 'turn-1' }),
+      event(4, 'step.started', { turnId: 'turn-1', stepId: 'step-1', kind: 'model' }),
+      event(5, 'step.completed', {
+        turnId: 'turn-1',
+        stepId: 'step-1',
+        status: 'completed',
+        context: breakdown,
+      }),
+      event(6, 'turn.completed', { turnId: 'turn-1', status: 'completed' }),
+    ];
+
+    const projection = projectSession(events);
+    expect(projection.turns[0]?.steps[0]?.context).toEqual(breakdown);
+  });
+
   it('sums token usage without inventing unreported fields', () => {
     expect(sumTokenUsage([undefined, undefined])).toBeUndefined();
     expect(
