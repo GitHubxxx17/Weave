@@ -1,5 +1,6 @@
 import {
   ChangeEvent,
+  type CSSProperties,
   FormEvent,
   KeyboardEvent as ReactKeyboardEvent,
   type ReactElement,
@@ -15,16 +16,17 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
-  Circle,
   Copy,
   Eye,
   Files,
   FolderOpen,
+  FolderCog,
   FolderKanban,
   GitBranch,
   History,
+  LoaderCircle,
+  MessageSquarePlus,
   MoreHorizontal,
-  PanelRight,
   PanelRightOpen,
   Pencil,
   Plus,
@@ -47,7 +49,8 @@ import { useAutoScroll } from '../features/conversation/use-auto-scroll.js';
 import { MarkdownMessage } from '../features/conversation/markdown-message.js';
 import { ToolStep } from '../features/conversation/tool-step.js';
 import { MessageFooter } from '../features/conversation/message-footer.js';
-import { SessionOverview } from '../features/conversation/session-overview.js';
+import { PanelContainer } from '../features/panel/panel-container.js';
+import { useSidePanelWidth } from '../features/panel/panel-resizer.js';
 import { sumUsage } from '../features/conversation/turn-stats.js';
 import { ApprovalPanel, useApprovals } from '../features/approvals/approval-panel.js';
 import { createProviderApi, ProviderApiError } from '../features/providers/provider-api.js';
@@ -365,6 +368,13 @@ function getSessionLabel(sessionId: string): string {
   return sessionId.startsWith('session-') ? sessionId.slice('session-'.length) : sessionId;
 }
 
+/** "DeepSeek · deepseek-chat", or only the model when the Provider is named after it. */
+function formatModelLabel(providerLabel: string, model: string): string {
+  return providerLabel.trim().toLowerCase() === model.trim().toLowerCase()
+    ? model
+    : `${providerLabel} · ${model}`;
+}
+
 function createSessionTitle(text: string): string {
   const normalized = text.replace(/\s+/g, ' ').trim();
   return normalized.length > 24 ? `${normalized.slice(0, 24)}…` : normalized;
@@ -621,6 +631,9 @@ export function App() {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [isActivityPanelOpen, setIsActivityPanelOpen] = useState(true);
+  const [panelWidth, setPanelWidth] = useSidePanelWidth();
+  const shellRef = useRef<HTMLElement>(null);
+  const chatColumnRef = useRef<HTMLElement>(null);
   const [permissionMode, setPermissionMode] = useState('工作区访问');
   const [providerSettings, setProviderSettings] =
     useState<ProviderSettings>(fallbackProviderSettings);
@@ -643,6 +656,8 @@ export function App() {
     readonly sessionId: string;
   } | null>(null);
   const [sessionTitleInput, setSessionTitleInput] = useState('');
+  const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null);
+  const [projectRenameInput, setProjectRenameInput] = useState('');
   const [sessionToDelete, setSessionToDelete] = useState<{
     readonly projectId: string;
     readonly sessionId: string;
@@ -1501,6 +1516,65 @@ export function App() {
     void loadSessionDetail(project.id, session.id);
   }
 
+  /**
+   * Opens a project from the projects page. A project without sessions gets a
+   * blank workbench; the first message there creates its session.
+   */
+  function openProject(projectId: string): void {
+    if (status === 'streaming') {
+      return;
+    }
+    const project = projects.find((candidate) => candidate.id === projectId);
+    if (project === undefined) {
+      return;
+    }
+    if (projectId === activeProjectId) {
+      setActiveView('studio');
+      return;
+    }
+    if (project.sessions.some((candidate) => candidate.archivedAt === null)) {
+      selectProject(projectId);
+      return;
+    }
+
+    activeSessionIdRef.current = '';
+    setActiveProjectId(projectId);
+    setActiveSessionId('');
+    setActiveView('studio');
+    setExpandedProjectIds((current) =>
+      current.includes(projectId) ? current : [...current, projectId],
+    );
+    resetTransientState();
+  }
+
+  function openProjectRename(project: StudioProject): void {
+    if (status === 'streaming') {
+      return;
+    }
+    setOpenMenu(null);
+    setRenamingProjectId(project.id);
+    setProjectRenameInput(project.name);
+  }
+
+  async function saveProjectName(): Promise<void> {
+    const projectId = renamingProjectId;
+    const name = projectRenameInput.trim();
+    if (projectId === null || name === '') {
+      return;
+    }
+    try {
+      const updated = await workspaceApi.renameProject(projectId, name);
+      setProjects((current) =>
+        current.map((project) =>
+          project.id === projectId ? { ...project, name: updated.name } : project,
+        ),
+      );
+      setRenamingProjectId(null);
+    } catch (error: unknown) {
+      setNotice(workspaceErrorMessage(error));
+    }
+  }
+
   function openProjectDialog(): void {
     if (status === 'streaming') {
       return;
@@ -1945,7 +2019,9 @@ export function App() {
 
   return (
     <main
-      className={`studio-shell studio-shell-fixed${!isActivityPanelOpen || activeView !== 'studio' ? ' studio-shell-context-collapsed' : ''}${activeView === 'settings' ? ' studio-shell-settings' : ''}`}
+      ref={shellRef}
+      className={`studio-shell studio-shell-fixed${activeView === 'studio' && !isActivityPanelOpen ? ' studio-shell-panel-collapsed' : ''}${activeView !== 'studio' && activeView !== 'settings' ? ' studio-shell-context-collapsed' : ''}${activeView === 'settings' ? ' studio-shell-settings' : ''}`}
+      style={{ '--panel-width': `${panelWidth}px` } as CSSProperties}
     >
       {openMenu !== null ? (
         <button
@@ -2261,23 +2337,14 @@ export function App() {
       )}
 
       {activeView === 'studio' ? (
-        <section className="chat-column" aria-label="智能对话">
+        <section className="chat-column" aria-label="智能对话" ref={chatColumnRef}>
           <header className="chat-header">
-            <div className="chat-header-title">
-              <div className="breadcrumb">
-                <span>{activeProject?.folderName ?? 'weave'}</span>
-                <span className="breadcrumb-divider" aria-hidden="true">
-                  /
-                </span>
-                <strong>{activeSession?.title ?? '未命名会话'}</strong>
-              </div>
-              <div className="chat-title-row">
-                <h2>Agent 工作台</h2>
-                <span className="runtime-chip">
-                  <Circle aria-hidden="true" />
-                  本地运行时
-                </span>
-              </div>
+            <div className="breadcrumb">
+              <span>{activeProject?.folderName ?? 'weave'}</span>
+              <span className="breadcrumb-divider" aria-hidden="true">
+                /
+              </span>
+              <strong>{activeSession?.title ?? '未命名会话'}</strong>
             </div>
             <div className="header-actions">
               <div className={`menu-anchor${openMenu === 'more' ? ' menu-anchor-open' : ''}`}>
@@ -2406,15 +2473,21 @@ export function App() {
                             }}
                           >
                             <summary>
+                              <ChevronRight className="disclosure-icon" aria-hidden="true" />
                               <span className="message-process-title">
                                 <TerminalSquare aria-hidden="true" />
                                 {message.tools.length > 0
                                   ? `${message.tools.length} 次工具调用`
                                   : '思考过程'}
                               </span>
-                              <span className="message-process-state">
-                                {isLatestAssistant && status === 'streaming' ? '进行中' : '已完成'}
-                              </span>
+                              {isLatestAssistant && status === 'streaming' ? (
+                                <span className="message-process-state message-process-state-live">
+                                  <LoaderCircle className="spin-icon" aria-hidden="true" />
+                                  进行中
+                                </span>
+                              ) : (
+                                <span className="message-process-state">已完成</span>
+                              )}
                             </summary>
                             <div className="message-process-content">
                               {message.reasoning !== '' ? (
@@ -2674,58 +2747,116 @@ export function App() {
         </section>
       ) : (
         <section
-          className={`product-view${activeView === 'settings' ? ' product-view-settings' : ''}`}
+          className={activeView === 'settings' ? 'product-view product-view-settings' : 'page-view'}
           aria-label={viewLabels[activeView].title}
         >
-          <div className="product-view-content">
+          <div className={activeView === 'settings' ? 'product-view-content' : 'page-content'}>
             {activeView === 'projects' ? (
               <>
-                <div className="product-view-heading">
-                  <div>
-                    <p>WEAVE STUDIO</p>
+                <header className="page-header">
+                  <div className="page-header-copy">
                     <h2>项目</h2>
-                    <span>每个项目对应一个本地文件夹，并包含多个 Agent 会话。</span>
+                    <p>每个项目对应一个本地文件夹，Agent 只在该文件夹内读写文件。</p>
                   </div>
-                  <button className="primary-button" type="button" onClick={openProjectDialog}>
-                    <Plus aria-hidden="true" />
-                    创建项目
-                  </button>
+                  <div className="page-header-actions">
+                    <button className="primary-button" type="button" onClick={openProjectDialog}>
+                      <Plus aria-hidden="true" />
+                      创建项目
+                    </button>
+                  </div>
+                </header>
+                <div className="page-section-heading">
+                  <span>全部项目</span>
+                  <small>{projects.length} 个</small>
                 </div>
                 <div className="project-overview-list" aria-label="项目列表">
-                  {projects.map((project) => (
-                    <button
-                      className="project-overview-item"
-                      type="button"
-                      key={project.id}
-                      onClick={() => selectProject(project.id)}
-                      disabled={status === 'streaming'}
-                    >
-                      <span className="project-overview-avatar" aria-hidden="true">
-                        {project.name.slice(0, 1).toLocaleUpperCase()}
-                      </span>
-                      <span>
-                        <strong>{project.name}</strong>
-                        <small className="project-folder-name">{project.folderName}</small>
-                      </span>
-                      <span className="project-overview-meta">
-                        <small>
-                          {project.sessions.filter((session) => session.archivedAt === null).length}{' '}
-                          个会话
-                        </small>
-                      </span>
-                    </button>
-                  ))}
+                  {projects.map((project) => {
+                    const isActive = project.id === activeProjectId;
+                    const sessionCount = project.sessions.filter(
+                      (session) => session.archivedAt === null,
+                    ).length;
+                    return (
+                      <article
+                        className={`project-overview-item${isActive ? ' project-overview-item-active' : ''}`}
+                        key={project.id}
+                      >
+                        <button
+                          className="project-overview-main"
+                          type="button"
+                          aria-label={`打开项目 ${project.name}`}
+                          onClick={() => openProject(project.id)}
+                          disabled={status === 'streaming'}
+                        >
+                          <span className="project-overview-avatar" aria-hidden="true">
+                            {project.name.slice(0, 1).toLocaleUpperCase()}
+                          </span>
+                          <span className="project-overview-copy">
+                            <span className="project-overview-title">
+                              <strong>{project.name}</strong>
+                              {isActive ? (
+                                <span className="project-current-badge">当前</span>
+                              ) : null}
+                            </span>
+                            <span className="project-overview-path">
+                              <small className="project-folder-name">
+                                {project.folderPath ?? project.folderName}
+                              </small>
+                              {project.folderPath === undefined ? (
+                                <small className="project-folder-missing">未设置文件夹路径</small>
+                              ) : null}
+                            </span>
+                          </span>
+                          <span className="project-overview-meta">{sessionCount} 个会话</span>
+                        </button>
+                        <div
+                          className="project-overview-actions"
+                          role="group"
+                          aria-label={`管理项目 ${project.name}`}
+                        >
+                          <button
+                            className="project-action-button"
+                            type="button"
+                            aria-label={`在 ${project.name} 中新建会话`}
+                            title="新建会话"
+                            onClick={() => void createSessionForProject(project.id)}
+                            disabled={status === 'streaming'}
+                          >
+                            <MessageSquarePlus aria-hidden="true" />
+                          </button>
+                          <button
+                            className="project-action-button"
+                            type="button"
+                            aria-label={`重命名项目 ${project.name}`}
+                            title="重命名"
+                            onClick={() => openProjectRename(project)}
+                            disabled={status === 'streaming'}
+                          >
+                            <Pencil aria-hidden="true" />
+                          </button>
+                          <button
+                            className="project-action-button"
+                            type="button"
+                            aria-label={`设置项目 ${project.name} 的文件夹`}
+                            title="设置文件夹"
+                            onClick={() => openFolderDialog(project)}
+                            disabled={status === 'streaming'}
+                          >
+                            <FolderCog aria-hidden="true" />
+                          </button>
+                        </div>
+                      </article>
+                    );
+                  })}
                 </div>
               </>
             ) : activeView === 'archived' ? (
               <>
-                <div className="product-view-heading">
-                  <div>
-                    <p>WEAVE STUDIO</p>
+                <header className="page-header">
+                  <div className="page-header-copy">
                     <h2>归档</h2>
-                    <span>归档会话不会出现在项目树中，可以恢复或永久删除。</span>
+                    <p>归档会话不会出现在项目树中，可以恢复或永久删除。</p>
                   </div>
-                </div>
+                </header>
                 <div className="archive-overview-list" aria-label="归档会话列表">
                   {archivedProjects.length > 0 ? (
                     archivedProjects.map((project) => (
@@ -2733,14 +2864,18 @@ export function App() {
                         <div className="archive-project-heading">
                           <FolderOpen aria-hidden="true" />
                           <strong>{project.name}</strong>
-                          <small>{project.folderName}</small>
+                          <small>{project.sessions.length} 个归档会话</small>
                         </div>
                         <div className="archive-session-list">
                           {project.sessions.map((session) => (
                             <article className="archive-session-item" key={session.id}>
                               <div>
                                 <strong>{session.title}</strong>
-                                <small>已归档</small>
+                                <small>
+                                  {session.archivedAt === null
+                                    ? '已归档'
+                                    : `归档于 ${formatMessageTime(session.archivedAt)}`}
+                                </small>
                               </div>
                               <div className="archive-session-actions">
                                 <button
@@ -2776,7 +2911,13 @@ export function App() {
                       </section>
                     ))
                   ) : (
-                    <p className="archive-empty">暂无归档会话</p>
+                    <div className="page-empty">
+                      <span className="page-empty-icon" aria-hidden="true">
+                        <Archive />
+                      </span>
+                      <strong>暂无归档会话</strong>
+                      <p>在左侧会话列表中归档的会话会显示在这里。</p>
+                    </div>
                   )}
                 </div>
               </>
@@ -2900,53 +3041,55 @@ export function App() {
               </div>
             ) : (
               <>
-                <span className="product-view-icon" aria-hidden="true">
-                  {activeView === 'history' ? <History /> : <Settings />}
-                </span>
-                <p>WEAVE STUDIO</p>
-                <h2>{viewLabels[activeView].title}</h2>
-                <span>{viewLabels[activeView].description}</span>
+                <header className="page-header">
+                  <div className="page-header-copy">
+                    <h2>{viewLabels[activeView].title}</h2>
+                    <p>{viewLabels[activeView].description}。</p>
+                  </div>
+                </header>
+                <div className="page-empty">
+                  <span className="page-empty-icon" aria-hidden="true">
+                    <History />
+                  </span>
+                  <strong>暂无历史记录</strong>
+                  <p>跨项目的运行记录与会话时间线还在开发中。</p>
+                </div>
               </>
             )}
           </div>
         </section>
       )}
 
-      {activeView === 'studio' && isActivityPanelOpen ? (
-        <aside className="activity-panel activity-scroll" aria-label="运行活动">
-          <header className="activity-header">
-            <div>
-              <h2>会话概览</h2>
-            </div>
-            <button
-              className="icon-button"
-              type="button"
-              aria-label="收起上下文"
-              title="收起上下文"
-              onClick={() => setIsActivityPanelOpen(false)}
-            >
-              <PanelRight aria-hidden="true" />
-            </button>
-          </header>
-          <SessionOverview
-            statusKey={status}
-            statusLabel={statusLabels[status]}
-            isRunning={status === 'streaming'}
-            sessionLabel={getSessionLabel(activeSessionId)}
-            folderPath={activeProject?.folderPath}
-            modelLabel={`${selectedProvider?.label ?? selectedProviderId} · ${selectedModel}`}
-            turns={turns}
-            messages={messages}
-            errorMessage={errorMessage}
-            formatTime={formatMessageTime}
-            onSetFolder={() => {
+      {activeView === 'studio' ? (
+        <PanelContainer
+          collapsed={!isActivityPanelOpen}
+          width={panelWidth}
+          shellRef={shellRef}
+          conversationRef={chatColumnRef}
+          onResize={setPanelWidth}
+          onCollapse={() => setIsActivityPanelOpen(false)}
+          context={{
+            statusKey: status,
+            statusLabel: statusLabels[status],
+            isRunning: status === 'streaming',
+            sessionLabel: getSessionLabel(activeSessionId),
+            folderPath: activeProject?.folderPath,
+            modelLabel: formatModelLabel(
+              selectedProvider?.label ?? selectedProviderId,
+              selectedModel,
+            ),
+            turns,
+            messages,
+            errorMessage,
+            formatTime: formatMessageTime,
+            onSetFolder: () => {
               if (activeProject !== undefined) {
                 openFolderDialog(activeProject);
               }
-            }}
-            onJumpToMessage={jumpToMessage}
-          />
-        </aside>
+            },
+            onJumpToMessage: jumpToMessage,
+          }}
+        />
       ) : null}
       {notice !== null ? (
         <div className="studio-notice" role="status">
@@ -3278,6 +3421,77 @@ export function App() {
                   type="submit"
                   aria-label="保存标题"
                   disabled={sessionTitleInput.trim() === ''}
+                >
+                  保存
+                </button>
+              </footer>
+            </form>
+          </section>
+        </div>
+      ) : null}
+      {renamingProjectId !== null ? (
+        <div
+          className="dialog-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setRenamingProjectId(null);
+            }
+          }}
+        >
+          <section
+            className="project-dialog session-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="rename-project-dialog-title"
+          >
+            <header className="project-dialog-header">
+              <div>
+                <p>项目设置</p>
+                <h2 id="rename-project-dialog-title">重命名项目</h2>
+              </div>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="关闭重命名项目"
+                onClick={() => setRenamingProjectId(null)}
+              >
+                <X aria-hidden="true" />
+              </button>
+            </header>
+            <form
+              className="project-dialog-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void saveProjectName();
+              }}
+            >
+              <label className="project-name-field">
+                <span>项目名称</span>
+                <div>
+                  <FolderKanban aria-hidden="true" />
+                  <input
+                    type="text"
+                    aria-label="新的项目名称"
+                    value={projectRenameInput}
+                    onChange={(event) => setProjectRenameInput(event.target.value)}
+                    autoFocus
+                  />
+                </div>
+              </label>
+              <p className="project-dialog-note">只修改显示名称，项目文件夹和会话保持不变。</p>
+              <footer className="project-dialog-actions">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => setRenamingProjectId(null)}
+                >
+                  取消
+                </button>
+                <button
+                  className="primary-button"
+                  type="submit"
+                  aria-label="保存项目名称"
+                  disabled={projectRenameInput.trim() === ''}
                 >
                   保存
                 </button>

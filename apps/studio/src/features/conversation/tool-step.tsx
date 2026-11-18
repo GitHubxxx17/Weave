@@ -1,4 +1,15 @@
 import { type ReactElement } from 'react';
+import {
+  Check,
+  ChevronRight,
+  CircleAlert,
+  FilePen,
+  FileText,
+  LoaderCircle,
+  Search,
+  Wrench,
+  type LucideIcon,
+} from 'lucide-react';
 
 export type ToolStepStatus = 'called' | 'executing' | 'completed' | 'failed';
 
@@ -17,25 +28,49 @@ const statusLabels: Record<ToolStepStatus, string> = {
   failed: '失败',
 };
 
-/** Pulls a `path` argument out for the collapsed heading, when present. */
-function toolTarget(argumentsText: string): string | undefined {
+function parseArguments(argumentsText: string): unknown {
   try {
-    const parsed = JSON.parse(argumentsText) as unknown;
-    if (typeof parsed === 'object' && parsed !== null && 'path' in parsed) {
-      const value = (parsed as { path: unknown }).path;
-      return typeof value === 'string' ? value : undefined;
-    }
+    return JSON.parse(argumentsText) as unknown;
   } catch {
     return undefined;
+  }
+}
+
+/** Pulls a `path` argument out for the collapsed heading, when present. */
+function toolTarget(parsed: unknown): string | undefined {
+  if (typeof parsed === 'object' && parsed !== null && 'path' in parsed) {
+    const value = (parsed as { path: unknown }).path;
+    return typeof value === 'string' ? value : undefined;
   }
   return undefined;
 }
 
+/** Shows JSON arguments indented; anything else is shown as received. */
+function formatArguments(argumentsText: string, parsed: unknown): string {
+  return parsed === undefined ? argumentsText : JSON.stringify(parsed, null, 2);
+}
+
+function toolIcon(name: string): LucideIcon {
+  if (name === 'read_file') {
+    return FileText;
+  }
+  if (name === 'write_file') {
+    return FilePen;
+  }
+  return name.includes('search') ? Search : Wrench;
+}
+
+function statusLabel(tool: ToolStepData): string {
+  return tool.status === 'failed' && tool.result?.includes('tool-approval-rejected') === true
+    ? '已拒绝'
+    : statusLabels[tool.status];
+}
+
 /**
- * One tool call rendered as a collapsed row.
+ * One tool call rendered as a compact, collapsed row.
  *
- * Only the tool name, target path, and status show by default; the full
- * arguments and result are revealed on expand and scroll inside a bounded box
+ * The heading shows the tool, its target path, and its status; the formatted
+ * arguments and the result are revealed on expand inside bounded scroll boxes
  * so a large file never stretches the conversation.
  */
 export function ToolStep({
@@ -47,19 +82,42 @@ export function ToolStep({
   readonly defaultOpen?: boolean;
   readonly showTime?: string;
 }): ReactElement {
-  const target = toolTarget(tool.arguments);
+  const parsed = parseArguments(tool.arguments);
+  const target = toolTarget(parsed);
+  const Icon = toolIcon(tool.name);
+  const label = statusLabel(tool);
+
   return (
-    <details className="tool-step" open={defaultOpen}>
+    <details className={`tool-step tool-step-${tool.status}`} open={defaultOpen}>
       <summary className="tool-step-heading">
+        <ChevronRight className="disclosure-icon" aria-hidden="true" />
+        <span className="tool-step-icon" aria-hidden="true">
+          <Icon />
+        </span>
+        <strong className="tool-step-name">{tool.name}</strong>
+        <code className="tool-step-target" title={target}>
+          {target ?? ''}
+        </code>
         {showTime === undefined ? null : <span className="tool-step-time">{showTime}</span>}
-        <strong>{tool.name}</strong>
-        {target === undefined ? null : <code className="tool-step-target">{target}</code>}
-        <span className={`status-badge status-${tool.status}`}>{statusLabels[tool.status]}</span>
+        <span className={`tool-step-status tool-step-status-${tool.status}`} title={label}>
+          {tool.status === 'completed' ? <Check aria-hidden="true" /> : null}
+          {tool.status === 'executing' ? (
+            <LoaderCircle className="spin-icon" aria-hidden="true" />
+          ) : null}
+          {tool.status === 'failed' ? <CircleAlert aria-hidden="true" /> : null}
+          <span className={tool.status === 'completed' ? 'sr-only' : undefined}>{label}</span>
+        </span>
       </summary>
       <div className="tool-step-body">
-        <pre className="tool-step-args">{tool.arguments}</pre>
+        <div className="tool-step-block">
+          <span className="tool-step-label">参数</span>
+          <pre className="tool-step-code">{formatArguments(tool.arguments, parsed)}</pre>
+        </div>
         {tool.result !== undefined && tool.result !== '' ? (
-          <pre className="tool-step-result">{tool.result}</pre>
+          <div className="tool-step-block">
+            <span className="tool-step-label">结果</span>
+            <pre className="tool-step-code tool-step-code-result">{tool.result}</pre>
+          </div>
         ) : null}
       </div>
     </details>

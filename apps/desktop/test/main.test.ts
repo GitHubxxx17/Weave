@@ -58,6 +58,7 @@ vi.mock('@weave/server/main', () => ({
 const {
   createDesktopFetch,
   createMainWindow,
+  getWindowChrome,
   handlePickDirectory,
   startDesktopApplication,
   startDesktopServer,
@@ -113,7 +114,7 @@ describe('desktop main process', () => {
   });
 
   it('creates a hardened BrowserWindow and blocks external navigation', () => {
-    const window = createMainWindow(config, 'http://127.0.0.1:46321');
+    const window = createMainWindow(config, 'http://127.0.0.1:46321', 'native');
     const instance = mocks.FakeBrowserWindow.instances[0];
 
     expect(window).toBe(instance);
@@ -122,9 +123,13 @@ describe('desktop main process', () => {
         contextIsolation: true,
         nodeIntegration: false,
         preload: expect.stringMatching(/preload\.cjs$/),
-        additionalArguments: ['--weave-server-url=http%3A%2F%2F127.0.0.1%3A46321'],
+        additionalArguments: [
+          '--weave-server-url=http%3A%2F%2F127.0.0.1%3A46321',
+          '--weave-window-chrome=native',
+        ],
       },
     });
+    expect(instance?.options).not.toHaveProperty('titleBarStyle');
     expect(instance?.loadURL).toHaveBeenCalledWith(config.studioUrl);
 
     const navigateHandler = instance?.webContents.on.mock.calls.find(
@@ -138,6 +143,27 @@ describe('desktop main process', () => {
     const openHandler = instance?.webContents.setWindowOpenHandler.mock.calls[0]?.[0] as
       ((details: { url: string }) => { action: string }) | undefined;
     expect(openHandler?.({ url: 'http://127.0.0.1:5173/help' })).toEqual({ action: 'deny' });
+  });
+
+  it('hides the macOS title bar and tells the Renderer about it', () => {
+    expect(getWindowChrome('darwin')).toBe('hidden-inset');
+    expect(getWindowChrome('win32')).toBe('native');
+    expect(getWindowChrome('linux')).toBe('native');
+
+    createMainWindow(config, 'http://127.0.0.1:46321', 'hidden-inset');
+    const instance = mocks.FakeBrowserWindow.instances[0];
+
+    expect(instance?.options).toMatchObject({
+      backgroundColor: expect.stringMatching(/^#[0-9a-f]{6}$/),
+      titleBarStyle: 'hidden',
+      trafficLightPosition: { x: expect.any(Number), y: expect.any(Number) },
+      webPreferences: {
+        additionalArguments: [
+          '--weave-server-url=http%3A%2F%2F127.0.0.1%3A46321',
+          '--weave-window-chrome=hidden-inset',
+        ],
+      },
+    });
   });
 
   it('shows a user-visible error when the Server cannot start', async () => {
