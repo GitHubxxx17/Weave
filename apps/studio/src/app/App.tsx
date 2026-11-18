@@ -73,6 +73,23 @@ import type {
 } from '../features/workspace/workspace-types.js';
 
 type RunStatus = 'idle' | 'streaming' | 'completed' | 'error' | 'cancelled';
+
+/** Reactive run state kept per session so switching sessions never disturbs a run. */
+type SessionRunState = {
+  readonly status: RunStatus;
+  readonly errorMessage: string | null;
+};
+
+/** Non-reactive bookkeeping for the single in-flight run of one session. */
+type SessionRunHandle = {
+  runId: string;
+  controller: AbortController;
+  assistantId: string;
+  tools: readonly ToolActivity[];
+};
+
+const idleRunState: SessionRunState = { status: 'idle', errorMessage: null };
+
 type ProductView = 'studio' | 'projects' | 'history' | 'archived' | 'settings';
 type OpenMenu = 'project' | 'more' | 'context' | 'permission' | 'model' | null;
 
@@ -469,6 +486,7 @@ function messageToolResult(
 function toToolActivities(
   message: Extract<WorkspaceMessage, { role: 'assistant' }>,
   messages: readonly WorkspaceMessage[],
+  statusByToolCallId: ReadonlyMap<string, 'completed' | 'failed'>,
 ): ToolActivity[] {
   return (message.toolCalls ?? []).map((toolCall) => {
     const result = messageToolResult(messages, toolCall.id);
@@ -476,7 +494,7 @@ function toToolActivities(
       toolCallId: toolCall.id,
       name: toolCall.name,
       arguments: toolCall.arguments,
-      status: 'completed' as const,
+      status: statusByToolCallId.get(toolCall.id) ?? 'completed',
       ...(result === undefined ? {} : { result }),
     };
   });
@@ -490,7 +508,11 @@ function toToolActivities(
  * matches what the live run showed: reasoning and tool calls from every step
  * together, with the final step's text as the answer.
  */
-function toChatMessages(sessionId: string, messages: readonly WorkspaceMessage[]): ChatMessage[] {
+function toChatMessages(
+  sessionId: string,
+  messages: readonly WorkspaceMessage[],
+  statusByToolCallId: ReadonlyMap<string, 'completed' | 'failed'>,
+): ChatMessage[] {
   const result: ChatMessage[] = [];
   const turnCard = new Map<string, ChatMessage>();
 
@@ -512,7 +534,7 @@ function toChatMessages(sessionId: string, messages: readonly WorkspaceMessage[]
 
     const text = messageText(message);
     const reasoning = messageReasoning(message);
-    const tools = toToolActivities(message, messages);
+    const tools = toToolActivities(message, messages, statusByToolCallId);
     const existing = message.turnId === undefined ? undefined : turnCard.get(message.turnId);
 
     if (existing !== undefined) {
@@ -567,13 +589,21 @@ function formatMessageTime(occurredAt: string): string {
 }
 
 function toStudioSession(session: SessionSummary | SessionDetail): StudioSession {
+  const turns = 'turns' in session ? session.turns : [];
+  const statusByToolCallId = new Map<string, 'completed' | 'failed'>();
+  for (const turn of turns) {
+    for (const result of turn.toolResults) {
+      statusByToolCallId.set(result.toolCallId, result.status);
+    }
+  }
   return {
     id: session.id,
     title: session.title,
     lastUsedLabel: '最近使用',
     archivedAt: session.archivedAt ?? null,
-    messages: 'messages' in session ? toChatMessages(session.id, session.messages) : [],
-    turns: 'turns' in session ? session.turns : [],
+    messages:
+      'messages' in session ? toChatMessages(session.id, session.messages, statusByToolCallId) : [],
+    turns,
   };
 }
 
@@ -583,7 +613,8 @@ function toStudioProject(project: ProjectWithSessions): StudioProject {
     name: project.name,
     folderName: project.folderName,
     folderPath: project.folderPath,
-    sessions: project.sessions.map(toStudioSession),
+    // The server returns sessions in creation order; show newest first.
+    sessions: [...project.sessions].reverse().map(toStudioSession),
   };
 }
 
@@ -665,12 +696,24 @@ export function App() {
     readonly title: string;
   } | null>(null);
   const [expandedMessageIds, setExpandedMessageIds] = useState<readonly string[]>([]);
-  const [status, setStatus] = useState<RunStatus>('idle');
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const toolsRef = useRef<readonly ToolActivity[]>([]);
-  const latestAssistantMessageId = useRef<string | null>(null);
-  const controller = useRef<AbortController | null>(null);
-  const activeRunId = useRef<string | null>(null);
+  const [runStateBySession, setRunStateBySession] = useState<Record<string, SessionRunState>>({});
+  const runHandles = useRef<Map<string, SessionRunHandle>>(new Map());
+
+  /** Run status of any session; a session without a run is idle. */
+  function sessionRunStatus(sessionId: string): RunStatus {
+    return runStateBySession[sessionId]?.status ?? 'idle';
+  }
+  function isSessionStreaming(sessionId: string): boolean {
+    return sessionRunStatus(sessionId) === 'streaming';
+  }
+  function setSessionRunState(sessionId: string, next: SessionRunState): void {
+    setRunStateBySession((current) => ({ ...current, [sessionId]: next }));
+  }
+
+  // The composer, overview and footer always reflect the active session's run.
+  const activeRunState = runStateBySession[activeSessionId] ?? idleRunState;
+  const status = activeRunState.status;
+  const errorMessage = activeRunState.errorMessage;
   const activeSessionIdRef = useRef('');
   const messageInputRef = useRef<HTMLTextAreaElement | null>(null);
   const directoryInputRef = useRef<HTMLInputElement | null>(null);
@@ -693,6 +736,11 @@ export function App() {
       lastReplyIdByTurn.set(message.turnId, message.id);
     }
   }
+  // The viewed session's most recent assistant message drives the live / terminal
+  // placeholder and spinner, so it stays correct for any session, including a
+  // background one that is still streaming.
+  const latestAssistantId =
+    [...messages].reverse().find((message) => message.role === 'assistant')?.id ?? null;
 
   /** Runs the last user message again as a new Turn; history is kept. */
   function retryLastTurn(): void {
@@ -933,12 +981,22 @@ export function App() {
   }
 
   /** Clears run-scoped state when the active session changes. */
+  /** Resets view-only state (expanded process panels) when the active session changes. */
   function resetTransientState(): void {
-    latestAssistantMessageId.current = null;
-    toolsRef.current = [];
     setExpandedMessageIds([]);
-    setErrorMessage(null);
-    setStatus('idle');
+  }
+
+  /** Clears the active session's transient run status and expanded panels. */
+  function clearActiveRunState(): void {
+    setExpandedMessageIds([]);
+    setRunStateBySession((current) => {
+      if (current[activeSessionId] === undefined) {
+        return current;
+      }
+      return Object.fromEntries(
+        Object.entries(current).filter(([sessionId]) => sessionId !== activeSessionId),
+      );
+    });
   }
 
   function applySessionDetail(projectId: string, detail: SessionDetail): void {
@@ -957,8 +1015,17 @@ export function App() {
   }
 
   async function loadSessionDetail(projectId: string, sessionId: string): Promise<void> {
+    // A streaming session's freshest messages live in memory; a server snapshot
+    // would clobber its in-flight assistant message, so skip the reload while it runs.
+    if (runHandles.current.has(sessionId)) {
+      return;
+    }
     try {
       const detail = await workspaceApi.getSession(sessionId);
+      // A run may have started while the snapshot was in flight; don't clobber it.
+      if (runHandles.current.has(sessionId)) {
+        return;
+      }
       applySessionDetail(projectId, detail);
     } catch (error: unknown) {
       if (activeSessionIdRef.current === sessionId) {
@@ -983,7 +1050,8 @@ export function App() {
     projectId: string,
     sessionId: string,
   ): void {
-    if (activeRunId.current !== runId) {
+    const handle = runHandles.current.get(sessionId);
+    if (handle === undefined || handle.runId !== runId) {
       return;
     }
 
@@ -1005,7 +1073,7 @@ export function App() {
         );
         break;
       case 'tool-call':
-        toolsRef.current = updateToolActivity(toolsRef.current, event.toolCall.id, () => ({
+        handle.tools = updateToolActivity(handle.tools, event.toolCall.id, () => ({
           toolCallId: event.toolCall.id,
           name: event.toolCall.name,
           arguments: event.toolCall.arguments,
@@ -1013,12 +1081,12 @@ export function App() {
         }));
         updateSessionMessages(projectId, sessionId, (messages) =>
           messages.map((message) =>
-            message.id === assistantId ? { ...message, tools: toolsRef.current } : message,
+            message.id === assistantId ? { ...message, tools: handle.tools } : message,
           ),
         );
         break;
       case 'tool-executing':
-        toolsRef.current = updateToolActivity(toolsRef.current, event.toolCall.id, (existing) => {
+        handle.tools = updateToolActivity(handle.tools, event.toolCall.id, (existing) => {
           const updated: ToolActivity = {
             toolCallId: event.toolCall.id,
             name: event.toolCall.name,
@@ -1029,25 +1097,21 @@ export function App() {
         });
         updateSessionMessages(projectId, sessionId, (messages) =>
           messages.map((message) =>
-            message.id === assistantId ? { ...message, tools: toolsRef.current } : message,
+            message.id === assistantId ? { ...message, tools: handle.tools } : message,
           ),
         );
         break;
       case 'tool-result':
-        toolsRef.current = updateToolActivity(
-          toolsRef.current,
-          event.result.toolCallId,
-          (existing) => ({
-            toolCallId: event.result.toolCallId,
-            name: event.result.name,
-            arguments: existing?.arguments ?? '',
-            status: event.status === 'failed' ? 'failed' : 'completed',
-            result: event.result.content,
-          }),
-        );
+        handle.tools = updateToolActivity(handle.tools, event.result.toolCallId, (existing) => ({
+          toolCallId: event.result.toolCallId,
+          name: event.result.name,
+          arguments: existing?.arguments ?? '',
+          status: event.status === 'failed' ? 'failed' : 'completed',
+          result: event.result.content,
+        }));
         updateSessionMessages(projectId, sessionId, (messages) =>
           messages.map((message) =>
-            message.id === assistantId ? { ...message, tools: toolsRef.current } : message,
+            message.id === assistantId ? { ...message, tools: handle.tools } : message,
           ),
         );
         updateSessionTurns(projectId, sessionId, (turns) =>
@@ -1101,7 +1165,7 @@ export function App() {
         break;
       }
       case 'completed': {
-        setStatus('completed');
+        setSessionRunState(sessionId, { status: 'completed', errorMessage: null });
         const liveTurnId = liveTurnIdFor(assistantId);
         const completedAt = new Date().toISOString();
         updateSessionTurns(projectId, sessionId, (turns) =>
@@ -1224,6 +1288,17 @@ export function App() {
     }
     const { projectId, sessionId } = sessionContext;
 
+    // Persist a generated title on the first message of an untitled session so
+    // it survives a reload (the local title update below is only cosmetic).
+    const generatedTitle = createSessionTitle(text);
+    const existingTitle = projects
+      .find((project) => project.id === projectId)
+      ?.sessions.find((session) => session.id === sessionId)?.title;
+    const shouldPersistTitle =
+      retryText === undefined &&
+      generatedTitle !== '' &&
+      (existingTitle === undefined || existingTitle === '未命名会话' || existingTitle === '');
+
     const userMessageId = createId('user');
     const assistantId = createId('assistant');
     const liveTurnId = liveTurnIdFor(assistantId);
@@ -1231,9 +1306,12 @@ export function App() {
     const requestController = new AbortController();
     const occurredAt = new Date().toISOString();
 
-    latestAssistantMessageId.current = assistantId;
-    activeRunId.current = runId;
-    controller.current = requestController;
+    runHandles.current.set(sessionId, {
+      runId,
+      controller: requestController,
+      assistantId,
+      tools: [],
+    });
     conversationScroll.scrollToBottom('auto');
     updateSessionMessages(projectId, sessionId, (current) => [
       ...current,
@@ -1264,6 +1342,7 @@ export function App() {
         provider: selectedProviderId,
         model: selectedModel,
         modelSteps: [],
+        toolResults: [],
         toolCalls: 0,
         failedToolCalls: 0,
       },
@@ -1290,10 +1369,11 @@ export function App() {
     if (retryText === undefined) {
       setMessageInput('');
     }
-    toolsRef.current = [];
+    if (shouldPersistTitle) {
+      void workspaceApi.renameSession(sessionId, generatedTitle).catch(() => undefined);
+    }
     setExpandedMessageIds([assistantId]);
-    setErrorMessage(null);
-    setStatus('streaming');
+    setSessionRunState(sessionId, { status: 'streaming', errorMessage: null });
 
     try {
       await streamAgentRun(
@@ -1310,32 +1390,30 @@ export function App() {
         { signal: requestController.signal },
       );
     } catch (error: unknown) {
-      if (activeRunId.current !== runId) {
+      if (runHandles.current.get(sessionId)?.runId !== runId) {
         return;
       }
 
       if (error instanceof DOMException && error.name === 'AbortError') {
-        setStatus('cancelled');
+        setSessionRunState(sessionId, { status: 'cancelled', errorMessage: null });
         finishLiveTurn(projectId, sessionId, liveTurnId, 'cancelled');
       } else {
-        setErrorMessage(safeErrorMessage(error));
-        setStatus('error');
+        setSessionRunState(sessionId, {
+          status: 'error',
+          errorMessage: safeErrorMessage(error),
+        });
         finishLiveTurn(projectId, sessionId, liveTurnId, 'failed');
       }
     } finally {
-      if (activeRunId.current === runId) {
-        activeRunId.current = null;
-        controller.current = null;
+      if (runHandles.current.get(sessionId)?.runId === runId) {
+        runHandles.current.delete(sessionId);
       }
     }
   }
 
   /** Selects a session from any project and keeps the project/session context aligned. */
   function selectProjectSession(projectId: string, sessionId: string): void {
-    if (
-      status === 'streaming' ||
-      (projectId === activeProjectId && sessionId === activeSessionId)
-    ) {
+    if (projectId === activeProjectId && sessionId === activeSessionId) {
       return;
     }
 
@@ -1365,7 +1443,7 @@ export function App() {
   }
 
   function openSessionEditor(projectId: string, sessionId: string): void {
-    if (status === 'streaming') {
+    if (sessionRunStatus(sessionId) === 'streaming') {
       return;
     }
 
@@ -1383,7 +1461,7 @@ export function App() {
   async function saveSessionTitle(): Promise<void> {
     const editing = editingSession;
     const title = sessionTitleInput.trim();
-    if (editing === null || title === '' || status === 'streaming') {
+    if (editing === null || title === '' || sessionRunStatus(editing.sessionId) === 'streaming') {
       return;
     }
 
@@ -1397,7 +1475,7 @@ export function App() {
   }
 
   async function archiveSession(projectId: string, sessionId: string): Promise<void> {
-    if (status === 'streaming') {
+    if (sessionRunStatus(sessionId) === 'streaming') {
       return;
     }
 
@@ -1439,7 +1517,7 @@ export function App() {
 
   async function permanentlyDeleteSession(): Promise<void> {
     const session = sessionToDelete;
-    if (session === null || status === 'streaming') {
+    if (session === null || sessionRunStatus(session.sessionId) === 'streaming') {
       return;
     }
 
@@ -1483,10 +1561,6 @@ export function App() {
 
   /** Creates an empty local session and focuses it in the session rail. */
   async function createSession(): Promise<void> {
-    if (status === 'streaming') {
-      return;
-    }
-
     try {
       let project = projects.find((candidate) => candidate.id === activeProjectId);
       if (project === undefined) {
@@ -1507,7 +1581,7 @@ export function App() {
 
   /** Switches the Studio to another local project and its most recent session. */
   function selectProject(projectId: string): void {
-    if (status === 'streaming' || projectId === activeProjectId) {
+    if (projectId === activeProjectId) {
       setOpenMenu(null);
       return;
     }
@@ -1533,9 +1607,6 @@ export function App() {
    * blank workbench; the first message there creates its session.
    */
   function openProject(projectId: string): void {
-    if (status === 'streaming') {
-      return;
-    }
     const project = projects.find((candidate) => candidate.id === projectId);
     if (project === undefined) {
       return;
@@ -1560,9 +1631,6 @@ export function App() {
   }
 
   function openProjectRename(project: StudioProject): void {
-    if (status === 'streaming') {
-      return;
-    }
     setOpenMenu(null);
     setRenamingProjectId(project.id);
     setProjectRenameInput(project.name);
@@ -1588,10 +1656,6 @@ export function App() {
   }
 
   function openProjectDialog(): void {
-    if (status === 'streaming') {
-      return;
-    }
-
     setOpenMenu(null);
     setProjectName('');
     setSelectedFolderName('');
@@ -1658,7 +1722,7 @@ export function App() {
   async function createProject(): Promise<void> {
     const name = projectName.trim();
     const folderName = selectedFolderName.trim();
-    if (name === '' || folderName === '' || status === 'streaming') {
+    if (name === '' || folderName === '') {
       return;
     }
 
@@ -1982,18 +2046,17 @@ export function App() {
   }
 
   function cancelRun(): void {
-    const requestController = controller.current;
-    if (requestController === null) {
+    const sessionId = activeSessionId;
+    const handle = runHandles.current.get(sessionId);
+    if (handle === undefined) {
       return;
     }
 
-    activeRunId.current = null;
-    controller.current = null;
-    requestController.abort();
-    setStatus('cancelled');
-    const assistantId = latestAssistantMessageId.current;
-    if (assistantId !== null && activeProjectId !== '' && activeSessionId !== '') {
-      finishLiveTurn(activeProjectId, activeSessionId, liveTurnIdFor(assistantId), 'cancelled');
+    runHandles.current.delete(sessionId);
+    handle.controller.abort();
+    setSessionRunState(sessionId, { status: 'cancelled', errorMessage: null });
+    if (activeProjectId !== '' && sessionId !== '') {
+      finishLiveTurn(activeProjectId, sessionId, liveTurnIdFor(handle.assistantId), 'cancelled');
     }
   }
 
@@ -2143,7 +2206,6 @@ export function App() {
               type="button"
               aria-label={`${activeProject?.name ?? '当前'} 项目`}
               aria-expanded={openMenu === 'project'}
-              disabled={status === 'streaming'}
               onClick={() => toggleMenu('project')}
             >
               <span className="project-avatar" aria-hidden="true">
@@ -2206,12 +2268,7 @@ export function App() {
               </div>
             ) : null}
           </div>
-          <button
-            className="new-session-button"
-            type="button"
-            onClick={() => void createSession()}
-            disabled={status === 'streaming'}
-          >
+          <button className="new-session-button" type="button" onClick={() => void createSession()}>
             <Plus aria-hidden="true" />
             新建会话
           </button>
@@ -2258,7 +2315,6 @@ export function App() {
                       aria-label={`${isExpanded ? '收起' : '展开'}项目 ${project.name}`}
                       aria-expanded={isExpanded}
                       onClick={() => toggleProjectExpanded(project.id)}
-                      disabled={status === 'streaming'}
                     >
                       {isExpanded ? (
                         <ChevronDown aria-hidden="true" />
@@ -2271,7 +2327,6 @@ export function App() {
                       type="button"
                       aria-label={`项目：${project.name}`}
                       onClick={() => selectProject(project.id)}
-                      disabled={status === 'streaming'}
                     >
                       <FolderOpen aria-hidden="true" />
                       <span>
@@ -2296,14 +2351,19 @@ export function App() {
                               type="button"
                               aria-label={`会话：${session.title}`}
                               onClick={() => selectProjectSession(project.id, session.id)}
-                              disabled={status === 'streaming'}
                             >
                               <span>
                                 <strong>{session.title}</strong>
                                 <small>{session.lastUsedLabel}</small>
                               </span>
                             </button>
-                            {session.id === activeSessionId && project.id === activeProjectId ? (
+                            {isSessionStreaming(session.id) ? (
+                              <span
+                                className="session-running-dot"
+                                aria-label="运行中"
+                                title="运行中"
+                              />
+                            ) : session.id === activeSessionId && project.id === activeProjectId ? (
                               <span className="session-dot" aria-hidden="true" />
                             ) : null}
                             <div className="session-actions" role="group" aria-label="会话操作">
@@ -2313,7 +2373,7 @@ export function App() {
                                 aria-label="编辑会话"
                                 title="编辑会话标题"
                                 onClick={() => openSessionEditor(project.id, session.id)}
-                                disabled={status === 'streaming'}
+                                disabled={isSessionStreaming(session.id)}
                               >
                                 <Pencil aria-hidden="true" />
                               </button>
@@ -2323,7 +2383,7 @@ export function App() {
                                 aria-label="归档会话"
                                 title="归档会话"
                                 onClick={() => void archiveSession(project.id, session.id)}
-                                disabled={status === 'streaming'}
+                                disabled={isSessionStreaming(session.id)}
                               >
                                 <Archive aria-hidden="true" />
                               </button>
@@ -2386,7 +2446,7 @@ export function App() {
                       type="button"
                       role="menuitem"
                       onClick={() => {
-                        resetTransientState();
+                        clearActiveRunState();
                         showNotice('运行状态已清空');
                       }}
                     >
@@ -2442,7 +2502,7 @@ export function App() {
               ) : (
                 messages.map((message) => {
                   const isLatestAssistant =
-                    message.role === 'assistant' && message.id === latestAssistantMessageId.current;
+                    message.role === 'assistant' && message.id === latestAssistantId;
                   const hasProcess =
                     message.role === 'assistant' &&
                     (message.reasoning !== '' ||
