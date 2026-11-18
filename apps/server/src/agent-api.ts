@@ -5,6 +5,7 @@ import { userMessageSchema } from '@weave/protocol';
 import {
   AgentRunError,
   ToolExecutionError,
+  toolPermissionModeSchema,
   type AgentRunner,
   type AgentRuntimeEvent,
   type Runtime,
@@ -20,6 +21,7 @@ const agentHttpRequestSchema = z
     temperature: z.number().finite().nonnegative().optional(),
     maxTokens: z.number().finite().nonnegative().optional(),
     reasoningEffort: z.string().min(1).optional(),
+    permissionMode: toolPermissionModeSchema.optional(),
   })
   .strict();
 

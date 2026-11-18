@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -14,9 +14,11 @@ import {
   createServerAgentRunner,
   createServerRuntime,
   getServerSessionStore,
+  type ServerAgentRunnerOptions,
 } from '../src/runtime.js';
+import { parseAgentMaxSteps } from '../src/main.js';
 import { createWorkspaceRootResolver } from '../src/workspace-root.js';
-import { createAgentInstructions } from '../src/agent-instructions.js';
+import { createAgentInstructions, readProjectInstructions } from '../src/agent-instructions.js';
 
 const cleanups: Array<() => Promise<void>> = [];
 
@@ -60,6 +62,7 @@ const finalText: readonly StreamEvent[] = [
 async function createAgentApp(
   scripts: readonly (readonly StreamEvent[])[],
   folderPath: string | undefined,
+  runnerOptions: Omit<ServerAgentRunnerOptions, 'resolveWorkspaceRoot'> = {},
 ) {
   const registry = createLlmProviderRegistry([
     {
@@ -90,6 +93,7 @@ async function createAgentApp(
   const app = createApp(runtime, {
     agentRunner: createServerAgentRunner(runtime, {
       resolveWorkspaceRoot: createWorkspaceRootResolver(projectStore),
+      ...runnerOptions,
     }),
     sessionService,
   });
@@ -211,6 +215,97 @@ describe('Default Agent Workspace file tools', () => {
     expect(body).toContain('"status":"failed","errorCode":"tool-execution-failed"');
     expect(body).toMatch(/event: completed\n/);
   });
+
+  it('edits a file after an Approval that shows the diff', async () => {
+    const folder = await createTemporaryFolder();
+    await writeFile(join(folder, 'app.ts'), 'const a = 1;\nconst b = 2;\n', 'utf8');
+    const { run, broker } = await createAgentApp(
+      [
+        toolCallScript('call-edit', 'edit_file', {
+          path: 'app.ts',
+          oldText: 'const a = 1;',
+          newText: 'const a = 10;',
+        }),
+        finalText,
+      ],
+      folder,
+    );
+    const diffs: string[] = [];
+    const unsubscribe = broker.subscribe((event) => {
+      if (event.type === 'approval.created') {
+        diffs.push((event.request.inputSummary as { diff: string }).diff);
+        broker.approve(event.request.approvalId);
+      }
+    });
+    cleanups.push(async () => unsubscribe());
+
+    const body = await run('把 a 改成 10');
+
+    expect(diffs[0]).toContain('-const a = 1;\n+const a = 10;');
+    expect(body).toContain('"name":"edit_file"');
+    await expect(readFile(join(folder, 'app.ts'), 'utf8')).resolves.toBe(
+      'const a = 10;\nconst b = 2;\n',
+    );
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'runs a command in the Project folder after Approval',
+    async () => {
+      const folder = await createTemporaryFolder();
+      const { run, broker } = await createAgentApp(
+        [
+          toolCallScript('call-cmd', 'run_command', { command: 'echo hello-from-command' }),
+          finalText,
+        ],
+        folder,
+        { commandEnvironment: () => ({ ...process.env }) },
+      );
+      const unsubscribe = broker.subscribe((event) => {
+        if (event.type === 'approval.created') {
+          expect(event.request).toMatchObject({
+            toolName: 'run_command',
+            risk: 'high',
+            inputSummary: { command: 'echo hello-from-command', cwd: '.' },
+          });
+          broker.approve(event.request.approvalId);
+        }
+      });
+      cleanups.push(async () => unsubscribe());
+
+      const body = await run('运行一个命令');
+
+      expect(body).toContain('exit code: 0');
+      expect(body).toContain('hello-from-command');
+      expect(body).toMatch(/event: completed\n/);
+    },
+  );
+
+  it('completes the turn with a reason at the configured step limit', async () => {
+    const folder = await createTemporaryFolder();
+    await writeFile(join(folder, 'README.md'), '项目说明', 'utf8');
+    const { run } = await createAgentApp(
+      [toolCallScript('call-read', 'read_file', { path: 'README.md' })],
+      folder,
+      { maxSteps: 1 },
+    );
+
+    const body = await run('读一下 README');
+
+    expect(body).toMatch(
+      /event: completed\ndata: \{"type":"completed","turnId":"[^"]+","reason":"agent-step-limit"\}/,
+    );
+  });
+});
+
+describe('Agent step limit setting', () => {
+  it('reads WEAVE_AGENT_MAX_STEPS and rejects invalid values', () => {
+    expect(parseAgentMaxSteps(undefined)).toBeUndefined();
+    expect(parseAgentMaxSteps(' ')).toBeUndefined();
+    expect(parseAgentMaxSteps('20')).toBe(20);
+    expect(() => parseAgentMaxSteps('0')).toThrow(/WEAVE_AGENT_MAX_STEPS/);
+    expect(() => parseAgentMaxSteps('2.5')).toThrow(/WEAVE_AGENT_MAX_STEPS/);
+    expect(() => parseAgentMaxSteps('many')).toThrow(/WEAVE_AGENT_MAX_STEPS/);
+  });
 });
 
 describe('Project folder validation', () => {
@@ -258,24 +353,104 @@ describe('Project folder validation', () => {
 });
 
 describe('Default Agent instructions', () => {
-  it('tells the model its tools and the Project folder', async () => {
+  const allTools = [
+    { name: 'list_dir', readOnly: true },
+    { name: 'glob', readOnly: true },
+    { name: 'grep', readOnly: true },
+    { name: 'read_file', readOnly: true },
+    { name: 'edit_file' },
+    { name: 'write_file' },
+    { name: 'run_command' },
+    { name: 'recall', readOnly: true },
+  ];
+  const fixedEnvironment = {
+    platform: 'darwin' as const,
+    shell: '/bin/zsh',
+    now: () => new Date(2026, 10, 18, 9, 30),
+    gitBranch: async () => 'main',
+    projectInstructions: async () => undefined,
+  };
+
+  it('tells the model its tools, how to use them and the Project folder', async () => {
     const instructions = createAgentInstructions({
-      toolNames: () => ['read_file', 'write_file'],
+      tools: () => allTools,
       resolveWorkspaceRoot: async () => '/Users/me/demo',
+      environment: fixedEnvironment,
     });
 
     const text = await instructions({ sessionId: 'session-1' });
 
     expect(text).toContain('Weave Agent');
-    expect(text).toContain('read_file、write_file');
-    expect(text).toContain('当前项目文件夹：/Users/me/demo');
+    expect(text).toContain(
+      '本轮可用的工具：list_dir、glob、grep、read_file、edit_file、write_file、run_command、recall。',
+    );
+    expect(text).toContain('先用 list_dir、glob、grep 找到相关文件，再用 read_file 读需要的部分');
+    expect(text).toContain('修改已有文件用 edit_file');
+    expect(text).toContain('用 run_command 运行相关的测试');
+    expect(text).toContain(
+      '权限：当前是"工作区访问"模式。edit_file、write_file、run_command 每次都要用户在界面上确认；命令不在沙箱中运行。',
+    );
+    expect(text).toContain('- 系统 macOS，Shell /bin/zsh，今天是 2026-11-18');
+    expect(text).toContain('- 当前项目文件夹：/Users/me/demo，Git 分支 main');
     expect(text).toContain('相对这个文件夹的路径');
+    expect(text).toContain('recall');
+  });
+
+  it('lists only read-only tools and explains the mode in read-only runs', async () => {
+    const instructions = createAgentInstructions({
+      tools: () => allTools,
+      resolveWorkspaceRoot: async () => '/Users/me/demo',
+      environment: fixedEnvironment,
+    });
+
+    const text = await instructions({ sessionId: 'session-1', permissionMode: 'read-only' });
+
+    expect(text).toContain('本轮可用的工具：list_dir、glob、grep、read_file、recall。');
+    expect(text).toContain('当前是"仅查看"模式');
+    expect(text).not.toContain('edit_file');
+    expect(text).not.toContain('run_command');
+  });
+
+  it('includes the AGENTS.md of the Project folder', async () => {
+    const folder = await createTemporaryFolder();
+    await writeFile(
+      join(folder, 'AGENTS.md'),
+      '# Rules\n\nRun pnpm check before committing.\n',
+      'utf8',
+    );
+    const instructions = createAgentInstructions({
+      tools: () => allTools,
+      resolveWorkspaceRoot: async () => folder,
+      environment: { ...fixedEnvironment, projectInstructions: readProjectInstructions },
+    });
+
+    const text = await instructions({ sessionId: 'session-1' });
+
+    expect(text).toContain('项目说明（来自项目根目录的 AGENTS.md，请遵守其中的约定）：\n# Rules');
+    expect(text).toContain('Run pnpm check before committing.');
+  });
+
+  it('reads at most 32 KB of AGENTS.md and ignores a symlink that leaves the folder', async () => {
+    const folder = await createTemporaryFolder();
+    await writeFile(join(folder, 'AGENTS.md'), `${'rule line\n'.repeat(5000)}`, 'utf8');
+    const long = await readProjectInstructions(folder);
+    expect(long?.truncated).toBe(true);
+    expect(Buffer.byteLength(long?.text ?? '', 'utf8')).toBeLessThanOrEqual(32 * 1024);
+    expect(long?.text.endsWith('rule line')).toBe(true);
+
+    const outside = await createTemporaryFolder();
+    const linked = await createTemporaryFolder();
+    await writeFile(join(outside, 'AGENTS.md'), 'outside rules', 'utf8');
+    await symlink(join(outside, 'AGENTS.md'), join(linked, 'AGENTS.md'));
+    await expect(readProjectInstructions(linked)).resolves.toBeUndefined();
+    await expect(readProjectInstructions(await createTemporaryFolder())).resolves.toBeUndefined();
   });
 
   it('tells the model when the Project has no folder', async () => {
     const instructions = createAgentInstructions({
-      toolNames: () => ['read_file', 'write_file'],
+      tools: () => allTools,
       resolveWorkspaceRoot: async () => undefined,
+      environment: fixedEnvironment,
     });
 
     await expect(instructions({ sessionId: 'session-1' })).resolves.toContain(
@@ -284,11 +459,15 @@ describe('Default Agent instructions', () => {
   });
 
   it('states that no tools are available when the registry is empty', async () => {
-    const instructions = createAgentInstructions({ toolNames: () => [] });
+    const instructions = createAgentInstructions({
+      tools: () => [],
+      environment: fixedEnvironment,
+    });
 
     const text = await instructions({ sessionId: 'session-1' });
     expect(text).toContain('本轮没有可用的工具');
     expect(text).not.toContain('文件夹');
+    expect(text).not.toContain('权限');
   });
 
   it('is sent as the first message of every model request', async () => {
@@ -348,10 +527,86 @@ describe('Default Agent instructions', () => {
     expect(requests[0]?.messages[0]?.role).toBe('system');
     expect(JSON.stringify(requests[0]?.messages[0])).toContain(`当前项目文件夹：${folder}`);
     expect(requests[0]?.tools?.map((tool) => tool.name)).toEqual([
+      'list_dir',
+      'glob',
+      'grep',
       'read_file',
+      'edit_file',
       'write_file',
+      'run_command',
       'recall',
     ]);
+  });
+
+  it('sends only read-only tools when the request asks for read-only mode', async () => {
+    const folder = await createTemporaryFolder();
+    const requests: LlmRequest[] = [];
+    const registry = createLlmProviderRegistry([
+      {
+        id: 'mock',
+        label: '本地演示',
+        type: 'mock',
+        client: {
+          async *stream(request) {
+            requests.push(structuredClone(request));
+            yield { type: 'text-delta', text: '好的' } as const;
+            yield { type: 'finish', reason: 'stop' } as const;
+          },
+        },
+        defaultModel: 'test-model',
+      },
+    ]);
+    const runtime = createServerRuntime({
+      providerSettings: { registry, providers: registry.list(), defaultProvider: 'mock' },
+    });
+    await runtime.start();
+    cleanups.push(() => runtime.stop());
+    const projectStore = createInMemoryProjectStore();
+    cleanups.push(() => projectStore.close());
+    const project = await projectStore.createProject({
+      name: 'Files',
+      folderName: 'files',
+      folderPath: folder,
+    });
+    const sessionService = createSessionService({
+      projectStore,
+      sessionStore: getServerSessionStore(runtime),
+    });
+    const session = await sessionService.create(project.id);
+    const app = createApp(runtime, {
+      agentRunner: createServerAgentRunner(runtime, {
+        resolveWorkspaceRoot: createWorkspaceRootResolver(projectStore),
+      }),
+      sessionService,
+    });
+    const body = {
+      sessionId: session.id,
+      userMessage: { role: 'user', content: [{ type: 'text', text: '看看项目' }] },
+      provider: 'mock',
+      model: 'test-model',
+    };
+
+    const response = await app.request('/agent/runs/stream', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...body, permissionMode: 'read-only' }),
+    });
+    await response.text();
+    expect(requests[0]?.tools?.map((tool) => tool.name)).toEqual([
+      'list_dir',
+      'glob',
+      'grep',
+      'read_file',
+      'recall',
+    ]);
+    expect(JSON.stringify(requests[0]?.messages[0])).toContain('仅查看');
+
+    const invalid = await app.request('/agent/runs/stream', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...body, permissionMode: 'everything' }),
+    });
+    expect(invalid.status).toBe(400);
   });
 });
 

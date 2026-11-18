@@ -39,6 +39,24 @@ const studioOriginSchema = z
   .transform((value) => new URL(value).origin)
   .optional();
 const defaultPort = 4317;
+const agentMaxStepsSchema = z.coerce.number().int().min(1).max(1000);
+
+/**
+ * Reads `WEAVE_AGENT_MAX_STEPS`, the model steps allowed per Agent turn.
+ *
+ * Returns `undefined` when unset so the Runtime default applies; an invalid
+ * value stops startup instead of being ignored.
+ */
+export function parseAgentMaxSteps(value: string | undefined): number | undefined {
+  if (value === undefined || value.trim() === '') {
+    return undefined;
+  }
+  const parsed = agentMaxStepsSchema.safeParse(value.trim());
+  if (!parsed.success) {
+    throw new Error('WEAVE_AGENT_MAX_STEPS must be an integer between 1 and 1000');
+  }
+  return parsed.data;
+}
 
 export interface StartServerOptions {
   readonly databaseFile?: string;
@@ -110,6 +128,7 @@ export async function startServer(
   const port = portSchema.parse(portInput);
   const persistence = persistenceOptionsSchema.parse(options);
   const studioOrigin = studioOriginSchema.parse(options.studioOrigin);
+  const maxSteps = parseAgentMaxSteps((options.environment ?? process.env).WEAVE_AGENT_MAX_STEPS);
   const databaseFile = resolveDatabaseFile({
     ...(persistence.databaseFile === undefined ? {} : { databaseFile: persistence.databaseFile }),
     ...(persistence.dataDirectory === undefined
@@ -154,6 +173,7 @@ export async function startServer(
     const sessionService = createSessionService({ projectStore, sessionStore });
     const agentRunner = createServerAgentRunner(runtime, {
       resolveWorkspaceRoot: createWorkspaceRootResolver(projectStore),
+      ...(maxSteps === undefined ? {} : { maxSteps }),
     });
 
     let resolveListening!: () => void;

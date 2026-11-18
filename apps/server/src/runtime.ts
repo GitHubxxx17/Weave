@@ -9,6 +9,7 @@ import type { SessionEventStore } from '@weave/session';
 import {
   createApprovalBroker,
   createAgentRunner,
+  createCommandTool,
   createRecallTool,
   createSessionRecallResolver,
   createToolPipeline,
@@ -17,12 +18,14 @@ import {
   createSessionEventStoreService,
   createWorkspaceFileTools,
   createWorkspacePolicy,
+  createWorkspaceSearchTools,
   type AgentRunner,
   type ApprovalBroker,
   type Runtime,
   type RuntimeService,
   type SessionEventStoreFactory,
   type ToolRegistry,
+  type WorkspaceResolver,
 } from '@weave/runtime';
 import { createInMemorySessionEventStore } from '@weave/session';
 import { createServerLlmProviders, type ServerLlmProviderSettings } from './llm-providers.js';
@@ -62,6 +65,10 @@ export interface ServerAgentRunnerOptions {
   readonly resolveWorkspaceRoot?: (sessionId: string) => Promise<string | undefined>;
   /** Overrides {@link defaultToolTimeoutMs}; mainly for tests. */
   readonly toolTimeoutMs?: number;
+  /** Model steps allowed per turn; the Runtime default applies when omitted. */
+  readonly maxSteps?: number;
+  /** Base environment for `run_command`; defaults to the login shell environment. */
+  readonly commandEnvironment?: () => NodeJS.ProcessEnv | Promise<NodeJS.ProcessEnv>;
 }
 
 /**
@@ -118,9 +125,11 @@ export async function registerServerPlugins(
  * The composition root owns this assembly because the current Runtime service
  * factory does not declare dependencies between services.
  *
- * When `resolveWorkspaceRoot` is supplied, `read_file` and `write_file` are
- * registered after trusted plugins and resolve the Workspace of each call's
- * Session. A Session whose Project has no folder gets `workspace-file-unavailable`.
+ * When `resolveWorkspaceRoot` is supplied, the Workspace tools are registered
+ * after trusted plugins, in the order the model should reach for them:
+ * `list_dir`, `glob`, `grep`, `read_file`, `edit_file`, `write_file`,
+ * `run_command`. Each call resolves the Workspace of its Session; a Session
+ * whose Project has no folder gets `workspace-file-unavailable`.
  */
 export function createServerAgentRunner(
   runtime: Runtime,
@@ -139,22 +148,42 @@ export function createServerAgentRunner(
 
   const resolveWorkspaceRoot = options.resolveWorkspaceRoot;
   if (resolveWorkspaceRoot !== undefined && !workspaceToolsRegistered.has(toolRegistry)) {
-    const fileTools = createWorkspaceFileTools({
-      resolveWorkspace: async ({ sessionId }) => {
-        if (sessionId === undefined) {
-          return undefined;
-        }
-        const root = await resolveWorkspaceRoot(sessionId);
-        return root === undefined ? undefined : createWorkspacePolicy({ root });
-      },
+    const resolveWorkspace: WorkspaceResolver = async ({ sessionId }) => {
+      if (sessionId === undefined) {
+        return undefined;
+      }
+      const root = await resolveWorkspaceRoot(sessionId);
+      return root === undefined ? undefined : createWorkspacePolicy({ root });
+    };
+    const fileTools = createWorkspaceFileTools({ resolveWorkspace });
+    const searchTools = createWorkspaceSearchTools({ resolveWorkspace });
+    const commandTool = createCommandTool({
+      resolveWorkspace,
+      ...(options.commandEnvironment === undefined
+        ? {}
+        : { environment: options.commandEnvironment }),
     });
-    for (const tool of [fileTools.readFile, fileTools.writeFile]) {
-      if (toolRegistry.get(tool.name) !== undefined) {
-        throw new Error(`Tool "${tool.name}" is already registered by a plugin`);
+    const workspaceToolNames = [
+      searchTools.listDir,
+      searchTools.glob,
+      searchTools.grep,
+      fileTools.readFile,
+      fileTools.editFile,
+      fileTools.writeFile,
+      commandTool,
+    ].map((tool) => tool.name);
+    for (const name of workspaceToolNames) {
+      if (toolRegistry.get(name) !== undefined) {
+        throw new Error(`Tool "${name}" is already registered by a plugin`);
       }
     }
+    toolRegistry.register(searchTools.listDir);
+    toolRegistry.register(searchTools.glob);
+    toolRegistry.register(searchTools.grep);
     toolRegistry.register(fileTools.readFile);
+    toolRegistry.register(fileTools.editFile);
     toolRegistry.register(fileTools.writeFile);
+    toolRegistry.register(commandTool);
     workspaceToolsRegistered.add(toolRegistry);
   }
 
@@ -179,8 +208,9 @@ export function createServerAgentRunner(
     sessionStore: runtime.get(sessionStoreService),
     toolRegistry,
     toolPipeline,
+    ...(options.maxSteps === undefined ? {} : { maxSteps: options.maxSteps }),
     instructions: createAgentInstructions({
-      toolNames: () => toolRegistry.list().map((tool) => tool.name),
+      tools: () => toolRegistry.list(),
       resolveWorkspaceRoot,
     }),
   });
