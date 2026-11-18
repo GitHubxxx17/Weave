@@ -15,8 +15,9 @@ import { FilesPanel } from './files-panel.js';
 import { ToolsPanel } from './tools-panel.js';
 import { UsagePanel } from './usage-panel.js';
 import { PreviewPanel } from './preview-panel.js';
+import { TerminalPanel } from './terminal-panel.js';
 
-/** Every side-panel kind. `terminal` is still a stub. */
+/** Every side-panel kind. */
 export type PanelKind = 'overview' | 'files' | 'tools' | 'usage' | 'preview' | 'terminal';
 
 export interface PanelDescriptor {
@@ -87,8 +88,9 @@ export const panelDescriptors: readonly PanelDescriptor[] = [
     label: '终端',
     Icon: SquareTerminal,
     defaultPinned: false,
-    comingSoon: true,
+    comingSoon: false,
     keepAlive: true,
+    render: (context) => <TerminalPanel cwd={context.folderPath} />,
   },
 ];
 

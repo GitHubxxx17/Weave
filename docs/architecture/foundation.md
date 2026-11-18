@@ -134,6 +134,22 @@ Studio writes it to `<html data-window-chrome>`, and CSS widens the navigation
 column for the traffic lights and marks header areas as window drag regions
 while their controls, menus, and dialogs stay `no-drag`.
 
+The desktop shell also hosts a user-driven terminal. `registerTerminalHost`
+owns pty sessions behind `weave:terminal:*` IPC: `create` (invoke) validates the
+sender origin against the Studio origin and the request with Zod, picks the
+platform shell, resolves the working directory to the Project folder (falling
+back to the home directory), and spawns a pty; `input`/`resize`/`dispose` act on
+a session by id; `data`/`exit` are sent only to the owning renderer. The pty is
+driven by the user, not the Agent, so it does not pass through Agent Approval;
+the boundary is the trusted-origin check plus per-renderer output. `node-pty`
+loads lazily through `createRequire` and only when a terminal is actually
+spawned, and the host accepts an injected spawner so tests never load the native
+module. It is a native module, so `@electron/rebuild` rebuilds it for Electron's
+ABI via the desktop `rebuild` script; CI never runs that step or loads the
+binary. Studio's `TerminalPanel` renders xterm.js (dynamically imported, so the
+main bundle and non-desktop/browser mode do not load it) and forwards keystrokes
+and output over the Preload `window.weaveDesktop.terminal` bridge.
+
 The old `apps/server/.weave/` directory is not automatically deleted or
 migrated. It is a legacy local runtime artifact; migration requires a separate
 backup, confirmation, copy, and rollback flow.

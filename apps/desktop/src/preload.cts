@@ -3,6 +3,14 @@ import { contextBridge, ipcRenderer } from 'electron';
 const serverUrlArgumentPrefix = '--weave-server-url=';
 const windowChromeArgumentPrefix = '--weave-window-chrome=';
 const pickDirectoryChannel = 'weave:pick-directory';
+const terminalChannels = {
+  create: 'weave:terminal:create',
+  input: 'weave:terminal:input',
+  resize: 'weave:terminal:resize',
+  dispose: 'weave:terminal:dispose',
+  data: 'weave:terminal:data',
+  exit: 'weave:terminal:exit',
+} as const;
 
 function readArgument(prefix: string): string | undefined {
   return process.argv.find((argument) => argument.startsWith(prefix))?.slice(prefix.length);
@@ -28,4 +36,34 @@ contextBridge.exposeInMainWorld('weaveDesktop', {
   /** Opens the system folder dialog; resolves to null when the user cancels. */
   pickDirectory: (): Promise<{ path: string; name: string } | null> =>
     ipcRenderer.invoke(pickDirectoryChannel),
+  /** User-driven terminal controlled from the Studio renderer. */
+  terminal: {
+    create: (options: {
+      cwd?: string | null;
+      cols: number;
+      rows: number;
+    }): Promise<{ id?: string; error?: string }> =>
+      ipcRenderer.invoke(terminalChannels.create, options),
+    write: (id: string, data: string): void => {
+      ipcRenderer.send(terminalChannels.input, { id, data });
+    },
+    resize: (id: string, cols: number, rows: number): void => {
+      ipcRenderer.send(terminalChannels.resize, { id, cols, rows });
+    },
+    dispose: (id: string): void => {
+      ipcRenderer.send(terminalChannels.dispose, { id });
+    },
+    onData: (listener: (payload: { id: string; data: string }) => void): (() => void) => {
+      const handler = (_event: unknown, payload: { id: string; data: string }): void =>
+        listener(payload);
+      ipcRenderer.on(terminalChannels.data, handler);
+      return () => ipcRenderer.removeListener(terminalChannels.data, handler);
+    },
+    onExit: (listener: (payload: { id: string; exitCode: number }) => void): (() => void) => {
+      const handler = (_event: unknown, payload: { id: string; exitCode: number }): void =>
+        listener(payload);
+      ipcRenderer.on(terminalChannels.exit, handler);
+      return () => ipcRenderer.removeListener(terminalChannels.exit, handler);
+    },
+  },
 });

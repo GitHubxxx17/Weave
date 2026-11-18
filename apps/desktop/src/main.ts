@@ -12,6 +12,7 @@ import {
 import { startServer } from '@weave/server/main';
 import { createDesktopConfig, type DesktopConfig } from './desktop-config.js';
 import { createElectronProviderSecretCodec } from './provider-secret-codec.js';
+import { registerTerminalHost, type TerminalHost } from './terminal.js';
 import type { ProviderSecretCodec } from '@weave/server';
 
 interface DesktopServer {
@@ -210,6 +211,7 @@ export async function startDesktopServer(
 }
 
 let desktopServer: DesktopServer | undefined;
+let terminalHost: TerminalHost | undefined;
 let stopPromise: Promise<void> | undefined;
 let isQuitting = false;
 
@@ -219,6 +221,8 @@ async function stopDesktopServer(): Promise<void> {
   }
 
   stopPromise = (async () => {
+    terminalHost?.dispose();
+    terminalHost = undefined;
     const server = desktopServer;
     desktopServer = undefined;
     if (server !== undefined) {
@@ -252,7 +256,16 @@ export async function startDesktopApplication(): Promise<void> {
     });
     desktopServer = await startDesktopServer(config, createElectronProviderSecretCodec());
     registerDesktopIpc(config);
-    createMainWindow(config, `http://127.0.0.1:${desktopServer.port}`);
+    const window = createMainWindow(config, `http://127.0.0.1:${desktopServer.port}`);
+    terminalHost = registerTerminalHost({
+      ipcMain,
+      studioOrigin: config.studioOrigin,
+      getWebContents: () => (window.isDestroyed() ? undefined : window.webContents),
+    });
+    window.on('closed', () => {
+      terminalHost?.dispose();
+      terminalHost = undefined;
+    });
   } catch (error: unknown) {
     await stopDesktopServer().catch((cleanupError: unknown) => {
       console.error(
