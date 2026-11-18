@@ -72,6 +72,12 @@ export interface SessionTurnSummary {
     readonly usage?: TokenUsage;
     readonly context?: ContextBreakdown;
   }[];
+  /** Per-tool-call outcome, so clients can show accurate status after reload. */
+  readonly toolResults: readonly {
+    readonly toolCallId: string;
+    readonly status: 'completed' | 'failed';
+    readonly errorCode?: string;
+  }[];
   readonly toolCalls: number;
   readonly failedToolCalls: number;
 }
@@ -165,6 +171,11 @@ function turnSummaryFor(turn: SessionProjection['turns'][number]): SessionTurnSu
       ...(step.completedAt === undefined ? {} : { completedAt: step.completedAt }),
       ...(step.usage === undefined ? {} : { usage: step.usage }),
       ...(step.context === undefined ? {} : { context: step.context }),
+    })),
+    toolResults: turn.toolResults.map((result) => ({
+      toolCallId: result.toolCallId,
+      status: result.status,
+      ...(result.errorCode === undefined ? {} : { errorCode: result.errorCode }),
     })),
     toolCalls: turn.toolCalls.length,
     failedToolCalls: turn.toolResults.filter((result) => result.status === 'failed').length,
