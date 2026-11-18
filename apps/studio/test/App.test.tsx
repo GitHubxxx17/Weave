@@ -1285,12 +1285,15 @@ describe('Studio Agent Chat', () => {
     expect(screen.getByRole('tab', { name: '工具' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /^关闭概览$/ })).toBeNull();
 
-    // The add menu lists coming-soon panels as disabled.
+    // The add menu lists only the terminal as coming soon now.
     fireEvent.click(screen.getByRole('button', { name: '添加面板' }));
     const addMenu = screen.getByRole('menu', { name: '添加面板' });
-    expect(within(addMenu).getAllByText('即将推出')).toHaveLength(2);
+    expect(within(addMenu).getAllByText('即将推出')).toHaveLength(1);
+    const terminalItem = within(addMenu).getByRole('menuitem', { name: /终端/ });
+    expect((terminalItem as HTMLButtonElement).disabled).toBe(true);
     const previewItem = within(addMenu).getByRole('menuitem', { name: /预览/ });
-    expect((previewItem as HTMLButtonElement).disabled).toBe(true);
+    expect((previewItem as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: '添加面板' }));
 
     // Unpin the 工具 tab via its context menu, then it can be closed.
     const toolsTab = screen.getByRole('tab', { name: '工具' }).closest('.panel-tab') as HTMLElement;
@@ -1310,6 +1313,39 @@ describe('Studio Agent Chat', () => {
       }),
     );
     expect(screen.getByRole('tab', { name: '工具' }).getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('opens the preview panel, loads a URL, and keeps the iframe across tab switches', async () => {
+    await renderApp();
+
+    fireEvent.click(screen.getByRole('button', { name: '添加面板' }));
+    fireEvent.click(
+      within(screen.getByRole('menu', { name: '添加面板' })).getByRole('menuitem', {
+        name: /预览/,
+      }),
+    );
+
+    const preview = screen.getByRole('region', { name: '预览' });
+    const address = within(preview).getByRole('textbox', { name: '预览网址' });
+
+    // A non-http scheme is rejected before any iframe loads.
+    fireEvent.change(address, { target: { value: 'file:///etc/passwd' } });
+    fireEvent.click(within(preview).getByRole('button', { name: '打开' }));
+    expect(within(preview).getByRole('alert').textContent).toContain('只支持 http 和 https 网址');
+    expect(preview.querySelector('iframe')).toBeNull();
+
+    // A bare localhost host defaults to http and loads.
+    fireEvent.change(address, { target: { value: 'localhost:5173' } });
+    fireEvent.click(within(preview).getByRole('button', { name: '打开' }));
+    const frame = preview.querySelector('iframe');
+    expect(frame?.getAttribute('src')).toBe('http://localhost:5173/');
+    expect(localStorage.getItem('weave.studio.previewUrl')).toBe('http://localhost:5173/');
+
+    // Switching to another tab keeps the preview mounted (same iframe node).
+    fireEvent.click(screen.getByRole('tab', { name: '概览' }));
+    expect(screen.getByRole('region', { name: '概览' })).toBeTruthy();
+    const frameAfter = document.querySelector('.preview-panel iframe');
+    expect(frameAfter).toBe(frame);
   });
 
   it('shows a safe error without leaking implementation details', async () => {

@@ -14,8 +14,9 @@ import { OverviewPanel } from './overview-panel.js';
 import { FilesPanel } from './files-panel.js';
 import { ToolsPanel } from './tools-panel.js';
 import { UsagePanel } from './usage-panel.js';
+import { PreviewPanel } from './preview-panel.js';
 
-/** Every side-panel kind. Data kinds render now; `preview`/`terminal` are stubs. */
+/** Every side-panel kind. `terminal` is still a stub. */
 export type PanelKind = 'overview' | 'files' | 'tools' | 'usage' | 'preview' | 'terminal';
 
 export interface PanelDescriptor {
@@ -26,6 +27,12 @@ export interface PanelDescriptor {
   readonly defaultPinned: boolean;
   /** Listed but disabled in the add menu; cannot be opened yet. */
   readonly comingSoon: boolean;
+  /**
+   * Keep the panel mounted while another tab is active (hidden, not
+   * unmounted). Needed by panels with live content such as the preview
+   * iframe, so switching tabs does not reload or reset them.
+   */
+  readonly keepAlive: boolean;
   readonly render?: (context: PanelContext) => ReactElement;
 }
 
@@ -36,6 +43,7 @@ export const panelDescriptors: readonly PanelDescriptor[] = [
     Icon: LayoutGrid,
     defaultPinned: true,
     comingSoon: false,
+    keepAlive: false,
     render: (context) => <OverviewPanel {...context} />,
   },
   {
@@ -44,6 +52,7 @@ export const panelDescriptors: readonly PanelDescriptor[] = [
     Icon: FileText,
     defaultPinned: true,
     comingSoon: false,
+    keepAlive: false,
     render: (context) => <FilesPanel {...context} />,
   },
   {
@@ -52,6 +61,7 @@ export const panelDescriptors: readonly PanelDescriptor[] = [
     Icon: Wrench,
     defaultPinned: true,
     comingSoon: false,
+    keepAlive: false,
     render: (context) => <ToolsPanel {...context} />,
   },
   {
@@ -60,6 +70,7 @@ export const panelDescriptors: readonly PanelDescriptor[] = [
     Icon: Coins,
     defaultPinned: true,
     comingSoon: false,
+    keepAlive: false,
     render: (context) => <UsagePanel {...context} />,
   },
   {
@@ -67,7 +78,9 @@ export const panelDescriptors: readonly PanelDescriptor[] = [
     label: '预览',
     Icon: Globe,
     defaultPinned: false,
-    comingSoon: true,
+    comingSoon: false,
+    keepAlive: true,
+    render: () => <PreviewPanel />,
   },
   {
     kind: 'terminal',
@@ -75,6 +88,7 @@ export const panelDescriptors: readonly PanelDescriptor[] = [
     Icon: SquareTerminal,
     defaultPinned: false,
     comingSoon: true,
+    keepAlive: true,
   },
 ];
 
