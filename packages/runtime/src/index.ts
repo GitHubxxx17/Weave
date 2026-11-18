@@ -13,6 +13,7 @@ export type {
 } from './session-service.js';
 export { AgentRunError, agentRunRequestSchema, agentRuntimeEventSchema } from './agent-types.js';
 export type {
+  AgentCompletionReason,
   AgentRunErrorCode,
   AgentRunner,
   AgentRunnerOptions,
@@ -25,15 +26,18 @@ export {
   ToolExecutionError,
   toolDefinitionSchema,
   toolExecutionRequestSchema,
+  toolPermissionModeSchema,
 } from './tool-types.js';
 export type {
   ToolDefinition,
   ToolApprovalRequirement,
+  ToolApprovalSummary,
   RegisteredToolDefinition,
   ToolExecutionContext,
   ToolExecutionErrorCode,
   ToolExecutionRequest,
   ToolExecutionResult,
+  ToolPermissionMode,
 } from './tool-types.js';
 export { createToolRegistry } from './tool-registry.js';
 export type { ToolRegistry } from './tool-registry.js';
@@ -60,10 +64,14 @@ export { createWorkspacePolicy } from './workspace-policy.js';
 export type { WorkspacePolicy } from './workspace-policy.js';
 export {
   WorkspaceFileError,
+  defaultReadLineLimit,
+  editFileInputSchema,
   readFileInputSchema,
   writeFileInputSchema,
 } from './workspace-file-types.js';
 export type {
+  EditFileInput,
+  EditFileResult,
   ReadFileInput,
   WriteFileInput,
   WriteFileResult,
@@ -72,8 +80,34 @@ export type {
   WorkspaceFileToolOptions,
   WorkspaceFileTools,
   WorkspaceResolver,
+  WorkspaceSource,
 } from './workspace-file-types.js';
 export { createWorkspaceFileTools } from './workspace-file-tools.js';
+export {
+  createWorkspaceSearchTools,
+  globInputSchema,
+  grepInputSchema,
+  listDirInputSchema,
+} from './workspace-search-tools.js';
+export type {
+  GlobInput,
+  GrepInput,
+  ListDirInput,
+  WorkspaceSearchToolOptions,
+  WorkspaceSearchTools,
+} from './workspace-search-tools.js';
+export {
+  createCommandTool,
+  defaultCommandTimeoutMs,
+  maxCommandTimeoutMs,
+  runCommandInputSchema,
+} from './command-tool.js';
+export type { CommandToolOptions, RunCommandInput } from './command-tool.js';
+export {
+  defaultCommandShell,
+  filterCommandEnvironment,
+  resolveLoginShellEnvironment,
+} from './shell-environment.js';
 export {
   ApprovalError,
   approvalDecisionSchema,

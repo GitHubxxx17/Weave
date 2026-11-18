@@ -10,7 +10,11 @@ import {
 } from '@weave/protocol';
 import type { SessionEventStore } from '@weave/session';
 import { z } from 'zod';
-import type { ToolExecutionResult } from './tool-types.js';
+import {
+  toolPermissionModeSchema,
+  type ToolExecutionResult,
+  type ToolPermissionMode,
+} from './tool-types.js';
 import type { ToolPipeline } from './tool-pipeline.js';
 import type { ToolRegistry } from './tool-registry.js';
 
@@ -24,6 +28,8 @@ export interface AgentRunRequest {
   readonly temperature?: number | undefined;
   readonly maxTokens?: number | undefined;
   readonly reasoningEffort?: string | undefined;
+  /** Tools available to this run; defaults to `workspace`. */
+  readonly permissionMode?: ToolPermissionMode | undefined;
   readonly signal?: AbortSignal | undefined;
 }
 
@@ -39,9 +45,18 @@ export const agentRunRequestSchema: z.ZodType<AgentRunRequest> = z
     temperature: z.number().finite().nonnegative().optional(),
     maxTokens: z.number().finite().nonnegative().optional(),
     reasoningEffort: nonEmptyStringSchema.optional(),
+    permissionMode: toolPermissionModeSchema.optional(),
     signal: z.instanceof(AbortSignal).optional(),
   })
   .passthrough();
+
+/**
+ * Why a turn completed without a final model answer.
+ *
+ * `agent-step-limit`: the run reached `maxSteps`; completed tool results are
+ * kept and the user can ask the Agent to continue.
+ */
+export type AgentCompletionReason = 'agent-step-limit';
 
 /**
  * Transient events emitted while an Agent Runner execution is in progress.
@@ -59,7 +74,12 @@ export type AgentRuntimeEvent =
       /** Stable error code for a failed result. */
       readonly errorCode?: string | undefined;
     }
-  | { readonly type: 'completed'; readonly turnId: string }
+  | {
+      readonly type: 'completed';
+      readonly turnId: string;
+      /** Set when the turn ended without a final answer, such as at the step limit. */
+      readonly reason?: AgentCompletionReason | undefined;
+    }
   | {
       /** Usage of one finished model step; a Turn may emit several. */
       readonly type: 'usage';
@@ -107,6 +127,7 @@ export const agentRuntimeEventSchema: z.ZodType<AgentRuntimeEvent> = z.discrimin
   z.object({
     type: z.literal('completed'),
     turnId: nonEmptyStringSchema,
+    reason: z.literal('agent-step-limit').optional(),
   }),
   z.object({
     type: z.literal('usage'),
@@ -161,17 +182,21 @@ export interface AgentRunnerOptions {
   readonly toolRegistry?: ToolRegistry | undefined;
   /** Shared validation, approval, timeout, cancellation, and execution boundary. */
   readonly toolPipeline?: ToolPipeline | undefined;
-  /** Maximum number of model steps allowed in one turn; defaults to eight. */
+  /**
+   * Maximum number of model steps allowed in one turn; defaults to fifty.
+   * Reaching it completes the turn with reason `agent-step-limit`.
+   */
   readonly maxSteps?: number | undefined;
   /**
    * Returns the system instructions for one run, resolved once before the
    * first model step. They are sent with every model request of the run but
    * are never written to the Session, so they can reflect current state such
-   * as the Session's Workspace folder.
+   * as the Session's Workspace folder and the run's permission mode.
    */
   readonly instructions?:
     | ((context: {
         readonly sessionId: string;
+        readonly permissionMode: ToolPermissionMode;
       }) => string | undefined | Promise<string | undefined>)
     | undefined;
   /**

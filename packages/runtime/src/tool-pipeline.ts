@@ -2,6 +2,7 @@ import {
   ToolExecutionError,
   toolExecutionRequestSchema,
   type RegisteredToolDefinition,
+  type ToolApprovalSummary,
   type ToolDefinition,
   type ToolExecutionRequest,
   type ToolExecutionResult,
@@ -104,12 +105,17 @@ function limitUtf8(text: string, maxBytes: number): { content: string; truncated
     return { content: text, truncated: false };
   }
 
-  let validPrefix = bytes.slice(0, maxBytes);
+  // Tell the model the result is incomplete, when the notice fits comfortably.
+  const notice = `\n[结果超过 ${maxBytes} 字节，后面的内容已截断]`;
+  const noticeBytes = encoder.encode(notice).byteLength;
+  const withNotice = noticeBytes * 2 <= maxBytes;
+  let validPrefix = bytes.slice(0, withNotice ? maxBytes - noticeBytes : maxBytes);
   const decoder = new TextDecoder('utf-8', { fatal: true });
   while (validPrefix.byteLength > 0) {
     try {
+      const prefix = decoder.decode(validPrefix);
       return {
-        content: decoder.decode(validPrefix),
+        content: withNotice ? `${prefix}${notice}` : prefix,
         truncated: true,
       };
     } catch {
@@ -118,9 +124,18 @@ function limitUtf8(text: string, maxBytes: number): { content: string; truncated
   }
 
   return {
-    content: '',
+    content: withNotice ? notice.trimStart() : '',
     truncated: true,
   };
+}
+
+function isPromiseLike<T>(value: T | PromiseLike<T>): value is PromiseLike<T> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'then' in value &&
+    typeof (value as { then?: unknown }).then === 'function'
+  );
 }
 
 function createCombinedSignal(
@@ -158,6 +173,12 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
       const tool = options.registry.get(request.name);
       if (tool === undefined) {
         throw new ToolExecutionError('tool-not-found', `Tool "${request.name}" was not found`);
+      }
+      if (request.permissionMode === 'read-only' && tool.readOnly !== true) {
+        throw new ToolExecutionError(
+          'tool-not-permitted',
+          `Tool "${request.name}" is not available in read-only mode`,
+        );
       }
 
       const parsedArguments = parseArguments(request.name, request.arguments);
@@ -209,9 +230,33 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
             );
           }
 
+          let summary: ToolApprovalSummary;
+          try {
+            const pendingSummary = approval.summarize(inputResult.data, {
+              signal,
+              ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
+            });
+            summary = isPromiseLike(pendingSummary) ? await pendingSummary : pendingSummary;
+          } catch (error: unknown) {
+            if (timedOut) {
+              throw new ToolExecutionError('tool-timeout', `Tool "${request.name}" timed out`, {
+                cause: error,
+              });
+            }
+            if (signal.aborted || isAbortError(error)) {
+              throw new ToolExecutionError('tool-cancelled', 'Tool execution was cancelled', {
+                cause: error,
+              });
+            }
+            // A summary failure is a tool failure (for example an edit whose text
+            // no longer matches); no Approval is created for it.
+            throw new ToolExecutionError('tool-execution-failed', `Tool "${request.name}" failed`, {
+              cause: error,
+            });
+          }
+
           let decision: ApprovalDecision;
           try {
-            const summary = approval.summarize(inputResult.data);
             decision = await approvalBroker.request({
               toolCallId: request.toolCallId,
               toolName: request.name,

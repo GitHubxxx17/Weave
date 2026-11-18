@@ -1,52 +1,44 @@
-import { lstat, realpath, readFile, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   WorkspaceFileError,
+  defaultReadLineLimit,
+  editFileInputSchema,
   readFileInputSchema,
   writeFileInputSchema,
+  type EditFileInput,
+  type EditFileResult,
   type ReadFileInput,
-  type WorkspaceFileErrorCode,
   type WorkspaceFileToolOptions,
   type WorkspaceFileTools,
   type WriteFileInput,
   type WriteFileResult,
 } from './workspace-file-types.js';
-import { WorkspacePolicyError } from './workspace-types.js';
-import type { WorkspacePolicy } from './workspace-policy.js';
+import {
+  assertWorkspaceSource,
+  checkSignal,
+  createMappedError,
+  isInsideRoot,
+  isNodeFileError,
+  mapFilesystemError,
+  resolveExistingTarget,
+  resolveLexicalPath,
+  resolvePolicy,
+  resolveRealRoot,
+  toPosixPath,
+  type ResolvedWorkspacePath,
+} from './workspace-access.js';
+import {
+  countLines,
+  formatFilePage,
+  isBinaryContent,
+  planTextEdit,
+  type TextEditPlan,
+} from './workspace-text.js';
 import type { ToolDefinition, ToolExecutionContext } from './tool-types.js';
 
 const defaultMaxReadBytes = 1_000_000;
 const defaultMaxWriteBytes = 1_000_000;
-
-interface NodeFileError extends Error {
-  readonly code?: string;
-}
-
-interface ResolvedWorkspacePath {
-  readonly absolutePath: string;
-  readonly relativePath: string;
-}
-
-function isNodeFileError(error: unknown): error is NodeFileError {
-  return error instanceof Error;
-}
-
-function isAbortError(error: unknown): boolean {
-  return (
-    (error instanceof DOMException && error.name === 'AbortError') ||
-    (error instanceof Error && error.name === 'AbortError')
-  );
-}
-
-function isInsideRoot(root: string, target: string): boolean {
-  const relativePath = path.relative(root, target);
-  return (
-    relativePath === '' ||
-    (relativePath !== '..' &&
-      !relativePath.startsWith(`..${path.sep}`) &&
-      !path.isAbsolute(relativePath))
-  );
-}
 
 function validateLimit(name: string, value: number | undefined): number | undefined {
   if (value !== undefined && (!Number.isFinite(value) || value < 0)) {
@@ -55,145 +47,24 @@ function validateLimit(name: string, value: number | undefined): number | undefi
   return value;
 }
 
-function createMappedError(
-  code: WorkspaceFileErrorCode,
-  message: string,
-  cause?: unknown,
-): WorkspaceFileError {
-  return new WorkspaceFileError(code, message, cause === undefined ? undefined : { cause });
+interface WorkspaceTextFile {
+  readonly target: string;
+  readonly relativePath: string;
+  readonly content: string;
 }
 
-function mapPolicyError(error: unknown): WorkspaceFileError {
-  if (error instanceof WorkspacePolicyError) {
-    return createMappedError(
-      'workspace-file-outside-root',
-      'Workspace file path is outside the configured root',
-      error,
-    );
-  }
-  return createMappedError(
-    'workspace-file-invalid-input',
-    'Workspace file input is invalid',
-    error,
-  );
-}
-
-function mapFilesystemError(error: unknown, operation: 'read' | 'write'): WorkspaceFileError {
-  if (isAbortError(error)) {
-    return createMappedError(
-      'workspace-file-cancelled',
-      'Workspace file operation was cancelled',
-      error,
-    );
-  }
-
-  const code = isNodeFileError(error) ? error.code : undefined;
-  if (code === 'ENOENT') {
-    return createMappedError('workspace-file-not-found', 'Workspace file was not found', error);
-  }
-  if (code === 'EACCES' || code === 'EPERM') {
-    return createMappedError(
-      'workspace-file-permission-denied',
-      'Workspace file access was denied',
-      error,
-    );
-  }
-  if (code === 'EISDIR') {
-    return createMappedError('workspace-file-is-directory', 'Workspace path is a directory', error);
-  }
-  if (code === 'EEXIST') {
-    return createMappedError(
-      'workspace-file-already-exists',
-      'Workspace file already exists',
-      error,
-    );
-  }
-
-  return createMappedError(
-    operation === 'read' ? 'workspace-file-read-failed' : 'workspace-file-write-failed',
-    operation === 'read'
-      ? 'Workspace file could not be read'
-      : 'Workspace file could not be written',
-    error,
-  );
-}
-
-async function resolveRealRoot(workspaceRoot: string): Promise<string> {
-  try {
-    return await realpath(workspaceRoot);
-  } catch (error: unknown) {
-    throw mapFilesystemError(error, 'read');
-  }
-}
-
-function resolveLexicalPath(
-  workspace: WorkspacePolicy,
+/** Opens an existing regular UTF-8 text file inside the Workspace. */
+async function readTextFile(
+  options: WorkspaceFileToolOptions,
+  context: ToolExecutionContext,
   inputPath: string,
   operation: 'read' | 'write',
-): ResolvedWorkspacePath {
-  try {
-    const resolved = workspace.resolve(inputPath, operation);
-    return {
-      absolutePath: resolved.absolutePath,
-      relativePath: resolved.relativePath,
-    };
-  } catch (error: unknown) {
-    throw mapPolicyError(error);
-  }
-}
-
-async function resolveExistingTarget(
-  root: string,
-  candidate: ResolvedWorkspacePath,
-  operation: 'read' | 'write',
-): Promise<string> {
-  let target: string;
-  try {
-    target = await realpath(candidate.absolutePath);
-  } catch (error: unknown) {
-    throw mapFilesystemError(error, operation);
-  }
-  if (!isInsideRoot(root, target)) {
-    throw createMappedError(
-      'workspace-file-symlink-outside-root',
-      'Workspace file symlink resolves outside the configured root',
-    );
-  }
-  return target;
-}
-
-function checkSignal(context: ToolExecutionContext): void {
-  context.signal.throwIfAborted();
-}
-
-/** Returns the fixed Workspace or resolves the one for this invocation. */
-async function resolvePolicy(
-  options: WorkspaceFileToolOptions,
-  context: ToolExecutionContext,
-): Promise<WorkspacePolicy> {
-  if (options.workspace !== undefined) {
-    return options.workspace;
-  }
-  const workspace = await options.resolveWorkspace(context);
-  if (workspace === undefined) {
-    throw createMappedError(
-      'workspace-file-unavailable',
-      'No Workspace folder is configured for this Session',
-    );
-  }
-  return workspace;
-}
-
-async function readWorkspaceFile(
-  input: ReadFileInput,
-  context: ToolExecutionContext,
-  options: WorkspaceFileToolOptions,
-): Promise<string> {
+): Promise<WorkspaceTextFile> {
   checkSignal(context);
   const workspace = await resolvePolicy(options, context);
-  const candidate = resolveLexicalPath(workspace, input.path, 'read');
+  const candidate = resolveLexicalPath(workspace, inputPath, operation);
   const root = await resolveRealRoot(workspace.root);
-  const target = await resolveExistingTarget(root, candidate, 'read');
+  const target = await resolveExistingTarget(root, candidate, operation);
 
   let metadata;
   try {
@@ -208,7 +79,7 @@ async function readWorkspaceFile(
     throw createMappedError('workspace-file-read-failed', 'Workspace path is not a regular file');
   }
 
-  const maxBytes = input.maxBytes ?? options.maxReadBytes ?? defaultMaxReadBytes;
+  const maxBytes = options.maxReadBytes ?? defaultMaxReadBytes;
   if (metadata.size > maxBytes) {
     throw createMappedError(
       'workspace-file-too-large',
@@ -217,104 +88,173 @@ async function readWorkspaceFile(
   }
 
   checkSignal(context);
-  let content: string;
+  let bytes: Buffer;
   try {
-    content = await readFile(target, { encoding: 'utf8', signal: context.signal });
+    bytes = await readFile(target, { signal: context.signal });
   } catch (error: unknown) {
     throw mapFilesystemError(error, 'read');
   }
-  if (Buffer.byteLength(content, 'utf8') > maxBytes) {
+  if (bytes.byteLength > maxBytes) {
     throw createMappedError(
       'workspace-file-too-large',
       `Workspace file exceeds the ${maxBytes}-byte read limit`,
     );
   }
-  return content;
+  if (isBinaryContent(bytes)) {
+    throw createMappedError(
+      'workspace-file-binary',
+      'Workspace file looks binary; read_file only returns text files',
+    );
+  }
+  return {
+    target,
+    relativePath: toPosixPath(candidate.relativePath),
+    content: bytes.toString('utf8'),
+  };
 }
 
-async function resolveWriteTarget(
+async function readWorkspaceFile(
+  input: ReadFileInput,
+  context: ToolExecutionContext,
+  options: WorkspaceFileToolOptions,
+): Promise<string> {
+  const file = await readTextFile(options, context, input.path, 'read');
+  return formatFilePage(file.content, input.offset ?? 1, input.limit ?? defaultReadLineLimit);
+}
+
+interface WritePlan {
+  readonly target: string;
+  readonly relativePath: string;
+  readonly bytes: number;
+  readonly existed: boolean;
+  readonly previousBytes?: number | undefined;
+  readonly previousLines?: number | undefined;
+  /** Absolute directories to create, outermost first. */
+  readonly missingDirectories: readonly string[];
+  /** The same directories relative to the Workspace root. */
+  readonly createdDirectories: readonly string[];
+}
+
+/** Resolves an existing write target, following the same symlink rules as reads. */
+async function planOverwrite(
   candidate: ResolvedWorkspacePath,
   root: string,
-  overwrite: boolean,
-): Promise<{ target: string; existed: boolean }> {
-  let candidateMetadata;
+  candidateIsSymlink: boolean,
+  input: WriteFileInput,
+  maxReadBytes: number,
+): Promise<Pick<WritePlan, 'target' | 'previousBytes' | 'previousLines'>> {
+  let target: string;
   try {
-    candidateMetadata = await lstat(candidate.absolutePath);
+    target = await resolveExistingTarget(root, candidate, 'write');
   } catch (error: unknown) {
-    const code = isNodeFileError(error) ? error.code : undefined;
-    if (code !== 'ENOENT') {
-      throw mapFilesystemError(error, 'write');
-    }
-  }
-
-  if (candidateMetadata !== undefined) {
-    let target: string;
-    try {
-      target = await resolveExistingTarget(root, candidate, 'write');
-    } catch (error: unknown) {
-      if (
-        candidateMetadata.isSymbolicLink() &&
-        error instanceof WorkspaceFileError &&
-        error.code === 'workspace-file-not-found'
-      ) {
-        throw createMappedError(
-          'workspace-file-symlink-outside-root',
-          'Workspace file symlink target could not be resolved safely',
-          error,
-        );
-      }
-      throw error;
-    }
-    let metadata;
-    try {
-      metadata = await stat(target);
-    } catch (error: unknown) {
-      throw mapFilesystemError(error, 'write');
-    }
-    if (metadata.isDirectory()) {
-      throw createMappedError('workspace-file-is-directory', 'Workspace path is a directory');
-    }
-    if (!metadata.isFile()) {
+    if (
+      candidateIsSymlink &&
+      error instanceof WorkspaceFileError &&
+      error.code === 'workspace-file-not-found'
+    ) {
       throw createMappedError(
-        'workspace-file-write-failed',
-        'Workspace path is not a regular file',
+        'workspace-file-symlink-outside-root',
+        'Workspace file symlink target could not be resolved safely',
+        error,
       );
     }
-    if (!overwrite) {
-      throw createMappedError(
-        'workspace-file-already-exists',
-        'Workspace file already exists and overwrite is disabled',
-      );
-    }
-    return { target, existed: true };
+    throw error;
   }
-
-  let parent: string;
+  let metadata;
   try {
-    parent = await realpath(path.dirname(candidate.absolutePath));
+    metadata = await stat(target);
   } catch (error: unknown) {
     throw mapFilesystemError(error, 'write');
   }
-  if (!isInsideRoot(root, parent)) {
+  if (metadata.isDirectory()) {
+    throw createMappedError('workspace-file-is-directory', 'Workspace path is a directory');
+  }
+  if (!metadata.isFile()) {
+    throw createMappedError('workspace-file-write-failed', 'Workspace path is not a regular file');
+  }
+  if (input.overwrite !== true) {
+    throw createMappedError(
+      'workspace-file-already-exists',
+      'Workspace file already exists and overwrite is disabled',
+    );
+  }
+
+  let previousLines: number | undefined;
+  if (metadata.size <= maxReadBytes) {
+    try {
+      previousLines = countLines(await readFile(target, 'utf8'));
+    } catch {
+      previousLines = undefined;
+    }
+  }
+  return {
+    target,
+    previousBytes: metadata.size,
+    ...(previousLines === undefined ? {} : { previousLines }),
+  };
+}
+
+/** Finds the deepest existing ancestor and the directories a new file needs. */
+async function planNewFile(
+  candidate: ResolvedWorkspacePath,
+  root: string,
+  lexicalRoot: string,
+): Promise<Pick<WritePlan, 'target' | 'missingDirectories' | 'createdDirectories'>> {
+  const missing: string[] = [];
+  let ancestor = path.dirname(candidate.absolutePath);
+  let realAncestor: string;
+  for (;;) {
+    try {
+      realAncestor = await realpath(ancestor);
+      break;
+    } catch (error: unknown) {
+      const code = isNodeFileError(error) ? error.code : undefined;
+      if (code !== 'ENOENT' || ancestor === lexicalRoot || ancestor === path.dirname(ancestor)) {
+        throw mapFilesystemError(error, 'write');
+      }
+      missing.unshift(path.basename(ancestor));
+      ancestor = path.dirname(ancestor);
+    }
+  }
+  if (!isInsideRoot(root, realAncestor)) {
     throw createMappedError(
       'workspace-file-symlink-outside-root',
       'Workspace file parent symlink resolves outside the configured root',
     );
   }
+  const ancestorMetadata = await stat(realAncestor).catch((error: unknown) => {
+    throw mapFilesystemError(error, 'write');
+  });
+  if (!ancestorMetadata.isDirectory()) {
+    throw createMappedError(
+      'workspace-file-not-directory',
+      'A parent of the Workspace path is not a directory',
+    );
+  }
+
+  const missingDirectories: string[] = [];
+  let current = realAncestor;
+  for (const segment of missing) {
+    current = path.join(current, segment);
+    missingDirectories.push(current);
+  }
   return {
-    target: path.join(parent, path.basename(candidate.absolutePath)),
-    existed: false,
+    target: path.join(current, path.basename(candidate.absolutePath)),
+    missingDirectories,
+    createdDirectories: missingDirectories.map((directory) =>
+      toPosixPath(path.relative(root, directory)),
+    ),
   };
 }
 
-async function writeWorkspaceFile(
+async function planWrite(
   input: WriteFileInput,
   context: ToolExecutionContext,
   options: WorkspaceFileToolOptions,
-): Promise<WriteFileResult> {
-  const bytesWritten = Buffer.byteLength(input.content, 'utf8');
-  const maxBytes = input.maxBytes ?? options.maxWriteBytes ?? defaultMaxWriteBytes;
-  if (bytesWritten > maxBytes) {
+): Promise<WritePlan> {
+  const bytes = Buffer.byteLength(input.content, 'utf8');
+  const maxBytes = options.maxWriteBytes ?? defaultMaxWriteBytes;
+  if (bytes > maxBytes) {
     throw createMappedError(
       'workspace-file-too-large',
       `Workspace file exceeds the ${maxBytes}-byte write limit`,
@@ -325,13 +265,70 @@ async function writeWorkspaceFile(
   const workspace = await resolvePolicy(options, context);
   const candidate = resolveLexicalPath(workspace, input.path, 'write');
   const root = await resolveRealRoot(workspace.root);
-  const { target, existed } = await resolveWriteTarget(candidate, root, input.overwrite === true);
+  const relativePath = toPosixPath(candidate.relativePath);
+
+  let candidateMetadata;
+  try {
+    candidateMetadata = await lstat(candidate.absolutePath);
+  } catch (error: unknown) {
+    const code = isNodeFileError(error) ? error.code : undefined;
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+      throw mapFilesystemError(error, 'write');
+    }
+  }
+
+  if (candidateMetadata !== undefined) {
+    const overwrite = await planOverwrite(
+      candidate,
+      root,
+      candidateMetadata.isSymbolicLink(),
+      input,
+      options.maxReadBytes ?? defaultMaxReadBytes,
+    );
+    return {
+      ...overwrite,
+      relativePath,
+      bytes,
+      existed: true,
+      missingDirectories: [],
+      createdDirectories: [],
+    };
+  }
+
+  const created = await planNewFile(candidate, root, workspace.root);
+  return { ...created, relativePath, bytes, existed: false };
+}
+
+async function writeWorkspaceFile(
+  input: WriteFileInput,
+  context: ToolExecutionContext,
+  options: WorkspaceFileToolOptions,
+): Promise<WriteFileResult> {
+  const plan = await planWrite(input, context, options);
 
   checkSignal(context);
+  for (const directory of plan.missingDirectories) {
+    try {
+      await mkdir(directory);
+    } catch (error: unknown) {
+      const code = isNodeFileError(error) ? error.code : undefined;
+      if (code !== 'EEXIST') {
+        throw mapFilesystemError(error, 'write');
+      }
+      const metadata = await lstat(directory).catch(() => undefined);
+      if (metadata === undefined || !metadata.isDirectory()) {
+        throw createMappedError(
+          'workspace-file-not-directory',
+          'A parent of the Workspace path is not a directory',
+          error,
+        );
+      }
+    }
+  }
   try {
-    await writeFile(target, input.content, {
+    await writeFile(plan.target, input.content, {
       encoding: 'utf8',
-      flag: existed ? 'w' : 'wx',
+      flag: plan.existed ? 'w' : 'wx',
       signal: context.signal,
     });
   } catch (error: unknown) {
@@ -339,9 +336,60 @@ async function writeWorkspaceFile(
   }
 
   return {
-    path: candidate.relativePath,
-    bytesWritten,
-    overwritten: existed,
+    path: plan.relativePath,
+    bytesWritten: plan.bytes,
+    overwritten: plan.existed,
+    ...(plan.createdDirectories.length === 0
+      ? {}
+      : { createdDirectories: plan.createdDirectories }),
+  };
+}
+
+interface EditPlan extends WorkspaceTextFile {
+  readonly plan: TextEditPlan;
+}
+
+async function planEdit(
+  input: EditFileInput,
+  context: ToolExecutionContext,
+  options: WorkspaceFileToolOptions,
+): Promise<EditPlan> {
+  const file = await readTextFile(options, context, input.path, 'write');
+  const plan = planTextEdit(file.content, input);
+  const maxBytes = options.maxWriteBytes ?? defaultMaxWriteBytes;
+  if (Buffer.byteLength(plan.updated, 'utf8') > maxBytes) {
+    throw createMappedError(
+      'workspace-file-too-large',
+      `Edited file would exceed the ${maxBytes}-byte write limit`,
+    );
+  }
+  return { ...file, plan };
+}
+
+async function editWorkspaceFile(
+  input: EditFileInput,
+  context: ToolExecutionContext,
+  options: WorkspaceFileToolOptions,
+): Promise<EditFileResult> {
+  // Re-read and re-match: a file changed while the Approval was pending must
+  // still contain the exact text, otherwise the edit fails instead of guessing.
+  const { target, relativePath, plan } = await planEdit(input, context, options);
+  checkSignal(context);
+  try {
+    await writeFile(target, plan.updated, {
+      encoding: 'utf8',
+      flag: 'w',
+      signal: context.signal,
+    });
+  } catch (error: unknown) {
+    throw mapFilesystemError(error, 'write');
+  }
+  return {
+    path: relativePath,
+    replacements: plan.replacements,
+    linesAdded: plan.linesAdded,
+    linesRemoved: plan.linesRemoved,
+    snippet: plan.snippet,
   };
 }
 
@@ -349,9 +397,7 @@ async function writeWorkspaceFile(
 export function createWorkspaceFileTools(options: WorkspaceFileToolOptions): WorkspaceFileTools {
   const maxReadBytes = validateLimit('maxReadBytes', options.maxReadBytes);
   const maxWriteBytes = validateLimit('maxWriteBytes', options.maxWriteBytes);
-  if ((options.workspace === undefined) === (options.resolveWorkspace === undefined)) {
-    throw new TypeError('Provide exactly one of workspace or resolveWorkspace');
-  }
+  assertWorkspaceSource(options);
   const normalizedOptions: WorkspaceFileToolOptions = {
     ...options,
     ...(maxReadBytes === undefined ? {} : { maxReadBytes }),
@@ -360,12 +406,18 @@ export function createWorkspaceFileTools(options: WorkspaceFileToolOptions): Wor
 
   const readFileTool: ToolDefinition<ReadFileInput, string> = {
     name: 'read_file',
-    description: 'Read a UTF-8 text file inside the configured Workspace',
+    description:
+      'Read a UTF-8 text file inside the project folder. Small files are returned whole. ' +
+      'Larger files are returned in pages of up to 2000 lines (about 28 KB); a note at the ' +
+      'end gives the lines shown, the total line count, and the offset of the next page. ' +
+      'Pass offset and limit to read a specific range, for example around a line found by grep.',
+    readOnly: true,
     parameters: {
       type: 'object',
       properties: {
         path: { type: 'string', minLength: 1 },
-        maxBytes: { type: 'number', minimum: 0 },
+        offset: { type: 'integer', minimum: 1, description: 'First line to return, from 1' },
+        limit: { type: 'integer', minimum: 1, description: 'Maximum lines to return' },
       },
       required: ['path'],
       additionalProperties: false,
@@ -376,14 +428,16 @@ export function createWorkspaceFileTools(options: WorkspaceFileToolOptions): Wor
 
   const writeFileTool: ToolDefinition<WriteFileInput, WriteFileResult> = {
     name: 'write_file',
-    description: 'Write UTF-8 text to a file inside the configured Workspace',
+    description:
+      'Create a new UTF-8 text file inside the project folder; missing parent directories ' +
+      'are created. To replace an existing file entirely pass overwrite: true, but prefer ' +
+      'edit_file for changes to existing files. Every write waits for user approval.',
     parameters: {
       type: 'object',
       properties: {
         path: { type: 'string', minLength: 1 },
         content: { type: 'string' },
         overwrite: { type: 'boolean' },
-        maxBytes: { type: 'number', minimum: 0 },
       },
       required: ['path', 'content'],
       additionalProperties: false,
@@ -392,20 +446,68 @@ export function createWorkspaceFileTools(options: WorkspaceFileToolOptions): Wor
     approval: {
       operation: 'workspace.write_file',
       risk: 'high',
-      summarize: (input) => ({
-        summary: `写入 Workspace 文件 ${input.path}`,
-        inputSummary: {
-          path: input.path,
-          bytes: Buffer.byteLength(input.content, 'utf8'),
-          overwrite: input.overwrite === true,
-        },
-      }),
+      summarize: async (input, context) => {
+        const plan = await planWrite(input, context, normalizedOptions);
+        return {
+          summary: `写入 Workspace 文件 ${input.path}`,
+          inputSummary: {
+            path: input.path,
+            bytes: plan.bytes,
+            lines: countLines(input.content),
+            overwrite: input.overwrite === true,
+            ...(plan.previousBytes === undefined ? {} : { previousBytes: plan.previousBytes }),
+            ...(plan.previousLines === undefined ? {} : { previousLines: plan.previousLines }),
+            createdDirectories: plan.createdDirectories,
+          },
+        };
+      },
     },
     execute: (input, context) => writeWorkspaceFile(input, context, normalizedOptions),
+  };
+
+  const editFileTool: ToolDefinition<EditFileInput, EditFileResult> = {
+    name: 'edit_file',
+    description:
+      'Replace exact text in an existing file inside the project folder. oldText must match ' +
+      'the file verbatim, including indentation and line breaks, and must occur once unless ' +
+      'replaceAll is true; copy it from read_file output. Every edit waits for user approval, ' +
+      'which shows the diff.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', minLength: 1 },
+        oldText: { type: 'string', minLength: 1 },
+        newText: { type: 'string' },
+        replaceAll: { type: 'boolean' },
+      },
+      required: ['path', 'oldText', 'newText'],
+      additionalProperties: false,
+    },
+    inputSchema: editFileInputSchema,
+    approval: {
+      operation: 'workspace.edit_file',
+      risk: 'medium',
+      summarize: async (input, context) => {
+        const { plan } = await planEdit(input, context, normalizedOptions);
+        return {
+          summary: `编辑 Workspace 文件 ${input.path}`,
+          inputSummary: {
+            path: input.path,
+            replacements: plan.replacements,
+            linesAdded: plan.linesAdded,
+            linesRemoved: plan.linesRemoved,
+            diff: plan.diff,
+            diffTruncated: plan.diffTruncated,
+          },
+        };
+      },
+    },
+    execute: (input, context) => editWorkspaceFile(input, context, normalizedOptions),
   };
 
   return Object.freeze({
     readFile: Object.freeze(readFileTool),
     writeFile: Object.freeze(writeFileTool),
+    editFile: Object.freeze(editFileTool),
   });
 }

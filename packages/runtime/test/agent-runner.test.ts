@@ -776,7 +776,7 @@ describe('Agent Runner contracts', () => {
     await store.close();
   });
 
-  it('fails the turn at the model step limit without duplicating completed tool steps', async () => {
+  it('completes the turn at the model step limit and keeps completed tool steps', async () => {
     const store = createInMemorySessionEventStore();
     const requests: LlmRequest[] = [];
     const registry = createToolRegistry();
@@ -808,20 +808,129 @@ describe('Agent Runner contracts', () => {
       maxSteps: 1,
     });
 
-    await expect(collect(runner.run(validRequest))).rejects.toMatchObject({
-      code: 'agent-step-limit',
+    const events = await collect(runner.run(validRequest));
+    expect(events.at(-1)).toMatchObject({ type: 'completed', reason: 'agent-step-limit' });
+    expect(agentRuntimeEventSchema.parse(events.at(-1))).toMatchObject({
+      reason: 'agent-step-limit',
     });
 
     const projection = projectSession(await store.read(validRequest.sessionId));
     expect(requests).toHaveLength(1);
     expect(projection.turns[0]).toMatchObject({
-      status: 'failed',
+      status: 'completed',
+      reason: 'agent-step-limit',
       steps: [
         { kind: 'model', status: 'completed' },
         { kind: 'tool', status: 'completed' },
       ],
     });
     expect(projection.turns[0]?.steps).toHaveLength(2);
+
+    await store.close();
+  });
+
+  it('defaults to fifty model steps per turn', async () => {
+    const store = createInMemorySessionEventStore();
+    const requests: LlmRequest[] = [];
+    const registry = createToolRegistry();
+    registry.register({
+      name: 'echo',
+      description: 'Returns the input value',
+      parameters: { type: 'object' },
+      inputSchema: z.object({ value: z.string() }),
+      execute: ({ value }) => value,
+    });
+    const toolStep: readonly StreamEvent[] = [
+      { type: 'tool-call-start', id: 'call', name: 'echo' },
+      { type: 'tool-call-delta', id: 'call', argumentsDelta: '{"value":"x"}' },
+      { type: 'finish', reason: 'tool-call' },
+    ];
+    let index = 0;
+    const runner = createAgentRunner({
+      llm: {
+        async *stream(request) {
+          requests.push(request);
+          index += 1;
+          // Tool call ids must be unique within a step, not across steps.
+          yield* toolStep.map((event) =>
+            'id' in event ? { ...event, id: `call-${index}` } : event,
+          );
+        },
+      },
+      sessionStore: store,
+      toolRegistry: registry,
+      toolPipeline: createToolPipeline({ registry }),
+    });
+
+    const events = await collect(runner.run(validRequest));
+    expect(requests).toHaveLength(50);
+    expect(events.at(-1)).toMatchObject({ type: 'completed', reason: 'agent-step-limit' });
+
+    await store.close();
+  });
+
+  it('offers and runs only read-only tools in read-only mode', async () => {
+    const store = createInMemorySessionEventStore();
+    const requests: LlmRequest[] = [];
+    const registry = createToolRegistry();
+    const writes: string[] = [];
+    const instructionModes: string[] = [];
+    registry.register({
+      name: 'look',
+      description: 'Reads something',
+      readOnly: true,
+      parameters: { type: 'object' },
+      inputSchema: z.object({}),
+      execute: () => 'looked',
+    });
+    registry.register({
+      name: 'change',
+      description: 'Changes something',
+      parameters: { type: 'object' },
+      inputSchema: z.object({}),
+      execute: () => {
+        writes.push('changed');
+        return 'changed';
+      },
+    });
+    const runner = createAgentRunner({
+      llm: sequenceClient(
+        [
+          [
+            { type: 'tool-call-start', id: 'call-1', name: 'change' },
+            { type: 'tool-call-delta', id: 'call-1', argumentsDelta: '{}' },
+            { type: 'finish', reason: 'tool-call' },
+          ],
+          [
+            { type: 'text-delta', text: '只读模式下不能修改' },
+            { type: 'finish', reason: 'stop' },
+          ],
+        ],
+        requests,
+      ),
+      sessionStore: store,
+      toolRegistry: registry,
+      toolPipeline: createToolPipeline({ registry }),
+      instructions: ({ permissionMode }) => {
+        instructionModes.push(permissionMode);
+        return `mode ${permissionMode}`;
+      },
+    });
+
+    const events = await collect(runner.run({ ...validRequest, permissionMode: 'read-only' }));
+
+    expect(requests[0]?.tools?.map((tool) => tool.name)).toEqual(['look']);
+    expect(instructionModes).toEqual(['read-only']);
+    expect(writes).toEqual([]);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'tool-result',
+        status: 'failed',
+        errorCode: 'tool-not-permitted',
+      }),
+    );
+    expect(events.at(-1)).toMatchObject({ type: 'completed' });
+    expect(events.at(-1)).not.toHaveProperty('reason');
 
     await store.close();
   });

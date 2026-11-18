@@ -119,6 +119,7 @@ export function createRecallTool(options: {
       'compressed out of the visible history. Pass the `toolCallId` shown in a ' +
       '"[recall id=...]" skeleton reference, or a `path` to get the most recent ' +
       'read of that file. Read-only; it never changes anything.',
+    readOnly: true,
     parameters: {
       type: 'object',
       properties: {

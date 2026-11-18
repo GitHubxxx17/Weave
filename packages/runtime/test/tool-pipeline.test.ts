@@ -374,7 +374,10 @@ describe('Tool Pipeline', () => {
     });
 
     await Promise.resolve();
-    expect(summarize).toHaveBeenCalledWith({ value: 'x' });
+    expect(summarize).toHaveBeenCalledWith(
+      { value: 'x' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
     const pending = broker.list()[0]!;
     expect(pending.expiresAt).toBeDefined();
     expect(new Date(pending.expiresAt!).getTime() - new Date(pending.createdAt).getTime()).toBe(50);
@@ -384,5 +387,91 @@ describe('Tool Pipeline', () => {
       code: 'tool-approval-cancelled',
     });
     expect(broker.get(pending.approvalId)?.status).toBe('cancelled');
+  });
+
+  it('awaits an asynchronous summary and fails before Approval when it throws', async () => {
+    const broker = createApprovalBroker();
+    const execute = vi.fn(() => 'done');
+    const pipeline = createToolPipeline({
+      registry: createProtectedRegistry(execute, async ({ value }, context) => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        if (value === 'bad') {
+          throw Object.assign(new Error('Text not found'), { code: 'workspace-edit-no-match' });
+        }
+        return { summary: `异步摘要 ${value} ${context.sessionId ?? ''}`, inputSummary: {} };
+      }),
+      approvalBroker: broker,
+    });
+
+    await expect(
+      pipeline.execute({ toolCallId: 'call-bad', name: 'protected', arguments: '{"value":"bad"}' }),
+    ).rejects.toMatchObject({
+      code: 'tool-execution-failed',
+      cause: expect.objectContaining({ code: 'workspace-edit-no-match' }),
+    });
+    expect(broker.list()).toEqual([]);
+
+    const execution = pipeline.execute({
+      toolCallId: 'call-good',
+      name: 'protected',
+      arguments: '{"value":"good"}',
+      sessionId: 'session-1',
+    });
+    await vi.waitFor(() => expect(broker.list()).toHaveLength(1));
+    expect(broker.list()[0]?.summary).toBe('异步摘要 good session-1');
+    broker.approve(broker.list()[0]!.approvalId);
+    await expect(execution).resolves.toMatchObject({ content: 'done' });
+  });
+
+  it('runs only read-only tools in read-only mode', async () => {
+    const broker = createApprovalBroker();
+    const execute = vi.fn(() => 'done');
+    const registry = createProtectedRegistry(execute);
+    registry.register({
+      name: 'look',
+      description: 'Read-only test tool',
+      readOnly: true,
+      parameters: { type: 'object' },
+      inputSchema: z.object({}),
+      execute: () => 'looked',
+    });
+    const pipeline = createToolPipeline({ registry, approvalBroker: broker });
+
+    await expect(
+      pipeline.execute({
+        toolCallId: 'call-1',
+        name: 'protected',
+        arguments: '{"value":"x"}',
+        permissionMode: 'read-only',
+      }),
+    ).rejects.toMatchObject({ code: 'tool-not-permitted' });
+    expect(broker.list()).toEqual([]);
+    expect(execute).not.toHaveBeenCalled();
+
+    await expect(
+      pipeline.execute({
+        toolCallId: 'call-2',
+        name: 'look',
+        arguments: '{}',
+        permissionMode: 'read-only',
+      }),
+    ).resolves.toMatchObject({ content: 'looked' });
+  });
+
+  it('tells the model when a result was truncated', async () => {
+    const pipeline = createToolPipeline({
+      registry: createRegistry(() => 'a'.repeat(500)),
+      maxResultBytes: 200,
+    });
+
+    const result = await pipeline.execute({
+      toolCallId: 'call-1',
+      name: 'echo',
+      arguments: '{"text":"x"}',
+    });
+
+    expect(result.truncated).toBe(true);
+    expect(Buffer.byteLength(result.content, 'utf8')).toBeLessThanOrEqual(200);
+    expect(result.content).toMatch(/\[结果超过 200 字节，后面的内容已截断\]$/);
   });
 });

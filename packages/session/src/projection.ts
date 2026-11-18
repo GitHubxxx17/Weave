@@ -76,6 +76,8 @@ export interface SessionToolResult {
 export interface SessionTurn {
   readonly turnId: string;
   readonly status: 'running' | 'completed' | 'failed' | 'cancelled';
+  /** Why the Turn ended, when its `turn.completed` event recorded one. */
+  readonly reason?: string | undefined;
   readonly startedAt: string;
   readonly completedAt?: string | undefined;
   readonly steps: readonly SessionStep[];
@@ -111,6 +113,7 @@ interface MutableStep {
 interface MutableTurn {
   turnId: string;
   status: SessionTurn['status'];
+  reason?: string | undefined;
   startedAt: string;
   completedAt?: string | undefined;
   steps: MutableStep[];
@@ -225,6 +228,9 @@ export function projectSession(events: readonly SessionEvent[]): SessionProjecti
         throw invalidOrder(`Turn ${event.payload.turnId} was already completed`);
       }
       turn.status = event.payload.status;
+      if (event.payload.reason !== undefined) {
+        turn.reason = event.payload.reason;
+      }
       turn.completedAt = event.occurredAt;
       if (activeTurnId === turn.turnId) {
         activeTurnId = undefined;
@@ -346,6 +352,7 @@ export function projectSession(events: readonly SessionEvent[]): SessionProjecti
     turns: turns.map((turn) => ({
       turnId: turn.turnId,
       status: turn.status,
+      ...(turn.reason === undefined ? {} : { reason: turn.reason }),
       startedAt: turn.startedAt,
       ...(turn.completedAt === undefined ? {} : { completedAt: turn.completedAt }),
       steps: turn.steps.map((step) => ({ ...step })),

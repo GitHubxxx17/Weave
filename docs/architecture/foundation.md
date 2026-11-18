@@ -210,17 +210,26 @@ message, completes the model Step, and executes each call in order through the
 shared Tool Pipeline. Each call gets a `tool` Step, a durable
 `tool-call.created` event, and then a `tool-result.created` event plus a
 `role: 'tool'` message. The projected messages are then sent to the next model
-step. The default limit is eight model steps; `maxSteps` protects against an
-unbounded model/tool cycle.
+step. The default limit is fifty model steps (`maxSteps`; the Server reads
+`WEAVE_AGENT_MAX_STEPS`). Reaching it does not fail the turn: the Runner
+appends `turn.completed` with `status: completed` and `reason:
+agent-step-limit`, and yields `completed` with the same `reason`, so completed
+tool results stay in the Session and the user can ask the Agent to continue.
+
+`AgentRunRequest.permissionMode` is `workspace` (default) or `read-only`. In
+read-only runs the Runner sends only tools declared `readOnly: true` and passes
+the mode to the Tool Pipeline, which rejects any other tool with the
+recoverable `tool-not-permitted` before an Approval is created.
 
 After a valid text terminal `finish`, the Runner appends the complete assistant
 message (when non-empty), the completed Step, and the completed Turn in one
 batch, then yields `completed`.
 
 Tool failures are split into two groups. A recoverable `ToolExecutionError`
-(`tool-not-found`, `tool-invalid-json`, `tool-invalid-arguments`,
-`tool-execution-failed`, `tool-timeout`, `tool-result-serialization-failed`,
-`tool-approval-rejected`, `tool-approval-expired`) persists a failed Tool
+(`tool-not-found`, `tool-not-permitted`, `tool-invalid-json`,
+`tool-invalid-arguments`, `tool-execution-failed`, `tool-timeout`,
+`tool-result-serialization-failed`, `tool-approval-rejected`,
+`tool-approval-expired`) persists a failed Tool
 Result, a `role: 'tool'` message describing the error, and a failed tool Step,
 emits `tool-result` with `status: 'failed'`, and then continues with the next
 model step so the model can correct the call or explain the outcome. The
@@ -353,20 +362,52 @@ boundary at execution time: they resolve the real Workspace root and target,
 reject symlink targets outside the root, check file type and byte limits, and
 only then call `readFile` or `writeFile`.
 
-`createWorkspaceFileTools()` exposes `read_file` and `write_file` as ordinary
-`ToolDefinition` values. They are registered in the shared `ToolRegistry` and
-must be called through `ToolPipeline`, so JSON parsing, Zod validation,
-Approval, cancellation, timeout classification, and result serialization
-remain consistent with every other Runtime tool. `read_file` is not protected
-in this phase. `write_file` declares a high-risk `workspace.write_file`
-Approval requirement whose summary includes only path, byte count, and
-overwrite state, never the complete content.
+`createWorkspaceFileTools()` exposes `read_file`, `edit_file` and `write_file`
+as ordinary `ToolDefinition` values; `createWorkspaceSearchTools()` adds the
+read-only `list_dir`, `glob` and `grep`, and `createCommandTool()` adds
+`run_command`. They are registered in the shared `ToolRegistry` and must be
+called through `ToolPipeline`, so JSON parsing, Zod validation, Approval,
+cancellation, timeout classification, and result serialization remain
+consistent with every other Runtime tool. The design is in
+`docs/superpowers/specs/2026-11-18-agent-coding-tools-design.md`.
+
+- `read_file` (read-only) returns small files unchanged and larger files in
+  pages of up to 2000 lines and about 28 KB / 6,000 estimated tokens, ending
+  with a note that gives the next `offset`, so a page is never cut silently.
+  Binary files are rejected with `workspace-file-binary`.
+- `list_dir`, `glob` and `grep` (read-only) list files with
+  `git ls-files --cached --others --exclude-standard` in a Git repository and
+  with a built-in ignore list elsewhere; they never follow symlinks, and
+  `grep` never reads `.env` files. `grep` runs in a worker thread so a
+  pathological regular expression is terminated instead of blocking the
+  Server's event loop.
+- `edit_file` replaces exact text (unique unless `replaceAll`), and its medium
+  `workspace.edit_file` Approval summary carries a unified diff capped at 200
+  lines. It re-reads and re-matches after approval, so a file changed while the
+  request was pending fails instead of being overwritten.
+- `write_file` declares a high-risk `workspace.write_file` Approval whose
+  summary carries path, size, line count, overwrite state, the size of the file
+  it replaces, and the directories it will create, never the content.
+- `run_command` declares a high-risk `shell.run_command` Approval for every
+  call. It runs `$SHELL -c` (PowerShell on Windows) in a directory inside the
+  Workspace with stdin closed, merges and trims output to its first 4 KB and
+  last 24 KB, stops the whole process group on timeout or cancellation, and
+  removes `WEAVE_*` and credential-like variables from the environment.
+
+`ToolApprovalRequirement.summarize(input, context)` may be asynchronous and
+receives the execution context, so protected tools can validate their input and
+build the summary from the filesystem before the Approval exists; an error
+there fails the call without asking the user. When the Pipeline truncates any
+result at its byte cap it appends a notice, so the model knows the content is
+incomplete.
 
 The tools accept either a fixed `workspace` policy or a `resolveWorkspace`
 function that receives the `ToolExecutionContext` and returns the policy for
 that call's Session. The Server uses the resolver form: after trusted plugins
 are registered, `createServerAgentRunner(runtime, { resolveWorkspaceRoot })`
-registers both tools, and the resolver maps the Session to its Project's
+registers the Workspace tools in the order `list_dir`, `glob`, `grep`,
+`read_file`, `edit_file`, `write_file`, `run_command`, and the resolver maps
+the Session to its Project's
 `folderPath`. A Session whose Project has no folder fails the call with
 `workspace-file-unavailable`, which the Runner returns to the model as a
 recoverable failure. `POST /projects` only accepts a `folderPath` that is an
@@ -382,12 +423,15 @@ same route renames a Project when the body carries `name`
 folder is validated before anything is written. `folderName` does not change on
 rename because it describes the folder on disk, not the display name.
 
-`AgentRunnerOptions.instructions({ sessionId })` returns system instructions
-that the Runner resolves once per run and prepends to every model request as a
-`system` message. They are never appended to the Session, so they always
-describe current state. The Server's default instructions name the Agent, list
-the registered tools, and state the Session's Project folder (or that none is
-set), so the model neither denies having tools nor passes absolute paths.
+`AgentRunnerOptions.instructions({ sessionId, permissionMode })` returns system
+instructions that the Runner resolves once per run and prepends to every model
+request as a `system` message. They are never appended to the Session, so they
+always describe current state. The Server's default instructions name the
+Agent, list the tools available in the run's permission mode and how to use
+them, describe the host (OS, shell, date) and the Session's Project folder and
+Git branch (or that no folder is set), and include the first 32 KB of the
+Project's root `AGENTS.md`. Only facts that rarely change are included, so the
+request prefix stays stable for provider prompt caching.
 
 Approval does not replace Workspace policy or filesystem validation. The file
 tool still resolves the real root and target after approval, so a stale or
@@ -395,14 +439,16 @@ unsafe path cannot become valid merely because a caller approved it. There is
 still residual TOCTOU risk between metadata checks and the final filesystem
 call; this is not yet a complete Sandbox.
 
-The file tools deliberately do not create parent directories. New writes use
-the exclusive `wx` flag by default; an existing regular file is replaced only
-when the caller explicitly supplies `overwrite: true`. This combines a product
-level guard against accidental replacement with the filesystem's exclusive
-create operation. The implementation still has residual TOCTOU risk between
-metadata checks and the final filesystem call, so it is not yet a complete
-Sandbox or Approval boundary. A dangling symlink is rejected conservatively
-because its final target cannot be proven to remain inside the Workspace.
+`write_file` creates missing parent directories only after resolving the
+deepest existing ancestor inside the root. New writes use the exclusive `wx`
+flag; an existing regular file is replaced only when the caller explicitly
+supplies `overwrite: true`. This combines a product level guard against
+accidental replacement with the filesystem's exclusive create operation. The
+implementation still has residual TOCTOU risk between metadata checks and the
+final filesystem call, so it is not yet a complete Sandbox or Approval
+boundary; `run_command` in particular runs outside any sandbox and relies on
+per-command Approval. A dangling symlink is rejected conservatively because
+its final target cannot be proven to remain inside the Workspace.
 
 The Server exposes Approval REST routes for polling and decisions:
 `GET /approvals`, `GET /approvals/:approvalId`, and POST routes for approve,

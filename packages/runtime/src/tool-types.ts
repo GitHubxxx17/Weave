@@ -5,6 +5,17 @@ const nonEmptyStringSchema = z.string().min(1);
 const nonNegativeFiniteNumberSchema = z.number().finite().nonnegative();
 const approvalRiskSchema = z.enum(['low', 'medium', 'high']);
 
+/** Validates a permission mode crossing the Runner or Pipeline boundary. */
+export const toolPermissionModeSchema = z.enum(['workspace', 'read-only']);
+
+/**
+ * Permission mode of one Agent run.
+ *
+ * `workspace` exposes every registered tool; protected tools still wait for
+ * Approval. `read-only` exposes and executes only tools marked `readOnly`.
+ */
+export type ToolPermissionMode = z.infer<typeof toolPermissionModeSchema>;
+
 /**
  * Context supplied to every tool implementation by the shared pipeline.
  */
@@ -15,17 +26,29 @@ export interface ToolExecutionContext {
   readonly sessionId?: string | undefined;
 }
 
+/** Safe, user-facing description of one protected invocation. */
+export interface ToolApprovalSummary {
+  readonly summary: string;
+  readonly inputSummary: unknown;
+}
+
 /** Metadata and redacted summary required before a tool can execute. */
 export interface ToolApprovalRequirement<TInput = unknown> {
   /** Stable operation identifier used by the approval control plane. */
   readonly operation: string;
   /** Risk level shown to the caller before approval. */
   readonly risk: ApprovalRisk;
-  /** Converts validated input into safe, user-facing approval metadata. */
-  readonly summarize: (input: TInput) => {
-    readonly summary: string;
-    readonly inputSummary: unknown;
-  };
+  /**
+   * Converts validated input into safe, user-facing approval metadata.
+   *
+   * It may inspect the filesystem through `context` (for example to build a
+   * diff) and may therefore be asynchronous. An error thrown here fails the
+   * tool call before any Approval is created.
+   */
+  readonly summarize: (
+    input: TInput,
+    context: ToolExecutionContext,
+  ) => ToolApprovalSummary | Promise<ToolApprovalSummary>;
 }
 
 /**
@@ -43,6 +66,12 @@ export interface ToolDefinition<TInput = unknown, TOutput = unknown> {
   readonly parameters: unknown;
   /** Runtime validator for parsed JSON arguments. */
   readonly inputSchema: z.ZodType<TInput>;
+  /**
+   * Whether the tool only reads state. Read-only runs expose and execute only
+   * tools with `readOnly: true`; the default is `false` so an undeclared
+   * plugin tool is never treated as safe.
+   */
+  readonly readOnly?: boolean | undefined;
   /** Optional approval gate evaluated before `execute` is called. */
   readonly approval?: ToolApprovalRequirement<TInput> | undefined;
   /** Tool implementation invoked only by the Tool Pipeline. */
@@ -66,6 +95,8 @@ export interface ToolExecutionRequest {
   readonly signal?: AbortSignal | undefined;
   /** Request-specific timeout in milliseconds. */
   readonly timeoutMs?: number | undefined;
+  /** Permission mode of the calling run; defaults to `workspace`. */
+  readonly permissionMode?: ToolPermissionMode | undefined;
 }
 
 /** Validates external Tool Pipeline input before lookup or execution. */
@@ -77,6 +108,7 @@ export const toolExecutionRequestSchema: z.ZodType<ToolExecutionRequest> = z
     sessionId: nonEmptyStringSchema.optional(),
     signal: z.instanceof(AbortSignal).optional(),
     timeoutMs: nonNegativeFiniteNumberSchema.optional(),
+    permissionMode: toolPermissionModeSchema.optional(),
   })
   .passthrough();
 
@@ -91,6 +123,7 @@ export const toolDefinitionSchema = z
     description: z.string(),
     parameters: z.unknown(),
     inputSchema: z.custom<z.ZodTypeAny>((value) => value instanceof z.ZodType),
+    readOnly: z.boolean().optional(),
     approval: z
       .object({
         operation: nonEmptyStringSchema,
@@ -106,6 +139,7 @@ export const toolDefinitionSchema = z
 export type ToolExecutionErrorCode =
   | 'tool-invalid-input'
   | 'tool-not-found'
+  | 'tool-not-permitted'
   | 'tool-invalid-json'
   | 'tool-invalid-arguments'
   | 'tool-cancelled'
