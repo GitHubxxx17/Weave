@@ -1285,12 +1285,12 @@ describe('Studio Agent Chat', () => {
     expect(screen.getByRole('tab', { name: '工具' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /^关闭概览$/ })).toBeNull();
 
-    // The add menu lists only the terminal as coming soon now.
+    // The add menu now lists preview and terminal as openable (no coming-soon).
     fireEvent.click(screen.getByRole('button', { name: '添加面板' }));
     const addMenu = screen.getByRole('menu', { name: '添加面板' });
-    expect(within(addMenu).getAllByText('即将推出')).toHaveLength(1);
+    expect(within(addMenu).queryByText('即将推出')).toBeNull();
     const terminalItem = within(addMenu).getByRole('menuitem', { name: /终端/ });
-    expect((terminalItem as HTMLButtonElement).disabled).toBe(true);
+    expect((terminalItem as HTMLButtonElement).disabled).toBe(false);
     const previewItem = within(addMenu).getByRole('menuitem', { name: /预览/ });
     expect((previewItem as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(screen.getByRole('button', { name: '添加面板' }));

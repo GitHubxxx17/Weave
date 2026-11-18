@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "pnpm build && electron dist/main.js",
     "build": "tsc -p tsconfig.json",
+    "rebuild": "electron-rebuild -f -w node-pty",
     "lint": "eslint src test",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --root ../.. --config vitest.config.ts apps/desktop/test"
@@ -14,9 +15,11 @@
   "dependencies": {
     "@weave/server": "workspace:*",
     "electron": "^39.2.6",
+    "node-pty": "1.1.0",
     "zod": "4.6.7"
   },
   "devDependencies": {
+    "@electron/rebuild": "4.2.1",
     "@types/node": "24.10.1"
   }
 }

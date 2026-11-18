@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 
 import { App } from './app/App.js';
 import { applyWindowChrome } from './features/runtime/runtime-bridge.js';
+import '@xterm/xterm/css/xterm.css';
 import './app/app.css';
 
 const rootElement = document.getElementById('root');

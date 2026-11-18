@@ -6,7 +6,8 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "electron",
-      "esbuild"
+      "esbuild",
+      "node-pty"
     ]
   },
   "engines": {
@@ -17,7 +18,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "dev": "pnpm --parallel --filter @weave/server --filter @weave/studio dev",
-    "desktop:dev": "pnpm --filter @weave/desktop... build && node apps/desktop/dist/dev.js",
+    "desktop:dev": "pnpm --filter @weave/desktop run rebuild && pnpm --filter @weave/desktop... build && node apps/desktop/dist/dev.js",
+    "desktop:rebuild": "pnpm --filter @weave/desktop run rebuild",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
