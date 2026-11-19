@@ -1432,15 +1432,25 @@ summary:hover > .disclosure-icon {
 
 .approval-card-title {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 8px;
   font-size: 0.84rem;
 }
 
+/* A long command or path wraps inside the title instead of squeezing the badge. */
+.approval-card-title strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Never shrink the badge: Chinese text may otherwise wrap after any character. */
 .approval-risk {
+  flex: none;
   padding: 1px 7px;
   color: var(--warning);
   font-size: 0.72rem;
+  line-height: 1.5;
+  white-space: nowrap;
   background: #fdecd0;
   border-radius: 999px;
 }
