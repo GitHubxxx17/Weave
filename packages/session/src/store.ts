@@ -8,7 +8,8 @@ export type SessionStoreErrorCode =
   | 'session-store-closed'
   | 'session-store-invalid-input'
   | 'session-store-io'
-  | 'session-store-protocol';
+  | 'session-store-protocol'
+  | 'session-store-migration';
 
 /**
  * Error raised when a Store cannot satisfy an operation.

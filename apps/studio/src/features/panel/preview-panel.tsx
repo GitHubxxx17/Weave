@@ -1,7 +1,8 @@
 import { useState, type FormEvent, type ReactElement } from 'react';
 import { Globe, RotateCcw } from 'lucide-react';
 
-const storageKey = 'weave.studio.previewUrl';
+/** Per-instance storage so two preview tabs keep independent addresses. */
+const storageKeyPrefix = 'weave.studio.previewUrl';
 
 /** Hosts that should default to http:// when the user omits the scheme. */
 const localHostPattern = /^(localhost|127\.|0\.0\.0\.0|\[?::1\]?)/i;
@@ -36,7 +37,7 @@ export function resolvePreviewUrl(input: string): ResolvedUrl {
   return { url: parsed.toString() };
 }
 
-function readStoredUrl(): string {
+function readStoredUrl(storageKey: string): string {
   try {
     return globalThis.localStorage?.getItem(storageKey) ?? '';
   } catch {
@@ -48,9 +49,12 @@ function readStoredUrl(): string {
  * Embeds a web page in an iframe with an address bar and reload control.
  * Works in browser and desktop modes; the target must allow embedding
  * (many public sites set `X-Frame-Options`, and local dev servers do not).
+ * `instanceId` keeps each preview tab's address separate when several are
+ * open at once.
  */
-export function PreviewPanel(): ReactElement {
-  const stored = readStoredUrl();
+export function PreviewPanel({ instanceId }: { readonly instanceId: string }): ReactElement {
+  const storageKey = `${storageKeyPrefix}:${instanceId}`;
+  const stored = readStoredUrl(storageKey);
   const [input, setInput] = useState(stored);
   const [loaded, setLoaded] = useState(stored);
   const [error, setError] = useState<string | null>(null);

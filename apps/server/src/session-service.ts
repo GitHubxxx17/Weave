@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ContextBreakdown, Message, TokenUsage } from '@weave/protocol';
 import {
-  projectSession,
+  createSessionProjectionCache,
   SessionProjectionError,
   sumTokenUsage,
   type SessionEventStore,
@@ -207,18 +207,22 @@ function assertProjectExists(project: Project | undefined, projectId: string): P
  */
 export function createSessionService(options: SessionServiceOptions): SessionService {
   const { projectStore, sessionStore } = options;
+  // Read-through incremental projection: a Session's history is parsed once and
+  // later reads fold only new events, instead of replaying the whole log on
+  // every get, lifecycle transition, and project-list entry.
+  const projectionCache = createSessionProjectionCache(sessionStore);
 
   async function readProjection(sessionId: string): Promise<SessionProjection> {
-    const events = await sessionStore.read(sessionId);
-    if (events.length === 0) {
-      throw sessionNotFound(sessionId);
-    }
-
+    let projection: SessionProjection | undefined;
     try {
-      return projectSession(events);
+      projection = await projectionCache.project(sessionId);
     } catch (error) {
       return rethrowProjectionError(sessionId, error);
     }
+    if (projection === undefined) {
+      throw sessionNotFound(sessionId);
+    }
+    return projection;
   }
 
   async function appendLifecycleEvent(
