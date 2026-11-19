@@ -37,7 +37,13 @@ export interface PanelDescriptor {
    * iframe, so switching tabs does not reload or reset them.
    */
   readonly keepAlive: boolean;
-  readonly render?: (context: PanelContext) => ReactElement;
+  /**
+   * Allow more than one open tab of this kind. A multi-instance kind opens a
+   * fresh tab (its own pty or iframe) every time it is added; a
+   * single-instance kind is focused instead of duplicated.
+   */
+  readonly multi: boolean;
+  readonly render?: (context: PanelContext, instanceId: string) => ReactElement;
 }
 
 export const panelDescriptors: readonly PanelDescriptor[] = [
@@ -48,6 +54,7 @@ export const panelDescriptors: readonly PanelDescriptor[] = [
     defaultPinned: true,
     comingSoon: false,
     keepAlive: false,
+    multi: false,
     render: (context) => <OverviewPanel {...context} />,
   },
   {
@@ -57,6 +64,7 @@ export const panelDescriptors: readonly PanelDescriptor[] = [
     defaultPinned: true,
     comingSoon: false,
     keepAlive: false,
+    multi: false,
     render: (context) => <FilesPanel {...context} />,
   },
   {
@@ -66,6 +74,7 @@ export const panelDescriptors: readonly PanelDescriptor[] = [
     defaultPinned: true,
     comingSoon: false,
     keepAlive: false,
+    multi: false,
     render: (context) => <ToolsPanel {...context} />,
   },
   {
@@ -75,6 +84,7 @@ export const panelDescriptors: readonly PanelDescriptor[] = [
     defaultPinned: true,
     comingSoon: false,
     keepAlive: false,
+    multi: false,
     render: (context) => <UsagePanel {...context} />,
   },
   {
@@ -84,6 +94,7 @@ export const panelDescriptors: readonly PanelDescriptor[] = [
     defaultPinned: true,
     comingSoon: false,
     keepAlive: false,
+    multi: false,
     render: (context) => <ContextPanel {...context} />,
   },
   {
@@ -93,7 +104,8 @@ export const panelDescriptors: readonly PanelDescriptor[] = [
     defaultPinned: false,
     comingSoon: false,
     keepAlive: true,
-    render: () => <PreviewPanel />,
+    multi: true,
+    render: (_context, instanceId) => <PreviewPanel instanceId={instanceId} />,
   },
   {
     kind: 'terminal',
@@ -102,6 +114,7 @@ export const panelDescriptors: readonly PanelDescriptor[] = [
     defaultPinned: false,
     comingSoon: false,
     keepAlive: true,
+    multi: true,
     render: (context) => <TerminalPanel cwd={context.folderPath} />,
   },
 ];
