@@ -1836,7 +1836,7 @@ describe('Studio Agent Chat', () => {
     fireEvent.change(screen.getByLabelText('默认模型'), {
       target: { value: 'deepseek-chat' },
     });
-    fireEvent.change(screen.getByLabelText('温度'), { target: { value: '0.4' } });
+    fireEvent.change(screen.getByLabelText('Temperature'), { target: { value: '0.4' } });
     fireEvent.change(screen.getByLabelText('最大输出 token'), { target: { value: '1024' } });
     fireEvent.change(screen.getByLabelText('上下文窗口 token'), { target: { value: '32000' } });
     fireEvent.click(screen.getByRole('button', { name: '保存 Provider' }));

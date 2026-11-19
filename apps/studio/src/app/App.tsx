@@ -3659,16 +3659,16 @@ export function App() {
               ) : null}
               <div className="provider-form-grid">
                 <label className="provider-form-field">
-                  <span>温度（可选）</span>
+                  <span>Temperature（可选）</span>
                   <input
-                    aria-label="温度"
+                    aria-label="Temperature"
                     type="number"
                     min={0}
                     max={2}
                     step={0.1}
                     value={providerForm.temperature}
                     onChange={(event) => updateProviderForm('temperature', event.target.value)}
-                    placeholder="默认"
+                    placeholder="默认 1.0"
                   />
                 </label>
                 <label className="provider-form-field">
@@ -3680,7 +3680,7 @@ export function App() {
                     step={1}
                     value={providerForm.maxTokens}
                     onChange={(event) => updateProviderForm('maxTokens', event.target.value)}
-                    placeholder="默认"
+                    placeholder="默认 4096"
                   />
                 </label>
               </div>
@@ -3699,7 +3699,8 @@ export function App() {
                 />
               </label>
               <p className="project-dialog-note">
-                三项留空则用内置默认；设置后仅作用于该 Provider，且对话未显式指定时才生效。
+                留空即用默认：温度与最大输出跟随模型（常见 1.0 / 4096），上下文窗口为
+                128000；设置后仅作用于该 Provider，对话未显式指定时才生效。
               </p>
               <label className="provider-checkbox-field">
                 <input
