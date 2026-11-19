@@ -151,6 +151,9 @@ type ProviderFormState = {
   readonly defaultModel: string;
   readonly makeDefault: boolean;
   readonly clearApiKey: boolean;
+  readonly contextWindowTokens: string;
+  readonly temperature: string;
+  readonly maxTokens: string;
 };
 
 type FormSelectOption = {
@@ -172,6 +175,33 @@ type FormSelectMenuPosition = {
   readonly width: number;
   readonly maxHeight: number;
 };
+
+/** Result of parsing one optional numeric Provider field from its input string. */
+type ParsedNumberField =
+  { readonly ok: true; readonly value: number | undefined } | { readonly ok: false };
+
+/**
+ * Parses an optional numeric Provider field: an empty string means "unset",
+ * otherwise the value must be a finite number in range (temperature 0–2, or a
+ * positive integer).
+ */
+function parseProviderNumberField(
+  raw: string,
+  kind: 'temperature' | 'positiveInt',
+): ParsedNumberField {
+  const trimmed = raw.trim();
+  if (trimmed === '') {
+    return { ok: true, value: undefined };
+  }
+  const value = Number(trimmed);
+  if (!Number.isFinite(value)) {
+    return { ok: false };
+  }
+  if (kind === 'temperature') {
+    return value >= 0 && value <= 2 ? { ok: true, value } : { ok: false };
+  }
+  return Number.isInteger(value) && value > 0 ? { ok: true, value } : { ok: false };
+}
 
 /**
  * Renders a keyboard-friendly select menu that matches the Studio visual
@@ -1863,6 +1893,9 @@ export function App() {
             defaultModel: '',
             makeDefault: providerSettings.providers.length === 0,
             clearApiKey: false,
+            contextWindowTokens: '',
+            temperature: '',
+            maxTokens: '',
           }
         : {
             mode: 'edit',
@@ -1876,6 +1909,12 @@ export function App() {
             defaultModel: provider.defaultModel ?? '',
             makeDefault: provider.id === providerSettings.defaultProvider,
             clearApiKey: false,
+            contextWindowTokens:
+              provider.contextWindowTokens === undefined
+                ? ''
+                : String(provider.contextWindowTokens),
+            temperature: provider.temperature === undefined ? '' : String(provider.temperature),
+            maxTokens: provider.maxTokens === undefined ? '' : String(provider.maxTokens),
           },
     );
   }
@@ -1983,6 +2022,14 @@ export function App() {
       return;
     }
 
+    const temperature = parseProviderNumberField(form.temperature, 'temperature');
+    const maxTokens = parseProviderNumberField(form.maxTokens, 'positiveInt');
+    const contextWindowTokens = parseProviderNumberField(form.contextWindowTokens, 'positiveInt');
+    if (!temperature.ok || !maxTokens.ok || !contextWindowTokens.ok) {
+      setProviderFormError('采样参数格式不对：温度 0–2，最大输出 token 与上下文窗口须为正整数');
+      return;
+    }
+
     setProviderMutation('saving');
     setProviderFormError(null);
     try {
@@ -1995,6 +2042,11 @@ export function App() {
           apiKey: form.apiKey,
           defaultModel: form.defaultModel.trim(),
           makeDefault: form.makeDefault,
+          ...(contextWindowTokens.value === undefined
+            ? {}
+            : { contextWindowTokens: contextWindowTokens.value }),
+          ...(temperature.value === undefined ? {} : { temperature: temperature.value }),
+          ...(maxTokens.value === undefined ? {} : { maxTokens: maxTokens.value }),
         });
       } else if (form.editingId !== null) {
         await providerApi.updateProvider(form.editingId, {
@@ -2003,6 +2055,9 @@ export function App() {
           apiKey: form.apiKey,
           defaultModel: form.defaultModel.trim(),
           makeDefault: form.makeDefault,
+          contextWindowTokens: contextWindowTokens.value ?? null,
+          temperature: temperature.value ?? null,
+          maxTokens: maxTokens.value ?? null,
           ...(form.clearApiKey ? { clearApiKey: true } : {}),
         });
       }
@@ -3452,6 +3507,50 @@ export function App() {
                   />
                 </label>
               ) : null}
+              <div className="provider-form-grid">
+                <label className="provider-form-field">
+                  <span>温度（可选）</span>
+                  <input
+                    aria-label="温度"
+                    type="number"
+                    min={0}
+                    max={2}
+                    step={0.1}
+                    value={providerForm.temperature}
+                    onChange={(event) => updateProviderForm('temperature', event.target.value)}
+                    placeholder="默认"
+                  />
+                </label>
+                <label className="provider-form-field">
+                  <span>最大输出 token（可选）</span>
+                  <input
+                    aria-label="最大输出 token"
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={providerForm.maxTokens}
+                    onChange={(event) => updateProviderForm('maxTokens', event.target.value)}
+                    placeholder="默认"
+                  />
+                </label>
+              </div>
+              <label className="provider-form-field">
+                <span>上下文窗口 token（可选）</span>
+                <input
+                  aria-label="上下文窗口 token"
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={providerForm.contextWindowTokens}
+                  onChange={(event) =>
+                    updateProviderForm('contextWindowTokens', event.target.value)
+                  }
+                  placeholder="默认 128000"
+                />
+              </label>
+              <p className="project-dialog-note">
+                三项留空则用内置默认；设置后仅作用于该 Provider，且对话未显式指定时才生效。
+              </p>
               <label className="provider-checkbox-field">
                 <input
                   type="checkbox"
