@@ -2501,3 +2501,70 @@ describe('Agent Runner update_plan', () => {
     expect(events.some((event) => event.type === 'plan')).toBe(false);
   });
 });
+
+describe('Agent Runner provider sampling defaults', () => {
+  const okScript: readonly StreamEvent[] = [
+    { type: 'text-delta', text: 'hi' },
+    { type: 'finish', reason: 'stop' },
+  ];
+
+  function registryWithDefaults(requests: LlmRequest[]) {
+    return createLlmProviderRegistry([
+      {
+        id: 'mock',
+        label: 'Mock',
+        type: 'mock',
+        client: recordingClient(okScript, requests),
+        defaultModel: 'test-model',
+        temperature: 0.2,
+        maxTokens: 1500,
+      },
+    ]);
+  }
+
+  it('applies the provider default sampling params when the request omits them', async () => {
+    const requests: LlmRequest[] = [];
+    const runner = createAgentRunner({
+      llmRegistry: registryWithDefaults(requests),
+      sessionStore: createInMemorySessionEventStore(),
+    });
+
+    await collect(runner.run(validRequest));
+
+    expect(requests[0]).toMatchObject({ temperature: 0.2, maxTokens: 1500 });
+  });
+
+  it('lets the request override the provider default sampling params', async () => {
+    const requests: LlmRequest[] = [];
+    const runner = createAgentRunner({
+      llmRegistry: registryWithDefaults(requests),
+      sessionStore: createInMemorySessionEventStore(),
+    });
+
+    await collect(runner.run({ ...validRequest, temperature: 0.9, maxTokens: 500 }));
+
+    expect(requests[0]).toMatchObject({ temperature: 0.9, maxTokens: 500 });
+  });
+
+  it('sends no sampling params when neither the request nor the provider sets them', async () => {
+    const requests: LlmRequest[] = [];
+    const registry = createLlmProviderRegistry([
+      {
+        id: 'mock',
+        label: 'Mock',
+        type: 'mock',
+        client: recordingClient(okScript, requests),
+        defaultModel: 'test-model',
+      },
+    ]);
+    const runner = createAgentRunner({
+      llmRegistry: registry,
+      sessionStore: createInMemorySessionEventStore(),
+    });
+
+    await collect(runner.run(validRequest));
+
+    expect(requests[0]?.temperature).toBeUndefined();
+    expect(requests[0]?.maxTokens).toBeUndefined();
+  });
+});

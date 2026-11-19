@@ -95,6 +95,18 @@ function resolveContextWindowTokens(options: AgentRunnerOptions, provider: strin
   return options.context?.defaultWindowTokens ?? defaultContextWindowTokens;
 }
 
+/** Reads the Provider's default sampling params from its descriptor, if any. */
+function resolveProviderSamplingDefaults(
+  options: AgentRunnerOptions,
+  provider: string,
+): { readonly temperature?: number; readonly maxTokens?: number } {
+  const descriptor = options.llmRegistry?.getDescriptor(provider);
+  return {
+    ...(descriptor?.temperature === undefined ? {} : { temperature: descriptor.temperature }),
+    ...(descriptor?.maxTokens === undefined ? {} : { maxTokens: descriptor.maxTokens }),
+  };
+}
+
 /** Builds the send-window budget for one model step from options and request. */
 function resolveContextBudget(
   options: AgentRunnerOptions,
@@ -486,6 +498,11 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
               ? []
               : [{ role: 'system', content: [{ type: 'text', text: instructionText }] }];
 
+          // Provider defaults fill sampling params the request did not set.
+          const samplingDefaults = resolveProviderSamplingDefaults(options, validRequest.provider);
+          const effectiveTemperature = validRequest.temperature ?? samplingDefaults.temperature;
+          const effectiveMaxTokens = validRequest.maxTokens ?? samplingDefaults.maxTokens;
+
           while (true) {
             if (modelSteps >= maxSteps) {
               // Completed tool results stay in the Session; the user can ask the
@@ -526,11 +543,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
             let finishSeen = false;
             let finishReason: FinishReason | undefined;
             let toolCalls = new Map<string, ToolCallState>();
-            const budget = resolveContextBudget(
-              options,
-              validRequest.provider,
-              validRequest.maxTokens,
-            );
+            const budget = resolveContextBudget(options, validRequest.provider, effectiveMaxTokens);
             const built = buildModelContext({
               system: systemMessages,
               history: messages,
@@ -557,12 +570,8 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
               model: validRequest.model,
               messages: [...systemMessages, ...built.messages],
               ...(tools === undefined ? {} : { tools }),
-              ...(validRequest.temperature === undefined
-                ? {}
-                : { temperature: validRequest.temperature }),
-              ...(validRequest.maxTokens === undefined
-                ? {}
-                : { maxTokens: validRequest.maxTokens }),
+              ...(effectiveTemperature === undefined ? {} : { temperature: effectiveTemperature }),
+              ...(effectiveMaxTokens === undefined ? {} : { maxTokens: effectiveMaxTokens }),
               ...(validRequest.reasoningEffort === undefined
                 ? {}
                 : { reasoningEffort: validRequest.reasoningEffort }),

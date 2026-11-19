@@ -18,6 +18,10 @@ export interface LlmProviderRegistration {
   readonly defaultModel?: string;
   /** Context window in tokens, used to budget the request send window. */
   readonly contextWindowTokens?: number;
+  /** Default sampling temperature applied when a request omits one. */
+  readonly temperature?: number;
+  /** Default max output tokens applied when a request omits one. */
+  readonly maxTokens?: number;
 }
 
 /** Public Provider metadata safe to return to browser callers. */
@@ -28,6 +32,10 @@ export interface LlmProviderDescriptor {
   readonly defaultModel?: string;
   /** Context window in tokens, when the Provider declares one. */
   readonly contextWindowTokens?: number;
+  /** Default sampling temperature, when the Provider declares one. */
+  readonly temperature?: number;
+  /** Default max output tokens, when the Provider declares one. */
+  readonly maxTokens?: number;
 }
 
 /** Registry used by Runtime to resolve model clients without vendor coupling. */
@@ -61,6 +69,8 @@ const providerRegistrationSchema = z
     ),
     defaultModel: z.string().trim().min(1).optional(),
     contextWindowTokens: z.number().int().positive().safe().optional(),
+    temperature: z.number().min(0).max(2).optional(),
+    maxTokens: z.number().int().positive().safe().optional(),
   })
   .strict();
 
@@ -70,6 +80,8 @@ function toDescriptor(provider: {
   readonly type: LlmProviderType;
   readonly defaultModel?: string | undefined;
   readonly contextWindowTokens?: number | undefined;
+  readonly temperature?: number | undefined;
+  readonly maxTokens?: number | undefined;
 }): LlmProviderDescriptor {
   return Object.freeze({
     id: provider.id,
@@ -79,6 +91,8 @@ function toDescriptor(provider: {
     ...(provider.contextWindowTokens === undefined
       ? {}
       : { contextWindowTokens: provider.contextWindowTokens }),
+    ...(provider.temperature === undefined ? {} : { temperature: provider.temperature }),
+    ...(provider.maxTokens === undefined ? {} : { maxTokens: provider.maxTokens }),
   });
 }
 
