@@ -150,9 +150,8 @@ export function createAgentInstructions(options: {
 }) => Promise<string> {
   const environment: AgentEnvironment = { ...defaultEnvironment, ...options.environment };
 
-  return async ({ sessionId, permissionMode = 'workspace' }) => {
-    const readOnly = permissionMode === 'read-only';
-    const tools = options.tools().filter((tool) => !readOnly || tool.readOnly === true);
+  return async ({ sessionId, permissionMode = 'ask' }) => {
+    const tools = options.tools();
     const names = new Set(tools.map((tool) => tool.name));
     const protectedNames = tools.filter((tool) => tool.readOnly !== true).map((tool) => tool.name);
     const usesWorkspace = tools.some((tool) => workspaceToolNames.has(tool.name));
@@ -194,16 +193,21 @@ export function createAgentInstructions(options: {
       sections.push(['工作方式：', ...practices.map((line) => `- ${line}`)].join('\n'));
     }
 
-    if (readOnly) {
-      sections.push(
-        '权限：当前是"仅查看"模式，只能使用只读工具，不能修改文件或运行命令。需要修改时，请告诉用户把输入框下方的权限切换为"工作区访问"。',
-      );
-    } else if (protectedNames.length > 0) {
-      sections.push(
-        `权限：当前是"工作区访问"模式。${protectedNames.join('、')} 每次都要用户在界面上确认${
-          names.has('run_command') ? '；命令不在沙箱中运行' : ''
-        }。`,
-      );
+    if (protectedNames.length > 0) {
+      const sandboxNote = names.has('run_command') ? '；命令不在沙箱中运行' : '';
+      if (permissionMode === 'yolo') {
+        sections.push(
+          `权限：当前是"完全访问"模式，${protectedNames.join('、')} 都不需要确认、直接执行${sandboxNote}。请谨慎操作，破坏性改动不可撤销。`,
+        );
+      } else if (permissionMode === 'trust') {
+        sections.push(
+          `权限：当前是"信任"模式。本会话内常规改动会自动执行，只有高风险操作（删除、git push、sudo、联网等）才需要用户确认${sandboxNote}。`,
+        );
+      } else {
+        sections.push(
+          `权限：当前是"常规"模式。${protectedNames.join('、')} 每次都要用户在界面上确认${sandboxNote}。`,
+        );
+      }
     }
 
     const environmentLines = [

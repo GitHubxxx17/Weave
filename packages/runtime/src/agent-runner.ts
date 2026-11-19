@@ -143,16 +143,12 @@ function createAbortError(): DOMException {
 
 function protocolToolDefinitions(
   registry: NonNullable<AgentRunnerOptions['toolRegistry']>,
-  permissionMode: ToolPermissionMode,
 ): NonNullable<LlmRequest['tools']> {
-  return registry
-    .list()
-    .filter((tool) => permissionMode !== 'read-only' || tool.readOnly === true)
-    .map(({ name, description, parameters }) => ({
-      name,
-      description,
-      parameters,
-    }));
+  return registry.list().map(({ name, description, parameters }) => ({
+    name,
+    description,
+    parameters,
+  }));
 }
 
 interface ToolCallState {
@@ -472,11 +468,11 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
           let messages: readonly Message[] = projectedSession.messages.map(
             ({ message }) => message,
           );
-          const permissionMode: ToolPermissionMode = validRequest.permissionMode ?? 'workspace';
+          const permissionMode: ToolPermissionMode = validRequest.permissionMode ?? 'ask';
           const tools =
             options.toolRegistry === undefined
               ? undefined
-              : protocolToolDefinitions(options.toolRegistry, permissionMode);
+              : protocolToolDefinitions(options.toolRegistry);
           const instructionText =
             options.instructions === undefined
               ? undefined

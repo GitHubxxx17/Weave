@@ -8,6 +8,7 @@ import {
   type ToolExecutionResult,
 } from './tool-types.js';
 import { ApprovalError, type ApprovalDecision, type ApprovalBroker } from './approval-types.js';
+import { approvalRequiredForMode } from './approval-risk.js';
 import type { ToolRegistry } from './tool-registry.js';
 
 const defaultMaxResultBytes = 32_000;
@@ -174,12 +175,6 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
       if (tool === undefined) {
         throw new ToolExecutionError('tool-not-found', `Tool "${request.name}" was not found`);
       }
-      if (request.permissionMode === 'read-only' && tool.readOnly !== true) {
-        throw new ToolExecutionError(
-          'tool-not-permitted',
-          `Tool "${request.name}" is not available in read-only mode`,
-        );
-      }
 
       const parsedArguments = parseArguments(request.name, request.arguments);
       const inputResult = tool.inputSchema.safeParse(parsedArguments);
@@ -220,8 +215,15 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
         }
 
         const toolWithApproval = tool as unknown as ToolDefinition<unknown, unknown>;
-        if (toolWithApproval.approval !== undefined) {
-          const approval = toolWithApproval.approval;
+        const approval = toolWithApproval.approval;
+        if (
+          approval !== undefined &&
+          approvalRequiredForMode(
+            request.permissionMode ?? 'ask',
+            approval.operation,
+            inputResult.data,
+          )
+        ) {
           const approvalBroker = options.approvalBroker;
           if (approvalBroker === undefined) {
             throw new ToolExecutionError(
@@ -264,6 +266,7 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
               summary: summary.summary,
               risk: approval.risk,
               inputSummary: summary.inputSummary,
+              ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
               signal,
               ...(effectiveTimeoutMs === undefined ? {} : { timeoutMs: effectiveTimeoutMs }),
             });

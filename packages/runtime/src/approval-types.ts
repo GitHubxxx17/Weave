@@ -19,6 +19,7 @@ export interface ApprovalRequest {
   readonly summary: string;
   readonly risk: ApprovalRisk;
   readonly inputSummary: unknown;
+  readonly sessionId?: string | undefined;
   readonly status: ApprovalStatus;
   readonly createdAt: string;
   readonly resolvedAt?: string | undefined;
@@ -43,6 +44,7 @@ export interface CreateApprovalRequestInput {
   readonly summary: string;
   readonly risk: ApprovalRisk;
   readonly inputSummary: unknown;
+  readonly sessionId?: string | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly timeoutMs?: number | undefined;
 }
@@ -101,6 +103,7 @@ export const createApprovalRequestInputSchema: z.ZodType<CreateApprovalRequestIn
   summary: nonEmptyStringSchema,
   risk: approvalRiskSchema,
   inputSummary: z.unknown(),
+  sessionId: nonEmptyStringSchema.optional(),
   signal: z.instanceof(AbortSignal).optional(),
   timeoutMs: z.number().finite().nonnegative().optional(),
 });
@@ -114,6 +117,7 @@ export const approvalRequestSchema: z.ZodType<ApprovalRequest> = z.object({
   summary: nonEmptyStringSchema,
   risk: approvalRiskSchema,
   inputSummary: z.unknown(),
+  sessionId: nonEmptyStringSchema.optional(),
   status: approvalStatusSchema,
   createdAt: nonEmptyStringSchema,
   resolvedAt: nonEmptyStringSchema.optional(),

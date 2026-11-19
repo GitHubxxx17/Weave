@@ -458,7 +458,7 @@ describe('Default Agent instructions', () => {
     expect(text).toContain('修改已有文件用 edit_file');
     expect(text).toContain('用 run_command 运行相关的测试');
     expect(text).toContain(
-      '权限：当前是"工作区访问"模式。edit_file、write_file、run_command 每次都要用户在界面上确认；命令不在沙箱中运行。',
+      '权限：当前是"常规"模式。edit_file、write_file、run_command 每次都要用户在界面上确认；命令不在沙箱中运行。',
     );
     expect(text).toContain('- 系统 macOS，Shell /bin/zsh，今天是 2026-11-18');
     expect(text).toContain('- 当前项目文件夹：/Users/me/demo，Git 分支 main');
@@ -466,19 +466,22 @@ describe('Default Agent instructions', () => {
     expect(text).toContain('recall');
   });
 
-  it('lists only read-only tools and explains the mode in read-only runs', async () => {
+  it('lists every tool and explains the mode in trust and yolo runs', async () => {
     const instructions = createAgentInstructions({
       tools: () => allTools,
       resolveWorkspaceRoot: async () => '/Users/me/demo',
       environment: fixedEnvironment,
     });
 
-    const text = await instructions({ sessionId: 'session-1', permissionMode: 'read-only' });
+    const trust = await instructions({ sessionId: 'session-1', permissionMode: 'trust' });
+    expect(trust).toContain(
+      '本轮可用的工具：list_dir、glob、grep、read_file、edit_file、write_file、run_command、recall。',
+    );
+    expect(trust).toContain('当前是"信任"模式');
 
-    expect(text).toContain('本轮可用的工具：list_dir、glob、grep、read_file、recall。');
-    expect(text).toContain('当前是"仅查看"模式');
-    expect(text).not.toContain('edit_file');
-    expect(text).not.toContain('run_command');
+    const yolo = await instructions({ sessionId: 'session-1', permissionMode: 'yolo' });
+    expect(yolo).toContain('当前是"完全访问"模式');
+    expect(yolo).toContain('edit_file、write_file、run_command');
   });
 
   it('includes the AGENTS.md of the Project folder', async () => {
@@ -608,7 +611,7 @@ describe('Default Agent instructions', () => {
     ]);
   });
 
-  it('sends only read-only tools when the request asks for read-only mode', async () => {
+  it('sends every tool and the mode text when a run sets a permission mode', async () => {
     const folder = await createTemporaryFolder();
     const requests: LlmRequest[] = [];
     const registry = createLlmProviderRegistry([
@@ -659,17 +662,14 @@ describe('Default Agent instructions', () => {
     const response = await app.request('/agent/runs/stream', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ...body, permissionMode: 'read-only' }),
+      body: JSON.stringify({ ...body, permissionMode: 'trust' }),
     });
     await response.text();
-    expect(requests[0]?.tools?.map((tool) => tool.name)).toEqual([
-      'list_dir',
-      'glob',
-      'grep',
-      'read_file',
-      'recall',
-    ]);
-    expect(JSON.stringify(requests[0]?.messages[0])).toContain('仅查看');
+    const toolNames = requests[0]?.tools?.map((tool) => tool.name) ?? [];
+    expect(toolNames).toContain('read_file');
+    expect(toolNames).toContain('edit_file');
+    expect(toolNames).toContain('run_command');
+    expect(JSON.stringify(requests[0]?.messages[0])).toContain('信任');
 
     const invalid = await app.request('/agent/runs/stream', {
       method: 'POST',
