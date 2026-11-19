@@ -88,8 +88,12 @@ export type {
   WorkspaceFileTools,
   WorkspaceResolver,
   WorkspaceSource,
+  WorkspaceFileSnapshot,
+  WorkspaceFileSnapshotHook,
 } from './workspace-file-types.js';
 export { createWorkspaceFileTools } from './workspace-file-tools.js';
+export { restoreFileSnapshot } from './file-undo.js';
+export type { RestorableFileSnapshot, RestoreFileOutcome } from './file-undo.js';
 export {
   createWorkspaceSearchTools,
   globInputSchema,

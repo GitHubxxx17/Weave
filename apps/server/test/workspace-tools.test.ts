@@ -782,3 +782,46 @@ describe('Project folder update API', () => {
     expect((await projectStore.getProject(project.id))?.name).toBe('Old');
   });
 });
+
+describe('File undo API', () => {
+  it('restores the file changes of a turn to the captured original', async () => {
+    const folder = await createTemporaryFolder();
+    await writeFile(join(folder, 'notes.md'), 'edited by agent', 'utf8');
+
+    const runtime = createServerRuntime();
+    await runtime.start();
+    cleanups.push(() => runtime.stop());
+    const projectStore = createInMemoryProjectStore();
+    cleanups.push(() => projectStore.close());
+    const project = await projectStore.createProject({
+      name: 'Files',
+      folderName: 'files',
+      folderPath: folder,
+    });
+    const sessionService = createSessionService({
+      projectStore,
+      sessionStore: getServerSessionStore(runtime),
+    });
+    const session = await sessionService.create(project.id);
+
+    await getServerSessionStore(runtime).append(session.id, [
+      { type: 'turn.started', payload: { turnId: 'turn-1' } },
+      {
+        type: 'workspace.file-snapshot',
+        payload: { path: 'notes.md', existedBefore: true, previousContent: 'original' },
+      },
+      { type: 'turn.completed', payload: { turnId: 'turn-1', status: 'completed' } },
+    ]);
+
+    const app = createApp(runtime, { projectStore, sessionService });
+    const response = await app.request(`/projects/${project.id}/sessions/${session.id}/undo`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ turnId: 'turn-1' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ restored: ['notes.md'], failed: [] });
+    expect(await readFile(join(folder, 'notes.md'), 'utf8')).toBe('original');
+  });
+});

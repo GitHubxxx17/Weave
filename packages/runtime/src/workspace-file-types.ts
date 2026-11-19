@@ -101,8 +101,26 @@ export type WorkspaceSource =
       readonly resolveWorkspace: WorkspaceResolver;
     };
 
+/** A pre-write snapshot of a workspace file, used to undo the change. */
+export interface WorkspaceFileSnapshot {
+  readonly sessionId?: string | undefined;
+  /** Path relative to the Workspace root (posix). */
+  readonly path: string;
+  readonly existedBefore: boolean;
+  /** Original UTF-8 content; empty when the file did not exist. */
+  readonly previousContent: string;
+}
+
+/** Optional hook invoked before `write_file`/`edit_file` change a file. */
+export interface WorkspaceFileSnapshotHook {
+  /** Records the pre-write original. A failure here must not block the write. */
+  readonly onFileSnapshot?: ((snapshot: WorkspaceFileSnapshot) => void | Promise<void>) | undefined;
+}
+
 /** Limits and Workspace boundary supplied when file tools are created. */
-export type WorkspaceFileToolOptions = WorkspaceFileToolLimits & WorkspaceSource;
+export type WorkspaceFileToolOptions = WorkspaceFileToolLimits &
+  WorkspaceFileSnapshotHook &
+  WorkspaceSource;
 
 /** The file tools exposed by the Runtime. */
 export interface WorkspaceFileTools {
