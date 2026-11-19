@@ -107,6 +107,8 @@ export type {
   WorkspaceSearchToolOptions,
   WorkspaceSearchTools,
 } from './workspace-search-tools.js';
+export { listWorkspaceFiles, readWorkspaceFileContent } from './workspace-browse.js';
+export type { WorkspaceFileContent, WorkspaceFileListing } from './workspace-browse.js';
 export {
   createCommandTool,
   defaultCommandTimeoutMs,
