@@ -78,6 +78,48 @@ describe('OpenAI-compatible provider', () => {
     expect(JSON.stringify(body)).not.toContain('内心独白');
   });
 
+  it('sends image parts as an OpenAI image_url content array', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => streamingResponse('data: [DONE]'));
+    await collectEvents(createClient(fetchMock), {
+      provider: 'openai-compatible',
+      model: 'test-model',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: '这是什么' },
+            { type: 'image', mediaType: 'image/png', data: 'aGVsbG8=' },
+          ],
+        },
+      ],
+    });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+      messages: { role: string; content: unknown }[];
+    };
+    expect(body.messages[0]).toEqual({
+      role: 'user',
+      content: [
+        { type: 'text', text: '这是什么' },
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,aGVsbG8=' } },
+      ],
+    });
+  });
+
+  it('keeps a text-only message as a plain content string', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => streamingResponse('data: [DONE]'));
+    await collectEvents(createClient(fetchMock), {
+      provider: 'openai-compatible',
+      model: 'test-model',
+      messages: [{ role: 'user', content: [{ type: 'text', text: '纯文本' }] }],
+    });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+      messages: { role: string; content: unknown }[];
+    };
+    expect(body.messages[0]).toEqual({ role: 'user', content: '纯文本' });
+  });
+
   it('maps an in-stream error frame to a stable, retryable error', async () => {
     const fetchMock = vi.fn<typeof fetch>(async () =>
       streamingResponse(

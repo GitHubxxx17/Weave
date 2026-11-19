@@ -11,6 +11,7 @@ const messageMetadataSchema = z.object({
 const contentPartSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('text'), text: z.string() }),
   z.object({ type: z.literal('reasoning'), text: z.string() }),
+  z.object({ type: z.literal('image'), mediaType: z.string(), data: z.string() }),
 ]);
 
 const messageSchema = z.discriminatedUnion('role', [
