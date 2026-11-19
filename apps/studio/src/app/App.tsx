@@ -3269,6 +3269,7 @@ export function App() {
           onCollapse={() => setIsActivityPanelOpen(false)}
           context={{
             statusKey: status,
+            projectId: activeProjectId,
             statusLabel: statusLabels[status],
             isRunning: status === 'streaming',
             sessionLabel: getSessionLabel(activeSessionId),

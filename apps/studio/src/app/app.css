@@ -4988,3 +4988,262 @@ body:has(.panel-resizer-active) {
     padding-left: 84px;
   }
 }
+
+.file-tree-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.file-tree-split {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.file-tree-split-row {
+  flex-direction: row;
+}
+
+.file-tree-split-col {
+  flex-direction: column;
+}
+
+.file-tree-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.file-viewer-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.file-tree-split-row > .file-viewer-pane {
+  border-left: 1px solid var(--line);
+}
+
+.file-tree-split-col > .file-viewer-pane {
+  border-top: 1px solid var(--line);
+}
+
+.file-tree-resizer {
+  position: relative;
+  flex: 0 0 auto;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  touch-action: none;
+}
+
+.file-tree-split-row > .file-tree-resizer {
+  width: 7px;
+  cursor: col-resize;
+}
+
+.file-tree-split-col > .file-tree-resizer {
+  height: 7px;
+  cursor: row-resize;
+}
+
+.file-tree-resizer::after {
+  position: absolute;
+  content: '';
+  background: transparent;
+  transition: background-color 140ms ease;
+}
+
+.file-tree-split-row > .file-tree-resizer::after {
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+}
+
+.file-tree-split-col > .file-tree-resizer::after {
+  left: 0;
+  right: 0;
+  top: 3px;
+  height: 1px;
+}
+
+.file-tree-resizer:hover::after,
+.file-tree-resizer:focus-visible::after,
+.file-tree-resizer-active::after {
+  background: var(--accent);
+}
+
+.file-tree-resizer:focus-visible {
+  outline: none;
+}
+
+.file-tree-toolbar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.file-tree-filter {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  color: var(--ink);
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 0.72rem;
+}
+
+.file-tree-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 0;
+}
+
+.file-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 8px;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  font-size: 0.72rem;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.file-tree-row:hover {
+  background: var(--surface-muted);
+}
+
+.file-tree-row-active,
+.file-tree-row-active:hover {
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+}
+
+.file-tree-row svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.file-tree-dir svg {
+  color: var(--accent);
+}
+
+.file-tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-tree-hint {
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.file-tree-error {
+  padding: 10px 12px;
+  color: #e86a6a;
+  font-size: 0.72rem;
+}
+
+.file-tree-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 24px 16px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 0.74rem;
+}
+
+.file-tree-empty svg {
+  width: 28px;
+  height: 28px;
+  color: var(--subtle);
+}
+
+.file-tree-set-folder {
+  padding: 5px 12px;
+  color: var(--accent-dark);
+  background: var(--accent-soft);
+  border: 0;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.file-viewer-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 4px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.file-viewer-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.file-viewer-close {
+  flex: 0 0 auto;
+}
+
+.file-viewer-close svg {
+  width: 13px;
+  height: 13px;
+}
+
+.file-viewer {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.file-viewer-note {
+  margin: 0;
+  padding: 6px 10px;
+  color: var(--muted);
+  font-size: 0.66rem;
+  background: var(--surface-muted);
+}
+
+.file-viewer-content {
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  white-space: pre;
+  tab-size: 2;
+}

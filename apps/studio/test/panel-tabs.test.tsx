@@ -19,6 +19,7 @@ function panelContext(): PanelContext {
     isRunning: false,
     sessionLabel: '会话',
     folderPath: '/Users/me/project',
+    projectId: 'project-1',
     modelLabel: 'mock',
     turns: [],
     messages: [],
