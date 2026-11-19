@@ -1,5 +1,6 @@
 import {
   ChangeEvent,
+  type ClipboardEvent as ReactClipboardEvent,
   type CSSProperties,
   FormEvent,
   KeyboardEvent as ReactKeyboardEvent,
@@ -24,6 +25,7 @@ import {
   FolderKanban,
   GitBranch,
   History,
+  ImagePlus,
   LoaderCircle,
   MessageSquarePlus,
   MoreHorizontal,
@@ -101,6 +103,8 @@ type ChatMessage = {
   readonly reasoning: string;
   readonly tools: readonly ToolActivity[];
   readonly occurredAt: string;
+  /** Images attached to a user message, base64-encoded. */
+  readonly images?: readonly { readonly mediaType: string; readonly data: string }[] | undefined;
   /** Turn that produced an assistant reply; live runs use a temporary id. */
   readonly turnId?: string | undefined;
 };
@@ -124,6 +128,14 @@ type StudioProject = {
 
 type ProjectDirectory = {
   readonly name: string;
+};
+
+/** An image staged in the composer before it is sent, base64-encoded. */
+type PendingImage = {
+  readonly id: string;
+  readonly name: string;
+  readonly mediaType: string;
+  readonly data: string;
 };
 
 type DirectoryPickerWindow = Window &
@@ -536,6 +548,31 @@ function messageReasoning(message: WorkspaceMessage): string {
     .join('');
 }
 
+function messageImages(
+  message: WorkspaceMessage,
+): { readonly mediaType: string; readonly data: string }[] {
+  return message.content
+    .filter((part) => part.type === 'image')
+    .map((part) => ({ mediaType: part.mediaType, data: part.data }));
+}
+
+/** Reads an image File as base64 (without the `data:` prefix). */
+function readImageFile(file: File): Promise<{ mediaType: string; data: string }> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error('image read failed'));
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      const comma = result.indexOf(',');
+      resolve({
+        mediaType: file.type !== '' ? file.type : 'image/png',
+        data: comma === -1 ? '' : result.slice(comma + 1),
+      });
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 function messageToolResult(
   messages: readonly WorkspaceMessage[],
   toolCallId: string,
@@ -588,6 +625,7 @@ function toChatMessages(
         reasoning: '',
         tools: [],
         occurredAt: message.occurredAt ?? '',
+        images: messageImages(message),
       });
       return;
     }
@@ -707,6 +745,11 @@ function workspaceErrorMessage(error: unknown): string {
 /** Studio's first local Agent workspace, combining chat state and stream events. */
 export function App() {
   const [messageInput, setMessageInput] = useState('');
+  const [pendingImages, setPendingImages] = useState<readonly PendingImage[]>([]);
+  const [previewImage, setPreviewImage] = useState<{
+    readonly mediaType: string;
+    readonly data: string;
+  } | null>(null);
   const [projects, setProjects] = useState<readonly StudioProject[]>([]);
   const [activeProjectId, setActiveProjectId] = useState('');
   const [expandedProjectIds, setExpandedProjectIds] = useState<readonly string[]>([]);
@@ -781,6 +824,7 @@ export function App() {
   const activeSessionIdRef = useRef('');
   const messageInputRef = useRef<HTMLTextAreaElement | null>(null);
   const directoryInputRef = useRef<HTMLInputElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
   const activeProject = projects.find((project) => project.id === activeProjectId);
   const sessions = activeProject?.sessions ?? [];
   const activeSession = sessions.find((session) => session.id === activeSessionId);
@@ -973,6 +1017,7 @@ export function App() {
         setIsProjectDialogOpen(false);
         setEditingSession(null);
         setSessionToDelete(null);
+        setPreviewImage(null);
       }
 
       if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === 'k') {
@@ -1350,7 +1395,8 @@ export function App() {
    */
   async function submitMessage(retryText?: string): Promise<void> {
     const text = (retryText ?? messageInput).trim();
-    if (text === '' || status === 'streaming') {
+    const images = retryText === undefined ? pendingImages : [];
+    if ((text === '' && images.length === 0) || status === 'streaming') {
       return;
     }
 
@@ -1394,6 +1440,7 @@ export function App() {
         reasoning: '',
         tools: [],
         occurredAt,
+        images: images.map((image) => ({ mediaType: image.mediaType, data: image.data })),
       },
       {
         id: assistantId,
@@ -1440,6 +1487,7 @@ export function App() {
     );
     if (retryText === undefined) {
       setMessageInput('');
+      setPendingImages([]);
     }
     if (shouldPersistTitle) {
       void workspaceApi.renameSession(sessionId, generatedTitle).catch(() => undefined);
@@ -1453,7 +1501,14 @@ export function App() {
           sessionId,
           userMessage: {
             role: 'user',
-            content: [{ type: 'text', text }],
+            content: [
+              ...(text === '' ? [] : [{ type: 'text' as const, text }]),
+              ...images.map((image) => ({
+                type: 'image' as const,
+                mediaType: image.mediaType,
+                data: image.data,
+              })),
+            ],
           },
           provider: selectedProviderId,
           model: selectedModel,
@@ -2144,6 +2199,41 @@ export function App() {
     void submitMessage();
   }
 
+  /** Reads image files from an attach picker or paste into the staged list. */
+  async function addImageFiles(files: FileList | null): Promise<void> {
+    if (files === null || files.length === 0) {
+      return;
+    }
+    const imageFiles = Array.from(files).filter((file) => file.type.startsWith('image/'));
+    if (imageFiles.length === 0) {
+      return;
+    }
+    const read = await Promise.all(
+      imageFiles.map(async (file) => {
+        const { mediaType, data } = await readImageFile(file);
+        return { id: createId('img'), name: file.name, mediaType, data };
+      }),
+    );
+    const added = read.filter((image) => image.data !== '');
+    if (added.length === 0) {
+      return;
+    }
+    setPendingImages((current) => [...current, ...added]);
+  }
+
+  function removePendingImage(id: string): void {
+    setPendingImages((current) => current.filter((image) => image.id !== id));
+  }
+
+  function handleComposerPaste(event: ReactClipboardEvent<HTMLTextAreaElement>): void {
+    const files = event.clipboardData.files;
+    if (files.length === 0 || !Array.from(files).some((file) => file.type.startsWith('image/'))) {
+      return;
+    }
+    event.preventDefault();
+    void addImageFiles(files);
+  }
+
   function cancelRun(): void {
     const sessionId = activeSessionId;
     const handle = runHandles.current.get(sessionId);
@@ -2694,7 +2784,7 @@ export function App() {
                         <div className="message">
                           {message.role === 'assistant' && message.text !== '' ? (
                             <MarkdownMessage text={message.text} />
-                          ) : (
+                          ) : message.text !== '' || message.role === 'assistant' ? (
                             <p>
                               {message.text ||
                                 getAssistantPlaceholder(
@@ -2703,7 +2793,26 @@ export function App() {
                                   message.role === 'assistant' && message.reasoning !== '',
                                 )}
                             </p>
-                          )}
+                          ) : null}
+                          {message.role === 'user' && (message.images?.length ?? 0) > 0 ? (
+                            <div className="message-images">
+                              {(message.images ?? []).map((image, index) => (
+                                <button
+                                  key={`${message.id}-${index}`}
+                                  type="button"
+                                  className="message-image-button"
+                                  aria-label="放大查看图片"
+                                  onClick={() => setPreviewImage(image)}
+                                >
+                                  <img
+                                    className="message-image"
+                                    src={`data:${image.mediaType};base64,${image.data}`}
+                                    alt="已发送的图片"
+                                  />
+                                </button>
+                              ))}
+                            </div>
+                          ) : null}
                         </div>
                         {message.role === 'assistant' &&
                         message.turnId !== undefined &&
@@ -2758,8 +2867,29 @@ export function App() {
                 value={messageInput}
                 onChange={(event) => setMessageInput(event.target.value)}
                 onKeyDown={handleMessageKeyDown}
+                onPaste={handleComposerPaste}
                 placeholder="给 Agent 分配一个任务…"
               />
+              {pendingImages.length > 0 ? (
+                <div className="composer-attachments" aria-label="待发送图片">
+                  {pendingImages.map((image) => (
+                    <span className="composer-attachment" key={image.id}>
+                      <img
+                        className="composer-attachment-thumb"
+                        src={`data:${image.mediaType};base64,${image.data}`}
+                        alt={image.name}
+                      />
+                      <button
+                        type="button"
+                        aria-label={`移除图片 ${image.name}`}
+                        onClick={() => removePendingImage(image.id)}
+                      >
+                        <X aria-hidden="true" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
               <div className="composer-toolbar">
                 <div className="composer-tools">
                   <div
@@ -2846,6 +2976,26 @@ export function App() {
                       </div>
                     ) : null}
                   </div>
+                  <button
+                    className="composer-tool-button"
+                    type="button"
+                    aria-label="添加图片"
+                    onClick={() => imageInputRef.current?.click()}
+                  >
+                    <ImagePlus aria-hidden="true" />
+                  </button>
+                  <input
+                    className="sr-only"
+                    ref={imageInputRef}
+                    type="file"
+                    accept="image/*"
+                    aria-label="选择图片文件"
+                    multiple
+                    onChange={(event) => {
+                      void addImageFiles(event.target.files);
+                      event.target.value = '';
+                    }}
+                  />
                   {selectedContexts.map((context) => (
                     <span className="context-chip" key={context}>
                       {context}
@@ -2988,7 +3138,7 @@ export function App() {
                     <button
                       className="send-button"
                       type="submit"
-                      disabled={messageInput.trim() === ''}
+                      disabled={messageInput.trim() === '' && pendingImages.length === 0}
                       aria-label="发送"
                     >
                       <SendHorizontal aria-hidden="true" />
@@ -4090,6 +4240,33 @@ export function App() {
               </footer>
             </form>
           </section>
+        </div>
+      ) : null}
+      {previewImage !== null ? (
+        <div
+          className="image-preview-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="图片预览"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setPreviewImage(null);
+            }
+          }}
+        >
+          <button
+            className="image-preview-close"
+            type="button"
+            aria-label="关闭预览"
+            onClick={() => setPreviewImage(null)}
+          >
+            <X aria-hidden="true" />
+          </button>
+          <img
+            className="image-preview-image"
+            src={`data:${previewImage.mediaType};base64,${previewImage.data}`}
+            alt="图片预览"
+          />
         </div>
       ) : null}
     </main>

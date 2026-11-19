@@ -136,6 +136,13 @@ function createWorkspaceFetchMock(
               { type: 'text', text: '历史项目回答' },
             ],
           },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: '看这张历史图' },
+              { type: 'image', mediaType: 'image/png', data: 'aGVsbG8=' },
+            ],
+          },
         ],
         undefined,
         new Set(['history-call']),
@@ -1210,6 +1217,17 @@ describe('Studio Agent Chat', () => {
     expect(within(assistantItem).getByText('失败')).toBeTruthy();
   });
 
+  it('renders an image attached to a historical user message after reload', async () => {
+    await renderApp();
+
+    fireEvent.click(screen.getByRole('button', { name: /Foundation 设计/ }));
+
+    const historyImage = (await screen.findByAltText('已发送的图片')) as HTMLImageElement;
+    expect(historyImage.getAttribute('src')).toBe('data:image/png;base64,aGVsbG8=');
+    const userItem = historyImage.closest('.timeline-item-user') as HTMLElement;
+    expect(within(userItem).getByText('看这张历史图')).toBeTruthy();
+  });
+
   it('lists sessions with the most recently created first', async () => {
     await renderApp();
     const eventStore = screen.getByRole('button', { name: /Session event store/ });
@@ -2030,5 +2048,107 @@ describe('Studio Agent Chat', () => {
       expect(screen.queryByText('旧响应')).toBeNull();
       expect(screen.getByText('已完成', { selector: '.run-status' })).toBeTruthy();
     });
+  });
+
+  it('attaches an image and sends it as an image content part', async () => {
+    streamAgentRunMock.mockImplementation(async (_request, handlers) => {
+      handlers.onEvent({ type: 'text-delta', text: '这是一张图表。' });
+      handlers.onEvent({ type: 'completed', turnId: 'turn-image' });
+    });
+
+    await renderApp();
+
+    const file = new File(['hello'], 'chart.png', { type: 'image/png' });
+    fireEvent.change(screen.getByLabelText('选择图片文件'), { target: { files: [file] } });
+
+    // The staged thumbnail uses the file name as its alt text.
+    expect(await screen.findByAltText('chart.png')).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '看这张图' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+
+    expect(await screen.findByText('这是一张图表。')).toBeTruthy();
+    // The sent user message renders the image, and the composer thumbnail clears.
+    const sentImage = (await screen.findByAltText('已发送的图片')) as HTMLImageElement;
+    expect(sentImage.getAttribute('src')).toBe('data:image/png;base64,aGVsbG8=');
+    expect(screen.queryByAltText('chart.png')).toBeNull();
+
+    expect(streamAgentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userMessage: {
+          role: 'user',
+          content: [
+            { type: 'text', text: '看这张图' },
+            { type: 'image', mediaType: 'image/png', data: 'aGVsbG8=' },
+          ],
+        },
+      }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('allows sending when only an image is attached, with no text', async () => {
+    streamAgentRunMock.mockImplementation(async (_request, handlers) => {
+      handlers.onEvent({ type: 'completed', turnId: 'turn-image-only' });
+    });
+
+    await renderApp();
+
+    const sendButton = screen.getByRole('button', { name: '发送' }) as HTMLButtonElement;
+    expect(sendButton.disabled).toBe(true);
+
+    const file = new File(['hello'], 'photo.png', { type: 'image/png' });
+    fireEvent.change(screen.getByLabelText('选择图片文件'), { target: { files: [file] } });
+    expect(await screen.findByAltText('photo.png')).toBeTruthy();
+    expect(sendButton.disabled).toBe(false);
+
+    fireEvent.click(sendButton);
+
+    await waitFor(() => {
+      expect(streamAgentRunMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userMessage: {
+            role: 'user',
+            content: [{ type: 'image', mediaType: 'image/png', data: 'aGVsbG8=' }],
+          },
+        }),
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+  });
+
+  it('opens an enlarged preview when a message image is clicked, closable by button and Escape', async () => {
+    streamAgentRunMock.mockImplementation(async (_request, handlers) => {
+      handlers.onEvent({ type: 'completed', turnId: 'turn-preview' });
+    });
+
+    await renderApp();
+
+    const file = new File(['hello'], 'preview.png', { type: 'image/png' });
+    fireEvent.change(screen.getByLabelText('选择图片文件'), { target: { files: [file] } });
+    expect(await screen.findByAltText('preview.png')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+
+    await screen.findByAltText('已发送的图片');
+    expect(screen.queryByRole('dialog', { name: '图片预览' })).toBeNull();
+
+    // Clicking the thumbnail opens the lightbox with the full-size image.
+    fireEvent.click(screen.getByRole('button', { name: '放大查看图片' }));
+    const dialog = await screen.findByRole('dialog', { name: '图片预览' });
+    expect((within(dialog).getByAltText('图片预览') as HTMLImageElement).getAttribute('src')).toBe(
+      'data:image/png;base64,aGVsbG8=',
+    );
+
+    // The close button dismisses it.
+    fireEvent.click(within(dialog).getByRole('button', { name: '关闭预览' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '图片预览' })).toBeNull());
+
+    // Reopening and pressing Escape also dismisses it.
+    fireEvent.click(screen.getByRole('button', { name: '放大查看图片' }));
+    expect(await screen.findByRole('dialog', { name: '图片预览' })).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '图片预览' })).toBeNull());
   });
 });

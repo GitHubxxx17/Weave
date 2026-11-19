@@ -16,9 +16,14 @@ const toolCallSchema = z
   })
   .passthrough();
 
+const userContentPartSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('text'), text: z.string() }),
+  z.object({ type: z.literal('image'), mediaType: z.string(), data: z.string() }),
+]);
+
 const userMessageSchema = z.object({
   role: z.literal('user'),
-  content: z.tuple([z.object({ type: z.literal('text'), text: z.string() })]).readonly(),
+  content: z.array(userContentPartSchema).readonly(),
 });
 
 /** Request body accepted by the Agent HTTP stream endpoint. */
@@ -26,7 +31,10 @@ export interface AgentRunRequestInput {
   readonly sessionId: string;
   readonly userMessage: {
     readonly role: 'user';
-    readonly content: readonly [{ readonly type: 'text'; readonly text: string }];
+    readonly content: readonly (
+      | { readonly type: 'text'; readonly text: string }
+      | { readonly type: 'image'; readonly mediaType: string; readonly data: string }
+    )[];
   };
   readonly provider: string;
   readonly model: string;
