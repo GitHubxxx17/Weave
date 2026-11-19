@@ -109,6 +109,8 @@ export type {
 } from './workspace-search-tools.js';
 export { listWorkspaceFiles, readWorkspaceFileContent } from './workspace-browse.js';
 export type { WorkspaceFileContent, WorkspaceFileListing } from './workspace-browse.js';
+export { readGitBaseContent } from './workspace-git.js';
+export type { GitBaseContent } from './workspace-git.js';
 export {
   createCommandTool,
   defaultCommandTimeoutMs,

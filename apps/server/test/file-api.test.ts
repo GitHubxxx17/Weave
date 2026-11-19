@@ -92,4 +92,25 @@ describe('Project file HTTP API', () => {
     const response = await app.request('/projects/missing/tree');
     expect(response.status).toBe(404);
   });
+
+  it('returns a file diff; a non-git folder reports the file as newly added', async () => {
+    const { app, projectId } = await setup();
+    const response = await app.request(`/projects/${projectId}/file-diff?path=a.txt`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      path: 'a.txt',
+      oldContent: '',
+      newContent: 'hello\n',
+      changed: true,
+      tracked: false,
+    });
+  });
+
+  it('rejects a file-diff path outside the project folder', async () => {
+    const { app, projectId } = await setup();
+    const response = await app.request(
+      `/projects/${projectId}/file-diff?path=${encodeURIComponent('../escape.txt')}`,
+    );
+    expect(response.status).toBe(400);
+  });
 });
