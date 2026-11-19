@@ -1,4 +1,6 @@
 import {
+  Suspense,
+  lazy,
   useCallback,
   useEffect,
   useMemo,
@@ -16,6 +18,18 @@ import {
   fetchFileTree,
   type FileContent,
 } from './file-tree-api.js';
+import { highlightToHtml, languageForPath } from './highlight.js';
+
+/**
+ * The diff view pulls in `@git-diff-view` and a Shiki highlighter, so it is
+ * code-split and only loaded the first time a file's "改动" view is opened.
+ */
+const FileDiffView = lazy(() =>
+  import('./file-diff-view.js').then((module) => ({ default: module.FileDiffView })),
+);
+
+/** Which face of a selected file the viewer shows. */
+type ViewMode = 'content' | 'diff';
 
 /** One node of the project file tree, keyed by path segment. */
 export interface FileTreeNode {
@@ -136,6 +150,8 @@ export function FileTreePanel({ projectId, onSetFolder }: FileTreePanelProps): R
   const [content, setContent] = useState<FileContent | null>(null);
   const [contentStatus, setContentStatus] = useState<LoadStatus>('idle');
   const [contentError, setContentError] = useState('');
+  const [highlightedHtml, setHighlightedHtml] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>('content');
   const [mode, setMode] = useState<'row' | 'column'>('column');
   const [ratio, setRatio] = useState<number>(() => readSplitRatio());
   const [resizing, setResizing] = useState(false);
@@ -187,12 +203,34 @@ export function FileTreePanel({ projectId, onSetFolder }: FileTreePanelProps): R
     loadTree();
   }, [loadTree]);
 
+  useEffect(() => {
+    if (selected === null || contentStatus !== 'idle' || content === null) {
+      setHighlightedHtml(null);
+      return;
+    }
+    const language = languageForPath(selected);
+    if (language === undefined) {
+      setHighlightedHtml(null);
+      return;
+    }
+    let active = true;
+    void highlightToHtml(content.content, language).then((html) => {
+      if (active) {
+        setHighlightedHtml(html ?? null);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [selected, content, contentStatus]);
+
   const openFile = useCallback(
     (path: string) => {
       if (projectId === undefined) {
         return;
       }
       setSelected(path);
+      setViewMode('content');
       setContent(null);
       setContentStatus('loading');
       setContentError('');
@@ -412,7 +450,7 @@ export function FileTreePanel({ projectId, onSetFolder }: FileTreePanelProps): R
             </div>
           )}
         </div>
-        {showViewer ? (
+        {selected !== null ? (
           <>
             <div
               className={`file-tree-resizer${resizing ? ' file-tree-resizer-active' : ''}`}
@@ -433,9 +471,31 @@ export function FileTreePanel({ projectId, onSetFolder }: FileTreePanelProps): R
             />
             <div className="file-viewer-pane" role="region" aria-label="文件内容">
               <div className="file-viewer-bar">
-                <span className="file-viewer-path" title={selected ?? undefined}>
+                <span className="file-viewer-path" title={selected}>
                   {selected}
                 </span>
+                <div className="file-viewer-modes" role="group" aria-label="查看模式">
+                  <button
+                    type="button"
+                    className={`file-viewer-mode${
+                      viewMode === 'content' ? ' file-viewer-mode-active' : ''
+                    }`}
+                    aria-pressed={viewMode === 'content'}
+                    onClick={() => setViewMode('content')}
+                  >
+                    内容
+                  </button>
+                  <button
+                    type="button"
+                    className={`file-viewer-mode${
+                      viewMode === 'diff' ? ' file-viewer-mode-active' : ''
+                    }`}
+                    aria-pressed={viewMode === 'diff'}
+                    onClick={() => setViewMode('diff')}
+                  >
+                    改动
+                  </button>
+                </div>
                 <button
                   type="button"
                   className="icon-button file-viewer-close"
@@ -446,7 +506,13 @@ export function FileTreePanel({ projectId, onSetFolder }: FileTreePanelProps): R
                   <X aria-hidden="true" />
                 </button>
               </div>
-              {contentStatus === 'loading' ? (
+              {viewMode === 'diff' ? (
+                <div className="file-viewer">
+                  <Suspense fallback={<p className="file-tree-hint">加载改动…</p>}>
+                    <FileDiffView projectId={projectId} path={selected} />
+                  </Suspense>
+                </div>
+              ) : contentStatus === 'loading' ? (
                 <p className="file-tree-hint">加载中…</p>
               ) : contentStatus === 'error' ? (
                 <p className="file-tree-error" role="alert">
@@ -457,7 +523,14 @@ export function FileTreePanel({ projectId, onSetFolder }: FileTreePanelProps): R
                   {content?.truncated === true ? (
                     <p className="file-viewer-note">文件较大，仅显示前一部分。</p>
                   ) : null}
-                  <pre className="file-viewer-content">{content?.content ?? ''}</pre>
+                  {highlightedHtml === null ? (
+                    <pre className="file-viewer-content">{content?.content ?? ''}</pre>
+                  ) : (
+                    <div
+                      className="file-viewer-content file-viewer-highlight"
+                      dangerouslySetInnerHTML={{ __html: highlightedHtml }}
+                    />
+                  )}
                 </div>
               )}
             </div>
