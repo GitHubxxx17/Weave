@@ -100,6 +100,14 @@ const toolResultCreatedPayloadSchema = z
   })
   .passthrough();
 
+const fileSnapshotPayloadSchema = z
+  .object({
+    path: nonEmptyStringSchema,
+    existedBefore: z.boolean(),
+    previousContent: z.string(),
+  })
+  .passthrough();
+
 /**
  * The durable facts supported by the first Session Event Store slice.
  */
@@ -151,6 +159,10 @@ export const sessionEventPayloadSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('tool-result.created'),
     payload: toolResultCreatedPayloadSchema,
+  }),
+  z.object({
+    type: z.literal('workspace.file-snapshot'),
+    payload: fileSnapshotPayloadSchema,
   }),
 ]);
 
@@ -268,6 +280,14 @@ const persistedEventSchemas = [
     occurredAt: z.iso.datetime(),
     type: z.literal('tool-result.created'),
     payload: toolResultCreatedPayloadSchema,
+  }),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('workspace.file-snapshot'),
+    payload: fileSnapshotPayloadSchema,
   }),
 ] as const;
 

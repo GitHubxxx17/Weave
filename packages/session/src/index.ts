@@ -32,3 +32,6 @@ export type {
 
 export { createSessionProjectionCache } from './projection-cache.js';
 export type { SessionProjectionCache, SessionProjectionCacheOptions } from './projection-cache.js';
+
+export { collectFileUndo, fileUndoForTurn } from './file-undo.js';
+export type { FileSnapshot, TurnFileUndo } from './file-undo.js';
