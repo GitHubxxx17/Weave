@@ -137,6 +137,44 @@ describe('Provider Settings Manager', () => {
     expect(manager.getDefaultProvider()).toBe('deepseek');
   });
 
+  it('persists and exposes model params, keeping omitted fields and clearing with null', async () => {
+    const { manager, registry } = createManager();
+
+    const created = await manager.create({
+      id: 'deepseek',
+      label: 'DeepSeek',
+      type: 'openai-compatible',
+      baseUrl: 'https://api.deepseek.com',
+      apiKey: 'first-key',
+      defaultModel: 'deepseek-chat',
+      makeDefault: true,
+      contextWindowTokens: 64_000,
+      temperature: 0.3,
+      maxTokens: 2048,
+    });
+    expect(created).toMatchObject({
+      contextWindowTokens: 64_000,
+      temperature: 0.3,
+      maxTokens: 2048,
+    });
+    expect(registry.getDescriptor('deepseek')).toMatchObject({
+      contextWindowTokens: 64_000,
+      temperature: 0.3,
+      maxTokens: 2048,
+    });
+
+    // An omitted field keeps the current value; an explicit null clears it.
+    const updated = await manager.update('deepseek', { temperature: null, maxTokens: 4096 });
+    expect(updated.contextWindowTokens).toBe(64_000);
+    expect(updated.maxTokens).toBe(4096);
+    expect('temperature' in updated).toBe(false);
+    expect(registry.getDescriptor('deepseek')?.temperature).toBeUndefined();
+    expect(registry.getDescriptor('deepseek')).toMatchObject({
+      contextWindowTokens: 64_000,
+      maxTokens: 4096,
+    });
+  });
+
   it('does not remove a Provider owned by another module', async () => {
     const pluginClient: LlmClient = createMockLlmClient([{ type: 'finish', reason: 'stop' }]);
     const registry = createLlmProviderRegistry([

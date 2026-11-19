@@ -26,6 +26,8 @@ const externalProviderSchema = z
     apiKey: z.string().min(1),
     defaultModel: z.string().trim().min(1),
     contextWindowTokens: z.number().int().positive().safe().optional(),
+    temperature: z.number().min(0).max(2).optional(),
+    maxTokens: z.number().int().positive().safe().optional(),
   })
   .strict();
 
@@ -41,6 +43,10 @@ export interface ServerLlmProviderConfig {
   readonly defaultModel: string;
   /** Model context window in tokens, used to budget the request send window. */
   readonly contextWindowTokens?: number | undefined;
+  /** Default sampling temperature applied when a request omits one. */
+  readonly temperature?: number | undefined;
+  /** Default max output tokens applied when a request omits one. */
+  readonly maxTokens?: number | undefined;
 }
 
 /** Error raised when the Server Provider environment is invalid. */
@@ -120,6 +126,8 @@ export function createServerLlmProviders(options?: {
       ...(config.contextWindowTokens === undefined
         ? {}
         : { contextWindowTokens: config.contextWindowTokens }),
+      ...(config.temperature === undefined ? {} : { temperature: config.temperature }),
+      ...(config.maxTokens === undefined ? {} : { maxTokens: config.maxTokens }),
     });
   }
 

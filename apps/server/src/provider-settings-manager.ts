@@ -79,6 +79,28 @@ function normalizeBaseUrl(baseUrl: string): string {
   return new URL(baseUrl.trim()).href.replace(/\/+$/, '');
 }
 
+/**
+ * Applies an optional numeric update field: an omitted input keeps the current
+ * value, an explicit `null` clears it, and a number sets it.
+ */
+function setOptionalNumber(
+  target: {
+    contextWindowTokens?: number | undefined;
+    temperature?: number | undefined;
+    maxTokens?: number | undefined;
+  },
+  key: 'contextWindowTokens' | 'temperature' | 'maxTokens',
+  input: number | null | undefined,
+  current: number | undefined,
+): void {
+  const next = input === undefined ? current : input === null ? undefined : input;
+  if (next === undefined) {
+    delete target[key];
+  } else {
+    target[key] = next;
+  }
+}
+
 function throwInvalid(cause?: unknown): never {
   throw new ProviderSettingsManagerError(
     'provider-settings-invalid',
@@ -115,6 +137,11 @@ function getDescriptor(record: ProviderSettingsRecord): ProviderSettingsDescript
     defaultModel: record.defaultModel,
     hasApiKey: record.encryptedApiKey !== null,
     editable: true,
+    ...(record.contextWindowTokens === undefined
+      ? {}
+      : { contextWindowTokens: record.contextWindowTokens }),
+    ...(record.temperature === undefined ? {} : { temperature: record.temperature }),
+    ...(record.maxTokens === undefined ? {} : { maxTokens: record.maxTokens }),
   });
 }
 
@@ -183,6 +210,11 @@ export function createProviderSettingsManager(
       type: record.type,
       client,
       defaultModel: record.defaultModel,
+      ...(record.contextWindowTokens === undefined
+        ? {}
+        : { contextWindowTokens: record.contextWindowTokens }),
+      ...(record.temperature === undefined ? {} : { temperature: record.temperature }),
+      ...(record.maxTokens === undefined ? {} : { maxTokens: record.maxTokens }),
     };
     if (options.registry.getDescriptor(record.id) === undefined) {
       options.registry.register(registration);
@@ -309,6 +341,11 @@ export function createProviderSettingsManager(
         encryptedApiKey: options.secretCodec.encrypt(parsed.data.apiKey),
         defaultModel: parsed.data.defaultModel,
         isDefault: parsed.data.makeDefault,
+        ...(parsed.data.contextWindowTokens === undefined
+          ? {}
+          : { contextWindowTokens: parsed.data.contextWindowTokens }),
+        ...(parsed.data.temperature === undefined ? {} : { temperature: parsed.data.temperature }),
+        ...(parsed.data.maxTokens === undefined ? {} : { maxTokens: parsed.data.maxTokens }),
         createdAt: now,
         updatedAt: now,
       };
@@ -399,6 +436,14 @@ export function createProviderSettingsManager(
               : current.isDefault,
         updatedAt: new Date().toISOString(),
       };
+      setOptionalNumber(
+        record,
+        'contextWindowTokens',
+        parsedInput.data.contextWindowTokens,
+        current.contextWindowTokens,
+      );
+      setOptionalNumber(record, 'temperature', parsedInput.data.temperature, current.temperature);
+      setOptionalNumber(record, 'maxTokens', parsedInput.data.maxTokens, current.maxTokens);
       if (record.isDefault) {
         for (const existing of managedRecords.values()) {
           if (existing.id !== id && existing.isDefault) {
