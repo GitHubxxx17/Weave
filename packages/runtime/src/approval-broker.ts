@@ -133,6 +133,7 @@ export function createApprovalBroker(): ApprovalBroker {
         summary: parsedInput.summary,
         risk: parsedInput.risk,
         inputSummary: parsedInput.inputSummary,
+        ...(parsedInput.sessionId === undefined ? {} : { sessionId: parsedInput.sessionId }),
         status: 'pending',
         createdAt: createdAt.toISOString(),
         ...(expiresAt === undefined ? {} : { expiresAt }),

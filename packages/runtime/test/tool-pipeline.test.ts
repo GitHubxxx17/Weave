@@ -423,39 +423,43 @@ describe('Tool Pipeline', () => {
     await expect(execution).resolves.toMatchObject({ content: 'done' });
   });
 
-  it('runs only read-only tools in read-only mode', async () => {
-    const broker = createApprovalBroker();
+  it('gates Approval by permission mode', async () => {
     const execute = vi.fn(() => 'done');
-    const registry = createProtectedRegistry(execute);
-    registry.register({
-      name: 'look',
-      description: 'Read-only test tool',
-      readOnly: true,
-      parameters: { type: 'object' },
-      inputSchema: z.object({}),
-      execute: () => 'looked',
+    const broker = createApprovalBroker();
+    const pipeline = createToolPipeline({
+      registry: createProtectedRegistry(execute),
+      approvalBroker: broker,
     });
-    const pipeline = createToolPipeline({ registry, approvalBroker: broker });
 
+    // trust: an unknown-operation protected tool stays conservative and asks.
+    const trusting = pipeline.execute({
+      toolCallId: 'call-trust',
+      name: 'protected',
+      arguments: '{"value":"x"}',
+      permissionMode: 'trust',
+    });
+    await Promise.resolve();
+    expect(broker.list()).toHaveLength(1);
+    broker.approve(broker.list()[0]!.approvalId);
+    await expect(trusting).resolves.toMatchObject({ content: 'done' });
+
+    // yolo: no Approval, runs directly.
+    const yoloExecute = vi.fn(() => 'done');
+    const yoloBroker = createApprovalBroker();
+    const yoloPipeline = createToolPipeline({
+      registry: createProtectedRegistry(yoloExecute),
+      approvalBroker: yoloBroker,
+    });
     await expect(
-      pipeline.execute({
-        toolCallId: 'call-1',
+      yoloPipeline.execute({
+        toolCallId: 'call-yolo',
         name: 'protected',
         arguments: '{"value":"x"}',
-        permissionMode: 'read-only',
+        permissionMode: 'yolo',
       }),
-    ).rejects.toMatchObject({ code: 'tool-not-permitted' });
-    expect(broker.list()).toEqual([]);
-    expect(execute).not.toHaveBeenCalled();
-
-    await expect(
-      pipeline.execute({
-        toolCallId: 'call-2',
-        name: 'look',
-        arguments: '{}',
-        permissionMode: 'read-only',
-      }),
-    ).resolves.toMatchObject({ content: 'looked' });
+    ).resolves.toMatchObject({ content: 'done' });
+    expect(yoloBroker.list()).toEqual([]);
+    expect(yoloExecute).toHaveBeenCalledOnce();
   });
 
   it('tells the model when a result was truncated', async () => {

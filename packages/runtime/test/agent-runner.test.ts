@@ -869,7 +869,7 @@ describe('Agent Runner contracts', () => {
     await store.close();
   });
 
-  it('offers and runs only read-only tools in read-only mode', async () => {
+  it('offers every tool regardless of mode and passes the mode to the instructions', async () => {
     const store = createInMemorySessionEventStore();
     const requests: LlmRequest[] = [];
     const registry = createToolRegistry();
@@ -902,7 +902,7 @@ describe('Agent Runner contracts', () => {
             { type: 'finish', reason: 'tool-call' },
           ],
           [
-            { type: 'text-delta', text: '只读模式下不能修改' },
+            { type: 'text-delta', text: '已修改' },
             { type: 'finish', reason: 'stop' },
           ],
         ],
@@ -917,20 +917,12 @@ describe('Agent Runner contracts', () => {
       },
     });
 
-    const events = await collect(runner.run({ ...validRequest, permissionMode: 'read-only' }));
+    const events = await collect(runner.run({ ...validRequest, permissionMode: 'yolo' }));
 
-    expect(requests[0]?.tools?.map((tool) => tool.name)).toEqual(['look']);
-    expect(instructionModes).toEqual(['read-only']);
-    expect(writes).toEqual([]);
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: 'tool-result',
-        status: 'failed',
-        errorCode: 'tool-not-permitted',
-      }),
-    );
+    expect(requests[0]?.tools?.map((tool) => tool.name)).toEqual(['look', 'change']);
+    expect(instructionModes).toEqual(['yolo']);
+    expect(writes).toEqual(['changed']);
     expect(events.at(-1)).toMatchObject({ type: 'completed' });
-    expect(events.at(-1)).not.toHaveProperty('reason');
 
     await store.close();
   });

@@ -25,6 +25,10 @@ export interface AgentRunRequestInput {
   };
   readonly provider: string;
   readonly model: string;
+  /** Provider-specific reasoning effort hint; omit for the provider default. */
+  readonly reasoningEffort?: string | undefined;
+  /** Approval mode for this run. */
+  readonly permissionMode?: 'ask' | 'trust' | 'yolo' | undefined;
 }
 
 /** Runtime event payloads that Studio can render without importing Runtime. */
@@ -78,6 +82,8 @@ export const agentRunRequestSchema: z.ZodType<AgentRunRequestInput> = z
     userMessage: userMessageSchema,
     provider: nonEmptyStringSchema,
     model: nonEmptyStringSchema,
+    reasoningEffort: nonEmptyStringSchema.optional(),
+    permissionMode: z.enum(['ask', 'trust', 'yolo']).optional(),
   })
   .strict();
 

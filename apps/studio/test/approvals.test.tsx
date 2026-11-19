@@ -21,6 +21,7 @@ const pendingWrite: ApprovalRequest = {
   summary: '写入 Workspace 文件 notes.md',
   risk: 'high',
   inputSummary: { path: 'notes.md', bytes: 12, overwrite: true },
+  sessionId: 'session-1',
   status: 'pending',
   createdAt: '2026-11-17T08:00:00.000Z',
 };

@@ -6,13 +6,15 @@ const nonNegativeFiniteNumberSchema = z.number().finite().nonnegative();
 const approvalRiskSchema = z.enum(['low', 'medium', 'high']);
 
 /** Validates a permission mode crossing the Runner or Pipeline boundary. */
-export const toolPermissionModeSchema = z.enum(['workspace', 'read-only']);
+export const toolPermissionModeSchema = z.enum(['ask', 'trust', 'yolo']);
 
 /**
- * Permission mode of one Agent run.
+ * Permission mode of one Agent run. Every mode exposes all registered tools;
+ * the mode only decides whether a protected tool waits for Approval.
  *
- * `workspace` exposes every registered tool; protected tools still wait for
- * Approval. `read-only` exposes and executes only tools marked `readOnly`.
+ * `ask` requests Approval for every protected tool (read-only tools run freely).
+ * `trust` auto-approves routine protected tools and only asks for high-risk ones
+ * (see `classifyApprovalRisk`). `yolo` runs every tool without Approval.
  */
 export type ToolPermissionMode = z.infer<typeof toolPermissionModeSchema>;
 

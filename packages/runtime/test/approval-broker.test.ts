@@ -49,6 +49,12 @@ describe('Approval Broker', () => {
     });
   });
 
+  it('carries the session id into the request snapshot', () => {
+    const broker = createApprovalBroker();
+    void broker.request(createRequestInput({ sessionId: 'session-9' }));
+    expect(broker.list()[0]?.sessionId).toBe('session-9');
+  });
+
   it('resolves a rejected decision without executing anything', async () => {
     const broker = createApprovalBroker();
     const decisionPromise = broker.request(createRequestInput());
