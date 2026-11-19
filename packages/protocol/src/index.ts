@@ -27,3 +27,6 @@ export type { FinishReason, LlmRequest, StreamEvent, TokenUsage } from './llm.js
 
 export { contextBreakdownSchema, contextCategoryBreakdownSchema } from './context.js';
 export type { ContextBreakdown, ContextCategoryBreakdown } from './context.js';
+
+export { planItemSchema, planItemStatusSchema, planSchema } from './plan.js';
+export type { AgentPlan, PlanItem, PlanItemStatus } from './plan.js';

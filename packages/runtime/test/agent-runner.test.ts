@@ -15,6 +15,7 @@ import {
   createAgentRunner,
   createToolPipeline,
   createToolRegistry,
+  createUpdatePlanTool,
   type AgentRunRequest,
   type AgentRuntimeEvent,
 } from '../src/index.js';
@@ -2405,5 +2406,98 @@ describe('Agent Runner context management', () => {
     });
 
     await store.close();
+  });
+});
+
+describe('Agent Runner update_plan', () => {
+  it('emits a plan event and persists the plan on the tool step', async () => {
+    const requests: LlmRequest[] = [];
+    const planArguments = JSON.stringify({
+      explanation: '先读后写',
+      plan: [
+        { step: '读取文件', status: 'in_progress' },
+        { step: '修改文件', status: 'pending' },
+      ],
+    });
+    const client = sequenceClient(
+      [
+        [
+          { type: 'tool-call-start', id: 'call-1', name: 'update_plan' },
+          { type: 'tool-call-delta', id: 'call-1', argumentsDelta: planArguments },
+          { type: 'finish', reason: 'tool-call' },
+        ],
+        [
+          { type: 'text-delta', text: '完成' },
+          { type: 'finish', reason: 'stop' },
+        ],
+      ],
+      requests,
+    );
+    const registry = createToolRegistry();
+    registry.register(createUpdatePlanTool());
+    const pipeline = createToolPipeline({ registry });
+    const { store, batches } = recordingSessionEventStore();
+    const runner = createAgentRunner({
+      llm: client,
+      sessionStore: store,
+      toolRegistry: registry,
+      toolPipeline: pipeline,
+    });
+
+    const events = withoutContext(await collect(runner.run(validRequest)));
+
+    const expectedPlan = {
+      explanation: '先读后写',
+      items: [
+        { step: '读取文件', status: 'in_progress' },
+        { step: '修改文件', status: 'pending' },
+      ],
+    };
+    expect(events).toContainEqual({ type: 'plan', plan: expectedPlan });
+
+    const stepCompletedWithPlan = batches
+      .flat()
+      .find((event) => event.type === 'step.completed' && 'plan' in event.payload);
+    expect(stepCompletedWithPlan?.payload).toMatchObject({
+      status: 'completed',
+      plan: expectedPlan,
+    });
+  });
+
+  it('does not emit a plan event for an ordinary tool call', async () => {
+    const requests: LlmRequest[] = [];
+    const client = sequenceClient(
+      [
+        [
+          { type: 'tool-call-start', id: 'call-1', name: 'echo' },
+          { type: 'tool-call-delta', id: 'call-1', argumentsDelta: JSON.stringify({ text: 'hi' }) },
+          { type: 'finish', reason: 'tool-call' },
+        ],
+        [
+          { type: 'text-delta', text: '完成' },
+          { type: 'finish', reason: 'stop' },
+        ],
+      ],
+      requests,
+    );
+    const registry = createToolRegistry();
+    registry.register({
+      name: 'echo',
+      description: 'echo',
+      readOnly: true,
+      parameters: { type: 'object', properties: { text: { type: 'string' } } },
+      inputSchema: z.object({ text: z.string() }),
+      execute: ({ text }) => text,
+    });
+    const pipeline = createToolPipeline({ registry });
+    const runner = createAgentRunner({
+      llm: client,
+      sessionStore: createInMemorySessionEventStore(),
+      toolRegistry: registry,
+      toolPipeline: pipeline,
+    });
+
+    const events = withoutContext(await collect(runner.run(validRequest)));
+    expect(events.some((event) => event.type === 'plan')).toBe(false);
   });
 });

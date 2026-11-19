@@ -47,6 +47,13 @@ export {
   recallInputSchema,
 } from './context/recall-tool.js';
 export type { RecallInput, RecallResolver, RecallToolResult } from './context/recall-tool.js';
+export {
+  createUpdatePlanTool,
+  parsePlanFromToolCall,
+  updatePlanInputSchema,
+  updatePlanToolName,
+} from './update-plan-tool.js';
+export type { UpdatePlanInput } from './update-plan-tool.js';
 export { createToolPipeline } from './tool-pipeline.js';
 export type { ToolPipeline, ToolPipelineOptions } from './tool-pipeline.js';
 export {

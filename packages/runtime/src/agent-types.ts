@@ -1,8 +1,10 @@
 import type { LlmClient, LlmProviderRegistry } from '@weave/llm';
 import {
   contextBreakdownSchema,
+  planSchema,
   toolCallSchema,
   userMessageSchema,
+  type AgentPlan,
   type ContextBreakdown,
   type TokenUsage,
   type ToolCall,
@@ -93,6 +95,11 @@ export type AgentRuntimeEvent =
       readonly breakdown: ContextBreakdown;
       readonly provider: string;
       readonly model: string;
+    }
+  | {
+      /** Current task plan after an `update_plan` tool call. */
+      readonly type: 'plan';
+      readonly plan: AgentPlan;
     };
 
 /** Token usage carried by the `usage` runtime event. */
@@ -140,6 +147,10 @@ export const agentRuntimeEventSchema: z.ZodType<AgentRuntimeEvent> = z.discrimin
     breakdown: contextBreakdownSchema,
     provider: nonEmptyStringSchema,
     model: nonEmptyStringSchema,
+  }),
+  z.object({
+    type: z.literal('plan'),
+    plan: planSchema,
   }),
 ]);
 
