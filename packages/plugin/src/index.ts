@@ -12,3 +12,31 @@ export type {
 } from './plugin-types.js';
 export { createPluginRegistry } from './plugin-registry.js';
 export type { PluginRegistry, PluginRegistryOptions } from './plugin-registry.js';
+
+// Typed plugin kernel (Stage 1).
+export { defineServiceRef, ServiceContainer, rootScopeKey } from './service.js';
+export type {
+  DepMap,
+  Disposer,
+  Resolved,
+  ScopeContext,
+  ServiceImpl,
+  ServiceInitContext,
+  ServiceRef,
+  ServiceScope,
+} from './service.js';
+export { defineExtensionPoint, ExtensionRegistry } from './extension-point.js';
+export type { ExtensionPoint } from './extension-point.js';
+export { defineHook, HookRegistry } from './hook.js';
+export type {
+  DecideHandler,
+  Hook,
+  HookMode,
+  ObserveHandler,
+  PolicyVote,
+  WrapHandler,
+} from './hook.js';
+export { createPluginEnv } from './plugin-env.js';
+export type { PluginEnv, PluginEnvDeps, ServiceHandle } from './plugin-env.js';
+export { createPluginKernel, definePlugin } from './kernel.js';
+export type { Generation, KernelPlugin, PluginKernel, PluginKernelOptions } from './kernel.js';

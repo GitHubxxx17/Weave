@@ -7,7 +7,16 @@ export type PluginErrorCode =
   | 'plugin-capability-not-declared'
   | 'plugin-setup-failed'
   | 'plugin-registration-conflict'
-  | 'plugin-dispose-failed';
+  | 'plugin-dispose-failed'
+  // Kernel: typed services
+  | 'plugin-service-missing-dependency'
+  | 'plugin-service-cycle'
+  | 'plugin-service-duplicate'
+  | 'plugin-service-scope-violation'
+  // Kernel: extension points
+  | 'plugin-extension-single-slot'
+  // Kernel: hooks
+  | 'plugin-hook-invalid-vote';
 
 /** Error raised when a Plugin cannot be validated, registered or disposed. */
 export class PluginError extends Error {
