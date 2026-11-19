@@ -133,6 +133,60 @@ describe('Session Service', () => {
     expect(detail.turns[0]?.modelSteps).toHaveLength(2);
   });
 
+  it('surfaces the latest task plan on the Turn summary', async () => {
+    const { service, projectStore, sessionStore } = await createContext();
+    const project = await projectStore.createProject({ name: 'Weave', folderName: 'weave' });
+    const session = await service.create(project.id);
+    const plan = {
+      explanation: '两步',
+      items: [
+        { step: '读取', status: 'completed' },
+        { step: '写入', status: 'in_progress' },
+      ],
+    };
+    await sessionStore.append(session.id, [
+      {
+        type: 'message.created',
+        payload: {
+          messageId: 'user-1',
+          message: { role: 'user', content: [{ type: 'text', text: '做计划' }] },
+        },
+      },
+      { type: 'turn.started', payload: { turnId: 'turn-1' } },
+      { type: 'step.started', payload: { turnId: 'turn-1', stepId: 'm1', kind: 'model' } },
+      { type: 'step.completed', payload: { turnId: 'turn-1', stepId: 'm1', status: 'completed' } },
+      { type: 'step.started', payload: { turnId: 'turn-1', stepId: 't1', kind: 'tool' } },
+      {
+        type: 'tool-call.created',
+        payload: {
+          turnId: 'turn-1',
+          stepId: 't1',
+          toolCall: { id: 'call-1', name: 'update_plan', arguments: '{}' },
+        },
+      },
+      {
+        type: 'tool-result.created',
+        payload: {
+          turnId: 'turn-1',
+          stepId: 't1',
+          toolCallId: 'call-1',
+          name: 'update_plan',
+          content: '已记录计划',
+          truncated: false,
+          status: 'completed',
+        },
+      },
+      {
+        type: 'step.completed',
+        payload: { turnId: 'turn-1', stepId: 't1', status: 'completed', plan },
+      },
+      { type: 'turn.completed', payload: { turnId: 'turn-1', status: 'completed' } },
+    ]);
+
+    const detail = await service.get(session.id);
+    expect(detail.turns[0]?.plan).toEqual(plan);
+  });
+
   it('creates a Session and attaches it to a Project', async () => {
     const { service, projectStore } = await createContext();
     const project = await projectStore.createProject({ name: 'Weave', folderName: 'weave' });

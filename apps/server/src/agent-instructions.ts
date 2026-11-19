@@ -234,6 +234,12 @@ export function createAgentInstructions(options: {
       );
     }
 
+    if (names.has('update_plan')) {
+      sections.push(
+        '多步任务开始时用 update_plan 列出步骤清单；完成一步就把它标为 completed、把下一步标为 in_progress，始终保持至多一个 in_progress。每次传完整的当前清单（会整体替换）。',
+      );
+    }
+
     if (folder !== undefined) {
       const project = await environment.projectInstructions(folder);
       if (project !== undefined) {

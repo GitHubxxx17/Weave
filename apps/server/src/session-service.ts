@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { ContextBreakdown, Message, TokenUsage } from '@weave/protocol';
+import type { AgentPlan, ContextBreakdown, Message, TokenUsage } from '@weave/protocol';
 import {
   createSessionProjectionCache,
   SessionProjectionError,
@@ -66,6 +66,8 @@ export interface SessionTurnSummary {
   readonly usage?: TokenUsage;
   /** Deterministic send-window composition of the Turn's last model step. */
   readonly context?: ContextBreakdown;
+  /** Current task plan, from the Turn's most recent `update_plan` call. */
+  readonly plan?: AgentPlan;
   readonly modelSteps: readonly {
     readonly startedAt: string;
     readonly completedAt?: string;
@@ -157,6 +159,12 @@ function turnSummaryFor(turn: SessionProjection['turns'][number]): SessionTurnSu
     (found, step) => found ?? step.context,
     undefined,
   );
+  // The plan rides a tool step (the `update_plan` call), not a model step, so it
+  // is taken from the most recent step of any kind that recorded one.
+  const plan = turn.steps.reduceRight<AgentPlan | undefined>(
+    (found, step) => found ?? step.plan,
+    undefined,
+  );
   return {
     turnId: turn.turnId,
     status: turn.status,
@@ -166,6 +174,7 @@ function turnSummaryFor(turn: SessionProjection['turns'][number]): SessionTurnSu
     ...(lastModelStep?.model === undefined ? {} : { model: lastModelStep.model }),
     ...(usage === undefined ? {} : { usage }),
     ...(context === undefined ? {} : { context }),
+    ...(plan === undefined ? {} : { plan }),
     modelSteps: modelSteps.map((step) => ({
       startedAt: step.startedAt,
       ...(step.completedAt === undefined ? {} : { completedAt: step.completedAt }),

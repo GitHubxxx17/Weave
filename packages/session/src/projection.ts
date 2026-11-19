@@ -1,4 +1,4 @@
-import type { ContextBreakdown, Message, TokenUsage } from '@weave/protocol';
+import type { AgentPlan, ContextBreakdown, Message, TokenUsage } from '@weave/protocol';
 import type { ToolCall } from '@weave/protocol';
 import { sessionEventSchema, type SessionEvent } from './events.js';
 
@@ -49,6 +49,8 @@ export interface SessionStep {
   readonly usage?: TokenUsage | undefined;
   /** Deterministic send-window composition of a model step, when recorded. */
   readonly context?: ContextBreakdown | undefined;
+  /** Task plan recorded on the tool step of an `update_plan` call. */
+  readonly plan?: AgentPlan | undefined;
 }
 
 /** A durable Tool Call associated with a projected Turn and Step. */
@@ -108,6 +110,7 @@ interface MutableStep {
   model?: string | undefined;
   usage?: TokenUsage | undefined;
   context?: ContextBreakdown | undefined;
+  plan?: AgentPlan | undefined;
 }
 
 interface MutableTurn {
@@ -311,6 +314,9 @@ export function applyEvent(state: ProjectionState, event: SessionEvent): void {
     }
     if (event.payload.context !== undefined) {
       step.context = event.payload.context;
+    }
+    if (event.payload.plan !== undefined) {
+      step.plan = event.payload.plan;
     }
   } else if (event.type === 'tool-call.created') {
     if (state.archivedAt !== undefined) {

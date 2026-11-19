@@ -230,6 +230,52 @@ describe('Session Projection', () => {
     expect(projection.turns[0]?.steps[0]?.context).toEqual(breakdown);
   });
 
+  it('projects the task plan recorded on an update_plan tool step', () => {
+    const plan = {
+      explanation: '先读后写',
+      items: [
+        { step: '读取文件', status: 'in_progress' },
+        { step: '修改文件', status: 'pending' },
+      ],
+    };
+    const events: SessionEvent[] = [
+      event(1, 'session.created', {}),
+      event(2, 'message.created', {
+        messageId: 'user-1',
+        message: { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+      }),
+      event(3, 'turn.started', { turnId: 'turn-1' }),
+      event(4, 'step.started', { turnId: 'turn-1', stepId: 'model-1', kind: 'model' }),
+      event(5, 'step.completed', { turnId: 'turn-1', stepId: 'model-1', status: 'completed' }),
+      event(6, 'step.started', { turnId: 'turn-1', stepId: 'tool-1', kind: 'tool' }),
+      event(7, 'tool-call.created', {
+        turnId: 'turn-1',
+        stepId: 'tool-1',
+        toolCall: { id: 'call-1', name: 'update_plan', arguments: '{}' },
+      }),
+      event(8, 'tool-result.created', {
+        turnId: 'turn-1',
+        stepId: 'tool-1',
+        toolCallId: 'call-1',
+        name: 'update_plan',
+        content: '已记录计划',
+        truncated: false,
+        status: 'completed',
+      }),
+      event(9, 'step.completed', {
+        turnId: 'turn-1',
+        stepId: 'tool-1',
+        status: 'completed',
+        plan,
+      }),
+      event(10, 'turn.completed', { turnId: 'turn-1', status: 'completed' }),
+    ];
+
+    const projection = projectSession(events);
+    const toolStep = projection.turns[0]?.steps.find((step) => step.kind === 'tool');
+    expect(toolStep?.plan).toEqual(plan);
+  });
+
   it('sums token usage without inventing unreported fields', () => {
     expect(sumTokenUsage([undefined, undefined])).toBeUndefined();
     expect(

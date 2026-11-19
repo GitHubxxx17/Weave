@@ -1,4 +1,4 @@
-import { contextBreakdownSchema, messageSchema, toolCallSchema } from '@weave/protocol';
+import { contextBreakdownSchema, messageSchema, planSchema, toolCallSchema } from '@weave/protocol';
 import { z } from 'zod';
 
 const nonEmptyStringSchema = z.string().min(1);
@@ -76,6 +76,8 @@ const stepCompletedPayloadSchema = z
     usage: stepUsageSchema.optional(),
     /** Deterministic send-window composition of a model step, when computed. */
     context: contextBreakdownSchema.optional(),
+    /** Current task plan, set on the tool step of an `update_plan` call. */
+    plan: planSchema.optional(),
   })
   .passthrough();
 

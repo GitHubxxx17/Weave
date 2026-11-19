@@ -608,6 +608,7 @@ describe('Default Agent instructions', () => {
       'write_file',
       'run_command',
       'recall',
+      'update_plan',
     ]);
   });
 
