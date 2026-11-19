@@ -190,6 +190,24 @@ DeepSeek uses `https://api.deepseek.com` in this configuration. The Server
 development command loads the root `.env` file with Node's built-in
 `--env-file-if-exists` option.
 
+#### Testing tools with the mock Provider
+
+The `mock` Provider (shown as 本地演示 in Studio) can call tools on request, so
+Approval cards and tool steps can be tested without a real model. Select it in
+a Project that has a folder and send one `/tool <name> <json arguments>` line
+per call; several lines start several calls in the same step:
+
+```text
+/tool run_command {"command":"echo hello"}
+/tool write_file {"path":"mock-test.md","content":"mock 测试\n"}
+```
+
+Arguments must stay on one line and reach the tool unchanged, so a typo shows
+the real error (`tool-invalid-json`, `tool-not-found`). After the tools run, the
+mock replies with the first line of each result; any other message gets the
+fixed demo answer. The tools really execute: reject the Approval when you only
+want to look at the card.
+
 ### Desktop development
 
 Use the Electron shell when you want to verify the desktop runtime and local

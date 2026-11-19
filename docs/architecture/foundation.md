@@ -583,6 +583,14 @@ OpenAI-compatible client for each configured entry. The same Registry is used
 by both the Agent Runner and `GET /settings/providers`; this keeps the list in
 Studio aligned with the clients Runtime can actually resolve.
 
+The built-in `mock` uses `createToolCommandMockLlmClient()`: it replays a fixed
+demo answer, but a user message with `/tool <name> <json>` lines becomes one
+tool call per line (arguments passed through verbatim), and a request that ends
+with tool results gets a one-line-per-result summary. Tool and Approval flows
+can therefore be exercised end to end without a real model; the tools still run
+through the shared Tool Pipeline. The design is in
+`docs/superpowers/specs/2026-11-19-mock-tool-commands-design.md`.
+
 When an Agent request contains `provider: "deepseek"`, Runtime resolves that
 id before it appends the first running Turn event. An unknown id returns the
 stable `agent-provider-unavailable` error and does not create a misleading

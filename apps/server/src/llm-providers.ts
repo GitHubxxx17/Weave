@@ -1,7 +1,7 @@
 import {
   createLlmProviderRegistry,
-  createMockLlmClient,
   createOpenAiCompatibleClient,
+  createToolCommandMockLlmClient,
   type LlmProviderDescriptor,
   type LlmProviderRegistry,
 } from '@weave/llm';
@@ -83,6 +83,10 @@ function readExternalConfigs(environment: NodeJS.ProcessEnv): readonly ServerLlm
  *
  * The returned descriptors contain no API key. The key remains captured by
  * the OpenAI-compatible client inside the Server process.
+ *
+ * The built-in `mock` Provider replays `mockScript` (a fixed demo answer by
+ * default) and turns `/tool <name> <json>` lines in a user message into tool
+ * calls, so tool and Approval flows can be tested without a real model.
  */
 export function createServerLlmProviders(options?: {
   readonly environment?: NodeJS.ProcessEnv;
@@ -95,7 +99,9 @@ export function createServerLlmProviders(options?: {
     id: 'mock',
     label: '本地演示',
     type: 'mock',
-    client: createMockLlmClient(options?.mockScript ?? defaultMockScript),
+    client: createToolCommandMockLlmClient({
+      fallback: options?.mockScript ?? defaultMockScript,
+    }),
     defaultModel: 'weave-local-demo',
   });
 
