@@ -1836,6 +1836,9 @@ describe('Studio Agent Chat', () => {
     fireEvent.change(screen.getByLabelText('默认模型'), {
       target: { value: 'deepseek-chat' },
     });
+    fireEvent.change(screen.getByLabelText('Temperature'), { target: { value: '0.4' } });
+    fireEvent.change(screen.getByLabelText('最大输出 token'), { target: { value: '1024' } });
+    fireEvent.change(screen.getByLabelText('上下文窗口 token'), { target: { value: '32000' } });
     fireEvent.click(screen.getByRole('button', { name: '保存 Provider' }));
 
     await waitFor(() => {
@@ -1846,6 +1849,16 @@ describe('Studio Agent Chat', () => {
           body: expect.stringContaining('"apiKey":"deepseek-secret"'),
         }),
       );
+    });
+    const createCall = fetchMock.mock.calls.find(
+      ([url, init]) =>
+        url === 'http://127.0.0.1:46321/settings/providers' &&
+        (init as RequestInit | undefined)?.method === 'POST',
+    );
+    expect(JSON.parse(String((createCall?.[1] as RequestInit).body))).toMatchObject({
+      temperature: 0.4,
+      maxTokens: 1024,
+      contextWindowTokens: 32000,
     });
     await waitFor(() => expect(screen.getByText('DeepSeek')).toBeTruthy());
     expect(screen.queryByDisplayValue('deepseek-secret')).toBeNull();
@@ -1971,6 +1984,9 @@ describe('Studio Agent Chat', () => {
             apiKey: '',
             defaultModel: 'deepseek-chat',
             makeDefault: true,
+            contextWindowTokens: null,
+            temperature: null,
+            maxTokens: null,
           }),
         }),
       );

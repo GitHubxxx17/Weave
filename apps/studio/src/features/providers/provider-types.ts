@@ -14,6 +14,9 @@ export const providerDescriptorSchema = z
     defaultModel: nonEmptyStringSchema.optional(),
     hasApiKey: z.boolean(),
     editable: z.boolean(),
+    contextWindowTokens: z.number().int().positive().safe().optional(),
+    temperature: z.number().min(0).max(2).optional(),
+    maxTokens: z.number().int().positive().safe().optional(),
   })
   .strict();
 
@@ -37,6 +40,9 @@ export interface ProviderSettingsInput {
   readonly apiKey: string;
   readonly defaultModel: string;
   readonly makeDefault: boolean;
+  readonly contextWindowTokens?: number;
+  readonly temperature?: number;
+  readonly maxTokens?: number;
 }
 
 export interface ProviderSettingsPatch {
@@ -46,4 +52,8 @@ export interface ProviderSettingsPatch {
   readonly clearApiKey?: boolean;
   readonly defaultModel?: string;
   readonly makeDefault?: boolean;
+  /** `null` clears the value; omitting the field keeps the current one. */
+  readonly contextWindowTokens?: number | null;
+  readonly temperature?: number | null;
+  readonly maxTokens?: number | null;
 }

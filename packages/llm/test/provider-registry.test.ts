@@ -35,6 +35,31 @@ describe('LLM Provider Registry', () => {
     ]);
   });
 
+  it('exposes context window and default sampling params on the descriptor', () => {
+    const registry = createLlmProviderRegistry([
+      {
+        id: 'deepseek',
+        label: 'DeepSeek',
+        type: 'openai-compatible',
+        client: createClient(),
+        defaultModel: 'deepseek-chat',
+        contextWindowTokens: 64_000,
+        temperature: 0.3,
+        maxTokens: 2048,
+      },
+    ]);
+
+    expect(registry.getDescriptor('deepseek')).toEqual({
+      id: 'deepseek',
+      label: 'DeepSeek',
+      type: 'openai-compatible',
+      defaultModel: 'deepseek-chat',
+      contextWindowTokens: 64_000,
+      temperature: 0.3,
+      maxTokens: 2048,
+    });
+  });
+
   it('registers providers after construction', () => {
     const registry = createLlmProviderRegistry();
     const client = createClient();

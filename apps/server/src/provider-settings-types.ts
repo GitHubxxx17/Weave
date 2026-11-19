@@ -11,6 +11,9 @@ export const providerSettingsRecordSchema = z
     encryptedApiKey: z.string().min(1).nullable(),
     defaultModel: nonEmptyStringSchema,
     isDefault: z.boolean(),
+    contextWindowTokens: z.number().int().positive().safe().optional(),
+    temperature: z.number().min(0).max(2).optional(),
+    maxTokens: z.number().int().positive().safe().optional(),
     createdAt: nonEmptyStringSchema,
     updatedAt: nonEmptyStringSchema,
   })
@@ -27,6 +30,9 @@ export const createProviderSettingsInputSchema = z
     apiKey: nonEmptyStringSchema,
     defaultModel: nonEmptyStringSchema,
     makeDefault: z.boolean().default(false),
+    contextWindowTokens: z.number().int().positive().safe().optional(),
+    temperature: z.number().min(0).max(2).optional(),
+    maxTokens: z.number().int().positive().safe().optional(),
   })
   .strict();
 
@@ -40,6 +46,10 @@ export const updateProviderSettingsInputSchema = z
     clearApiKey: z.boolean().optional(),
     defaultModel: nonEmptyStringSchema.optional(),
     makeDefault: z.boolean().optional(),
+    // `null` clears the value; an omitted field keeps the current one.
+    contextWindowTokens: z.number().int().positive().safe().nullable().optional(),
+    temperature: z.number().min(0).max(2).nullable().optional(),
+    maxTokens: z.number().int().positive().safe().nullable().optional(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -63,6 +73,9 @@ export const providerSettingsDescriptorSchema = z
     baseUrl: z.string().url().optional(),
     hasApiKey: z.boolean(),
     editable: z.boolean(),
+    contextWindowTokens: z.number().int().positive().safe().optional(),
+    temperature: z.number().min(0).max(2).optional(),
+    maxTokens: z.number().int().positive().safe().optional(),
   })
   .strict();
 

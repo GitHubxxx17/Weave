@@ -19,6 +19,34 @@ const createTableSql = `
   );
 `;
 
+/**
+ * Adds the per-Provider model-parameter columns to an existing table.
+ *
+ * This SQLite file is shared with the Session and Project stores, so the
+ * migration must NOT use the single per-database `PRAGMA user_version`: another
+ * store already owns it, and reading it here would wrongly skip these columns.
+ * Instead it inspects the actual columns and adds only the missing ones, which
+ * is idempotent and independent of any other store's schema version.
+ */
+function migrateProviderSettingsSchema(database: DatabaseSync): void {
+  const existingColumns = new Set(
+    database
+      .prepare('PRAGMA table_info(provider_settings)')
+      .all()
+      .map((row) => row.name),
+  );
+  const additions: readonly (readonly [string, string])[] = [
+    ['context_window_tokens', 'INTEGER'],
+    ['temperature', 'REAL'],
+    ['max_tokens', 'INTEGER'],
+  ];
+  for (const [column, definition] of additions) {
+    if (!existingColumns.has(column)) {
+      database.exec(`ALTER TABLE provider_settings ADD COLUMN ${column} ${definition}`);
+    }
+  }
+}
+
 const invalidMessage = 'Provider Settings Store input is invalid';
 const closedMessage = 'Provider Settings Store is closed';
 const storageMessage = 'Provider Settings Store database operation failed';
@@ -63,6 +91,9 @@ interface ProviderSettingsRow {
   readonly encrypted_api_key: unknown;
   readonly default_model: unknown;
   readonly is_default: unknown;
+  readonly context_window_tokens: unknown;
+  readonly temperature: unknown;
+  readonly max_tokens: unknown;
   readonly created_at: unknown;
   readonly updated_at: unknown;
 }
@@ -82,6 +113,9 @@ function parseRecord(row: Record<string, unknown>): ProviderSettingsRecord {
     encrypted_api_key: row.encrypted_api_key,
     default_model: row.default_model,
     is_default: row.is_default,
+    context_window_tokens: row.context_window_tokens,
+    temperature: row.temperature,
+    max_tokens: row.max_tokens,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -94,6 +128,11 @@ function parseRecord(row: Record<string, unknown>): ProviderSettingsRecord {
     encryptedApiKey: stored.encrypted_api_key,
     defaultModel: stored.default_model,
     isDefault: stored.is_default === 1,
+    ...(typeof stored.context_window_tokens === 'number'
+      ? { contextWindowTokens: stored.context_window_tokens }
+      : {}),
+    ...(typeof stored.temperature === 'number' ? { temperature: stored.temperature } : {}),
+    ...(typeof stored.max_tokens === 'number' ? { maxTokens: stored.max_tokens } : {}),
     createdAt: stored.created_at,
     updatedAt: stored.updated_at,
   });
@@ -147,6 +186,7 @@ export function createSqliteProviderSettingsStore(options: {
   const database = withStorageError(() => {
     const created = new DatabaseSync(parsedOptions.data.filename);
     created.exec(createTableSql);
+    migrateProviderSettingsSchema(created);
     return created;
   });
   let closed = false;
@@ -158,7 +198,8 @@ export function createSqliteProviderSettingsStore(options: {
         const rows = database
           .prepare(
             `SELECT id, label, type, base_url, encrypted_api_key,
-                    default_model, is_default, created_at, updated_at
+                    default_model, is_default, context_window_tokens, temperature, max_tokens,
+                    created_at, updated_at
              FROM provider_settings
              ORDER BY created_at ASC, rowid ASC`,
           )
@@ -177,7 +218,8 @@ export function createSqliteProviderSettingsStore(options: {
         const row = database
           .prepare(
             `SELECT id, label, type, base_url, encrypted_api_key,
-                    default_model, is_default, created_at, updated_at
+                    default_model, is_default, context_window_tokens, temperature, max_tokens,
+                    created_at, updated_at
              FROM provider_settings
              WHERE id = ?`,
           )
@@ -194,8 +236,8 @@ export function createSqliteProviderSettingsStore(options: {
           .prepare(
             `INSERT INTO provider_settings
               (id, label, type, base_url, encrypted_api_key, default_model, is_default,
-               created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               context_window_tokens, temperature, max_tokens, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             record.id,
@@ -205,6 +247,9 @@ export function createSqliteProviderSettingsStore(options: {
             record.encryptedApiKey,
             record.defaultModel,
             record.isDefault ? 1 : 0,
+            record.contextWindowTokens ?? null,
+            record.temperature ?? null,
+            record.maxTokens ?? null,
             record.createdAt,
             record.updatedAt,
           );
@@ -223,7 +268,8 @@ export function createSqliteProviderSettingsStore(options: {
             .prepare(
               `UPDATE provider_settings
                SET label = ?, type = ?, base_url = ?, encrypted_api_key = ?,
-                   default_model = ?, is_default = ?, created_at = ?, updated_at = ?
+                   default_model = ?, is_default = ?, context_window_tokens = ?,
+                   temperature = ?, max_tokens = ?, created_at = ?, updated_at = ?
                WHERE id = ?`,
             )
             .run(
@@ -233,6 +279,9 @@ export function createSqliteProviderSettingsStore(options: {
               record.encryptedApiKey,
               record.defaultModel,
               record.isDefault ? 1 : 0,
+              record.contextWindowTokens ?? null,
+              record.temperature ?? null,
+              record.maxTokens ?? null,
               record.createdAt,
               record.updatedAt,
               record.id,
