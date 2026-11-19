@@ -155,7 +155,21 @@ export function createServerAgentRunner(
       const root = await resolveWorkspaceRoot(sessionId);
       return root === undefined ? undefined : createWorkspacePolicy({ root });
     };
-    const fileTools = createWorkspaceFileTools({ resolveWorkspace });
+    const sessionStore = runtime.get(sessionStoreService);
+    const fileTools = createWorkspaceFileTools({
+      resolveWorkspace,
+      onFileSnapshot: async ({ sessionId, path, existedBefore, previousContent }) => {
+        if (sessionId === undefined) {
+          return;
+        }
+        await sessionStore.append(sessionId, [
+          {
+            type: 'workspace.file-snapshot',
+            payload: { path, existedBefore, previousContent },
+          },
+        ]);
+      },
+    });
     const searchTools = createWorkspaceSearchTools({ resolveWorkspace });
     const commandTool = createCommandTool({
       resolveWorkspace,
