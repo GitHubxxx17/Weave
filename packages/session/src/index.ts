@@ -29,3 +29,6 @@ export type {
   SessionToolResult,
   SessionTurn,
 } from './projection.js';
+
+export { createSessionProjectionCache } from './projection-cache.js';
+export type { SessionProjectionCache, SessionProjectionCacheOptions } from './projection-cache.js';
