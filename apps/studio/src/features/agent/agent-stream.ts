@@ -71,6 +71,7 @@ export function parseAgentEvent(eventName: string, dataText: string): AgentRunti
     'tool-result',
     'usage',
     'context',
+    'plan',
     'completed',
   ]);
   if (!knownEventNames.has(eventName)) {

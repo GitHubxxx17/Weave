@@ -168,6 +168,21 @@ describe('SSE frame parsing', () => {
       breakdown: { windowTokens: 128000, sentTokens: 1200, trimmed: false },
       provider: 'deepseek',
     });
+    expect(
+      parseAgentEvent(
+        'plan',
+        '{"type":"plan","plan":{"explanation":"先读后写","items":[{"step":"读取文件","status":"in_progress"},{"step":"修改文件","status":"pending"}]}}',
+      ),
+    ).toEqual({
+      type: 'plan',
+      plan: {
+        explanation: '先读后写',
+        items: [
+          { step: '读取文件', status: 'in_progress' },
+          { step: '修改文件', status: 'pending' },
+        ],
+      },
+    });
     expect(() =>
       parseAgentEvent('text-delta', '{"type":"reasoning-delta","text":"错位"}'),
     ).toThrowError('agent-stream-protocol: Agent stream event is invalid');

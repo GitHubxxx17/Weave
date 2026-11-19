@@ -17,6 +17,7 @@ import {
   type AgentRuntimeEvent,
 } from './agent-types.js';
 import { buildModelContext, type ContextBudget } from './context/build-context.js';
+import { parsePlanFromToolCall } from './update-plan-tool.js';
 import {
   ToolExecutionError,
   type ToolExecutionResult,
@@ -848,6 +849,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
                 throw error;
               }
 
+              const plan = parsePlanFromToolCall(toolCall);
               await options.sessionStore.append(validRequest.sessionId, [
                 {
                   type: 'tool-result.created',
@@ -874,11 +876,15 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
                     turnId,
                     stepId: toolStepId,
                     status: 'completed',
+                    ...(plan === undefined ? {} : { plan }),
                   },
                 },
               ]);
               activeStepStatus = 'completed';
               emit({ type: 'tool-result', result });
+              if (plan !== undefined) {
+                emit({ type: 'plan', plan });
+              }
             }
 
             projectedSession = projectSession(

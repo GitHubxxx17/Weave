@@ -112,6 +112,18 @@ export const contextBreakdownSchema = z.object({
   categories: contextCategoriesSchema,
 });
 
+/** One task in the Agent plan checklist. */
+export const planItemSchema = z.object({
+  step: nonEmptyStringSchema,
+  status: z.enum(['pending', 'in_progress', 'completed']),
+});
+
+/** The task plan the Agent maintains with the update_plan tool. */
+export const planSchema = z.object({
+  explanation: z.string().optional(),
+  items: z.array(planItemSchema),
+});
+
 /** Per-Turn timing, attribution, and token usage summed over its model steps. */
 export const turnSummarySchema = z.object({
   turnId: nonEmptyStringSchema,
@@ -122,6 +134,7 @@ export const turnSummarySchema = z.object({
   model: nonEmptyStringSchema.optional(),
   usage: turnUsageSchema.optional(),
   context: contextBreakdownSchema.optional(),
+  plan: planSchema.optional(),
   modelSteps: z
     .array(
       z.object({
@@ -155,6 +168,8 @@ export type TurnUsage = z.infer<typeof turnUsageSchema>;
 export type TurnSummary = z.infer<typeof turnSummarySchema>;
 export type ContextCategories = z.infer<typeof contextCategoriesSchema>;
 export type ContextBreakdown = z.infer<typeof contextBreakdownSchema>;
+export type PlanItem = z.infer<typeof planItemSchema>;
+export type AgentPlan = z.infer<typeof planSchema>;
 
 export type ContentPart = z.infer<typeof contentPartSchema>;
 export type WorkspaceMessage = z.infer<typeof messageSchema>;

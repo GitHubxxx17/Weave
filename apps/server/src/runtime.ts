@@ -12,6 +12,7 @@ import {
   createCommandTool,
   createRecallTool,
   createSessionRecallResolver,
+  createUpdatePlanTool,
   createToolPipeline,
   createToolRegistry,
   createRuntime,
@@ -53,6 +54,7 @@ const toolRegistries = new WeakMap<Runtime, ToolRegistry>();
 const pluginRegistries = new WeakMap<Runtime, PluginRegistry>();
 const workspaceToolsRegistered = new WeakSet<ToolRegistry>();
 const recallToolRegistered = new WeakSet<ToolRegistry>();
+const updatePlanToolRegistered = new WeakSet<ToolRegistry>();
 
 /**
  * Upper bound for one tool call, including the time a protected tool waits for
@@ -209,6 +211,14 @@ export function createServerAgentRunner(
       toolRegistry.register(recallTool);
     }
     recallToolRegistered.add(toolRegistry);
+  }
+
+  if (!updatePlanToolRegistered.has(toolRegistry)) {
+    const updatePlanTool = createUpdatePlanTool();
+    if (toolRegistry.get(updatePlanTool.name) === undefined) {
+      toolRegistry.register(updatePlanTool);
+    }
+    updatePlanToolRegistered.add(toolRegistry);
   }
 
   const toolPipeline = createToolPipeline({
