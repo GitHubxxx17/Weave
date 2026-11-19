@@ -308,6 +308,76 @@ describe('Agent step limit setting', () => {
   });
 });
 
+describe('Built-in mock /tool commands', () => {
+  it('calls the requested tools through Approval and summarizes the results', async () => {
+    const folder = await createTemporaryFolder();
+    await writeFile(join(folder, 'README.md'), '项目说明', 'utf8');
+    // The default Providers include the built-in `mock` that understands /tool.
+    const runtime = createServerRuntime();
+    await runtime.start();
+    cleanups.push(() => runtime.stop());
+    const projectStore = createInMemoryProjectStore();
+    cleanups.push(() => projectStore.close());
+    const project = await projectStore.createProject({
+      name: 'Mock',
+      folderName: 'mock',
+      folderPath: folder,
+    });
+    const sessionService = createSessionService({
+      projectStore,
+      sessionStore: getServerSessionStore(runtime),
+    });
+    const session = await sessionService.create(project.id);
+    const app = createApp(runtime, {
+      agentRunner: createServerAgentRunner(runtime, {
+        resolveWorkspaceRoot: createWorkspaceRootResolver(projectStore),
+      }),
+      sessionService,
+    });
+    const broker = runtime.get(approvalBrokerService);
+    const approved: string[] = [];
+    const unsubscribe = broker.subscribe((event) => {
+      if (event.type === 'approval.created') {
+        approved.push(event.request.toolName);
+        broker.approve(event.request.approvalId);
+      }
+    });
+    cleanups.push(async () => unsubscribe());
+
+    const response = await app.request('/agent/runs/stream', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: session.id,
+        userMessage: {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: [
+                '/tool read_file {"path":"README.md"}',
+                '/tool write_file {"path":"notes/mock.md","content":"mock 测试"}',
+              ].join('\n'),
+            },
+          ],
+        },
+        provider: 'mock',
+        model: 'weave-local-demo',
+      }),
+    });
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(body).toContain('"name":"read_file","content":"项目说明"');
+    expect(approved).toEqual(['write_file']);
+    expect(body).toContain(
+      '（本地演示）收到 2 个工具结果：\\n- read_file：项目说明\\n- write_file：',
+    );
+    expect(body).toMatch(/event: completed\n/);
+    await expect(readFile(join(folder, 'notes', 'mock.md'), 'utf8')).resolves.toBe('mock 测试');
+  });
+});
+
 describe('Project folder validation', () => {
   async function createProjectApp() {
     const runtime = createRuntime();

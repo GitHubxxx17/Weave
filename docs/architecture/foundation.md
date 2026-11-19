@@ -415,7 +415,9 @@ existing absolute directory. The Server Tool Pipeline uses a ten-minute
 timeout that also bounds the wait for Approval, so an unanswered request
 expires instead of blocking the turn. Studio subscribes to
 `GET /approvals/stream` and shows pending requests as cards above the
-composer; the Broker remains the only Approval state. An existing Project's
+composer; a card expands to the complete request (the full command, the edit
+diff, the write details, or the raw summary of other tools) in a scrollable
+block. The Broker remains the only Approval state. An existing Project's
 folder can be set, replaced, or cleared through `PATCH /projects/:projectId`
 (`ProjectStore.updateProjectFolder()`), which applies the same validation. The
 same route renames a Project when the body carries `name`
@@ -582,6 +584,14 @@ registers the deterministic `mock` Provider, then creates an
 OpenAI-compatible client for each configured entry. The same Registry is used
 by both the Agent Runner and `GET /settings/providers`; this keeps the list in
 Studio aligned with the clients Runtime can actually resolve.
+
+The built-in `mock` uses `createToolCommandMockLlmClient()`: it replays a fixed
+demo answer, but a user message with `/tool <name> <json>` lines becomes one
+tool call per line (arguments passed through verbatim), and a request that ends
+with tool results gets a one-line-per-result summary. Tool and Approval flows
+can therefore be exercised end to end without a real model; the tools still run
+through the shared Tool Pipeline. The design is in
+`docs/superpowers/specs/2026-11-19-mock-tool-commands-design.md`.
 
 When an Agent request contains `provider: "deepseek"`, Runtime resolves that
 id before it appends the first running Turn event. An unknown id returns the
