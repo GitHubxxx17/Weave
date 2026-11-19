@@ -1440,7 +1440,11 @@ describe('Studio Agent Chat', () => {
     fireEvent.click(within(toolsTab).getByRole('button', { name: '关闭工具' }));
     expect(screen.queryByRole('tab', { name: '工具' })).toBeNull();
     expect(
-      JSON.parse(localStorage.getItem('weave.studio.panelTabs.v1') ?? '{}').open,
+      (
+        (JSON.parse(localStorage.getItem('weave.studio.panelTabs.v2') ?? '{}').tabs ?? []) as {
+          kind: string;
+        }[]
+      ).map((tab) => tab.kind),
     ).not.toContain('tools');
 
     // Reopening from the add menu restores the tab and makes it active.
@@ -1477,7 +1481,15 @@ describe('Studio Agent Chat', () => {
     fireEvent.click(within(preview).getByRole('button', { name: '打开' }));
     const frame = preview.querySelector('iframe');
     expect(frame?.getAttribute('src')).toBe('http://localhost:5173/');
-    expect(localStorage.getItem('weave.studio.previewUrl')).toBe('http://localhost:5173/');
+    // The URL is persisted under a per-instance key so several preview tabs stay independent.
+    let storedPreviewUrl: string | null = null;
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (key?.startsWith('weave.studio.previewUrl')) {
+        storedPreviewUrl = localStorage.getItem(key);
+      }
+    }
+    expect(storedPreviewUrl).toBe('http://localhost:5173/');
 
     // Switching to another tab keeps the preview mounted (same iframe node).
     fireEvent.click(screen.getByRole('tab', { name: '概览' }));

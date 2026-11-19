@@ -8,42 +8,86 @@ import {
   type PanelKind,
 } from './panel-registry.js';
 
-const storageKey = 'weave.studio.panelTabs.v1';
+const storageKey = 'weave.studio.panelTabs.v2';
 
 const panelKindSchema = z.string().refine(isPanelKind);
 
+const storedTabSchema = z.object({ id: z.string().min(1), kind: panelKindSchema });
+
 const storedLayoutSchema = z.object({
-  open: z.array(panelKindSchema),
-  pinned: z.array(panelKindSchema),
-  active: panelKindSchema,
+  tabs: z.array(storedTabSchema),
+  pinned: z.array(z.string()),
+  active: z.string(),
 });
+
+/**
+ * One open tab. A single-instance kind uses `id === kind`; a multi-instance
+ * kind (terminal, preview) gets a unique id so two tabs of the same kind each
+ * keep their own pty or iframe.
+ */
+export interface PanelTab {
+  readonly id: string;
+  readonly kind: PanelKind;
+}
 
 export interface PanelLayout {
   /** Open tabs in display order. */
-  readonly open: readonly PanelKind[];
-  /** Pinned tabs (a subset of `open`) that cannot be closed. */
-  readonly pinned: readonly PanelKind[];
-  readonly active: PanelKind;
+  readonly tabs: readonly PanelTab[];
+  /** Ids of pinned tabs (a subset of `tabs`) that cannot be closed. */
+  readonly pinned: readonly string[];
+  readonly active: string;
+}
+
+let instanceCounter = 0;
+
+/** A unique id for a multi-instance tab, e.g. `terminal:ab12…`. */
+function newTabId(kind: PanelKind): string {
+  const unique =
+    globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${(instanceCounter += 1)}`;
+  return `${kind}:${unique}`;
 }
 
 function defaultLayout(): PanelLayout {
+  const tabs = defaultPanelKinds.map((kind) => ({ id: kind, kind }));
   return {
-    open: [...defaultPanelKinds],
-    pinned: [...defaultPanelKinds],
-    active: defaultPanelKinds[0] ?? 'overview',
+    tabs,
+    pinned: tabs.map((tab) => tab.id),
+    active: tabs[0]?.id ?? 'overview',
   };
 }
 
-/** Drops unknown/openable-only inconsistencies so a stored layout is always usable. */
+/**
+ * Drops unknown/coming-soon kinds, collapses accidental duplicate
+ * single-instance tabs, and repairs the pinned set and active id so a stored
+ * layout is always usable.
+ */
 function normalize(layout: PanelLayout): PanelLayout {
-  const open = layout.open.filter(
-    (kind, index) =>
-      layout.open.indexOf(kind) === index && panelDescriptor(kind)?.comingSoon === false,
-  );
-  const safeOpen = open.length > 0 ? open : [...defaultPanelKinds];
-  const pinned = safeOpen.filter((kind) => layout.pinned.includes(kind));
-  const active = safeOpen.includes(layout.active) ? layout.active : (safeOpen[0] as PanelKind);
-  return { open: safeOpen, pinned, active };
+  const seenIds = new Set<string>();
+  const seenSingletonKinds = new Set<PanelKind>();
+  const tabs: PanelTab[] = [];
+  for (const tab of layout.tabs) {
+    const descriptor = panelDescriptor(tab.kind);
+    if (descriptor === undefined || descriptor.comingSoon || seenIds.has(tab.id)) {
+      continue;
+    }
+    if (!descriptor.multi) {
+      // Single-instance kinds always use id === kind and appear at most once.
+      if (seenSingletonKinds.has(tab.kind)) {
+        continue;
+      }
+      seenSingletonKinds.add(tab.kind);
+      seenIds.add(tab.kind);
+      tabs.push({ id: tab.kind, kind: tab.kind });
+      continue;
+    }
+    seenIds.add(tab.id);
+    tabs.push({ id: tab.id, kind: tab.kind });
+  }
+  const safeTabs = tabs.length > 0 ? tabs : defaultLayout().tabs;
+  const ids = new Set(safeTabs.map((tab) => tab.id));
+  const pinned = [...new Set(layout.pinned)].filter((id) => ids.has(id));
+  const active = ids.has(layout.active) ? layout.active : (safeTabs[0]?.id ?? 'overview');
+  return { tabs: safeTabs, pinned, active };
 }
 
 function readLayout(): PanelLayout {
@@ -69,11 +113,17 @@ function saveLayout(layout: PanelLayout): void {
 
 export interface PanelTabsController {
   readonly layout: PanelLayout;
-  readonly activate: (kind: PanelKind) => void;
-  /** Opens a kind (if openable) and activates it. */
+  /** Activates an open tab by id. */
+  readonly activate: (id: string) => void;
+  /**
+   * Opens a kind. A single-instance kind is focused when already open and
+   * created otherwise; a multi-instance kind always opens a new tab.
+   */
   readonly open: (kind: PanelKind) => void;
-  readonly close: (kind: PanelKind) => void;
-  readonly togglePin: (kind: PanelKind) => void;
+  readonly close: (id: string) => void;
+  readonly togglePin: (id: string) => void;
+  /** Moves `draggedId` to just before or after `targetId` in the tab order. */
+  readonly reorder: (draggedId: string, targetId: string, after: boolean) => void;
 }
 
 /** Persisted side-panel tab state: which tabs are open, pinned, and active. */
@@ -87,54 +137,82 @@ export function usePanelTabs(): PanelTabsController {
   }, []);
 
   const activate = useCallback(
-    (kind: PanelKind) => {
-      setLayout({ ...layout, active: kind });
+    (id: string) => {
+      setLayout({ ...layout, active: id });
     },
     [layout, setLayout],
   );
 
   const open = useCallback(
     (kind: PanelKind) => {
-      if (panelDescriptor(kind)?.comingSoon !== false) {
+      const descriptor = panelDescriptor(kind);
+      if (descriptor === undefined || descriptor.comingSoon) {
         return;
       }
-      setLayout({
-        ...layout,
-        open: layout.open.includes(kind) ? layout.open : [...layout.open, kind],
-        active: kind,
-      });
+      if (!descriptor.multi) {
+        const existing = layout.tabs.find((tab) => tab.kind === kind);
+        if (existing !== undefined) {
+          setLayout({ ...layout, active: existing.id });
+          return;
+        }
+        setLayout({ ...layout, tabs: [...layout.tabs, { id: kind, kind }], active: kind });
+        return;
+      }
+      const tab = { id: newTabId(kind), kind };
+      setLayout({ ...layout, tabs: [...layout.tabs, tab], active: tab.id });
     },
     [layout, setLayout],
   );
 
   const close = useCallback(
-    (kind: PanelKind) => {
-      if (layout.pinned.includes(kind) || !layout.open.includes(kind)) {
+    (id: string) => {
+      if (layout.pinned.includes(id) || !layout.tabs.some((tab) => tab.id === id)) {
         return;
       }
-      const open = layout.open.filter((candidate) => candidate !== kind);
+      const tabs = layout.tabs.filter((tab) => tab.id !== id);
       const active =
-        layout.active === kind ? (open.at(-1) ?? open[0] ?? 'overview') : layout.active;
-      setLayout({ ...layout, open, pinned: layout.pinned, active });
+        layout.active === id ? (tabs.at(-1)?.id ?? tabs[0]?.id ?? 'overview') : layout.active;
+      setLayout({ ...layout, tabs, active });
     },
     [layout, setLayout],
   );
 
   const togglePin = useCallback(
-    (kind: PanelKind) => {
-      if (!layout.open.includes(kind)) {
+    (id: string) => {
+      if (!layout.tabs.some((tab) => tab.id === id)) {
         return;
       }
-      const pinned = layout.pinned.includes(kind)
-        ? layout.pinned.filter((candidate) => candidate !== kind)
-        : [...layout.pinned, kind];
+      const pinned = layout.pinned.includes(id)
+        ? layout.pinned.filter((candidate) => candidate !== id)
+        : [...layout.pinned, id];
       setLayout({ ...layout, pinned });
     },
     [layout, setLayout],
   );
 
+  const reorder = useCallback(
+    (draggedId: string, targetId: string, after: boolean) => {
+      if (draggedId === targetId) {
+        return;
+      }
+      const dragged = layout.tabs.find((tab) => tab.id === draggedId);
+      if (dragged === undefined) {
+        return;
+      }
+      const without = layout.tabs.filter((tab) => tab.id !== draggedId);
+      const targetIndex = without.findIndex((tab) => tab.id === targetId);
+      if (targetIndex < 0) {
+        return;
+      }
+      const insertAt = after ? targetIndex + 1 : targetIndex;
+      const tabs = [...without.slice(0, insertAt), dragged, ...without.slice(insertAt)];
+      setLayout({ ...layout, tabs });
+    },
+    [layout, setLayout],
+  );
+
   return useMemo(
-    () => ({ layout, activate, open, close, togglePin }),
-    [layout, activate, open, close, togglePin],
+    () => ({ layout, activate, open, close, togglePin, reorder }),
+    [layout, activate, open, close, togglePin, reorder],
   );
 }
