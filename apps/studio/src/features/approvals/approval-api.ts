@@ -179,12 +179,23 @@ export interface WriteFileApprovalSummary {
   readonly path: string;
   readonly bytes: number;
   readonly overwrite: boolean;
+  /** Line count of the new content. */
+  readonly lines?: number | undefined;
+  /** Size of the file an overwrite replaces. */
+  readonly previousBytes?: number | undefined;
+  readonly previousLines?: number | undefined;
+  /** Directories the write creates, relative to the project folder. */
+  readonly createdDirectories?: readonly string[] | undefined;
 }
 
 const writeFileSummarySchema = z.object({
   path: z.string(),
   bytes: z.number(),
   overwrite: z.boolean(),
+  lines: z.number().optional(),
+  previousBytes: z.number().optional(),
+  previousLines: z.number().optional(),
+  createdDirectories: z.array(z.string()).optional(),
 });
 
 export function readWriteFileSummary(
@@ -194,5 +205,58 @@ export function readWriteFileSummary(
     return undefined;
   }
   const parsed = writeFileSummarySchema.safeParse(approval.inputSummary);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/** Fields of a `shell.run_command` summary. */
+export interface CommandApprovalSummary {
+  /** The complete command line; the request summary only shows its start. */
+  readonly command: string;
+  /** Working directory relative to the project folder. */
+  readonly cwd: string;
+  readonly timeoutMs: number;
+}
+
+const commandSummarySchema = z.object({
+  command: z.string(),
+  cwd: z.string(),
+  timeoutMs: z.number(),
+});
+
+export function readCommandSummary(approval: ApprovalRequest): CommandApprovalSummary | undefined {
+  if (approval.operation !== 'shell.run_command') {
+    return undefined;
+  }
+  const parsed = commandSummarySchema.safeParse(approval.inputSummary);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/** Fields of a `workspace.edit_file` summary. */
+export interface EditFileApprovalSummary {
+  readonly path: string;
+  readonly replacements: number;
+  readonly linesAdded: number;
+  readonly linesRemoved: number;
+  /** Unified diff of the change, capped by the Server. */
+  readonly diff: string;
+  readonly diffTruncated: boolean;
+}
+
+const editFileSummarySchema = z.object({
+  path: z.string(),
+  replacements: z.number(),
+  linesAdded: z.number(),
+  linesRemoved: z.number(),
+  diff: z.string(),
+  diffTruncated: z.boolean(),
+});
+
+export function readEditFileSummary(
+  approval: ApprovalRequest,
+): EditFileApprovalSummary | undefined {
+  if (approval.operation !== 'workspace.edit_file') {
+    return undefined;
+  }
+  const parsed = editFileSummarySchema.safeParse(approval.inputSummary);
   return parsed.success ? parsed.data : undefined;
 }

@@ -415,7 +415,9 @@ existing absolute directory. The Server Tool Pipeline uses a ten-minute
 timeout that also bounds the wait for Approval, so an unanswered request
 expires instead of blocking the turn. Studio subscribes to
 `GET /approvals/stream` and shows pending requests as cards above the
-composer; the Broker remains the only Approval state. An existing Project's
+composer; a card expands to the complete request (the full command, the edit
+diff, the write details, or the raw summary of other tools) in a scrollable
+block. The Broker remains the only Approval state. An existing Project's
 folder can be set, replaced, or cleared through `PATCH /projects/:projectId`
 (`ProjectStore.updateProjectFolder()`), which applies the same validation. The
 same route renames a Project when the body carries `name`

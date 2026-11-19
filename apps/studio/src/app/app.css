@@ -1407,13 +1407,19 @@ summary:hover > .disclosure-icon {
 
 .approval-card {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  gap: 10px;
   padding: 12px 14px;
   color: var(--ink);
   background: #fff8ec;
   border: 1px solid #f1d6a8;
   border-radius: 8px;
+}
+
+.approval-card-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .approval-card-icon svg {
@@ -1489,6 +1495,94 @@ summary:hover > .disclosure-icon {
   display: flex;
   flex: 0 0 auto;
   gap: 8px;
+}
+
+.approval-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0;
+  color: var(--accent);
+  background: none;
+  border: 0;
+}
+
+.approval-toggle:hover {
+  color: var(--accent-dark);
+}
+
+.approval-toggle:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Starts under the card text: the 20px icon plus the 12px gap of the row. */
+.approval-card-content {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin-left: 32px;
+}
+
+.approval-meta {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+}
+
+.approval-meta code {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Long content scrolls inside the card instead of stretching it. */
+.approval-code {
+  max-height: 240px;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.74rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--surface);
+  border: 1px solid #f1d6a8;
+  border-radius: 6px;
+}
+
+.approval-code:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.approval-diff-line {
+  display: block;
+  min-height: 1.6em;
+}
+
+.approval-diff-added {
+  color: #11795a;
+  background: rgb(24 161 116 / 10%);
+}
+
+.approval-diff-removed {
+  color: #b23a4a;
+  background: rgb(207 83 98 / 10%);
+}
+
+.approval-diff-hunk {
+  color: var(--muted);
+}
+
+.approval-facts {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+  line-height: 1.6;
 }
 
 .project-folder-path {
