@@ -24,9 +24,13 @@ export interface OpenAiCompatibleClientOptions {
   readonly idleTimeoutMs?: number;
 }
 
+type ProviderContentPart =
+  | { readonly type: 'text'; readonly text: string }
+  | { readonly type: 'image_url'; readonly image_url: { readonly url: string } };
+
 interface ProviderMessage {
   readonly role: string;
-  readonly content: string;
+  readonly content: string | readonly ProviderContentPart[];
   readonly tool_calls?: readonly ProviderToolCall[];
   readonly tool_call_id?: string;
 }
@@ -164,15 +168,41 @@ function validateTimeout(timeoutMs: number | undefined): void {
  */
 function contentToText(content: LlmRequest['messages'][number]['content']): string {
   return content
-    .filter((part) => part.type !== 'reasoning')
+    .filter((part) => part.type === 'text')
     .map((part) => part.text)
     .join('');
+}
+
+/**
+ * Builds the provider `content`. A message with images needs an array of typed
+ * parts; a text-only message stays a plain string for broad provider support.
+ */
+function toProviderContent(
+  content: LlmRequest['messages'][number]['content'],
+): string | ProviderContentPart[] {
+  if (!content.some((part) => part.type === 'image')) {
+    return contentToText(content);
+  }
+  const parts: ProviderContentPart[] = [];
+  for (const part of content) {
+    if (part.type === 'text') {
+      if (part.text !== '') {
+        parts.push({ type: 'text', text: part.text });
+      }
+    } else if (part.type === 'image') {
+      parts.push({
+        type: 'image_url',
+        image_url: { url: `data:${part.mediaType};base64,${part.data}` },
+      });
+    }
+  }
+  return parts;
 }
 
 function toProviderMessage(message: LlmRequest['messages'][number]): ProviderMessage {
   const providerMessage: ProviderMessage = {
     role: message.role,
-    content: contentToText(message.content),
+    content: toProviderContent(message.content),
   };
 
   if (message.role === 'assistant' && message.toolCalls !== undefined) {
