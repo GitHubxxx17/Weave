@@ -12,6 +12,7 @@ export const approvalRequestSchema = z.object({
   summary: z.string().min(1),
   risk: z.enum(['low', 'medium', 'high']),
   inputSummary: z.unknown(),
+  sessionId: z.string().optional(),
   status: z.enum(['pending', 'approved', 'rejected', 'cancelled', 'expired']),
   createdAt: z.string().min(1),
   resolvedAt: z.string().optional(),

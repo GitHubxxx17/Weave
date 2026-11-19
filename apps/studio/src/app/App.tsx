@@ -17,7 +17,7 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
-  Eye,
+  Handshake,
   Files,
   FolderOpen,
   FolderCog,
@@ -40,6 +40,7 @@ import {
   Trash2,
   RotateCcw,
   X,
+  Zap,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -352,10 +353,42 @@ const contextOptions = [
   ['项目目录', FolderOpen],
 ] as const satisfies readonly (readonly [string, LucideIcon])[];
 
-const permissionOptions = [
-  ['工作区访问', ShieldCheck],
-  ['仅查看', Eye],
-] as const satisfies readonly (readonly [string, LucideIcon])[];
+type PermissionOption = {
+  readonly value: 'ask' | 'trust' | 'yolo';
+  readonly label: string;
+  readonly description: string;
+  readonly icon: LucideIcon;
+  readonly danger?: boolean;
+};
+
+const permissionOptions: readonly PermissionOption[] = [
+  {
+    value: 'ask',
+    label: '常规',
+    description: '每次写文件或运行命令都要你确认',
+    icon: ShieldCheck,
+  },
+  {
+    value: 'trust',
+    label: '信任',
+    description: '本会话自动执行，仅高风险操作才确认',
+    icon: Handshake,
+  },
+  {
+    value: 'yolo',
+    label: '完全访问',
+    description: '全程不确认、直接执行，请谨慎',
+    icon: Zap,
+    danger: true,
+  },
+];
+
+/** Model reasoning-effort options; the empty value sends no hint (provider default). */
+const reasoningEffortOptions = [
+  { value: 'low', label: '低' },
+  { value: 'medium', label: '中' },
+  { value: 'high', label: '高' },
+] as const;
 
 const fallbackProviderSettings: ProviderSettings = {
   providers: [
@@ -666,7 +699,8 @@ export function App() {
   const [panelWidth, setPanelWidth] = useSidePanelWidth();
   const shellRef = useRef<HTMLElement>(null);
   const chatColumnRef = useRef<HTMLElement>(null);
-  const [permissionMode, setPermissionMode] = useState('工作区访问');
+  const [permissionMode, setPermissionMode] = useState<'ask' | 'trust' | 'yolo'>('ask');
+  const [reasoningEffort, setReasoningEffort] = useState('medium');
   const [providerSettings, setProviderSettings] =
     useState<ProviderSettings>(fallbackProviderSettings);
   const [selectedProviderId, setSelectedProviderId] = useState(
@@ -1385,6 +1419,8 @@ export function App() {
           },
           provider: selectedProviderId,
           model: selectedModel,
+          reasoningEffort,
+          permissionMode,
         },
         { onEvent: (event) => handleEvent(event, runId, assistantId, projectId, sessionId) },
         { signal: requestController.signal },
@@ -2640,7 +2676,13 @@ export function App() {
           </div>
 
           <form className="composer" onSubmit={handleSubmit}>
-            <ApprovalPanel pending={approvals.pending} onDecide={approvals.decide} />
+            <ApprovalPanel
+              pending={approvals.pending.filter(
+                (approval) =>
+                  approval.sessionId === undefined || approval.sessionId === activeSessionId,
+              )}
+              onDecide={approvals.decide}
+            />
             <div className="composer-box">
               <label className="sr-only" htmlFor="message-input">
                 发送消息
@@ -2703,7 +2745,8 @@ export function App() {
                       aria-expanded={openMenu === 'permission'}
                       onClick={() => toggleMenu('permission')}
                     >
-                      {permissionMode}
+                      {permissionOptions.find((option) => option.value === permissionMode)?.label ??
+                        '常规'}
                       <ChevronDown aria-hidden="true" />
                     </button>
                     {openMenu === 'permission' ? (
@@ -2712,21 +2755,27 @@ export function App() {
                         role="menu"
                         aria-label="权限模式"
                       >
-                        {permissionOptions.map(([label, Icon]) => (
+                        {permissionOptions.map((option) => (
                           <button
                             type="button"
                             role="menuitem"
-                            key={label}
+                            key={option.value}
+                            className={
+                              option.danger === true ? 'permission-option-danger' : undefined
+                            }
                             onClick={() => {
-                              setPermissionMode(label);
+                              setPermissionMode(option.value);
                               setOpenMenu(null);
                             }}
                           >
                             <span className="menu-icon">
-                              <Icon aria-hidden="true" />
+                              <option.icon aria-hidden="true" />
                             </span>
-                            {label}
-                            {permissionMode === label ? (
+                            <span className="provider-menu-copy">
+                              <strong>{option.label}</strong>
+                              <small>{option.description}</small>
+                            </span>
+                            {permissionMode === option.value ? (
                               <Check className="menu-check" aria-hidden="true" />
                             ) : null}
                           </button>
@@ -2784,9 +2833,17 @@ export function App() {
                       className="model-button"
                       type="button"
                       aria-expanded={openMenu === 'model'}
+                      aria-label="模型与强度"
                       onClick={() => toggleMenu('model')}
                     >
-                      {selectedProvider?.label ?? selectedModel}
+                      <span className="model-button-label">
+                        {selectedProvider?.label ?? selectedModel}
+                      </span>
+                      <span className="model-button-strength">
+                        ·{' '}
+                        {reasoningEffortOptions.find((option) => option.value === reasoningEffort)
+                          ?.label ?? '默认'}
+                      </span>
                       <ChevronDown aria-hidden="true" />
                     </button>
                     {openMenu === 'model' ? (
@@ -2817,6 +2874,41 @@ export function App() {
                             ) : null}
                           </button>
                         ))}
+                        <div className="menu-divider" />
+                        <div className="model-strength" role="group" aria-label="模型强度">
+                          <div className="model-strength-head">
+                            <span>强度</span>
+                            <small>
+                              {reasoningEffortOptions.find(
+                                (option) => option.value === reasoningEffort,
+                              )?.label ?? '默认'}
+                            </small>
+                          </div>
+                          <input
+                            type="range"
+                            className="model-strength-slider"
+                            min={0}
+                            max={reasoningEffortOptions.length - 1}
+                            step={1}
+                            value={Math.max(
+                              0,
+                              reasoningEffortOptions.findIndex(
+                                (option) => option.value === reasoningEffort,
+                              ),
+                            )}
+                            aria-label="模型强度"
+                            onChange={(event) =>
+                              setReasoningEffort(
+                                reasoningEffortOptions[Number(event.target.value)]?.value ??
+                                  'medium',
+                              )
+                            }
+                          />
+                          <div className="model-strength-scale" aria-hidden="true">
+                            <span>更快</span>
+                            <span>更聪明</span>
+                          </div>
+                        </div>
                       </div>
                     ) : null}
                   </div>

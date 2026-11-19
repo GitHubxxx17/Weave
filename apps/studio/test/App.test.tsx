@@ -458,7 +458,7 @@ describe('Studio Agent Chat', () => {
     expect(screen.getByLabelText('运行活动')).toBeTruthy();
     expect(screen.getByRole('tab', { name: '概览' })).toBeTruthy();
     expect(screen.getByRole('tab', { name: '用量' })).toBeTruthy();
-    expect(screen.getByText('工作区访问')).toBeTruthy();
+    expect(screen.getByText('常规')).toBeTruthy();
     expect(screen.getByText('本地模型')).toBeTruthy();
     expect(screen.queryByText('SESSION CONTEXT')).toBeNull();
     expect(screen.queryByText('LIVE TRACE')).toBeNull();
@@ -957,9 +957,34 @@ describe('Studio Agent Chat', () => {
         sessionId: 'session-local',
         provider: 'mock',
         model: 'weave-local-demo',
+        permissionMode: 'ask',
       }),
       expect.objectContaining({ onEvent: expect.any(Function) }),
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it('sends medium reasoning effort by default and the selected level otherwise', async () => {
+    streamAgentRunMock.mockImplementation(async (_request, handlers) => {
+      handlers.onEvent({ type: 'completed', turnId: 'turn-effort' });
+    });
+
+    await renderApp();
+
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '默认强度' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    expect(await screen.findByText('默认强度')).toBeTruthy();
+    expect(streamAgentRunMock.mock.calls[0]?.[0]).toMatchObject({ reasoningEffort: 'medium' });
+
+    fireEvent.click(screen.getByRole('button', { name: '模型与强度' }));
+    fireEvent.change(screen.getByRole('slider'), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '高强度' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    expect(await screen.findByText('高强度')).toBeTruthy();
+    expect(streamAgentRunMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ reasoningEffort: 'high' }),
+      expect.anything(),
+      expect.anything(),
     );
   });
 
@@ -1068,7 +1093,7 @@ describe('Studio Agent Chat', () => {
     streamAgentRunMock.mockResolvedValue(undefined);
 
     await renderApp();
-    expect(screen.getByRole('button', { name: /DeepSeek/ })).toBeTruthy();
+    expect(screen.getByText('DeepSeek')).toBeTruthy();
     fireEvent.change(screen.getByLabelText('发送消息'), {
       target: { value: '使用 DeepSeek' },
     });
@@ -1692,7 +1717,7 @@ describe('Studio Agent Chat', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '显示上下文' }));
     expect(shell?.classList.contains('studio-shell-panel-collapsed')).toBe(false);
-    fireEvent.click(screen.getByRole('button', { name: '本地演示' }));
+    fireEvent.click(screen.getByRole('button', { name: '模型与强度' }));
 
     expect(screen.getByRole('menu', { name: '选择模型' })).toBeTruthy();
     fireEvent.click(screen.getByRole('menuitem', { name: 'DeepSeek' }));
@@ -1925,10 +1950,10 @@ describe('Studio Agent Chat', () => {
   it('opens the permission and context menus', async () => {
     await renderApp();
 
-    fireEvent.click(screen.getByRole('button', { name: '工作区访问' }));
+    fireEvent.click(screen.getByRole('button', { name: '常规' }));
     expect(screen.getByRole('menu', { name: '权限模式' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('menuitem', { name: '仅查看' }));
-    expect(screen.getByText('仅查看')).toBeTruthy();
+    fireEvent.click(screen.getByRole('menuitem', { name: /信任/ }));
+    expect(screen.getByText('信任')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: '添加上下文' }));
     expect(screen.getByRole('menu', { name: '添加上下文' })).toBeTruthy();

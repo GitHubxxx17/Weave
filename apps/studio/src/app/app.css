@@ -3541,6 +3541,51 @@ body:has(.panel-resizer-active) {
   font-size: 0.58rem;
 }
 
+.model-button-strength {
+  color: var(--subtle, var(--muted));
+}
+
+.model-strength {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px 4px;
+}
+
+.model-strength-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 0.6rem;
+}
+
+.model-strength-head small {
+  color: var(--accent-dark);
+  font-weight: 650;
+}
+
+.model-strength-slider {
+  width: 100%;
+  margin: 2px 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.model-strength-scale {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 0.56rem;
+}
+
+.permission-option-danger strong {
+  color: #e86a6a;
+}
+
+.permission-option-danger .menu-icon {
+  color: #e86a6a;
+}
+
 .context-chip {
   display: inline-flex;
   min-height: 26px;
