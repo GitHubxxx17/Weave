@@ -13,6 +13,13 @@ import { usePanelTabs, type PanelTab } from './use-panel-tabs.js';
 
 type OpenMenu = { readonly type: 'add' } | { readonly type: 'tab'; readonly id: string } | null;
 
+/** The in-progress drag: which tab is moving and where it would drop. */
+interface DragState {
+  readonly dragId: string;
+  readonly overId: string;
+  readonly after: boolean;
+}
+
 interface LabeledTab {
   readonly tab: PanelTab;
   readonly descriptor: PanelDescriptor | undefined;
@@ -66,6 +73,7 @@ export function PanelContainer({
 }: PanelContainerProps): ReactElement {
   const tabs = usePanelTabs();
   const [menu, setMenu] = useState<OpenMenu>(null);
+  const [drag, setDrag] = useState<DragState | null>(null);
   const activeTab = tabs.layout.tabs.find((tab) => tab.id === tabs.layout.active);
   const activeDescriptor = activeTab === undefined ? undefined : panelDescriptor(activeTab.kind);
 
@@ -100,10 +108,44 @@ export function PanelContainer({
             }
             const isActive = tab.id === tabs.layout.active;
             const isPinned = tabs.layout.pinned.includes(tab.id);
+            const dropHint =
+              drag !== null && drag.overId === tab.id && drag.dragId !== tab.id
+                ? drag.after
+                  ? ' panel-tab-drop-after'
+                  : ' panel-tab-drop-before'
+                : '';
             return (
               <div
-                className={`panel-tab${isActive ? ' panel-tab-active' : ''}`}
+                className={`panel-tab${isActive ? ' panel-tab-active' : ''}${
+                  drag?.dragId === tab.id ? ' panel-tab-dragging' : ''
+                }${dropHint}`}
                 key={tab.id}
+                draggable
+                onDragStart={(event) => {
+                  event.dataTransfer.effectAllowed = 'move';
+                  event.dataTransfer.setData('text/plain', tab.id);
+                  setDrag({ dragId: tab.id, overId: tab.id, after: false });
+                }}
+                onDragOver={(event) => {
+                  if (drag === null) {
+                    return;
+                  }
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = 'move';
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  const after = event.clientX > rect.left + rect.width / 2;
+                  setDrag((current) =>
+                    current === null ? current : { ...current, overId: tab.id, after },
+                  );
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  if (drag !== null) {
+                    tabs.reorder(drag.dragId, tab.id, drag.after);
+                  }
+                  setDrag(null);
+                }}
+                onDragEnd={() => setDrag(null)}
                 onContextMenu={(event) => {
                   event.preventDefault();
                   setMenu({ type: 'tab', id: tab.id });

@@ -2,7 +2,7 @@
 
 import { createRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 
 import { PanelContainer } from '../src/features/panel/panel-container.js';
 import type { PanelContext } from '../src/features/panel/panel-data.js';
@@ -113,5 +113,31 @@ describe('PanelContainer multi-tab', () => {
     expect(raw).not.toBeNull();
     const stored = JSON.parse(raw ?? '{}') as { tabs: { kind: string }[] };
     expect(stored.tabs.some((tab) => tab.kind === 'terminal')).toBe(true);
+  });
+
+  it('reorders tabs by dragging one before another and persists the order', () => {
+    renderPanel();
+    const tablist = screen.getByRole('tablist', { name: '面板标签' });
+    const contextTab = screen.getByRole('tab', { name: '上下文' }).closest('.panel-tab');
+    const overviewTab = screen.getByRole('tab', { name: '概览' }).closest('.panel-tab');
+    expect(contextTab).not.toBeNull();
+    expect(overviewTab).not.toBeNull();
+
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    fireEvent.dragStart(contextTab as Element, { dataTransfer });
+    // jsdom reports a zero-sized rect, so clientX 0 lands before the target.
+    fireEvent.dragOver(overviewTab as Element, { dataTransfer, clientX: 0 });
+    fireEvent.drop(overviewTab as Element, { dataTransfer });
+
+    const order = within(tablist)
+      .getAllByRole('tab')
+      .map((tab) => tab.textContent);
+    expect(order[0]).toBe('上下文');
+    expect(order[1]).toBe('概览');
+
+    const layout = JSON.parse(localStorage.getItem('weave.studio.panelTabs.v2') ?? '{}') as {
+      tabs: { kind: string }[];
+    };
+    expect(layout.tabs[0]?.kind).toBe('context');
   });
 });

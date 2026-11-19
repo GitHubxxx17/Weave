@@ -1774,6 +1774,30 @@ summary:hover > .disclosure-icon {
   border-bottom-color: var(--accent);
 }
 
+.panel-tab-dragging {
+  opacity: 0.5;
+}
+
+.panel-tab-drop-before::before,
+.panel-tab-drop-after::after {
+  content: '';
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+.panel-tab-drop-before::before {
+  left: -1px;
+}
+
+.panel-tab-drop-after::after {
+  right: -1px;
+}
+
 .panel-tab-button {
   display: inline-flex;
   align-items: center;

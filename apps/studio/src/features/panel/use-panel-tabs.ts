@@ -122,6 +122,8 @@ export interface PanelTabsController {
   readonly open: (kind: PanelKind) => void;
   readonly close: (id: string) => void;
   readonly togglePin: (id: string) => void;
+  /** Moves `draggedId` to just before or after `targetId` in the tab order. */
+  readonly reorder: (draggedId: string, targetId: string, after: boolean) => void;
 }
 
 /** Persisted side-panel tab state: which tabs are open, pinned, and active. */
@@ -188,8 +190,29 @@ export function usePanelTabs(): PanelTabsController {
     [layout, setLayout],
   );
 
+  const reorder = useCallback(
+    (draggedId: string, targetId: string, after: boolean) => {
+      if (draggedId === targetId) {
+        return;
+      }
+      const dragged = layout.tabs.find((tab) => tab.id === draggedId);
+      if (dragged === undefined) {
+        return;
+      }
+      const without = layout.tabs.filter((tab) => tab.id !== draggedId);
+      const targetIndex = without.findIndex((tab) => tab.id === targetId);
+      if (targetIndex < 0) {
+        return;
+      }
+      const insertAt = after ? targetIndex + 1 : targetIndex;
+      const tabs = [...without.slice(0, insertAt), dragged, ...without.slice(insertAt)];
+      setLayout({ ...layout, tabs });
+    },
+    [layout, setLayout],
+  );
+
   return useMemo(
-    () => ({ layout, activate, open, close, togglePin }),
-    [layout, activate, open, close, togglePin],
+    () => ({ layout, activate, open, close, togglePin, reorder }),
+    [layout, activate, open, close, togglePin, reorder],
   );
 }
