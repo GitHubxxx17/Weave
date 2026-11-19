@@ -31,6 +31,7 @@ export interface PanelContext {
   readonly isRunning: boolean;
   readonly sessionLabel: string;
   readonly folderPath: string | undefined;
+  readonly projectId: string | undefined;
   readonly modelLabel: string;
   readonly turns: readonly TurnSummary[];
   readonly messages: readonly OverviewMessage[];

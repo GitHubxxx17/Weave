@@ -48,6 +48,7 @@ function panelContext(turns: readonly TurnSummary[]): PanelContext {
     isRunning: false,
     sessionLabel: '会话',
     folderPath: undefined,
+    projectId: undefined,
     modelLabel: 'mock',
     turns,
     messages: [],

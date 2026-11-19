@@ -2,6 +2,7 @@ import { type ReactElement } from 'react';
 import {
   Coins,
   FileText,
+  FolderTree,
   Gauge,
   Globe,
   LayoutGrid,
@@ -20,10 +21,19 @@ import { ContextPanel } from './context-panel.js';
 import { PlanPanel } from './plan-panel.js';
 import { PreviewPanel } from './preview-panel.js';
 import { TerminalPanel } from './terminal-panel.js';
+import { FileTreePanel } from '../files-tree/file-tree-panel.js';
 
 /** Every side-panel kind. */
 export type PanelKind =
-  'overview' | 'files' | 'tools' | 'usage' | 'context' | 'plan' | 'preview' | 'terminal';
+  | 'overview'
+  | 'files'
+  | 'explorer'
+  | 'tools'
+  | 'usage'
+  | 'context'
+  | 'plan'
+  | 'preview'
+  | 'terminal';
 
 export interface PanelDescriptor {
   readonly kind: PanelKind;
@@ -60,8 +70,20 @@ export const panelDescriptors: readonly PanelDescriptor[] = [
     render: (context) => <OverviewPanel {...context} />,
   },
   {
-    kind: 'files',
+    kind: 'explorer',
     label: '文件',
+    Icon: FolderTree,
+    defaultPinned: true,
+    comingSoon: false,
+    keepAlive: false,
+    multi: false,
+    render: (context) => (
+      <FileTreePanel projectId={context.projectId} onSetFolder={context.onSetFolder} />
+    ),
+  },
+  {
+    kind: 'files',
+    label: '改动文件',
     Icon: FileText,
     defaultPinned: true,
     comingSoon: false,
