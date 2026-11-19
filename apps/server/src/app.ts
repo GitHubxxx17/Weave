@@ -7,6 +7,7 @@ import { registerApprovalRoutes, type ApprovalAppOptions } from './approval-api.
 import { registerAgentRoutes, type AgentAppOptions } from './agent-api.js';
 import { registerSessionRoutes, type SessionAppOptions } from './session-api.js';
 import { registerWorkspaceRoutes, type WorkspaceAppOptions } from './workspace-api.js';
+import { registerFileUndoRoutes } from './file-undo-api.js';
 
 const healthResponseSchema = z.object({
   status: z.enum(['ok', 'unavailable']),
@@ -66,6 +67,7 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
 
   registerApprovalRoutes(app, runtime, options ?? {});
   registerWorkspaceRoutes(app, options ?? {});
+  registerFileUndoRoutes(app, runtime, options ?? {});
   registerSessionRoutes(app, options ?? {});
   registerAgentRoutes(app, runtime, options ?? {});
   registerProviderRoutes(app, options ?? {});
