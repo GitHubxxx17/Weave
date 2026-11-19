@@ -52,6 +52,30 @@ describe('protocol schemas', () => {
     expect(() => contentPartSchema.parse({ type: 'image', url: 'image.png' })).toThrow();
   });
 
+  it('accepts an image content part with media type and base64 data', () => {
+    expect(
+      contentPartSchema.parse({ type: 'image', mediaType: 'image/png', data: 'aGVsbG8=' }),
+    ).toEqual({ type: 'image', mediaType: 'image/png', data: 'aGVsbG8=' });
+  });
+
+  it('rejects an image part with empty data', () => {
+    expect(() =>
+      contentPartSchema.parse({ type: 'image', mediaType: 'image/png', data: '' }),
+    ).toThrow();
+  });
+
+  it('accepts a user message mixing text and image parts', () => {
+    const parsed = messageSchema.parse({
+      role: 'user',
+      content: [
+        { type: 'text', text: '看这张图' },
+        { type: 'image', mediaType: 'image/jpeg', data: 'Zm9v' },
+      ],
+    });
+    expect(parsed.content).toHaveLength(2);
+    expect(parsed.content[1]).toEqual({ type: 'image', mediaType: 'image/jpeg', data: 'Zm9v' });
+  });
+
   it('rejects error stream events because LLM failures reject the stream', () => {
     expect(() =>
       streamEventSchema.parse({

@@ -1392,6 +1392,45 @@ summary:hover > .disclosure-icon {
   border-radius: 8px;
 }
 
+.message-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.message-images:first-child {
+  margin-top: 0;
+}
+
+.message-image-button {
+  display: inline-flex;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: zoom-in;
+}
+
+.message-image-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.message-image {
+  max-width: 220px;
+  max-height: 220px;
+  object-fit: contain;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  transition: border-color 140ms ease;
+}
+
+.message-image-button:hover .message-image {
+  border-color: var(--accent);
+}
+
 .composer {
   flex: 0 0 auto;
   padding: 12px max(28px, calc((100% - 800px) / 2)) 22px;
@@ -1624,6 +1663,51 @@ summary:hover > .disclosure-icon {
 
 .composer textarea::placeholder {
   color: var(--subtle);
+}
+
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 2px 2px;
+}
+
+.composer-attachment {
+  position: relative;
+  display: inline-flex;
+}
+
+.composer-attachment-thumb {
+  width: 54px;
+  height: 54px;
+  object-fit: cover;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.composer-attachment button {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  padding: 0;
+  color: #ffffff;
+  background: rgb(35 42 72 / 82%);
+  border: 0;
+  border-radius: 50%;
+}
+
+.composer-attachment button:hover {
+  background: var(--danger);
+}
+
+.composer-attachment button svg {
+  width: 11px;
+  height: 11px;
 }
 
 .composer-toolbar {
@@ -3261,6 +3345,49 @@ body:has(.panel-resizer-active) {
   place-items: center;
   background: rgb(28 32 43 / 34%);
   backdrop-filter: blur(2px);
+}
+
+.image-preview-backdrop {
+  position: fixed;
+  z-index: 70;
+  inset: 0;
+  display: flex;
+  padding: 48px;
+  align-items: center;
+  justify-content: center;
+  background: rgb(15 18 32 / 82%);
+}
+
+.image-preview-image {
+  max-width: min(92vw, 1200px);
+  max-height: 90vh;
+  object-fit: contain;
+  border-radius: 10px;
+  box-shadow: 0 24px 60px rgb(0 0 0 / 45%);
+}
+
+.image-preview-close {
+  position: fixed;
+  top: 20px;
+  right: 24px;
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  padding: 0;
+  color: #ffffff;
+  background: rgb(255 255 255 / 12%);
+  border: 1px solid rgb(255 255 255 / 24%);
+  border-radius: 50%;
+}
+
+.image-preview-close:hover {
+  background: rgb(255 255 255 / 22%);
+}
+
+.image-preview-close svg {
+  width: 18px;
+  height: 18px;
 }
 
 .project-dialog {

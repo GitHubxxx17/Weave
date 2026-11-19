@@ -8,7 +8,8 @@ import { z } from 'zod';
  */
 export type ContentPart =
   | { readonly type: 'text'; readonly text: string }
-  | { readonly type: 'reasoning'; readonly text: string };
+  | { readonly type: 'reasoning'; readonly text: string }
+  | { readonly type: 'image'; readonly mediaType: string; readonly data: string };
 
 const textContentPartSchema = z
   .object({
@@ -24,10 +25,20 @@ const reasoningContentPartSchema = z
   })
   .passthrough();
 
+/** An image attachment carried by a message; `data` is base64 (no data: prefix). */
+const imageContentPartSchema = z
+  .object({
+    type: z.literal('image'),
+    mediaType: z.string().min(1),
+    data: z.string().min(1),
+  })
+  .passthrough();
+
 /**
  * Validates content fragments crossing a package or provider boundary.
  */
 export const contentPartSchema = z.discriminatedUnion('type', [
   textContentPartSchema,
   reasoningContentPartSchema,
+  imageContentPartSchema,
 ]);

@@ -4,6 +4,13 @@ import type { Message, ToolDefinition } from '@weave/protocol';
 const messageOverheadTokens = 4;
 
 /**
+ * Flat estimate for one image part. Real image token cost depends on the
+ * provider and the resolution tiling, which this heuristic does not model; a
+ * deliberately high constant keeps the budget on the safe side of the window.
+ */
+const imageOverheadTokens = 1024;
+
+/**
  * Approximate token count for a string, without a tokenizer dependency.
  *
  * CJK and other full-width characters are counted as ~1 token each; other
@@ -44,7 +51,7 @@ function isWideCharacter(char: string): boolean {
 export function estimateMessageTokens(message: Message): number {
   let total = messageOverheadTokens;
   for (const part of message.content) {
-    total += estimateTokens(part.text);
+    total += part.type === 'image' ? imageOverheadTokens : estimateTokens(part.text);
   }
   if (message.role === 'assistant' && message.toolCalls !== undefined) {
     for (const call of message.toolCalls) {
