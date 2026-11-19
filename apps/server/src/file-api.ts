@@ -3,7 +3,12 @@ import { stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { z } from 'zod';
 import type { ProjectStore } from '@weave/workspace';
-import { WorkspaceFileError, listWorkspaceFiles, readWorkspaceFileContent } from '@weave/runtime';
+import {
+  WorkspaceFileError,
+  listWorkspaceFiles,
+  readGitBaseContent,
+  readWorkspaceFileContent,
+} from '@weave/runtime';
 
 /** Dependencies needed by the read-only project file routes. */
 export interface FileAppOptions {
@@ -131,6 +136,32 @@ export function registerFileRoutes(app: Hono, options: FileAppOptions): void {
         signal: context.req.raw.signal,
       });
       return context.json(file);
+    } catch (error) {
+      return mapFileError(context, error);
+    }
+  });
+
+  app.get('/projects/:projectId/file-diff', async (context) => {
+    const folder = await resolveProjectFolder(context, options);
+    if (folder instanceof Response) {
+      return folder;
+    }
+    const pathResult = filePathQuerySchema.safeParse(context.req.query('path'));
+    if (!pathResult.success) {
+      return jsonError(context, 'invalid-request', 'A non-empty path query is required');
+    }
+    try {
+      const [base, current] = await Promise.all([
+        readGitBaseContent(folder, pathResult.data),
+        readWorkspaceFileContent(folder, pathResult.data, { signal: context.req.raw.signal }),
+      ]);
+      return context.json({
+        path: current.path,
+        oldContent: base.content,
+        newContent: current.content,
+        changed: base.content !== current.content,
+        tracked: base.tracked,
+      });
     } catch (error) {
       return mapFileError(context, error);
     }

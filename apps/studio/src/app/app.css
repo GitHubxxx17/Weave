@@ -5374,3 +5374,58 @@ body:has(.panel-resizer-active) {
   white-space: pre;
   tab-size: 2;
 }
+
+.file-viewer-highlight {
+  margin: 0;
+}
+
+.file-viewer-highlight .shiki {
+  margin: 0;
+  padding: 10px 12px;
+  background: transparent !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.file-viewer-modes {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.file-viewer-mode {
+  padding: 2px 9px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  cursor: pointer;
+}
+
+.file-viewer-mode:hover {
+  color: var(--ink);
+}
+
+.file-viewer-mode-active,
+.file-viewer-mode-active:hover {
+  color: var(--accent-dark);
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(31 36 48 / 10%);
+}
+
+.file-diff {
+  min-width: 0;
+}
+
+/* Let the GitHub-style diff sit flush inside the viewer's own scroll area. */
+.file-diff .diff-tailwindcss-wrapper {
+  --diff-font-family--: ui-monospace, SFMono-Regular, Menlo, monospace;
+}

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const mocks = vi.hoisted(() => ({
   fetchFileTree: vi.fn(),
@@ -16,6 +16,17 @@ vi.mock('../src/features/files-tree/file-tree-api.js', async () => {
     fetchFileContent: mocks.fetchFileContent,
   };
 });
+
+vi.mock('../src/features/files-tree/highlight.js', () => ({
+  languageForPath: (path: string) => (/\.tsx?$/.test(path) ? 'typescript' : undefined),
+  highlightToHtml: async () => '<pre class="shiki"><code><span>const b = 1</span></code></pre>',
+}));
+
+vi.mock('../src/features/files-tree/file-diff-view.js', () => ({
+  FileDiffView: ({ projectId, path }: { projectId: string; path: string }) => (
+    <div data-testid="file-diff-view">{`改动预览 ${projectId}:${path}`}</div>
+  ),
+}));
 
 import { FileTreeApiError } from '../src/features/files-tree/file-tree-api.js';
 import {
@@ -144,5 +155,62 @@ describe('FileTreePanel', () => {
 
     fireEvent.keyDown(divider, { key: 'ArrowRight' });
     expect(divider.getAttribute('aria-valuenow')).toBe('47');
+  });
+
+  it('syntax-highlights a known-language file in the viewer', async () => {
+    mocks.fetchFileTree.mockResolvedValue({
+      files: ['src/b.ts'],
+      source: 'git',
+      truncated: false,
+    });
+    mocks.fetchFileContent.mockResolvedValue({
+      path: 'src/b.ts',
+      content: 'const b = 1;',
+      bytes: 12,
+      truncated: false,
+    });
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole('treeitem', { name: /src/ }));
+    fireEvent.click(await screen.findByRole('treeitem', { name: /b\.ts/ }));
+    await waitFor(() => {
+      expect(document.querySelector('.file-viewer-highlight')).not.toBeNull();
+    });
+  });
+
+  it('toggles between the content and diff views of a file', async () => {
+    mocks.fetchFileTree.mockResolvedValue({
+      files: ['src/b.ts'],
+      source: 'git',
+      truncated: false,
+    });
+    mocks.fetchFileContent.mockResolvedValue({
+      path: 'src/b.ts',
+      content: 'const b = 1;',
+      bytes: 12,
+      truncated: false,
+    });
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole('treeitem', { name: /src/ }));
+    fireEvent.click(await screen.findByRole('treeitem', { name: /b\.ts/ }));
+    // Content view is shown first, highlighted.
+    await waitFor(() => {
+      expect(document.querySelector('.file-viewer-highlight')).not.toBeNull();
+    });
+    expect(screen.queryByTestId('file-diff-view')).toBeNull();
+
+    // Switching to 改动 lazy-loads the diff view for the selected path.
+    fireEvent.click(screen.getByRole('button', { name: '改动' }));
+    const diffView = await screen.findByTestId('file-diff-view');
+    expect(diffView.textContent).toContain('p1:src/b.ts');
+    expect(document.querySelector('.file-viewer-highlight')).toBeNull();
+
+    // Switching back shows the content again.
+    fireEvent.click(screen.getByRole('button', { name: '内容' }));
+    await waitFor(() => {
+      expect(document.querySelector('.file-viewer-highlight')).not.toBeNull();
+    });
+    expect(screen.queryByTestId('file-diff-view')).toBeNull();
   });
 });
