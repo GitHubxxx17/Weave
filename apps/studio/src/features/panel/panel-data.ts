@@ -1,4 +1,5 @@
 import type {
+  AgentPlan,
   ContextBreakdown,
   ContextCategories,
   TurnSummary,
@@ -192,3 +193,24 @@ export function latestContext(turns: readonly TurnSummary[]): ContextBreakdown |
   }
   return undefined;
 }
+
+/** The most recent Turn that recorded a task plan, if any. */
+export function latestPlan(turns: readonly TurnSummary[]): AgentPlan | undefined {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const plan = turns[index]?.plan;
+    if (plan !== undefined) {
+      return plan;
+    }
+  }
+  return undefined;
+}
+
+/** Display metadata for each plan item status, in checklist order. */
+export const planStatusMeta = {
+  completed: { label: '已完成', symbol: '✓' },
+  in_progress: { label: '进行中', symbol: '▸' },
+  pending: { label: '待办', symbol: '○' },
+} as const satisfies Record<
+  'pending' | 'in_progress' | 'completed',
+  { readonly label: string; readonly symbol: string }
+>;

@@ -2640,6 +2640,89 @@ body:has(.panel-resizer-active) {
   background: #e86a6a;
 }
 
+.plan-progress {
+  display: block;
+  height: 6px;
+  margin: 2px 0 10px;
+  overflow: hidden;
+  background: var(--surface-muted);
+  border-radius: 999px;
+}
+
+.plan-progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 160ms ease;
+}
+
+.plan-explanation {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 0.64rem;
+  line-height: 1.5;
+}
+
+.plan-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plan-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 2px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+.plan-item:last-child {
+  border-bottom: 0;
+}
+
+.plan-item-mark {
+  flex: 0 0 auto;
+  width: 14px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.plan-item-step {
+  flex: 1 1 auto;
+  color: var(--text);
+}
+
+.plan-item-status {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 0.58rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-item-in_progress .plan-item-mark {
+  color: var(--accent);
+}
+
+.plan-item-in_progress .plan-item-step {
+  font-weight: 600;
+}
+
+.plan-item-completed .plan-item-mark {
+  color: var(--accent);
+}
+
+.plan-item-completed .plan-item-step {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
 .file-icon {
   display: grid;
   width: 20px;

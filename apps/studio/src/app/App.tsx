@@ -1198,6 +1198,14 @@ export function App() {
         );
         break;
       }
+      case 'plan': {
+        updateSessionTurns(projectId, sessionId, (turns) =>
+          turns.map((turn) =>
+            turn.turnId === liveTurnIdFor(assistantId) ? { ...turn, plan: event.plan } : turn,
+          ),
+        );
+        break;
+      }
       case 'completed': {
         setSessionRunState(sessionId, { status: 'completed', errorMessage: null });
         const liveTurnId = liveTurnIdFor(assistantId);

@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { contextBreakdownSchema, type ContextBreakdown } from '../workspace/workspace-types.js';
+import {
+  contextBreakdownSchema,
+  planSchema,
+  type AgentPlan,
+  type ContextBreakdown,
+} from '../workspace/workspace-types.js';
 
 const nonEmptyStringSchema = z.string().min(1);
 
@@ -73,7 +78,8 @@ export type AgentRuntimeEvent =
       readonly breakdown: ContextBreakdown;
       readonly provider: string;
       readonly model: string;
-    };
+    }
+  | { readonly type: 'plan'; readonly plan: AgentPlan };
 
 /** Validates the browser-facing request before serializing it for fetch. */
 export const agentRunRequestSchema: z.ZodType<AgentRunRequestInput> = z
@@ -124,6 +130,7 @@ export const agentRuntimeEventSchema: z.ZodType<AgentRuntimeEvent> = z.discrimin
     provider: nonEmptyStringSchema,
     model: nonEmptyStringSchema,
   }),
+  z.object({ type: z.literal('plan'), plan: planSchema }),
 ]);
 
 /** Shape of an error event emitted after the SSE stream has started. */

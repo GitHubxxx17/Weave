@@ -5,6 +5,7 @@ import {
   Gauge,
   Globe,
   LayoutGrid,
+  ListChecks,
   SquareTerminal,
   Wrench,
   type LucideIcon,
@@ -16,12 +17,13 @@ import { FilesPanel } from './files-panel.js';
 import { ToolsPanel } from './tools-panel.js';
 import { UsagePanel } from './usage-panel.js';
 import { ContextPanel } from './context-panel.js';
+import { PlanPanel } from './plan-panel.js';
 import { PreviewPanel } from './preview-panel.js';
 import { TerminalPanel } from './terminal-panel.js';
 
 /** Every side-panel kind. */
 export type PanelKind =
-  'overview' | 'files' | 'tools' | 'usage' | 'context' | 'preview' | 'terminal';
+  'overview' | 'files' | 'tools' | 'usage' | 'context' | 'plan' | 'preview' | 'terminal';
 
 export interface PanelDescriptor {
   readonly kind: PanelKind;
@@ -96,6 +98,16 @@ export const panelDescriptors: readonly PanelDescriptor[] = [
     keepAlive: false,
     multi: false,
     render: (context) => <ContextPanel {...context} />,
+  },
+  {
+    kind: 'plan',
+    label: '计划',
+    Icon: ListChecks,
+    defaultPinned: true,
+    comingSoon: false,
+    keepAlive: false,
+    multi: false,
+    render: (context) => <PlanPanel {...context} />,
   },
   {
     kind: 'preview',
