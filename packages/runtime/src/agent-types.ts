@@ -6,6 +6,8 @@ import {
   userMessageSchema,
   type AgentPlan,
   type ContextBreakdown,
+  type LlmRequest,
+  type StreamEvent,
   type TokenUsage,
   type ToolCall,
   type UserMessage,
@@ -182,11 +184,38 @@ export interface AgentRunner {
 }
 
 /** Services required to construct an Agent Runner. */
+/** One model request as a {@link LlmMiddleware} sees it. */
+export interface LlmCall {
+  readonly request: LlmRequest;
+  /** Aborted when the run is cancelled; a middleware should stop when it fires. */
+  readonly signal: AbortSignal;
+}
+
+/**
+ * Middleware around the model stream of one step: it sees the request, may
+ * adjust the messages and sampling parameters it passes on, call `next` again
+ * to retry, or answer from elsewhere, and it may transform the stream it gets
+ * back. It wraps the whole stream, not each chunk.
+ *
+ * The runner keeps its guarantees around the middleware. The provider and the
+ * model of the request cannot change, because the user chose them and the
+ * conversation goes only there. Every event the middleware yields is checked
+ * against the stream protocol. The run's cancellation always reaches the
+ * model. Events the middleware has already yielded have reached the consumer,
+ * so a retry after that point repeats them; retry before yielding anything.
+ */
+export type LlmMiddleware = (
+  call: LlmCall,
+  next: (call: LlmCall) => AsyncIterable<StreamEvent>,
+) => AsyncIterable<StreamEvent> | PromiseLike<AsyncIterable<StreamEvent>>;
+
 export interface AgentRunnerOptions {
   /** Provider-independent model stream implementation. */
   readonly llm?: LlmClient | undefined;
   /** Registry used to route each request to its selected Provider. */
   readonly llmRegistry?: LlmProviderRegistry | undefined;
+  /** Middleware around every model stream; see {@link LlmMiddleware}. */
+  readonly llmMiddleware?: LlmMiddleware | undefined;
   /** Append-only Session Event Store used for durable turn facts. */
   readonly sessionStore: SessionEventStore;
   /** Model-visible and executable tool registry; must pair with `toolPipeline`. */

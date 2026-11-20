@@ -18,6 +18,7 @@ import {
   createUpdatePlanTool,
   type AgentRunRequest,
   type AgentRuntimeEvent,
+  type LlmMiddleware,
 } from '../src/index.js';
 
 async function collect(
@@ -2616,5 +2617,173 @@ describe('Agent Runner provider sampling defaults', () => {
 
     expect(requests[0]?.temperature).toBeUndefined();
     expect(requests[0]?.maxTokens).toBeUndefined();
+  });
+});
+
+describe('Agent Runner LLM middleware', () => {
+  const answer: readonly StreamEvent[] = [
+    { type: 'text-delta', text: '你好' },
+    { type: 'finish', reason: 'stop' },
+  ];
+
+  async function run(
+    llmMiddleware: LlmMiddleware | undefined,
+    script: readonly StreamEvent[] = answer,
+    requests: LlmRequest[] = [],
+  ) {
+    const store = createInMemorySessionEventStore();
+    const runner = createAgentRunner({
+      llm: recordingClient(script, requests),
+      sessionStore: store,
+      ...(llmMiddleware === undefined ? {} : { llmMiddleware }),
+    });
+    const events = await collect(runner.run(validRequest));
+    return { events: withoutContext(events), store, requests };
+  }
+
+  it('runs the turn exactly as before when there is no middleware', async () => {
+    const { events } = await run(undefined);
+
+    expect(events).toEqual([
+      { type: 'text-delta', text: '你好' },
+      expect.objectContaining({ type: 'completed' }),
+    ]);
+  });
+
+  it('lets the middleware pass the stream through untouched', async () => {
+    const { events, requests } = await run((call, next) => next(call));
+
+    expect(events[0]).toEqual({ type: 'text-delta', text: '你好' });
+    expect(requests).toHaveLength(1);
+  });
+
+  it('lets the middleware adjust the messages it sends on', async () => {
+    const { requests } = await run((call, next) =>
+      next({
+        ...call,
+        request: {
+          ...call.request,
+          messages: [
+            ...call.request.messages,
+            { role: 'user', content: [{ type: 'text', text: '额外的提示' }] },
+          ],
+        },
+      }),
+    );
+
+    expect(requests[0]?.messages.at(-1)).toMatchObject({
+      role: 'user',
+      content: [{ type: 'text', text: '额外的提示' }],
+    });
+  });
+
+  it('lets the middleware transform the stream it gets back', async () => {
+    const { events, store } = await run(async (call, next) => {
+      const source = next(call);
+      return (async function* () {
+        for await (const event of source) {
+          yield event.type === 'text-delta'
+            ? { ...event, text: event.text.toUpperCase() + '!' }
+            : event;
+        }
+      })();
+    });
+
+    expect(events[0]).toEqual({ type: 'text-delta', text: '你好!' });
+    const projection = projectSession(await store.read(validRequest.sessionId));
+    expect(projection.messages.at(-1)?.message).toMatchObject({
+      role: 'assistant',
+      content: [{ type: 'text', text: '你好!' }],
+    });
+  });
+
+  it('lets the middleware retry before it has yielded anything', async () => {
+    let attempts = 0;
+    const requests: LlmRequest[] = [];
+    const { events } = await run(
+      async (call, next) => {
+        attempts += 1;
+        if (attempts === 1) {
+          // Drain and discard the first attempt, then ask again.
+          for await (const ignored of next(call)) {
+            void ignored;
+          }
+        }
+        return next(call);
+      },
+      answer,
+      requests,
+    );
+
+    expect(requests).toHaveLength(2);
+    expect(events.filter((event) => event.type === 'text-delta')).toHaveLength(1);
+  });
+
+  it('lets the middleware answer without reaching the model', async () => {
+    const { events, requests } = await run(async function* () {
+      yield { type: 'text-delta', text: '来自缓存' };
+      yield { type: 'finish', reason: 'stop' };
+    } as unknown as LlmMiddleware);
+
+    expect(events[0]).toEqual({ type: 'text-delta', text: '来自缓存' });
+    expect(requests).toHaveLength(0);
+  });
+
+  it('refuses a request for another provider or model, so the conversation stays where the user sent it', async () => {
+    const { events } = await run(async (call, next) =>
+      next({ ...call, request: { ...call.request, model: 'another-model' } }),
+    ).catch((error: unknown) => ({ events: [error] as unknown[] }));
+
+    expect(events[0]).toMatchObject({ code: 'agent-stream-protocol' });
+  });
+
+  it('refuses an event that is not a valid stream event', async () => {
+    const failure = await run(async function* () {
+      yield { type: 'text-delta' };
+    } as unknown as LlmMiddleware).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ code: 'agent-stream-protocol' });
+  });
+
+  it('checks the stream protocol on what the middleware yields, such as a missing finish', async () => {
+    const failure = await run(async function* () {
+      yield { type: 'text-delta', text: '没有结束' };
+    } as unknown as LlmMiddleware).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ code: 'agent-stream-protocol' });
+  });
+
+  it('keeps the run cancellable whatever signal the middleware passes on', async () => {
+    const controller = new AbortController();
+    const llm: LlmClient = {
+      async *stream(_request, options): AsyncIterable<StreamEvent> {
+        yield { type: 'text-delta', text: 'partial' };
+        await new Promise<void>((_resolve, reject) => {
+          options?.signal?.addEventListener('abort', () => reject(abortError()), { once: true });
+        });
+      },
+    };
+    const runner = createAgentRunner({
+      llm,
+      sessionStore: createInMemorySessionEventStore(),
+      // The middleware hands the model a signal of its own that never fires.
+      llmMiddleware: (call, next) => next({ ...call, signal: new AbortController().signal }),
+    });
+    const stream = runner.run({ ...validRequest, signal: controller.signal });
+    const iterator = stream[Symbol.asyncIterator]();
+
+    await expectContextEvent(iterator);
+    expect((await iterator.next()).value).toEqual({ type: 'text-delta', text: 'partial' });
+    controller.abort();
+
+    await expect(iterator.next()).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('lets a failure of the middleware end the turn like a failure of the model', async () => {
+    const failure = await run(async () => {
+      throw new Error('middleware bug');
+    }).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ message: 'middleware bug' });
   });
 });

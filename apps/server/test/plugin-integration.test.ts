@@ -4,6 +4,7 @@ import { createLlmProviderRegistry, type LlmProviderRegistry } from '@weave/llm'
 import type { LlmRequest, StreamEvent } from '@weave/protocol';
 import {
   definePlugin,
+  llmRequestHook,
   promptSectionsExtensionPoint,
   toolAroundHook,
   toolPolicyHook,
@@ -17,7 +18,7 @@ import {
   type TurnInfo,
   type WeavePlugin,
 } from '@weave/plugin';
-import type { ToolExecutionRequest, ToolExecutionResult } from '@weave/runtime';
+import type { ToolExecutionRequest, ToolExecutionResult, LlmCall } from '@weave/runtime';
 import { createInMemoryProjectStore } from '@weave/workspace';
 import { createApp } from '../src/app.js';
 import { createSessionService } from '../src/session-service.js';
@@ -537,6 +538,156 @@ describe('Server Plugin integration', () => {
       expect(turns).toHaveLength(2);
       expect(turns[0]).toMatch(/^start /);
       expect(turns[1]).toMatch(/ failed$/);
+    });
+  });
+
+  describe('llm request hook', () => {
+    type Next = (call: LlmCall) => Promise<AsyncIterable<StreamEvent>>;
+
+    function middlewarePlugin(
+      wrap: (call: LlmCall, next: Next) => Promise<AsyncIterable<StreamEvent>>,
+    ): KernelPlugin {
+      return definePlugin({
+        manifest: {
+          id: 'llm-middleware',
+          name: 'LLM Middleware',
+          version: '1.0.0',
+          apiVersion: '1.0.0',
+          capabilities: ['tool'],
+        },
+        setup(env) {
+          env.onHook(llmRequestHook, wrap);
+        },
+      });
+    }
+
+    async function runChat(client: unknown, plugin: KernelPlugin) {
+      const providerRegistry = createLlmProviderRegistry([
+        {
+          id: 'mock',
+          label: '本地演示',
+          type: 'mock',
+          client: client as ReturnType<typeof createSequenceClient>,
+          defaultModel: 'test-model',
+        },
+      ]);
+      const runtime = createServerRuntime({
+        providerSettings: createProviderSettings(providerRegistry),
+      });
+      await runtime.start();
+      try {
+        const sessionService = await createSessionServiceForRuntime(runtime);
+        const response = await createApp(runtime, {
+          agentRunner: await createServerAgentRunner(runtime, { kernelPlugins: [plugin] }),
+          sessionService,
+        }).request('/agent/runs/stream', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            sessionId,
+            userMessage: { role: 'user', content: [{ type: 'text', text: '我的密码是 hunter2' }] },
+            provider: 'mock',
+            model: 'test-model',
+          }),
+        });
+        return await response.text();
+      } finally {
+        await runtime.stop();
+      }
+    }
+
+    it('lets a plugin transform the model stream', async () => {
+      const body = await runChat(
+        createSequenceClient([
+          [
+            { type: 'text-delta', text: 'hello' },
+            { type: 'finish', reason: 'stop' },
+          ],
+        ]),
+        middlewarePlugin(async (call, next) => {
+          const source = await next(call);
+          return (async function* () {
+            for await (const event of source) {
+              yield event.type === 'text-delta'
+                ? { ...event, text: event.text.toUpperCase() }
+                : event;
+            }
+          })();
+        }),
+      );
+
+      expect(body).toContain('HELLO');
+      expect(body).not.toContain('hello');
+    });
+
+    it('lets a plugin change what is sent to the model, such as redacting a secret', async () => {
+      const requests: LlmRequest[] = [];
+
+      await runChat(
+        createCapturingClient((request) => requests.push(request)),
+        middlewarePlugin((call, next) =>
+          next({
+            ...call,
+            request: {
+              ...call.request,
+              messages: call.request.messages.map((message) => ({
+                ...message,
+                content: message.content.map((part) =>
+                  part.type === 'text'
+                    ? { ...part, text: part.text.replace('hunter2', '[已脱敏]') }
+                    : part,
+                ),
+              })),
+            },
+          }),
+        ),
+      );
+
+      const sent = requests[0]?.messages
+        .flatMap((message) => message.content)
+        .map((part) => (part.type === 'text' ? part.text : ''))
+        .join('\n');
+      expect(sent).toContain('[已脱敏]');
+      expect(sent).not.toContain('hunter2');
+    });
+
+    it('lets a plugin retry before it has yielded anything', async () => {
+      const body = await runChat(
+        createSequenceClient([
+          [
+            { type: 'text-delta', text: 'first attempt' },
+            { type: 'finish', reason: 'stop' },
+          ],
+          [
+            { type: 'text-delta', text: 'second attempt' },
+            { type: 'finish', reason: 'stop' },
+          ],
+        ]),
+        middlewarePlugin(async (call, next) => {
+          for await (const ignored of await next(call)) {
+            void ignored;
+          }
+          return next(call);
+        }),
+      );
+
+      expect(body).toContain('second attempt');
+      expect(body).not.toContain('first attempt');
+    });
+
+    it('does not let a plugin send the conversation to another model', async () => {
+      const requests: LlmRequest[] = [];
+
+      const body = await runChat(
+        createCapturingClient((request) => requests.push(request)),
+        middlewarePlugin((call, next) =>
+          next({ ...call, request: { ...call.request, model: 'another-model' } }),
+        ),
+      );
+
+      expect(body).toContain('event: error');
+      expect(body).toContain('agent-stream-protocol');
+      expect(requests).toHaveLength(0);
     });
   });
 
