@@ -298,3 +298,13 @@ interface PluginListItem {
 - 管线对返回值保持担保：结果必须仍是原调用的结果（`toolCallId`、`name` 不变），内容重新按字节上限截断，只保留 `toolCallId`、`name`、`content`、`truncated` 四个字段，不合规的结果报 `tool-execution-failed`。
 - 中间件抛出的 `ToolExecutionError` 原样保留错误码，其他异常变为 `tool-execution-failed`，调用方已中止时变为 `tool-cancelled`。
 - 洋葱顺序即注册顺序，先注册的在最外层。`tools.result` 的观察者看到的是 `around` 处理之后的最终结果。
+
+### 17.2 `turn.start` / `turn.end`（observe）
+
+宣告一个回合的开始与结束。落点在 **Session Store**，不在 Agent Runner 里。回合本来就把开始和结束记成会话事件：`turn.started`，以及完成、失败、取消三种结局都会写的 `turn.completed`。所以 server 用 `observeTurns` 包住交给 Agent Runner 的 Session Store，在这两类事件**成功追加之后**通知观察者，Runtime 不需要知道插件。
+
+- 观察者不会看到存储没有记下的回合。它失败或抛出也不会撤销或隐藏已记录的事实，`turn.start` 失败不影响 `turn.end` 的通知。
+- `turn.start` 带 `{ sessionId, turnId }`；`turn.end` 另带 `status`（`completed`、`failed`、`cancelled`）和可选的 `reason`（例如 `agent-step-limit`）。
+- 没有插件注册这两个钩子时，Agent Runner 拿到的仍是原来的 Session Store。
+- 处理函数会被等待，所以应当很快返回；它们的失败被隔离。
+- 不逐条观察 `text-delta` 这类高频流事件，保持持久事实与临时状态的分离。
