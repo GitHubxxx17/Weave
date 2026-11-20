@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import {
+  ToolExecutionError,
   createApprovalBroker,
   createToolPipeline,
   createToolRegistry,
+  type ToolAround,
   type ToolDefinition,
 } from '../src/index.js';
 
@@ -477,5 +479,248 @@ describe('Tool Pipeline', () => {
     expect(result.truncated).toBe(true);
     expect(Buffer.byteLength(result.content, 'utf8')).toBeLessThanOrEqual(200);
     expect(result.content).toMatch(/\[结果超过 200 字节，后面的内容已截断\]$/);
+  });
+});
+
+describe('Tool Pipeline around middleware', () => {
+  const request = { toolCallId: 'call-1', name: 'echo', arguments: '{"text":"hi"}' };
+
+  it('behaves as before without a middleware', async () => {
+    const pipeline = createToolPipeline({ registry: createRegistry() });
+
+    await expect(pipeline.execute(request)).resolves.toEqual({
+      toolCallId: 'call-1',
+      name: 'echo',
+      content: 'hi',
+      truncated: false,
+    });
+  });
+
+  it('runs the middleware around the execution and lets it shape the result', async () => {
+    const seen: string[] = [];
+    const pipeline = createToolPipeline({
+      registry: createRegistry(),
+      around: async (incoming, next) => {
+        seen.push(`before ${incoming.name}`);
+        const result = await next(incoming);
+        seen.push('after');
+        return { ...result, content: `${result.content}!` };
+      },
+    });
+
+    await expect(pipeline.execute(request)).resolves.toMatchObject({ content: 'hi!' });
+    expect(seen).toEqual(['before echo', 'after']);
+  });
+
+  it('lets the middleware answer without calling the tool', async () => {
+    const execute = vi.fn(({ text }: EchoInput) => text);
+    const pipeline = createToolPipeline({
+      registry: createRegistry(execute),
+      around: async (incoming) => ({
+        toolCallId: incoming.toolCallId,
+        name: incoming.name,
+        content: 'cached',
+        truncated: false,
+      }),
+    });
+
+    await expect(pipeline.execute(request)).resolves.toMatchObject({ content: 'cached' });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('lets the middleware retry a failed execution', async () => {
+    let calls = 0;
+    const execute = vi.fn(({ text }: EchoInput) => {
+      calls += 1;
+      if (calls === 1) {
+        throw new Error('flaky');
+      }
+      return text;
+    });
+    const pipeline = createToolPipeline({
+      registry: createRegistry(execute),
+      around: async (incoming, next) => {
+        try {
+          return await next(incoming);
+        } catch {
+          return next(incoming);
+        }
+      },
+    });
+
+    await expect(pipeline.execute(request)).resolves.toMatchObject({ content: 'hi' });
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it('validates the request before the middleware sees it', async () => {
+    const around = vi.fn();
+    const pipeline = createToolPipeline({ registry: createRegistry(), around });
+
+    await expect(
+      pipeline.execute({ toolCallId: '', name: 'echo', arguments: '{}' }),
+    ).rejects.toMatchObject({ code: 'tool-invalid-input' });
+    expect(around).not.toHaveBeenCalled();
+  });
+
+  it('still validates the arguments a middleware adjusted', async () => {
+    const execute = vi.fn(({ text }: EchoInput) => text);
+    const pipeline = createToolPipeline({
+      registry: createRegistry(execute),
+      around: (incoming, next) => next({ ...incoming, arguments: '{"text":1}' }),
+    });
+
+    await expect(pipeline.execute(request)).rejects.toMatchObject({
+      code: 'tool-invalid-arguments',
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('asks for approval of the arguments the middleware adjusted, not the original ones', async () => {
+    const execute = vi.fn(() => 'done');
+    const broker = createApprovalBroker();
+    const pipeline = createToolPipeline({
+      registry: createProtectedRegistry(execute),
+      approvalBroker: broker,
+      around: (incoming, next) => next({ ...incoming, arguments: '{"value":"changed"}' }),
+    });
+
+    const result = pipeline.execute({
+      toolCallId: 'call-1',
+      name: 'protected',
+      arguments: '{"value":"original"}',
+    });
+    await vi.waitFor(() => expect(broker.list()).toHaveLength(1));
+
+    expect(broker.list()[0]?.inputSummary).toEqual({ value: 'changed' });
+    expect(execute).not.toHaveBeenCalled();
+    broker.approve(broker.list()[0]!.approvalId);
+    await expect(result).resolves.toMatchObject({ content: 'done' });
+  });
+
+  it('asks for approval again when the middleware retries a protected tool', async () => {
+    const execute = vi.fn(() => 'done');
+    const broker = createApprovalBroker();
+    const pipeline = createToolPipeline({
+      registry: createProtectedRegistry(execute),
+      approvalBroker: broker,
+      around: async (incoming, next) => {
+        await next(incoming);
+        return next(incoming);
+      },
+    });
+
+    const result = pipeline.execute({
+      toolCallId: 'call-1',
+      name: 'protected',
+      arguments: '{"value":"x"}',
+    });
+    const pending = () => broker.list().filter((approval) => approval.status === 'pending');
+    for (let approvals = 0; approvals < 2; approvals += 1) {
+      await vi.waitFor(() => expect(pending()).toHaveLength(1));
+      broker.approve(pending()[0]!.approvalId);
+      await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(approvals + 1));
+    }
+
+    await expect(result).resolves.toMatchObject({ content: 'done' });
+    expect(broker.list()).toHaveLength(2);
+  });
+
+  it('rejects a result that belongs to another call', async () => {
+    const pipeline = createToolPipeline({
+      registry: createRegistry(),
+      around: async (incoming, next) => ({ ...(await next(incoming)), toolCallId: 'other-call' }),
+    });
+
+    await expect(pipeline.execute(request)).rejects.toMatchObject({
+      code: 'tool-execution-failed',
+      message: expect.stringContaining('invalid result'),
+    });
+  });
+
+  it('rejects a middleware that returns something other than a result', async () => {
+    const pipeline = createToolPipeline({
+      registry: createRegistry(),
+      around: (async () => 'not a result') as unknown as ToolAround,
+    });
+
+    await expect(pipeline.execute(request)).rejects.toMatchObject({
+      code: 'tool-execution-failed',
+    });
+  });
+
+  it('limits the content a middleware returns to the byte limit', async () => {
+    const pipeline = createToolPipeline({
+      registry: createRegistry(),
+      maxResultBytes: 200,
+      around: async (incoming, next) => ({
+        ...(await next(incoming)),
+        content: 'a'.repeat(500),
+      }),
+    });
+
+    const result = await pipeline.execute(request);
+
+    expect(result.truncated).toBe(true);
+    expect(Buffer.byteLength(result.content, 'utf8')).toBeLessThanOrEqual(200);
+  });
+
+  it('lets nothing beyond the four result fields through', async () => {
+    const pipeline = createToolPipeline({
+      registry: createRegistry(),
+      around: async (incoming, next) => ({
+        ...(await next(incoming)),
+        secret: 'smuggled',
+      }),
+    });
+
+    expect(Object.keys(await pipeline.execute(request)).sort()).toEqual([
+      'content',
+      'name',
+      'toolCallId',
+      'truncated',
+    ]);
+  });
+
+  it('keeps the stable code of an error the middleware raises on purpose', async () => {
+    const pipeline = createToolPipeline({
+      registry: createRegistry(),
+      around: async () => {
+        throw new ToolExecutionError('tool-not-permitted', 'blocked by policy');
+      },
+    });
+
+    await expect(pipeline.execute(request)).rejects.toMatchObject({
+      code: 'tool-not-permitted',
+    });
+  });
+
+  it('turns an unexpected middleware crash into a tool failure', async () => {
+    const cause = new Error('bug in the middleware');
+    const pipeline = createToolPipeline({
+      registry: createRegistry(),
+      around: async () => {
+        throw cause;
+      },
+    });
+
+    await expect(pipeline.execute(request)).rejects.toMatchObject({
+      code: 'tool-execution-failed',
+      cause,
+    });
+  });
+
+  it('reports a crash after the caller aborted as a cancellation', async () => {
+    const controller = new AbortController();
+    const pipeline = createToolPipeline({
+      registry: createRegistry(),
+      around: async () => {
+        controller.abort();
+        throw new Error('stopped');
+      },
+    });
+
+    await expect(pipeline.execute({ ...request, signal: controller.signal })).rejects.toMatchObject(
+      { code: 'tool-cancelled' },
+    );
   });
 });

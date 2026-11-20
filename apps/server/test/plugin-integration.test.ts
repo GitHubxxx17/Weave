@@ -5,11 +5,13 @@ import type { LlmRequest, StreamEvent } from '@weave/protocol';
 import {
   definePlugin,
   promptSectionsExtensionPoint,
+  toolAroundHook,
   toolResultHook,
   toolsExtensionPoint,
   type KernelPlugin,
   type WeavePlugin,
 } from '@weave/plugin';
+import type { ToolExecutionRequest, ToolExecutionResult } from '@weave/runtime';
 import { createInMemoryProjectStore } from '@weave/workspace';
 import { createApp } from '../src/app.js';
 import { createSessionService } from '../src/session-service.js';
@@ -358,6 +360,95 @@ describe('Server Plugin integration', () => {
       await expect(
         createServerAgentRunner(runtime, { kernelPlugins: [unlistedPlugin] }),
       ).rejects.toMatchObject({ code: 'plugin-contributes-exceeds-manifest' });
+    } finally {
+      await runtime.stop();
+    }
+  });
+
+  it('lets a kernel plugin wrap each tool execution, outside the result observers', async () => {
+    const providerRegistry = createLlmProviderRegistry([
+      {
+        id: 'mock',
+        label: '本地演示',
+        type: 'mock',
+        client: createSequenceClient([
+          [
+            { type: 'tool-call-start', id: 'call-1', name: 'ping' },
+            { type: 'tool-call-delta', id: 'call-1', argumentsDelta: '{}' },
+            { type: 'finish', reason: 'tool-call' },
+          ],
+          [
+            { type: 'text-delta', text: '完成' },
+            { type: 'finish', reason: 'stop' },
+          ],
+        ]),
+        defaultModel: 'test-model',
+      },
+    ]);
+    const runtime = createServerRuntime({
+      providerSettings: createProviderSettings(providerRegistry),
+    });
+    await runtime.start();
+
+    const observed: string[] = [];
+    const wrapped: string[] = [];
+    const shoutPlugin: KernelPlugin = definePlugin({
+      manifest: {
+        id: 'shout',
+        name: 'Shout',
+        version: '1.0.0',
+        apiVersion: '1.0.0',
+        capabilities: ['tool'],
+      },
+      setup(env) {
+        env.contribute(toolsExtensionPoint, (api) => {
+          api.addTool({
+            name: 'ping',
+            description: '回 pong',
+            parameters: { type: 'object', properties: {} },
+            inputSchema: z.object({}),
+            execute: () => 'pong',
+          });
+        });
+        env.onHook(
+          toolAroundHook,
+          async (
+            request: ToolExecutionRequest,
+            next: (request: ToolExecutionRequest) => Promise<ToolExecutionResult>,
+          ) => {
+            wrapped.push(request.name);
+            const result = await next(request);
+            return { ...result, content: result.content.toUpperCase() };
+          },
+        );
+        env.onHook(toolResultHook, (result: { readonly content: string }) => {
+          observed.push(result.content);
+        });
+      },
+    });
+
+    try {
+      const sessionService = await createSessionServiceForRuntime(runtime);
+      const response = await createApp(runtime, {
+        agentRunner: await createServerAgentRunner(runtime, { kernelPlugins: [shoutPlugin] }),
+        sessionService,
+      }).request('/agent/runs/stream', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          userMessage: { role: 'user', content: [{ type: 'text', text: '调用 ping' }] },
+          provider: 'mock',
+          model: 'test-model',
+        }),
+      });
+
+      const body = await response.text();
+      expect(response.status).toBe(200);
+      expect(body).toContain('"name":"ping","content":"PONG"');
+      expect(wrapped).toEqual(['ping']);
+      // Observers see what the model sees: the wrapped result.
+      expect(observed).toEqual(['PONG']);
     } finally {
       await runtime.stop();
     }

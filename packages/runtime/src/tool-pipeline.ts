@@ -13,6 +13,23 @@ import type { ToolRegistry } from './tool-registry.js';
 
 const defaultMaxResultBytes = 32_000;
 
+/**
+ * Middleware around one whole tool execution: validation, approval, the tool
+ * and result shaping. It may adjust the request it passes on and the result it
+ * returns, call `next` again to retry, or answer without calling it. Because it
+ * sits outside the pipeline, an adjusted request still goes through approval,
+ * and a retry asks for approval again.
+ *
+ * The pipeline keeps its guarantees around the middleware: the result must
+ * still be the result of the original call (same `toolCallId` and `name`), its
+ * content is limited to `maxResultBytes` again, and nothing beyond the four
+ * result fields gets through.
+ */
+export type ToolAround = (
+  request: ToolExecutionRequest,
+  next: (request: ToolExecutionRequest) => Promise<ToolExecutionResult>,
+) => Promise<ToolExecutionResult>;
+
 /** Configuration used to create a shared Tool Pipeline. */
 export interface ToolPipelineOptions {
   /** Registry containing executable tool definitions. */
@@ -23,6 +40,8 @@ export interface ToolPipelineOptions {
   readonly timeoutMs?: number | undefined;
   /** Maximum UTF-8 byte length returned in tool content. */
   readonly maxResultBytes?: number | undefined;
+  /** Middleware around each execution; see {@link ToolAround}. */
+  readonly around?: ToolAround | undefined;
 }
 
 /** Public execution boundary for all registered tools. */
@@ -149,6 +168,74 @@ function createCombinedSignal(
   return AbortSignal.any([requestSignal, controller.signal]);
 }
 
+/** Rebuilds what a middleware returned as the result of `request`, or rejects it. */
+function checkAroundResult(
+  request: ToolExecutionRequest,
+  result: unknown,
+  maxResultBytes: number,
+): ToolExecutionResult {
+  const candidate =
+    typeof result === 'object' && result !== null ? (result as Record<string, unknown>) : undefined;
+  if (
+    candidate === undefined ||
+    candidate.toolCallId !== request.toolCallId ||
+    candidate.name !== request.name ||
+    typeof candidate.content !== 'string' ||
+    typeof candidate.truncated !== 'boolean'
+  ) {
+    throw new ToolExecutionError(
+      'tool-execution-failed',
+      `Tool "${request.name}" around middleware returned an invalid result`,
+    );
+  }
+  const limited = limitUtf8(candidate.content, maxResultBytes);
+  return {
+    toolCallId: request.toolCallId,
+    name: request.name,
+    content: limited.content,
+    truncated: candidate.truncated || limited.truncated,
+  };
+}
+
+/** Runs `around` outside `pipeline`, holding its result to the pipeline's guarantees. */
+function withAround(
+  pipeline: ToolPipeline,
+  around: ToolAround,
+  maxResultBytes: number,
+): ToolPipeline {
+  return {
+    async execute(requestInput): Promise<ToolExecutionResult> {
+      const parsedRequest = toolExecutionRequestSchema.safeParse(requestInput);
+      if (!parsedRequest.success) {
+        throw new ToolExecutionError('tool-invalid-input', 'Tool execution input is invalid', {
+          cause: parsedRequest.error,
+        });
+      }
+      const request = parsedRequest.data;
+
+      let result: unknown;
+      try {
+        result = await around(request, (next) => pipeline.execute(next));
+      } catch (error: unknown) {
+        if (error instanceof ToolExecutionError) {
+          throw error;
+        }
+        if (request.signal?.aborted === true || isAbortError(error)) {
+          throw new ToolExecutionError('tool-cancelled', 'Tool execution was cancelled', {
+            cause: error,
+          });
+        }
+        throw new ToolExecutionError(
+          'tool-execution-failed',
+          `Tool "${request.name}" around middleware failed`,
+          { cause: error },
+        );
+      }
+      return checkAroundResult(request, result, maxResultBytes);
+    },
+  };
+}
+
 /** Creates a Tool Pipeline that owns validation and execution lifecycle. */
 export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
   const timeoutMs = options.timeoutMs;
@@ -161,7 +248,7 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
     throw new RangeError('maxResultBytes must be a finite non-negative number');
   }
 
-  return {
+  const pipeline: ToolPipeline = {
     async execute(requestInput): Promise<ToolExecutionResult> {
       const parsedRequest = toolExecutionRequestSchema.safeParse(requestInput);
       if (!parsedRequest.success) {
@@ -354,4 +441,8 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
       }
     },
   };
+
+  return options.around === undefined
+    ? pipeline
+    : withAround(pipeline, options.around, maxResultBytes);
 }

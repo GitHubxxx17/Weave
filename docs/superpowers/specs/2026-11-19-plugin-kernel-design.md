@@ -284,3 +284,17 @@ interface PluginListItem {
 `contributes` / `permissions` 是插件声明的，`provides` 是实际发生的，二者可以不同：没有声明 `contributes` 的插件不受限制，所以 `provides` 才是它真实的足迹。接口本身没有写操作，启用 / 停用 / 重载属于 Stage 4。
 
 **Studio**：右侧面板新增「插件」（面板种类 `plugins`，单实例，默认不固定，从面板的添加菜单打开）。列表按来源分为内置、已注册、扩展三组，每项可展开，查看实际提供的工具、模型提供方、提示词片段和服务，以及声明的权限与适用版本。面板打开时请求一次 `GET /plugins`，标题行的刷新按钮重新请求。Studio 不引用 `@weave/*`，自己定义响应类型，对不认识的来源、运行方式和能力原样显示，不让整个列表失败。
+
+## 17. 钩子的落点（Stage 3.3 起）
+
+钩子由宿主按各自的位置接线，位置决定了它能影响什么。下面逐个记录已落地的钩子。
+
+### 17.1 `tools.around`（wrap）
+
+包住一次完整的工具执行。落点在共享 Tool Pipeline 的**最外层**：`createToolPipeline` 新增选项 `around`，server 只在有插件注册了 `tools.around` 时才传入，没有时管线不被包装，行为不变。
+
+- 中间件拿到的请求已经通过校验。它可以改写请求、重试（多次调用 `next`），或者不调用 `next` 直接作答。
+- 因为它在管线最外层，被改写的请求仍然要经过参数校验和审批：审批弹出的是改写后的参数，重试会再次请求审批。这是有意的，插件不能在用户批准之后再改参数。
+- 管线对返回值保持担保：结果必须仍是原调用的结果（`toolCallId`、`name` 不变），内容重新按字节上限截断，只保留 `toolCallId`、`name`、`content`、`truncated` 四个字段，不合规的结果报 `tool-execution-failed`。
+- 中间件抛出的 `ToolExecutionError` 原样保留错误码，其他异常变为 `tool-execution-failed`，调用方已中止时变为 `tool-cancelled`。
+- 洋葱顺序即注册顺序，先注册的在最外层。`tools.result` 的观察者看到的是 `around` 处理之后的最终结果。
