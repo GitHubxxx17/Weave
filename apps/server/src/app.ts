@@ -9,6 +9,7 @@ import { registerSessionRoutes, type SessionAppOptions } from './session-api.js'
 import { registerWorkspaceRoutes, type WorkspaceAppOptions } from './workspace-api.js';
 import { registerFileUndoRoutes } from './file-undo-api.js';
 import { registerFileRoutes, type FileAppOptions } from './file-api.js';
+import { registerPluginRoutes, type PluginAppOptions } from './plugin-api.js';
 
 const healthResponseSchema = z.object({
   status: z.enum(['ok', 'unavailable']),
@@ -32,6 +33,7 @@ export interface AppOptions
     SessionAppOptions,
     WorkspaceAppOptions,
     FileAppOptions,
+    PluginAppOptions,
     ProviderAppOptions {
   /**
    * Exact browser origin allowed to call the local control plane.
@@ -74,11 +76,13 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
   registerSessionRoutes(app, options ?? {});
   registerAgentRoutes(app, runtime, options ?? {});
   registerProviderRoutes(app, options ?? {});
+  registerPluginRoutes(app, options ?? {});
 
   return app;
 }
 
 export type { ApprovalAppOptions } from './approval-api.js';
 export type { AgentAppOptions } from './agent-api.js';
+export type { PluginAppOptions } from './plugin-api.js';
 export type { ProviderAppOptions } from './provider-api.js';
 export type { ProviderSecretCodec } from './provider-secret-codec.js';

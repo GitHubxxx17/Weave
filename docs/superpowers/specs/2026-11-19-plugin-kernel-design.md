@@ -259,3 +259,26 @@ export const newSessionEventSchema = z.union([coreEventSchema, pluginEventSchema
 - **注册时机。** 旧插件必须在创建 Agent Runner 之前注册，之后注册会被拒绝。旧路径曾允许晚注册，但没有调用方依赖它，晚注册何时生效统一留给 Stage 4 的"下一轮生效"重载。
 - **每个 runner 一个 kernel，装配顺序即工具顺序。** 顺序是：注册表与宿主服务、已注册的旧插件、`server-tool-host`（Tool Pipeline 与 server 自带工具）、`kernelPlugins`。模型看到的工具顺序因此仍是：旧插件工具、server 工具、内核插件工具，与重构前一致。装配失败时先销毁这个 kernel 再抛出。
 - **销毁。** `disposeServerPlugins(runtime)` 先销毁各 runner 的 kernel，再销毁没有进过 kernel 的已注册插件，后注册的先销毁，每个插件的 `dispose` 至多执行一次。
+
+## 16. 插件列表接口（Stage 3.2）
+
+Studio 不运行插件代码，就能列出已加载的插件加了什么、要什么权限。内核与 server 各出一半。
+
+**内核**：`kernel.plugins()`（`Generation.plugins()` 是同一个函数）按注册顺序返回已加载的插件，每项是 `{ manifest, contributed }`。`contributed` 是插件实际放进内核的名字：`tools`、`providers`、`promptSections` 由受治理的扩展点在 owner 回放贡献时记录，无论插件有没有声明 `contributes`；`services` 在 `setup` 里 `provide` 时即知。因此 owner 回放之前，前三类是空的，宿主应在装配完成后再读取。同一个名字重复回放只记一次，插件被销毁后不再列出。
+
+**server**：`GET /plugins`，只读，响应 `{ plugins: PluginListItem[] }`，对象按装配时的注册顺序排列，指最近一个 Agent Runner 装配时加载的插件，没有 Agent Runner 时为空。
+
+```ts
+interface PluginListItem {
+  id: string; name: string; version: string; description?: string;
+  origin: 'builtin' | 'registered' | 'kernel';  // server 自带 | registerServerPlugins 注册的旧插件 | kernelPlugins
+  host: 'in-process' | 'mcp' | 'subprocess';    // manifest 未写时为 in-process
+  capabilities: ('tool' | 'llm-provider' | 'prompt')[];
+  engines?: { weave: string };
+  contributes?: { tools?: string[]; providers?: string[]; promptSections?: string[]; services?: string[] }; // manifest 声明的清单，未声明则省略
+  permissions?: string[];                        // manifest 声明的权限，未声明则省略
+  provides: { tools: string[]; providers: string[]; promptSections: string[]; services: string[] }; // 实际加入内核的名字
+}
+```
+
+`contributes` / `permissions` 是插件声明的，`provides` 是实际发生的，二者可以不同：没有声明 `contributes` 的插件不受限制，所以 `provides` 才是它真实的足迹。接口本身没有写操作，启用 / 停用 / 重载属于 Stage 4。

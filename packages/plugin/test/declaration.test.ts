@@ -391,3 +391,104 @@ describe('governed seams', () => {
     expect(added).toEqual(['one', 'two']);
   });
 });
+
+describe('plugin info', () => {
+  const serviceRef = defineServiceRef<number>({ id: 'example.counter' });
+
+  const toolAndPrompt = (id: string, over: Partial<PluginManifest> = {}) =>
+    definePlugin({
+      manifest: manifest(id, { capabilities: ['tool', 'prompt'], ...over }),
+      setup(env) {
+        env.contribute(toolsExtensionPoint, (api) => api.addTool(tool(`${id}-tool`)));
+        env.contribute(promptSectionsExtensionPoint, (api) =>
+          api.addSection({ id: `${id}-section`, order: 1, text: id }),
+        );
+      },
+    });
+
+  function collectAll(kernel: ReturnType<typeof createPluginKernel>): void {
+    kernel.extensions.collect(toolsExtensionPoint, { addTool: () => undefined });
+    kernel.extensions.collect(promptSectionsExtensionPoint, { addSection: () => undefined });
+  }
+
+  it('lists the loaded plugins in registration order with their manifests', async () => {
+    const kernel = createPluginKernel();
+    await kernel.register(definePlugin({ manifest: manifest('first'), setup: () => undefined }));
+    await kernel.register(definePlugin({ manifest: manifest('second'), setup: () => undefined }));
+    const generation = await kernel.seal();
+
+    expect(kernel.plugins().map((info) => info.manifest.id)).toEqual(['first', 'second']);
+    expect(generation.plugins()).toEqual(kernel.plugins());
+    expect(kernel.plugins()[0]?.manifest).toMatchObject({ id: 'first', version: '0.1.0' });
+  });
+
+  it('knows the services a plugin provides as soon as its setup has run', async () => {
+    const kernel = createPluginKernel();
+    await kernel.register(
+      definePlugin({
+        manifest: manifest('owner'),
+        setup(env) {
+          env.provide(serviceRef, { factory: () => 1 });
+        },
+      }),
+    );
+
+    expect(kernel.plugins()[0]?.contributed.services).toEqual(['example.counter']);
+  });
+
+  it('lists tools and prompt sections only after an owner collected them', async () => {
+    const kernel = createPluginKernel();
+    await kernel.register(toolAndPrompt('both'));
+    await kernel.seal();
+
+    expect(kernel.plugins()[0]?.contributed).toMatchObject({ tools: [], promptSections: [] });
+
+    collectAll(kernel);
+
+    expect(kernel.plugins()[0]?.contributed).toMatchObject({
+      tools: ['both-tool'],
+      promptSections: ['both-section'],
+    });
+  });
+
+  it('records what a plugin added even when it declared no contributes', async () => {
+    const kernel = createPluginKernel();
+    await kernel.register(toolAndPrompt('open'));
+    await kernel.register(
+      toolAndPrompt('closed', {
+        contributes: { tools: ['closed-tool'], promptSections: ['closed-section'] },
+      }),
+    );
+    await kernel.seal();
+
+    collectAll(kernel);
+    collectAll(kernel);
+
+    const [open, closed] = kernel.plugins();
+    expect(open?.contributed.tools).toEqual(['open-tool']);
+    expect(closed?.contributed.tools).toEqual(['closed-tool']);
+    // Collecting twice records each name once.
+    expect(closed?.contributed.promptSections).toEqual(['closed-section']);
+  });
+
+  it('lists no plugin that failed to register or that was disposed', async () => {
+    const kernel = createPluginKernel();
+    await kernel.register(definePlugin({ manifest: manifest('kept'), setup: () => undefined }));
+    await expect(
+      kernel.register(
+        definePlugin({
+          manifest: manifest('broken'),
+          setup() {
+            throw new Error('boom');
+          },
+        }),
+      ),
+    ).rejects.toBeInstanceOf(PluginError);
+
+    expect(kernel.plugins().map((info) => info.manifest.id)).toEqual(['kept']);
+
+    await kernel.dispose();
+
+    expect(kernel.plugins()).toEqual([]);
+  });
+});

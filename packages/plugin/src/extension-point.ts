@@ -77,6 +77,7 @@ interface ContributionEntry {
 export class ExtensionRegistry {
   readonly #contributions = new Map<string, ContributionEntry[]>();
   readonly #singleSlot = new Map<string, boolean>();
+  readonly #collected = new Map<string, Map<ContributedNameKey, Set<string>>>();
 
   /**
    * Records a contribution to `point`. Returns a disposer that removes it.
@@ -147,16 +148,48 @@ export class ExtensionRegistry {
     return api;
   }
 
-  /** The API a contributor receives: guarded when its manifest declared `contributes`. */
+  /**
+   * The API a contributor receives. A governed point always wraps it: names are
+   * checked against the manifest's `contributes` when one was declared, and
+   * recorded either way so the host can list what each plugin added.
+   */
   #guarded<T>(point: ExtensionPoint<T>, api: T, entry: ContributionEntry): T {
     const governed = point.governed;
-    const contributes = entry.declaration?.contributes;
-    if (governed === undefined || contributes === undefined) {
+    if (governed === undefined) {
       return api;
     }
-    return governed.guard(api, (name) =>
-      assertNameDeclared(entry.pluginId, contributes, governed.key, name),
-    );
+    const contributes = entry.declaration?.contributes;
+    return governed.guard(api, (name) => {
+      assertNameDeclared(entry.pluginId, contributes, governed.key, name);
+      this.#record(entry.pluginId, governed.key, name);
+    });
+  }
+
+  #record(pluginId: string, key: ContributedNameKey, name: string): void {
+    let byKind = this.#collected.get(pluginId);
+    if (byKind === undefined) {
+      byKind = new Map();
+      this.#collected.set(pluginId, byKind);
+    }
+    let names = byKind.get(key);
+    if (names === undefined) {
+      names = new Set();
+      byKind.set(key, names);
+    }
+    names.add(name);
+  }
+
+  /**
+   * The names a plugin has added through governed extension points, as owners
+   * collected them. Nothing is listed until an owner has run `collect`.
+   */
+  collected(pluginId: string): Readonly<Record<ContributedNameKey, readonly string[]>> {
+    const byKind = this.#collected.get(pluginId);
+    return {
+      tools: [...(byKind?.get('tools') ?? [])],
+      providers: [...(byKind?.get('providers') ?? [])],
+      promptSections: [...(byKind?.get('promptSections') ?? [])],
+    };
   }
 
   /** Number of contributions recorded for a point (test/introspection aid). */

@@ -34,6 +34,7 @@ import {
   type ToolRegistry,
   type WorkspaceResolver,
 } from '@weave/runtime';
+import { describePlugin, type PluginListItem } from './plugin-catalog.js';
 
 export interface AgentKernelAssembly {
   readonly toolRegistry: ToolRegistry;
@@ -60,6 +61,8 @@ export interface AssembledAgentKernel {
   readonly toolPipeline: ToolPipeline;
   /** Plugin-contributed system-prompt sections, ordered by `order` ascending. */
   readonly promptSections: readonly PromptSection[];
+  /** The loaded plugins, in registration order, as `GET /plugins` lists them. */
+  readonly plugins: readonly PluginListItem[];
 }
 
 /**
@@ -87,74 +90,79 @@ export async function assembleAgentKernel(
   const { timeoutMs, resolveWorkspaceRoot } = assembly;
   const kernel = createPluginKernel();
 
+  const owners = [
+    createToolRegistryPlugin({ registry: toolRegistry, existing: 'skip' }),
+    createProviderRegistryPlugin({ registry: providerRegistry, existing: 'skip' }),
+    hostServicesPlugin({ approvalBroker, sessionStore }),
+  ];
+  const serverToolHost = definePlugin({
+    manifest: {
+      id: 'server-tool-host',
+      name: 'Server Tool Host',
+      version: '1.0.0',
+      apiVersion: pluginApiVersion,
+      capabilities: ['tool'],
+    },
+    setup(env) {
+      env.provide(toolPipelineRef, {
+        deps: { registry: toolRegistryRef, approvalBroker: approvalBrokerRef },
+        factory: ({ registry, approvalBroker: broker }) =>
+          createToolPipeline({ registry, approvalBroker: broker, timeoutMs }),
+      });
+      env.contribute(toolsExtensionPoint, (api) => {
+        if (resolveWorkspaceRoot !== undefined) {
+          const resolveWorkspace: WorkspaceResolver = async ({ sessionId }) => {
+            if (sessionId === undefined) {
+              return undefined;
+            }
+            const root = await resolveWorkspaceRoot(sessionId);
+            return root === undefined ? undefined : createWorkspacePolicy({ root });
+          };
+          const fileTools = createWorkspaceFileTools({
+            resolveWorkspace,
+            onFileSnapshot: async ({ sessionId, path, existedBefore, previousContent }) => {
+              if (sessionId === undefined) {
+                return;
+              }
+              await sessionStore.append(sessionId, [
+                {
+                  type: 'workspace.file-snapshot',
+                  payload: { path, existedBefore, previousContent },
+                },
+              ]);
+            },
+          });
+          const searchTools = createWorkspaceSearchTools({ resolveWorkspace });
+          const commandTool = createCommandTool({
+            resolveWorkspace,
+            ...(assembly.commandEnvironment === undefined
+              ? {}
+              : { environment: assembly.commandEnvironment }),
+          });
+          api.addTool(searchTools.listDir);
+          api.addTool(searchTools.glob);
+          api.addTool(searchTools.grep);
+          api.addTool(fileTools.readFile);
+          api.addTool(fileTools.editFile);
+          api.addTool(fileTools.writeFile);
+          api.addTool(commandTool);
+        }
+        api.addTool(createRecallTool({ resolve: createSessionRecallResolver(sessionStore) }));
+        api.addTool(createUpdatePlanTool());
+      });
+    },
+  });
+  const builtinIds = new Set([...owners, serverToolHost].map((plugin) => plugin.manifest.id));
+  const registeredIds = new Set(assembly.registeredPlugins.map((plugin) => plugin.manifest.id));
+
   try {
-    await kernel.register(createToolRegistryPlugin({ registry: toolRegistry, existing: 'skip' }));
-    await kernel.register(
-      createProviderRegistryPlugin({ registry: providerRegistry, existing: 'skip' }),
-    );
-    await kernel.register(hostServicesPlugin({ approvalBroker, sessionStore }));
+    for (const plugin of owners) {
+      await kernel.register(plugin);
+    }
     for (const plugin of assembly.registeredPlugins) {
       await kernel.register(plugin);
     }
-    await kernel.register(
-      definePlugin({
-        manifest: {
-          id: 'server-tool-host',
-          name: 'Server Tool Host',
-          version: '1.0.0',
-          apiVersion: pluginApiVersion,
-          capabilities: ['tool'],
-        },
-        setup(env) {
-          env.provide(toolPipelineRef, {
-            deps: { registry: toolRegistryRef, approvalBroker: approvalBrokerRef },
-            factory: ({ registry, approvalBroker: broker }) =>
-              createToolPipeline({ registry, approvalBroker: broker, timeoutMs }),
-          });
-          env.contribute(toolsExtensionPoint, (api) => {
-            if (resolveWorkspaceRoot !== undefined) {
-              const resolveWorkspace: WorkspaceResolver = async ({ sessionId }) => {
-                if (sessionId === undefined) {
-                  return undefined;
-                }
-                const root = await resolveWorkspaceRoot(sessionId);
-                return root === undefined ? undefined : createWorkspacePolicy({ root });
-              };
-              const fileTools = createWorkspaceFileTools({
-                resolveWorkspace,
-                onFileSnapshot: async ({ sessionId, path, existedBefore, previousContent }) => {
-                  if (sessionId === undefined) {
-                    return;
-                  }
-                  await sessionStore.append(sessionId, [
-                    {
-                      type: 'workspace.file-snapshot',
-                      payload: { path, existedBefore, previousContent },
-                    },
-                  ]);
-                },
-              });
-              const searchTools = createWorkspaceSearchTools({ resolveWorkspace });
-              const commandTool = createCommandTool({
-                resolveWorkspace,
-                ...(assembly.commandEnvironment === undefined
-                  ? {}
-                  : { environment: assembly.commandEnvironment }),
-              });
-              api.addTool(searchTools.listDir);
-              api.addTool(searchTools.glob);
-              api.addTool(searchTools.grep);
-              api.addTool(fileTools.readFile);
-              api.addTool(fileTools.editFile);
-              api.addTool(fileTools.writeFile);
-              api.addTool(commandTool);
-            }
-            api.addTool(createRecallTool({ resolve: createSessionRecallResolver(sessionStore) }));
-            api.addTool(createUpdatePlanTool());
-          });
-        },
-      }),
-    );
+    await kernel.register(serverToolHost);
     for (const plugin of assembly.kernelPlugins ?? []) {
       await kernel.register(plugin);
     }
@@ -186,7 +194,21 @@ export async function assembleAgentKernel(
       [...collected].sort((left, right) => left.order - right.order),
     );
 
-    return { kernel, toolPipeline, promptSections };
+    // Every owner has collected by now, so what each plugin contributed is known.
+    const plugins = generation
+      .plugins()
+      .map((info) =>
+        describePlugin(
+          info,
+          builtinIds.has(info.manifest.id)
+            ? 'builtin'
+            : registeredIds.has(info.manifest.id)
+              ? 'registered'
+              : 'kernel',
+        ),
+      );
+
+    return { kernel, toolPipeline, promptSections, plugins };
   } catch (error: unknown) {
     await kernel.dispose().catch(() => undefined);
     throw error;
