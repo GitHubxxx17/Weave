@@ -11,9 +11,16 @@ export type {
   SessionEventStoreFactory,
   SessionEventStoreServiceOptions,
 } from './session-service.js';
-// Re-exported so the plugin layer can type the session-store seam without a
-// direct @weave/session dependency (the plugin boundary allows llm + runtime).
-export type { SessionEventStore } from '@weave/session';
+// Re-exported so the plugin layer can type the session-store seam and the
+// events that cross it without a direct @weave/session dependency (the plugin
+// boundary allows llm + runtime). Types only: the plugin kernel carries no
+// runtime dependency on a library.
+export type {
+  NewSessionEvent,
+  PluginEventType,
+  SessionEvent,
+  SessionEventStore,
+} from '@weave/session';
 export { AgentRunError, agentRunRequestSchema, agentRuntimeEventSchema } from './agent-types.js';
 export type {
   AgentCompletionReason,

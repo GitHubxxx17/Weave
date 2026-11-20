@@ -53,6 +53,18 @@ export type {
 } from './hook.js';
 export { createPluginEnv } from './plugin-env.js';
 export type { PluginEnv, PluginEnvDeps, ServiceHandle } from './plugin-env.js';
+export { createPluginEventRegistry, createPluginSessionStore } from './plugin-events.js';
+export type {
+  PluginEventDefinition,
+  PluginEventHandle,
+  PluginEventProjection,
+  PluginEventRecord,
+  PluginEventRegistry,
+  PluginEventSpec,
+  PluginNewEvent,
+  ProjectedPluginEventHandle,
+  ProjectedPluginEventSpec,
+} from './plugin-events.js';
 export { createPluginKernel, definePlugin } from './kernel.js';
 export type {
   Generation,
@@ -68,9 +80,11 @@ export type {
 export {
   agentRunnerRef,
   approvalBrokerRef,
+  eventsExtensionPoint,
   llmProviderRegistryRef,
   llmProvidersExtensionPoint,
   llmRequestHook,
+  pluginEventsRef,
   promptSectionsExtensionPoint,
   sessionStoreRef,
   toolAroundHook,
@@ -86,6 +100,7 @@ export type {
   LlmProvidersExtensionApi,
   PromptSection,
   PromptSectionsExtensionApi,
+  SessionEventsExtensionApi,
   ToolsExtensionApi,
   TurnEndInfo,
   TurnInfo,

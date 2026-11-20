@@ -1,3 +1,5 @@
+export { createEventRegistryPlugin, eventRegistryPlugin } from './event-registry.js';
+export type { EventRegistryPluginOptions } from './event-registry.js';
 export { hostServicesPlugin } from './host-services.js';
 export type { HostServicesOptions } from './host-services.js';
 export { createProviderRegistryPlugin, providerRegistryPlugin } from './provider-registry.js';

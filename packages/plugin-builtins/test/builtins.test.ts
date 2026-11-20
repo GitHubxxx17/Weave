@@ -1,10 +1,12 @@
 import { createLlmProviderRegistry, createMockLlmClient } from '@weave/llm';
 import {
   approvalBrokerRef,
+  createPluginEventRegistry,
   createPluginKernel,
   definePlugin,
   llmProviderRegistryRef,
   llmProvidersExtensionPoint,
+  pluginEventsRef,
   sessionStoreRef,
   toolRegistryRef,
   toolsExtensionPoint,
@@ -20,15 +22,28 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import {
+  createEventRegistryPlugin,
   createProviderRegistryPlugin,
   createToolRegistryPlugin,
+  eventRegistryPlugin,
   hostServicesPlugin,
   providerRegistryPlugin,
   toolRegistryPlugin,
 } from '../src/index.js';
 
-function manifest(id: string, capability: 'tool' | 'llm-provider'): PluginManifest {
-  return { id, name: id, version: '0.1.0', apiVersion: '1.0.0', capabilities: [capability] };
+function manifest(
+  id: string,
+  capability: 'tool' | 'llm-provider' | 'event',
+  over: Partial<PluginManifest> = {},
+): PluginManifest {
+  return {
+    id,
+    name: id,
+    version: '0.1.0',
+    apiVersion: '1.0.0',
+    capabilities: [capability],
+    ...over,
+  };
 }
 
 describe('builtin owner plugins', () => {
@@ -199,6 +214,77 @@ describe('host services', () => {
 
     expect(plugin.manifest.contributes).toEqual({ services: [approvalBrokerRef.id] });
     await expect(generation.resolve(sessionStoreRef)).rejects.toThrow();
+    await kernel.dispose();
+  });
+});
+
+describe('event registry', () => {
+  // The schema is irrelevant to the owner, which only collects definitions.
+  const anyPayload = {
+    safeParse: (value: unknown) => ({ success: true as const, data: value }),
+  } as never;
+  const notesPlugin = (id: string) =>
+    definePlugin({
+      manifest: manifest(id, 'event'),
+      setup(env) {
+        env.defineEvent('note-added', { schema: anyPayload });
+        env.defineEvent('note-removed', { schema: anyPayload });
+      },
+    });
+
+  it('defines every contributed event in a registry of its own by default', async () => {
+    const kernel = createPluginKernel();
+    await kernel.register(eventRegistryPlugin);
+    await kernel.register(notesPlugin('notes'));
+    await kernel.register(notesPlugin('journal'));
+
+    const generation = await kernel.seal();
+    const registry = await generation.resolve(pluginEventsRef);
+
+    expect(registry.list().map((event) => event.type)).toEqual([
+      'notes/note-added',
+      'notes/note-removed',
+      'journal/note-added',
+      'journal/note-removed',
+    ]);
+    expect(kernel.plugins().map((info) => info.contributed.events)).toEqual([
+      [],
+      ['notes/note-added', 'notes/note-removed'],
+      ['journal/note-added', 'journal/note-removed'],
+    ]);
+    await kernel.dispose();
+  });
+
+  it('defines the events into the registry the host passes in', async () => {
+    const registry = createPluginEventRegistry();
+    const kernel = createPluginKernel();
+    await kernel.register(createEventRegistryPlugin({ registry }));
+    await kernel.register(notesPlugin('notes'));
+
+    const generation = await kernel.seal();
+
+    expect(await generation.resolve(pluginEventsRef)).toBe(registry);
+    expect(registry.get('notes/note-added')).toBeDefined();
+    await kernel.dispose();
+  });
+
+  it('rejects an event the contributing plugin did not list in its manifest', async () => {
+    const kernel = createPluginKernel();
+    await kernel.register(eventRegistryPlugin);
+    await kernel.register(
+      definePlugin({
+        manifest: manifest('strict', 'event', { contributes: { events: ['strict/listed'] } }),
+        setup(env) {
+          env.defineEvent('unlisted', { schema: anyPayload });
+        },
+      }),
+    );
+
+    const generation = await kernel.seal();
+
+    await expect(generation.resolve(pluginEventsRef)).rejects.toMatchObject({
+      code: 'plugin-contributes-exceeds-manifest',
+    });
     await kernel.dispose();
   });
 });

@@ -43,12 +43,17 @@ const noteKernelPlugin: KernelPlugin = definePlugin({
     name: 'Note Kernel',
     version: '0.4.0',
     apiVersion: '1.0.0',
-    capabilities: ['tool', 'prompt'],
+    capabilities: ['tool', 'prompt', 'event'],
     host: 'mcp',
-    contributes: { tools: ['note'], promptSections: ['note-style'] },
+    contributes: {
+      tools: ['note'],
+      promptSections: ['note-style'],
+      events: ['note-kernel/note-added'],
+    },
     permissions: ['workspace:read'],
   },
   setup(env) {
+    env.defineEvent('note-added', { schema: z.object({ text: z.string() }) });
     env.contribute(toolsExtensionPoint, (api) =>
       api.addTool({
         name: 'note',
@@ -106,6 +111,7 @@ describe('GET /plugins', () => {
       expect(plugins.map((plugin) => [plugin.id, plugin.origin])).toEqual([
         ['tool-registry', 'builtin'],
         ['provider-registry', 'builtin'],
+        ['event-registry', 'builtin'],
         ['host-services', 'builtin'],
         ['server-echo', 'registered'],
         ['server-tool-host', 'builtin'],
@@ -135,7 +141,13 @@ describe('GET /plugins', () => {
         origin: 'registered',
         host: 'in-process',
         capabilities: ['tool'],
-        provides: { tools: ['echo'], providers: [], promptSections: [], services: [] },
+        provides: {
+          tools: ['echo'],
+          providers: [],
+          promptSections: [],
+          events: [],
+          services: [],
+        },
       });
       expect(byId.get('note-kernel')).toEqual({
         id: 'note-kernel',
@@ -143,13 +155,18 @@ describe('GET /plugins', () => {
         version: '0.4.0',
         origin: 'kernel',
         host: 'mcp',
-        capabilities: ['tool', 'prompt'],
-        contributes: { tools: ['note'], promptSections: ['note-style'] },
+        capabilities: ['tool', 'prompt', 'event'],
+        contributes: {
+          tools: ['note'],
+          promptSections: ['note-style'],
+          events: ['note-kernel/note-added'],
+        },
         permissions: ['workspace:read'],
         provides: {
           tools: ['note'],
           providers: [],
           promptSections: ['note-style'],
+          events: ['note-kernel/note-added'],
           services: [],
         },
       });
@@ -170,6 +187,9 @@ describe('GET /plugins', () => {
 
       expect(byId.get('tool-registry')?.provides.services).toEqual(['weave.tools.registry']);
       expect(byId.get('provider-registry')?.provides.services).toEqual(['weave.llm.registry']);
+      expect(byId.get('event-registry')?.provides.services).toEqual([
+        'weave.session.plugin-events',
+      ]);
       expect(byId.get('host-services')).toMatchObject({
         contributes: { services: ['weave.approval.broker', 'weave.session.store'] },
         provides: { services: ['weave.approval.broker', 'weave.session.store'] },
