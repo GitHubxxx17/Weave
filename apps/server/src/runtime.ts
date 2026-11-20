@@ -7,7 +7,9 @@ import {
   pluginApiVersion,
   toolPipelineRef,
   toolRegistryRef,
+  toolResultHook,
   toolsExtensionPoint,
+  type KernelPlugin,
   type PluginRegistry,
   type PluginSnapshot,
   type WeavePlugin,
@@ -76,6 +78,11 @@ export interface ServerAgentRunnerOptions {
   readonly maxSteps?: number;
   /** Base environment for `run_command`; defaults to the login shell environment. */
   readonly commandEnvironment?: () => NodeJS.ProcessEnv | Promise<NodeJS.ProcessEnv>;
+  /**
+   * Kernel plugins registered into the per-run tool kernel. They may contribute
+   * tools to `weave.tools` and observe results through `weave.tools.result`.
+   */
+  readonly kernelPlugins?: readonly KernelPlugin[];
 }
 
 /**
@@ -133,6 +140,7 @@ interface AgentToolAssembly {
   readonly timeoutMs: number;
   readonly resolveWorkspaceRoot?: ((sessionId: string) => Promise<string | undefined>) | undefined;
   readonly commandEnvironment?: (() => NodeJS.ProcessEnv | Promise<NodeJS.ProcessEnv>) | undefined;
+  readonly kernelPlugins?: readonly KernelPlugin[] | undefined;
 }
 
 /**
@@ -221,8 +229,23 @@ async function assembleToolPipeline(assembly: AgentToolAssembly): Promise<ToolPi
       },
     }),
   );
+  for (const plugin of assembly.kernelPlugins ?? []) {
+    await kernel.register(plugin);
+  }
   const generation = await kernel.seal();
-  return generation.resolve(toolPipelineRef);
+  const pipeline = await generation.resolve(toolPipelineRef);
+  if (kernel.hooks.count(toolResultHook) === 0) {
+    return pipeline;
+  }
+  // A plugin observes completed tool results; observation is read-only and its
+  // failures are isolated, so the pipeline's result is returned unchanged.
+  return {
+    async execute(request) {
+      const result = await pipeline.execute(request);
+      await kernel.hooks.runObserve(toolResultHook, result);
+      return result;
+    },
+  };
 }
 
 /**
@@ -258,6 +281,7 @@ export async function createServerAgentRunner(
     timeoutMs: options.toolTimeoutMs ?? defaultToolTimeoutMs,
     resolveWorkspaceRoot,
     commandEnvironment: options.commandEnvironment,
+    kernelPlugins: options.kernelPlugins,
   });
 
   return createAgentRunner({
