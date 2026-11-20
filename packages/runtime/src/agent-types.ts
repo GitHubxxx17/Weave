@@ -230,13 +230,17 @@ export interface AgentRunnerOptions {
   /**
    * Returns the system instructions for one run, resolved once before the
    * first model step. They are sent with every model request of the run but
-   * are never written to the Session, so they can reflect current state such
-   * as the Session's Workspace folder and the run's permission mode.
+   * are never written to the Session by the Runner, so they can reflect
+   * current state such as the Session's Workspace folder and the run's
+   * permission mode. `turnId` is the turn whose `turn.started` is already
+   * recorded, so a host that must record what it is about to apply can tie it
+   * to that turn. A failure here fails the turn before any model call.
    */
   readonly instructions?:
     | ((context: {
         readonly sessionId: string;
         readonly permissionMode: ToolPermissionMode;
+        readonly turnId: string;
       }) => string | undefined | Promise<string | undefined>)
     | undefined;
   /**

@@ -115,6 +115,12 @@ export interface PromptSection {
   readonly id: string;
   readonly order: number;
   readonly text: string;
+  /**
+   * The plugin that contributed the section. The kernel sets it on every
+   * section it passes to the owner and replaces whatever a contributor wrote,
+   * so an owner can attribute the text it applies.
+   */
+  readonly pluginId?: string | undefined;
 }
 
 /** Contributor API for the `weave.prompt.sections` extension point. */
@@ -129,10 +135,13 @@ export const promptSectionsExtensionPoint: ExtensionPoint<PromptSectionsExtensio
     governed: {
       capability: 'prompt',
       key: 'promptSections',
-      guard: (api, check) => ({
+      guard: (api, check, pluginId) => ({
         addSection(section) {
           check(section.id);
-          api.addSection(section);
+          // A copy that names its contributor: the owner can tell whose text it
+          // applies, and a later change to the contributor's own object cannot
+          // change what the owner holds.
+          api.addSection(Object.freeze({ ...section, pluginId }));
         },
       }),
     },

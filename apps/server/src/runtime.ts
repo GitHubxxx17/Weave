@@ -24,6 +24,7 @@ import { createServerLlmProviders, type ServerLlmProviderSettings } from './llm-
 import { createAgentInstructions } from './agent-instructions.js';
 import { assembleAgentKernel } from './agent-kernel.js';
 import { type CommandListItem, type PluginListItem } from './plugin-catalog.js';
+import { createPromptAudit } from './prompt-audit.js';
 import { createServerHost, serverHostOf, type ServerRuntime } from './server-host.js';
 import { observeTurns } from './turn-observer.js';
 
@@ -156,6 +157,14 @@ export async function createServerAgentRunner(
           start: (info) => hooks.runObserve(turnStartHook, info),
           end: (info) => hooks.runObserve(turnEndHook, info),
         });
+  // What plugins add to the prompt is recorded in the Session, with the Server's
+  // own store because these are core events plugins cannot write.
+  const promptAudit = createPromptAudit({ store: sessionStore, sections: promptSections });
+  const baseInstructions = createAgentInstructions({
+    tools: () => toolRegistry.list(),
+    resolveWorkspaceRoot,
+    extraSections: () => promptSections.map((section) => section.text),
+  });
 
   return createAgentRunner({
     llmRegistry: host.providerRegistry,
@@ -170,11 +179,12 @@ export async function createServerAgentRunner(
             hooks.runWrap(llmRequestHook, call, async (wrapped) => next(wrapped)),
         }),
     ...(options.maxSteps === undefined ? {} : { maxSteps: options.maxSteps }),
-    instructions: createAgentInstructions({
-      tools: () => toolRegistry.list(),
-      resolveWorkspaceRoot,
-      extraSections: () => promptSections.map((section) => section.text),
-    }),
+    instructions: async (context) => {
+      // The record comes first and a failure fails the turn, so no plugin text
+      // reaches a model without being on record.
+      await promptAudit.record(context);
+      return baseInstructions(context);
+    },
   });
 }
 

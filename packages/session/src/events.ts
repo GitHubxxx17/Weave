@@ -110,6 +110,39 @@ const fileSnapshotPayloadSchema = z
   })
   .passthrough();
 
+const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/, 'Expected a lowercase SHA-256 hex digest');
+const byteCountSchema = z.number().int().nonnegative().safe();
+
+/**
+ * One plugin-contributed system-prompt section as it was applied: which section
+ * and plugin, the SHA-256 of its text, and the size of that text in UTF-8 bytes.
+ * The text itself is in a `prompt.section-content` event under the same hash.
+ */
+const appliedPromptSectionSchema = z
+  .object({
+    id: nonEmptyStringSchema,
+    pluginId: nonEmptyStringSchema,
+    sha256: sha256Schema,
+    bytes: byteCountSchema,
+  })
+  .passthrough();
+
+const promptSectionsAppliedPayloadSchema = z
+  .object({
+    /** The turn the set took effect for; it stays in effect until the next such event. */
+    turnId: nonEmptyStringSchema,
+    /** The sections in the order they were rendered; empty when none apply any more. */
+    sections: z.array(appliedPromptSectionSchema),
+  })
+  .passthrough();
+
+const promptSectionContentPayloadSchema = z
+  .object({
+    sha256: sha256Schema,
+    text: nonEmptyStringSchema,
+  })
+  .passthrough();
+
 /**
  * The durable facts supported by the first Session Event Store slice.
  */
@@ -165,6 +198,14 @@ export const sessionEventPayloadSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('workspace.file-snapshot'),
     payload: fileSnapshotPayloadSchema,
+  }),
+  z.object({
+    type: z.literal('prompt.section-content'),
+    payload: promptSectionContentPayloadSchema,
+  }),
+  z.object({
+    type: z.literal('prompt.sections-applied'),
+    payload: promptSectionsAppliedPayloadSchema,
   }),
 ]);
 
@@ -321,6 +362,22 @@ const persistedEventSchemas = [
     occurredAt: z.iso.datetime(),
     type: z.literal('workspace.file-snapshot'),
     payload: fileSnapshotPayloadSchema,
+  }),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('prompt.section-content'),
+    payload: promptSectionContentPayloadSchema,
+  }),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('prompt.sections-applied'),
+    payload: promptSectionsAppliedPayloadSchema,
   }),
 ] as const;
 
