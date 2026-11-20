@@ -82,7 +82,7 @@ describe('GET /health', () => {
     const runtime = createServerRuntime();
     await runtime.start();
 
-    expect(createServerAgentRunner(runtime)).toMatchObject({
+    expect(await createServerAgentRunner(runtime)).toMatchObject({
       run: expect.any(Function),
     });
 

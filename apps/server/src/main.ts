@@ -171,7 +171,7 @@ export async function startServer(
     await registerServerPlugins(runtime, options.plugins);
     const sessionStore = getServerSessionStore(runtime);
     const sessionService = createSessionService({ projectStore, sessionStore });
-    const agentRunner = createServerAgentRunner(runtime, {
+    const agentRunner = await createServerAgentRunner(runtime, {
       resolveWorkspaceRoot: createWorkspaceRootResolver(projectStore),
       ...(maxSteps === undefined ? {} : { maxSteps }),
     });

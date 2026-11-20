@@ -116,7 +116,7 @@ describe('Server Plugin integration', () => {
       await registerServerPlugins(runtime, [echoPlugin]);
       const sessionService = await createSessionServiceForRuntime(runtime);
       const response = await createApp(runtime, {
-        agentRunner: createServerAgentRunner(runtime),
+        agentRunner: await createServerAgentRunner(runtime),
         sessionService,
       }).request('/agent/runs/stream', {
         method: 'POST',

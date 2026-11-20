@@ -91,7 +91,7 @@ async function createAgentApp(
   const session = await sessionService.create(project.id);
 
   const app = createApp(runtime, {
-    agentRunner: createServerAgentRunner(runtime, {
+    agentRunner: await createServerAgentRunner(runtime, {
       resolveWorkspaceRoot: createWorkspaceRootResolver(projectStore),
       ...runnerOptions,
     }),
@@ -329,7 +329,7 @@ describe('Built-in mock /tool commands', () => {
     });
     const session = await sessionService.create(project.id);
     const app = createApp(runtime, {
-      agentRunner: createServerAgentRunner(runtime, {
+      agentRunner: await createServerAgentRunner(runtime, {
         resolveWorkspaceRoot: createWorkspaceRootResolver(projectStore),
       }),
       sessionService,
@@ -579,7 +579,7 @@ describe('Default Agent instructions', () => {
     });
     const session = await sessionService.create(project.id);
     const app = createApp(runtime, {
-      agentRunner: createServerAgentRunner(runtime, {
+      agentRunner: await createServerAgentRunner(runtime, {
         resolveWorkspaceRoot: createWorkspaceRootResolver(projectStore),
       }),
       sessionService,
@@ -648,7 +648,7 @@ describe('Default Agent instructions', () => {
     });
     const session = await sessionService.create(project.id);
     const app = createApp(runtime, {
-      agentRunner: createServerAgentRunner(runtime, {
+      agentRunner: await createServerAgentRunner(runtime, {
         resolveWorkspaceRoot: createWorkspaceRootResolver(projectStore),
       }),
       sessionService,

@@ -1,6 +1,13 @@
 import { type LlmProviderRegistry } from '@weave/llm';
 import {
+  approvalBrokerRef,
+  createPluginKernel,
   createPluginRegistry,
+  definePlugin,
+  pluginApiVersion,
+  toolPipelineRef,
+  toolRegistryRef,
+  toolsExtensionPoint,
   type PluginRegistry,
   type PluginSnapshot,
   type WeavePlugin,
@@ -25,6 +32,7 @@ import {
   type Runtime,
   type RuntimeService,
   type SessionEventStoreFactory,
+  type ToolPipeline,
   type ToolRegistry,
   type WorkspaceResolver,
 } from '@weave/runtime';
@@ -52,9 +60,6 @@ const sessionStoreServices = new WeakMap<Runtime, RuntimeService<SessionEventSto
 const providerRegistryServices = new WeakMap<Runtime, RuntimeService<LlmProviderRegistry>>();
 const toolRegistries = new WeakMap<Runtime, ToolRegistry>();
 const pluginRegistries = new WeakMap<Runtime, PluginRegistry>();
-const workspaceToolsRegistered = new WeakSet<ToolRegistry>();
-const recallToolRegistered = new WeakSet<ToolRegistry>();
-const updatePlanToolRegistered = new WeakSet<ToolRegistry>();
 
 /**
  * Upper bound for one tool call, including the time a protected tool waits for
@@ -121,22 +126,118 @@ export async function registerServerPlugins(
   return Object.freeze(snapshots);
 }
 
+interface AgentToolAssembly {
+  readonly toolRegistry: ToolRegistry;
+  readonly approvalBroker: ApprovalBroker;
+  readonly sessionStore: SessionEventStore;
+  readonly timeoutMs: number;
+  readonly resolveWorkspaceRoot?: ((sessionId: string) => Promise<string | undefined>) | undefined;
+  readonly commandEnvironment?: (() => NodeJS.ProcessEnv | Promise<NodeJS.ProcessEnv>) | undefined;
+}
+
 /**
- * Creates the Agent Runner after the Runtime has created its dependencies.
+ * Assembles the Tool Pipeline through the plugin kernel.
  *
- * The composition root owns this assembly because the current Runtime service
- * factory does not declare dependencies between services.
- *
- * When `resolveWorkspaceRoot` is supplied, the Workspace tools are registered
- * after trusted plugins, in the order the model should reach for them:
- * `list_dir`, `glob`, `grep`, `read_file`, `edit_file`, `write_file`,
- * `run_command`. Each call resolves the Workspace of its Session; a Session
- * whose Project has no folder gets `workspace-file-unavailable`.
+ * A single server-host plugin owns the `weave.tools` extension point over the
+ * shared Tool Registry (so tools already registered by trusted plugins are
+ * kept) and provides the Tool Pipeline from the registry plus the Approval
+ * Broker. The server's own tools are contributed in the order the model should
+ * reach for them — `list_dir`, `glob`, `grep`, `read_file`, `edit_file`,
+ * `write_file`, `run_command`, then `recall` and `update_plan`. Contributing a
+ * tool whose name is already taken is skipped, so re-assembly is idempotent.
  */
-export function createServerAgentRunner(
+async function assembleToolPipeline(assembly: AgentToolAssembly): Promise<ToolPipeline> {
+  const { toolRegistry, approvalBroker, sessionStore, timeoutMs, resolveWorkspaceRoot } = assembly;
+  const kernel = createPluginKernel();
+  await kernel.register(
+    definePlugin({
+      manifest: {
+        id: 'server-tool-host',
+        name: 'Server Tool Host',
+        version: '1.0.0',
+        apiVersion: pluginApiVersion,
+        capabilities: ['tool'],
+      },
+      setup(env) {
+        env.provide(approvalBrokerRef, { factory: () => approvalBroker });
+        env.provide(toolRegistryRef, {
+          factory: (_deps, context) => {
+            context.collect(toolsExtensionPoint, {
+              addTool: (tool) => {
+                if (toolRegistry.get(tool.name) === undefined) {
+                  toolRegistry.register(tool);
+                }
+              },
+            });
+            return toolRegistry;
+          },
+        });
+        env.provide(toolPipelineRef, {
+          deps: { registry: toolRegistryRef, approvalBroker: approvalBrokerRef },
+          factory: ({ registry, approvalBroker: broker }) =>
+            createToolPipeline({ registry, approvalBroker: broker, timeoutMs }),
+        });
+        env.contribute(toolsExtensionPoint, (api) => {
+          if (resolveWorkspaceRoot !== undefined) {
+            const resolveWorkspace: WorkspaceResolver = async ({ sessionId }) => {
+              if (sessionId === undefined) {
+                return undefined;
+              }
+              const root = await resolveWorkspaceRoot(sessionId);
+              return root === undefined ? undefined : createWorkspacePolicy({ root });
+            };
+            const fileTools = createWorkspaceFileTools({
+              resolveWorkspace,
+              onFileSnapshot: async ({ sessionId, path, existedBefore, previousContent }) => {
+                if (sessionId === undefined) {
+                  return;
+                }
+                await sessionStore.append(sessionId, [
+                  {
+                    type: 'workspace.file-snapshot',
+                    payload: { path, existedBefore, previousContent },
+                  },
+                ]);
+              },
+            });
+            const searchTools = createWorkspaceSearchTools({ resolveWorkspace });
+            const commandTool = createCommandTool({
+              resolveWorkspace,
+              ...(assembly.commandEnvironment === undefined
+                ? {}
+                : { environment: assembly.commandEnvironment }),
+            });
+            api.addTool(searchTools.listDir);
+            api.addTool(searchTools.glob);
+            api.addTool(searchTools.grep);
+            api.addTool(fileTools.readFile);
+            api.addTool(fileTools.editFile);
+            api.addTool(fileTools.writeFile);
+            api.addTool(commandTool);
+          }
+          api.addTool(createRecallTool({ resolve: createSessionRecallResolver(sessionStore) }));
+          api.addTool(createUpdatePlanTool());
+        });
+      },
+    }),
+  );
+  const generation = await kernel.seal();
+  return generation.resolve(toolPipelineRef);
+}
+
+/**
+ * Creates the Agent Runner after the Runtime has started.
+ *
+ * Tool assembly runs through the plugin kernel ({@link assembleToolPipeline}):
+ * the server's tools are contributed to the shared Tool Registry in model-facing
+ * order, and the Tool Pipeline is resolved from the registry and Approval
+ * Broker. Each tool call resolves the Workspace of its Session; a Session whose
+ * Project has no folder gets `workspace-file-unavailable`.
+ */
+export async function createServerAgentRunner(
   runtime: Runtime,
   options: ServerAgentRunnerOptions = {},
-): AgentRunner {
+): Promise<AgentRunner> {
   const sessionStoreService = sessionStoreServices.get(runtime);
   const providerRegistryService = providerRegistryServices.get(runtime);
   const toolRegistry = toolRegistries.get(runtime);
@@ -148,88 +249,20 @@ export function createServerAgentRunner(
     throw new Error('Server Runtime was not created by createServerRuntime');
   }
 
+  const sessionStore = runtime.get(sessionStoreService);
   const resolveWorkspaceRoot = options.resolveWorkspaceRoot;
-  if (resolveWorkspaceRoot !== undefined && !workspaceToolsRegistered.has(toolRegistry)) {
-    const resolveWorkspace: WorkspaceResolver = async ({ sessionId }) => {
-      if (sessionId === undefined) {
-        return undefined;
-      }
-      const root = await resolveWorkspaceRoot(sessionId);
-      return root === undefined ? undefined : createWorkspacePolicy({ root });
-    };
-    const sessionStore = runtime.get(sessionStoreService);
-    const fileTools = createWorkspaceFileTools({
-      resolveWorkspace,
-      onFileSnapshot: async ({ sessionId, path, existedBefore, previousContent }) => {
-        if (sessionId === undefined) {
-          return;
-        }
-        await sessionStore.append(sessionId, [
-          {
-            type: 'workspace.file-snapshot',
-            payload: { path, existedBefore, previousContent },
-          },
-        ]);
-      },
-    });
-    const searchTools = createWorkspaceSearchTools({ resolveWorkspace });
-    const commandTool = createCommandTool({
-      resolveWorkspace,
-      ...(options.commandEnvironment === undefined
-        ? {}
-        : { environment: options.commandEnvironment }),
-    });
-    const workspaceToolNames = [
-      searchTools.listDir,
-      searchTools.glob,
-      searchTools.grep,
-      fileTools.readFile,
-      fileTools.editFile,
-      fileTools.writeFile,
-      commandTool,
-    ].map((tool) => tool.name);
-    for (const name of workspaceToolNames) {
-      if (toolRegistry.get(name) !== undefined) {
-        throw new Error(`Tool "${name}" is already registered by a plugin`);
-      }
-    }
-    toolRegistry.register(searchTools.listDir);
-    toolRegistry.register(searchTools.glob);
-    toolRegistry.register(searchTools.grep);
-    toolRegistry.register(fileTools.readFile);
-    toolRegistry.register(fileTools.editFile);
-    toolRegistry.register(fileTools.writeFile);
-    toolRegistry.register(commandTool);
-    workspaceToolsRegistered.add(toolRegistry);
-  }
-
-  if (!recallToolRegistered.has(toolRegistry)) {
-    const recallTool = createRecallTool({
-      resolve: createSessionRecallResolver(runtime.get(sessionStoreService)),
-    });
-    if (toolRegistry.get(recallTool.name) === undefined) {
-      toolRegistry.register(recallTool);
-    }
-    recallToolRegistered.add(toolRegistry);
-  }
-
-  if (!updatePlanToolRegistered.has(toolRegistry)) {
-    const updatePlanTool = createUpdatePlanTool();
-    if (toolRegistry.get(updatePlanTool.name) === undefined) {
-      toolRegistry.register(updatePlanTool);
-    }
-    updatePlanToolRegistered.add(toolRegistry);
-  }
-
-  const toolPipeline = createToolPipeline({
-    registry: toolRegistry,
+  const toolPipeline = await assembleToolPipeline({
+    toolRegistry,
     approvalBroker: runtime.get(approvalBrokerService),
+    sessionStore,
     timeoutMs: options.toolTimeoutMs ?? defaultToolTimeoutMs,
+    resolveWorkspaceRoot,
+    commandEnvironment: options.commandEnvironment,
   });
 
   return createAgentRunner({
     llmRegistry: runtime.get(providerRegistryService),
-    sessionStore: runtime.get(sessionStoreService),
+    sessionStore,
     toolRegistry,
     toolPipeline,
     ...(options.maxSteps === undefined ? {} : { maxSteps: options.maxSteps }),
