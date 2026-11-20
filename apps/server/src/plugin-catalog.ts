@@ -18,7 +18,7 @@ export const pluginListItemSchema = z.object({
   description: z.string().optional(),
   origin: z.enum(['builtin', 'registered', 'kernel']),
   host: z.enum(['in-process', 'mcp', 'subprocess']),
-  capabilities: z.array(z.enum(['tool', 'llm-provider', 'prompt', 'event'])),
+  capabilities: z.array(z.enum(['tool', 'llm-provider', 'prompt', 'event', 'command'])),
   engines: z.object({ weave: z.string() }).optional(),
   contributes: z
     .object({
@@ -26,6 +26,7 @@ export const pluginListItemSchema = z.object({
       providers: nameListSchema.optional(),
       promptSections: nameListSchema.optional(),
       events: nameListSchema.optional(),
+      commands: nameListSchema.optional(),
       services: nameListSchema.optional(),
     })
     .optional(),
@@ -35,6 +36,7 @@ export const pluginListItemSchema = z.object({
     providers: nameListSchema,
     promptSections: nameListSchema,
     events: nameListSchema,
+    commands: nameListSchema,
     services: nameListSchema,
   }),
 });
@@ -44,6 +46,20 @@ export type PluginListItem = z.infer<typeof pluginListItemSchema>;
 /** Response body of `GET /plugins`. */
 export const pluginListResponseSchema = z.object({ plugins: z.array(pluginListItemSchema) });
 
+/** One slash command as `GET /commands` lists it: the command and who contributed it. */
+export const commandListItemSchema = z.object({
+  name: z.string(),
+  title: z.string(),
+  description: z.string().optional(),
+  prompt: z.string(),
+  pluginId: z.string(),
+});
+
+export type CommandListItem = z.infer<typeof commandListItemSchema>;
+
+/** Response body of `GET /commands`. */
+export const commandListResponseSchema = z.object({ commands: z.array(commandListItemSchema) });
+
 function declared(contributes: PluginContributes): NonNullable<PluginListItem['contributes']> {
   return {
     ...(contributes.tools === undefined ? {} : { tools: [...contributes.tools] }),
@@ -52,6 +68,7 @@ function declared(contributes: PluginContributes): NonNullable<PluginListItem['c
       ? {}
       : { promptSections: [...contributes.promptSections] }),
     ...(contributes.events === undefined ? {} : { events: [...contributes.events] }),
+    ...(contributes.commands === undefined ? {} : { commands: [...contributes.commands] }),
     ...(contributes.services === undefined ? {} : { services: [...contributes.services] }),
   };
 }
@@ -75,6 +92,7 @@ export function describePlugin(info: PluginInfo, origin: PluginOrigin): PluginLi
       providers: [...contributed.providers],
       promptSections: [...contributed.promptSections],
       events: [...contributed.events],
+      commands: [...contributed.commands],
       services: [...contributed.services],
     },
   });

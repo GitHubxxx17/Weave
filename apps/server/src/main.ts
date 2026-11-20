@@ -25,6 +25,7 @@ import {
   createServerRuntime,
   disposeServerPlugins,
   getServerSessionStore,
+  listServerCommands,
   listServerPlugins,
   registerServerPlugins,
 } from './runtime.js';
@@ -195,6 +196,7 @@ export async function startServer(
           providerSettingsManager,
           canManageProviders: providerSettingsManager !== undefined,
           pluginCatalog: () => listServerPlugins(runtime),
+          commandCatalog: () => listServerCommands(runtime),
           ...(studioOrigin === undefined ? {} : { studioOrigin }),
         }).fetch,
         hostname: '127.0.0.1',

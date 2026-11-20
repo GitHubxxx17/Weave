@@ -1,11 +1,13 @@
 import { type LlmProviderRegistry } from '@weave/llm';
 import {
   approvalBrokerRef,
+  commandsExtensionPoint,
   createPluginEventRegistry,
   createPluginKernel,
   createPluginSessionStore,
   definePlugin,
   llmProviderRegistryRef,
+  PluginError,
   pluginApiVersion,
   pluginEventsRef,
   promptSectionsExtensionPoint,
@@ -16,6 +18,7 @@ import {
   toolResultHook,
   toolsExtensionPoint,
   type KernelPlugin,
+  type PluginCommand,
   type PluginKernel,
   type PromptSection,
 } from '@weave/plugin';
@@ -40,7 +43,7 @@ import {
   type ToolRegistry,
   type WorkspaceResolver,
 } from '@weave/runtime';
-import { describePlugin, type PluginListItem } from './plugin-catalog.js';
+import { describePlugin, type CommandListItem, type PluginListItem } from './plugin-catalog.js';
 
 export interface AgentKernelAssembly {
   readonly toolRegistry: ToolRegistry;
@@ -69,6 +72,8 @@ export interface AssembledAgentKernel {
   readonly promptSections: readonly PromptSection[];
   /** The loaded plugins, in registration order, as `GET /plugins` lists them. */
   readonly plugins: readonly PluginListItem[];
+  /** The slash commands plugins contributed, in registration order, as `GET /commands` lists them. */
+  readonly commands: readonly CommandListItem[];
 }
 
 /**
@@ -92,8 +97,10 @@ export interface AssembledAgentKernel {
  * applies both itself, around outermost. Plugins record their own Session
  * events (`<pluginId>/<name>`, defined through `env.defineEvent`) in the
  * Session Store they get as `weave.session.store`, which checks each append
- * against the registered definitions and refuses every core event. A failure
- * while assembling disposes the kernel before it propagates.
+ * against the registered definitions and refuses every core event. Slash
+ * commands contributed through `weave.commands` are collected too and listed
+ * for Studio; a command name belongs to one plugin. A failure while
+ * assembling disposes the kernel before it propagates.
  */
 export async function assembleAgentKernel(
   assembly: AgentKernelAssembly,
@@ -232,6 +239,33 @@ export async function assembleAgentKernel(
       [...collected].sort((left, right) => left.order - right.order),
     );
 
+    // Commands are declarative prompt templates the host serves to Studio. A
+    // name belongs to one plugin, so a second plugin that uses it fails the
+    // assembly rather than shadowing the first.
+    const commandsByName = new Map<string, PluginCommand>();
+    kernel.extensions.collect(commandsExtensionPoint, {
+      addCommand: (command) => {
+        if (commandsByName.has(command.name)) {
+          const owners = generation
+            .plugins()
+            .filter((info) => info.contributed.commands.includes(command.name))
+            .map((info) => info.manifest.id);
+          throw new PluginError(
+            'plugin-registration-conflict',
+            `Command "${command.name}" is contributed by more than one plugin (${owners.join(', ')})`,
+          );
+        }
+        commandsByName.set(command.name, command);
+      },
+    });
+    // Listed plugin by plugin, so each command carries the plugin that added it.
+    const commands: readonly CommandListItem[] = generation.plugins().flatMap((info) =>
+      info.contributed.commands.flatMap((name) => {
+        const command = commandsByName.get(name);
+        return command === undefined ? [] : [{ ...command, pluginId: info.manifest.id }];
+      }),
+    );
+
     // Every owner has collected by now, so what each plugin contributed is known.
     const plugins = generation
       .plugins()
@@ -246,7 +280,7 @@ export async function assembleAgentKernel(
         ),
       );
 
-    return { kernel, toolPipeline, promptSections, plugins };
+    return { kernel, toolPipeline, promptSections, plugins, commands };
   } catch (error: unknown) {
     await kernel.dispose().catch(() => undefined);
     throw error;

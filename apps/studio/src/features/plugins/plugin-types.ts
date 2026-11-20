@@ -24,6 +24,7 @@ export const pluginListItemSchema = z.object({
       providers: nameListSchema.optional(),
       promptSections: nameListSchema.optional(),
       events: nameListSchema.optional(),
+      commands: nameListSchema.optional(),
       services: nameListSchema.optional(),
     })
     .optional(),
@@ -35,6 +36,8 @@ export const pluginListItemSchema = z.object({
     promptSections: nameListSchema,
     /** Left out by a Server that predates plugin events. */
     events: nameListSchema.default([]),
+    /** Left out by a Server that predates plugin commands. */
+    commands: nameListSchema.default([]),
     services: nameListSchema,
   }),
 });

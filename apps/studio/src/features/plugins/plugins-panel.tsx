@@ -23,6 +23,7 @@ const capabilityLabels: Readonly<Record<string, string>> = {
   'llm-provider': '模型提供方',
   prompt: '提示词',
   event: '会话事件',
+  command: '命令',
 };
 
 const hostLabels: Readonly<Record<string, string>> = {
@@ -84,6 +85,7 @@ function PluginItem({ plugin }: { readonly plugin: PluginListItem }): ReactEleme
     ['模型提供方', plugin.provides.providers],
     ['提示词片段', plugin.provides.promptSections],
     ['会话事件', plugin.provides.events],
+    ['命令', plugin.provides.commands],
     ['服务', plugin.provides.services],
   ];
 

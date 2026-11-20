@@ -23,7 +23,7 @@ import { createInMemorySessionEventStore } from '@weave/session';
 import { createServerLlmProviders, type ServerLlmProviderSettings } from './llm-providers.js';
 import { createAgentInstructions } from './agent-instructions.js';
 import { assembleAgentKernel } from './agent-kernel.js';
-import { type PluginListItem } from './plugin-catalog.js';
+import { type CommandListItem, type PluginListItem } from './plugin-catalog.js';
 import { createServerHost, serverHostOf, type ServerRuntime } from './server-host.js';
 import { observeTurns } from './turn-observer.js';
 
@@ -142,6 +142,7 @@ export async function createServerAgentRunner(
   host.lockPlugins();
   host.trackKernel(assembled.kernel);
   host.setPlugins(assembled.plugins);
+  host.setCommands(assembled.commands);
   const { toolRegistry } = host;
   const { promptSections } = assembled;
   const { hooks } = assembled.kernel;
@@ -196,4 +197,12 @@ export async function disposeServerPlugins(runtime: Runtime): Promise<void> {
  */
 export function listServerPlugins(runtime: Runtime): readonly PluginListItem[] {
   return serverHostOf(runtime).plugins();
+}
+
+/**
+ * Lists the slash commands plugins contributed to the most recently created
+ * Agent Runner, empty until one exists. This is what `GET /commands` serves.
+ */
+export function listServerCommands(runtime: Runtime): readonly CommandListItem[] {
+  return serverHostOf(runtime).commands();
 }
