@@ -8,7 +8,11 @@ import {
   toolAroundHook,
   toolResultHook,
   toolsExtensionPoint,
+  turnEndHook,
+  turnStartHook,
   type KernelPlugin,
+  type TurnEndInfo,
+  type TurnInfo,
   type WeavePlugin,
 } from '@weave/plugin';
 import type { ToolExecutionRequest, ToolExecutionResult } from '@weave/runtime';
@@ -452,5 +456,84 @@ describe('Server Plugin integration', () => {
     } finally {
       await runtime.stop();
     }
+  });
+
+  describe('turn hooks', () => {
+    function turnRecorder(turns: string[]): KernelPlugin {
+      return definePlugin({
+        manifest: {
+          id: 'turn-recorder',
+          name: 'Turn Recorder',
+          version: '1.0.0',
+          apiVersion: '1.0.0',
+          capabilities: ['tool'],
+        },
+        setup(env) {
+          env.onHook(turnStartHook, (info: TurnInfo) => {
+            turns.push(`start ${info.sessionId} ${info.turnId}`);
+          });
+          env.onHook(turnEndHook, (info: TurnEndInfo) => {
+            turns.push(`end ${info.turnId} ${info.status}`);
+          });
+        },
+      });
+    }
+
+    async function runTurn(client: ReturnType<typeof createSequenceClient>, plugin: KernelPlugin) {
+      const providerRegistry = createLlmProviderRegistry([
+        { id: 'mock', label: '本地演示', type: 'mock', client, defaultModel: 'test-model' },
+      ]);
+      const runtime = createServerRuntime({
+        providerSettings: createProviderSettings(providerRegistry),
+      });
+      await runtime.start();
+      try {
+        const sessionService = await createSessionServiceForRuntime(runtime);
+        const response = await createApp(runtime, {
+          agentRunner: await createServerAgentRunner(runtime, { kernelPlugins: [plugin] }),
+          sessionService,
+        }).request('/agent/runs/stream', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            sessionId,
+            userMessage: { role: 'user', content: [{ type: 'text', text: '你好' }] },
+            provider: 'mock',
+            model: 'test-model',
+          }),
+        });
+        return await response.text();
+      } finally {
+        await runtime.stop();
+      }
+    }
+
+    it('announces the start and the end of a finished turn to kernel plugins', async () => {
+      const turns: string[] = [];
+
+      const body = await runTurn(
+        createSequenceClient([
+          [
+            { type: 'text-delta', text: '完成' },
+            { type: 'finish', reason: 'stop' },
+          ],
+        ]),
+        turnRecorder(turns),
+      );
+
+      const turnId = /"type":"completed","turnId":"([^"]+)"/.exec(body)?.[1];
+      expect(turnId).toBeDefined();
+      expect(turns).toEqual([`start ${sessionId} ${turnId}`, `end ${turnId} completed`]);
+    });
+
+    it('announces the end of a turn that failed', async () => {
+      const turns: string[] = [];
+
+      await runTurn(createSequenceClient([]), turnRecorder(turns));
+
+      expect(turns).toHaveLength(2);
+      expect(turns[0]).toMatch(/^start /);
+      expect(turns[1]).toMatch(/ failed$/);
+    });
   });
 });

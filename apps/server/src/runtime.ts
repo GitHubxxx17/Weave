@@ -1,4 +1,10 @@
-import { type KernelPlugin, type PluginSnapshot, type WeavePlugin } from '@weave/plugin';
+import {
+  turnEndHook,
+  turnStartHook,
+  type KernelPlugin,
+  type PluginSnapshot,
+  type WeavePlugin,
+} from '@weave/plugin';
 import type { SessionEventStore } from '@weave/session';
 import {
   createApprovalBroker,
@@ -18,6 +24,7 @@ import { createAgentInstructions } from './agent-instructions.js';
 import { assembleAgentKernel } from './agent-kernel.js';
 import { type PluginListItem } from './plugin-catalog.js';
 import { createServerHost, serverHostOf, type ServerRuntime } from './server-host.js';
+import { observeTurns } from './turn-observer.js';
 
 export type { ServerRuntime } from './server-host.js';
 
@@ -136,10 +143,21 @@ export async function createServerAgentRunner(
   host.setPlugins(assembled.plugins);
   const { toolRegistry } = host;
   const { promptSections } = assembled;
+  const { hooks } = assembled.kernel;
+  // Turns are announced from the Session Store, which records every turn's start
+  // and end, so the runner stays unaware of plugins. Without observers the
+  // runner keeps the plain store.
+  const runnerStore =
+    hooks.count(turnStartHook) + hooks.count(turnEndHook) === 0
+      ? sessionStore
+      : observeTurns(sessionStore, {
+          start: (info) => hooks.runObserve(turnStartHook, info),
+          end: (info) => hooks.runObserve(turnEndHook, info),
+        });
 
   return createAgentRunner({
     llmRegistry: host.providerRegistry,
-    sessionStore,
+    sessionStore: runnerStore,
     toolRegistry,
     toolPipeline: assembled.toolPipeline,
     ...(options.maxSteps === undefined ? {} : { maxSteps: options.maxSteps }),

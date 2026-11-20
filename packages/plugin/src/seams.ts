@@ -155,11 +155,21 @@ export interface TurnInfo {
   readonly turnId: string;
 }
 
-/** Observed when a turn starts. */
+/** A turn that has ended, and how. */
+export interface TurnEndInfo extends TurnInfo {
+  readonly status: 'completed' | 'failed' | 'cancelled';
+  /** Why a turn that did not simply finish ended, such as `agent-step-limit`. */
+  readonly reason?: string | undefined;
+}
+
+/** Observed when a turn starts, after its start is durably recorded. */
 export const turnStartHook: Hook<TurnInfo> = defineHook({
   id: 'weave.turn.start',
   mode: 'observe',
 });
 
-/** Observed when a turn ends. */
-export const turnEndHook: Hook<TurnInfo> = defineHook({ id: 'weave.turn.end', mode: 'observe' });
+/** Observed when a turn ends, after its end is durably recorded. */
+export const turnEndHook: Hook<TurnEndInfo> = defineHook({
+  id: 'weave.turn.end',
+  mode: 'observe',
+});

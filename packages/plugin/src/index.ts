@@ -86,5 +86,6 @@ export type {
   PromptSection,
   PromptSectionsExtensionApi,
   ToolsExtensionApi,
+  TurnEndInfo,
   TurnInfo,
 } from './seams.js';
