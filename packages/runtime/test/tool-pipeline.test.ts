@@ -7,6 +7,7 @@ import {
   createToolRegistry,
   type ToolAround,
   type ToolDefinition,
+  type ToolPolicy,
 } from '../src/index.js';
 
 interface EchoInput {
@@ -722,5 +723,276 @@ describe('Tool Pipeline around middleware', () => {
     await expect(pipeline.execute({ ...request, signal: controller.signal })).rejects.toMatchObject(
       { code: 'tool-cancelled' },
     );
+  });
+});
+
+describe('Tool Pipeline policy', () => {
+  const request = { toolCallId: 'call-1', name: 'echo', arguments: '{"text":"hi"}' };
+  const protectedRequest = {
+    toolCallId: 'call-1',
+    name: 'protected',
+    arguments: '{"value":"x"}',
+  };
+
+  function pendingApprovals(broker: ReturnType<typeof createApprovalBroker>) {
+    return broker.list().filter((approval) => approval.status === 'pending');
+  }
+
+  it('leaves the usual flow alone when the policy abstains', async () => {
+    const execute = vi.fn(({ text }: EchoInput) => text);
+    const policy = vi.fn(() => 'abstain' as const);
+    const pipeline = createToolPipeline({ registry: createRegistry(execute), policy });
+
+    await expect(pipeline.execute(request)).resolves.toMatchObject({ content: 'hi' });
+    expect(policy).toHaveBeenCalledWith(expect.objectContaining(request));
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it('stops a denied call before the tool runs and before any Approval', async () => {
+    const execute = vi.fn(() => 'done');
+    const broker = createApprovalBroker();
+    const pipeline = createToolPipeline({
+      registry: createProtectedRegistry(execute),
+      approvalBroker: broker,
+      policy: () => 'deny',
+    });
+
+    await expect(pipeline.execute(protectedRequest)).rejects.toMatchObject({
+      code: 'tool-denied',
+      message: 'Tool "protected" was denied by a policy',
+    });
+    expect(execute).not.toHaveBeenCalled();
+    expect(broker.list()).toEqual([]);
+  });
+
+  it('requires Approval for a tool that has none of its own when the policy asks', async () => {
+    const execute = vi.fn(({ text }: EchoInput) => text);
+    const broker = createApprovalBroker();
+    const pipeline = createToolPipeline({
+      registry: createRegistry(execute),
+      approvalBroker: broker,
+      policy: () => 'ask',
+    });
+
+    const result = pipeline.execute(request);
+    await vi.waitFor(() => expect(pendingApprovals(broker)).toHaveLength(1));
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(pendingApprovals(broker)[0]).toMatchObject({
+      toolName: 'echo',
+      operation: 'plugin.policy',
+      risk: 'medium',
+      inputSummary: { tool: 'echo', arguments: '{"text":"hi"}' },
+    });
+    broker.approve(pendingApprovals(broker)[0]!.approvalId);
+    await expect(result).resolves.toMatchObject({ content: 'hi' });
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it('does not run a tool whose policy-required Approval is rejected', async () => {
+    const execute = vi.fn(({ text }: EchoInput) => text);
+    const broker = createApprovalBroker();
+    const pipeline = createToolPipeline({
+      registry: createRegistry(execute),
+      approvalBroker: broker,
+      policy: () => 'ask',
+    });
+
+    const result = pipeline.execute(request);
+    await vi.waitFor(() => expect(pendingApprovals(broker)).toHaveLength(1));
+    broker.reject(pendingApprovals(broker)[0]!.approvalId);
+
+    await expect(result).rejects.toMatchObject({ code: 'tool-approval-rejected' });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('asks even in yolo mode, using the Approval the tool itself describes', async () => {
+    const execute = vi.fn(() => 'done');
+    const broker = createApprovalBroker();
+    const pipeline = createToolPipeline({
+      registry: createProtectedRegistry(execute),
+      approvalBroker: broker,
+      policy: () => 'ask',
+    });
+
+    const result = pipeline.execute({ ...protectedRequest, permissionMode: 'yolo' });
+    await vi.waitFor(() => expect(pendingApprovals(broker)).toHaveLength(1));
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(pendingApprovals(broker)[0]).toMatchObject({
+      operation: 'test.protected',
+      risk: 'high',
+      summary: '执行受保护操作 x',
+    });
+    broker.approve(pendingApprovals(broker)[0]!.approvalId);
+    await expect(result).resolves.toMatchObject({ content: 'done' });
+  });
+
+  it('asks in yolo mode for a tool that has no Approval of its own', async () => {
+    const broker = createApprovalBroker();
+    const pipeline = createToolPipeline({
+      registry: createRegistry(),
+      approvalBroker: broker,
+      policy: () => 'ask',
+    });
+
+    const result = pipeline.execute({ ...request, permissionMode: 'yolo' });
+    await vi.waitFor(() => expect(pendingApprovals(broker)).toHaveLength(1));
+    broker.approve(pendingApprovals(broker)[0]!.approvalId);
+
+    await expect(result).resolves.toMatchObject({ content: 'hi' });
+  });
+
+  it('does not let an abstaining policy relax the permission mode', async () => {
+    const broker = createApprovalBroker();
+    const pipeline = createToolPipeline({
+      registry: createProtectedRegistry(() => 'done'),
+      approvalBroker: broker,
+      policy: () => 'abstain',
+    });
+
+    const result = pipeline.execute(protectedRequest);
+    await vi.waitFor(() => expect(pendingApprovals(broker)).toHaveLength(1));
+    broker.approve(pendingApprovals(broker)[0]!.approvalId);
+
+    await expect(result).resolves.toMatchObject({ content: 'done' });
+  });
+
+  it('refuses to run an asked call when there is no Approval Broker', async () => {
+    const execute = vi.fn(({ text }: EchoInput) => text);
+    const pipeline = createToolPipeline({
+      registry: createRegistry(execute),
+      policy: () => 'ask',
+    });
+
+    await expect(pipeline.execute(request)).rejects.toMatchObject({
+      code: 'tool-approval-required',
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('shortens very long arguments in the Approval it creates', async () => {
+    const broker = createApprovalBroker();
+    const pipeline = createToolPipeline({
+      registry: createRegistry(),
+      approvalBroker: broker,
+      policy: () => 'ask',
+    });
+    const longText = 'a'.repeat(5_000);
+
+    const result = pipeline.execute({
+      ...request,
+      arguments: JSON.stringify({ text: longText }),
+    });
+    await vi.waitFor(() => expect(pendingApprovals(broker)).toHaveLength(1));
+
+    const summary = pendingApprovals(broker)[0]?.inputSummary as { arguments: string };
+    expect(summary.arguments.length).toBeLessThan(1_100);
+    expect(summary.arguments.endsWith('…')).toBe(true);
+    broker.cancel(pendingApprovals(broker)[0]!.approvalId);
+    await expect(result).rejects.toMatchObject({ code: 'tool-approval-cancelled' });
+  });
+
+  it('waits for an asynchronous policy', async () => {
+    const execute = vi.fn(({ text }: EchoInput) => text);
+    const pipeline = createToolPipeline({
+      registry: createRegistry(execute),
+      policy: async () => {
+        await Promise.resolve();
+        return 'deny' as const;
+      },
+    });
+
+    await expect(pipeline.execute(request)).rejects.toMatchObject({ code: 'tool-denied' });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('denies when the policy throws, and keeps the cause', async () => {
+    const cause = new Error('policy bug');
+    const execute = vi.fn(({ text }: EchoInput) => text);
+    const pipeline = createToolPipeline({
+      registry: createRegistry(execute),
+      policy: () => {
+        throw cause;
+      },
+    });
+
+    await expect(pipeline.execute(request)).rejects.toMatchObject({
+      code: 'tool-denied',
+      message: 'Tool "echo" was denied because a policy could not decide',
+      cause,
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('denies when the policy answers with something that is not a vote, such as allow', async () => {
+    const execute = vi.fn(({ text }: EchoInput) => text);
+    const pipeline = createToolPipeline({
+      registry: createRegistry(execute),
+      policy: (() => 'allow') as unknown as ToolPolicy,
+    });
+
+    await expect(pipeline.execute(request)).rejects.toMatchObject({ code: 'tool-denied' });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('only consults the policy for a call that is well formed', async () => {
+    const policy = vi.fn(() => 'abstain' as const);
+    const pipeline = createToolPipeline({ registry: createRegistry(), policy });
+
+    await expect(pipeline.execute({ ...request, name: 'missing' })).rejects.toMatchObject({
+      code: 'tool-not-found',
+    });
+    await expect(pipeline.execute({ ...request, arguments: '{' })).rejects.toMatchObject({
+      code: 'tool-invalid-json',
+    });
+    await expect(pipeline.execute({ ...request, arguments: '{"text":1}' })).rejects.toMatchObject({
+      code: 'tool-invalid-arguments',
+    });
+    expect(policy).not.toHaveBeenCalled();
+  });
+
+  it('ends the call at its deadline when a policy never answers', async () => {
+    const execute = vi.fn(({ text }: EchoInput) => text);
+    const pipeline = createToolPipeline({
+      registry: createRegistry(execute),
+      timeoutMs: 20,
+      policy: () => new Promise<never>(() => undefined),
+    });
+
+    await expect(pipeline.execute(request)).rejects.toMatchObject({ code: 'tool-timeout' });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('ends the call when the caller cancels while a policy has not answered', async () => {
+    const controller = new AbortController();
+    const execute = vi.fn(({ text }: EchoInput) => text);
+    const pipeline = createToolPipeline({
+      registry: createRegistry(execute),
+      policy: () => new Promise<never>(() => undefined),
+    });
+
+    const result = pipeline.execute({ ...request, signal: controller.signal });
+    controller.abort();
+
+    await expect(result).rejects.toMatchObject({ code: 'tool-cancelled' });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('judges the request a middleware adjusted, so a middleware cannot get around it', async () => {
+    const seen: string[] = [];
+    const execute = vi.fn(({ text }: EchoInput) => text);
+    const pipeline = createToolPipeline({
+      registry: createRegistry(execute),
+      around: (incoming, next) => next({ ...incoming, arguments: '{"text":"changed"}' }),
+      policy: (incoming) => {
+        seen.push(incoming.arguments);
+        return incoming.arguments.includes('changed') ? 'deny' : 'abstain';
+      },
+    });
+
+    await expect(pipeline.execute(request)).rejects.toMatchObject({ code: 'tool-denied' });
+    expect(seen).toEqual(['{"text":"changed"}']);
+    expect(execute).not.toHaveBeenCalled();
   });
 });

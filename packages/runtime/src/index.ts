@@ -58,7 +58,13 @@ export {
 } from './update-plan-tool.js';
 export type { UpdatePlanInput } from './update-plan-tool.js';
 export { createToolPipeline } from './tool-pipeline.js';
-export type { ToolAround, ToolPipeline, ToolPipelineOptions } from './tool-pipeline.js';
+export type {
+  ToolAround,
+  ToolPipeline,
+  ToolPipelineOptions,
+  ToolPolicy,
+  ToolPolicyVote,
+} from './tool-pipeline.js';
 export {
   WorkspacePolicyError,
   workspacePathRequestSchema,
