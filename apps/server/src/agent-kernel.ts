@@ -6,6 +6,7 @@ import {
   llmProviderRegistryRef,
   pluginApiVersion,
   promptSectionsExtensionPoint,
+  toolAroundHook,
   toolPipelineRef,
   toolRegistryRef,
   toolResultHook,
@@ -80,8 +81,10 @@ export interface AssembledAgentKernel {
  *
  * After sealing, the host collects `weave.prompt.sections` so plugins can add
  * system-prompt sections, and wraps the pipeline to fan completed results out
- * to `weave.tools.result` observers. A failure while assembling disposes the
- * kernel before it propagates.
+ * to `weave.tools.result` observers. Plugins can also wrap every execution
+ * through `weave.tools.around`; the pipeline applies it outside its own
+ * validation and approval. A failure while assembling disposes the kernel
+ * before it propagates.
  */
 export async function assembleAgentKernel(
   assembly: AgentKernelAssembly,
@@ -107,7 +110,18 @@ export async function assembleAgentKernel(
       env.provide(toolPipelineRef, {
         deps: { registry: toolRegistryRef, approvalBroker: approvalBrokerRef },
         factory: ({ registry, approvalBroker: broker }) =>
-          createToolPipeline({ registry, approvalBroker: broker, timeoutMs }),
+          createToolPipeline({
+            registry,
+            approvalBroker: broker,
+            timeoutMs,
+            // The pipeline resolves after every plugin registered, so the
+            // handlers are known; without any, the pipeline stays unwrapped.
+            ...(kernel.hooks.count(toolAroundHook) === 0
+              ? {}
+              : {
+                  around: (request, next) => kernel.hooks.runWrap(toolAroundHook, request, next),
+                }),
+          }),
       });
       env.contribute(toolsExtensionPoint, (api) => {
         if (resolveWorkspaceRoot !== undefined) {
