@@ -169,6 +169,22 @@ importers:
         specifier: 24.10.1
         version: 24.10.1
 
+  packages/plugin-builtins:
+    dependencies:
+      '@weave/llm':
+        specifier: workspace:*
+        version: link:../llm
+      '@weave/plugin':
+        specifier: workspace:*
+        version: link:../plugin
+      '@weave/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+    devDependencies:
+      '@types/node':
+        specifier: 24.10.1
+        version: 24.10.1
+
   packages/protocol:
     dependencies:
       zod:
