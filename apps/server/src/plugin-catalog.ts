@@ -1,8 +1,15 @@
 import { type PluginContributes, type PluginInfo } from '@weave/plugin';
+import type { PluginHostSnapshot } from '@weave/plugin-host';
+import {
+  localPluginMetadataSchema,
+  localPluginSummarySchema,
+  pluginIssueSchema,
+  pluginReloadResultSchema,
+} from './plugin-management-types.js';
 import { z } from 'zod';
 
 /** Who put a plugin into the Server. */
-export type PluginOrigin = 'builtin' | 'registered' | 'kernel';
+export type PluginOrigin = 'builtin' | 'registered' | 'kernel' | 'local';
 
 const nameListSchema = z.array(z.string());
 
@@ -16,7 +23,18 @@ export const pluginListItemSchema = z.object({
   name: z.string(),
   version: z.string(),
   description: z.string().optional(),
-  origin: z.enum(['builtin', 'registered', 'kernel']),
+  origin: z.enum(['builtin', 'registered', 'kernel', 'local']),
+  state: z.enum([
+    'loaded',
+    'pending-trust',
+    'changed',
+    'disabled',
+    'failed',
+    'invalid',
+    'incompatible',
+  ]),
+  error: pluginIssueSchema.optional(),
+  local: localPluginMetadataSchema.optional(),
   host: z.enum(['in-process', 'mcp', 'subprocess']),
   capabilities: z.array(z.enum(['tool', 'llm-provider', 'prompt', 'event', 'command'])),
   engines: z.object({ weave: z.string() }).optional(),
@@ -46,7 +64,16 @@ export const pluginListItemSchema = z.object({
 export type PluginListItem = z.infer<typeof pluginListItemSchema>;
 
 /** Response body of `GET /plugins`. */
-export const pluginListResponseSchema = z.object({ plugins: z.array(pluginListItemSchema) });
+export const pluginListResponseSchema = z.object({
+  plugins: z.array(pluginListItemSchema),
+  local: localPluginSummarySchema.optional(),
+});
+
+/** A successful decision may still report a failed generation rebuild. */
+export const pluginMutationResponseSchema = pluginListResponseSchema.extend({
+  local: localPluginSummarySchema,
+  result: pluginReloadResultSchema,
+});
 
 /** One slash command as `GET /commands` lists it: the command and who contributed it. */
 export const commandListItemSchema = z.object({
@@ -85,6 +112,7 @@ export function describePlugin(info: PluginInfo, origin: PluginOrigin): PluginLi
     version: manifest.version,
     ...(manifest.description === undefined ? {} : { description: manifest.description }),
     origin,
+    state: 'loaded',
     host: manifest.host ?? 'in-process',
     capabilities: [...manifest.capabilities],
     ...(manifest.engines === undefined ? {} : { engines: { weave: manifest.engines.weave } }),
@@ -100,4 +128,72 @@ export function describePlugin(info: PluginInfo, origin: PluginOrigin): PluginLi
       services: [...contributed.services],
     },
   });
+}
+
+/** Desired local records replace the current generation's local catalog entries. */
+export function projectPluginCatalog(
+  catalog: readonly PluginListItem[],
+  snapshot: PluginHostSnapshot,
+): PluginListItem[] {
+  const active = new Map(snapshot.generation.plugins.map((plugin) => [plugin.id, plugin]));
+  const actual = new Map(catalog.map((plugin) => [plugin.id, plugin]));
+  const nonLocal = catalog
+    .filter((plugin) => plugin.origin !== 'local' && !active.has(plugin.id))
+    .map((plugin) => pluginListItemSchema.parse({ ...plugin, state: 'loaded' }));
+  const local = snapshot.plugins.map((record) => {
+    const { candidate, trusted } = record;
+    const manifest = candidate.manifest;
+    const digest = candidate.status === 'ready' ? candidate.digest : undefined;
+    const error = record.error ?? (candidate.status === 'ready' ? undefined : candidate.issue);
+    const provides =
+      record.state === 'loaded' &&
+      digest !== undefined &&
+      active.get(record.id)?.digest === digest &&
+      record.active?.digest === digest &&
+      record.active.generation === snapshot.generation.id
+        ? actual.get(record.id)?.provides
+        : undefined;
+    return pluginListItemSchema.parse({
+      id: record.id,
+      name: manifest?.name ?? record.id,
+      version: manifest?.version ?? 'unknown',
+      ...(manifest?.description === undefined ? {} : { description: manifest.description }),
+      origin: 'local',
+      state: record.state,
+      host: manifest?.host ?? 'in-process',
+      capabilities: manifest?.capabilities ?? [],
+      ...(manifest?.engines === undefined ? {} : { engines: manifest.engines }),
+      ...(manifest?.contributes === undefined
+        ? {}
+        : { contributes: declared(manifest.contributes) }),
+      ...(manifest?.permissions === undefined ? {} : { permissions: [...manifest.permissions] }),
+      ...(error === undefined ? {} : { error }),
+      provides: provides ?? {
+        tools: [],
+        providers: [],
+        promptSections: [],
+        events: [],
+        commands: [],
+        hooks: [],
+        services: [],
+      },
+      local: {
+        directory: candidate.directory,
+        ...(digest === undefined ? {} : { digest }),
+        enabled: trusted?.enabled ?? false,
+        ...(manifest === undefined ? {} : { manifest }),
+        ...(trusted === undefined
+          ? {}
+          : {
+              trusted: {
+                digest: trusted.digest,
+                trustedAt: trusted.trustedAt,
+                manifest: trusted.manifest,
+              },
+            }),
+        ...(record.active === undefined ? {} : { active: record.active }),
+      },
+    });
+  });
+  return [...nonLocal, ...local];
 }

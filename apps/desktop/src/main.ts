@@ -199,6 +199,7 @@ export async function startDesktopServer(
 ): Promise<{ port: number; stop: () => Promise<void> }> {
   const server = await startServer(0, {
     databaseFile: config.databaseFile,
+    dataDirectory: config.userDataDirectory,
     studioOrigin: config.studioOrigin,
     providerSecretCodec,
     fetch: createDesktopFetch(),

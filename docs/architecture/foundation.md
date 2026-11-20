@@ -149,7 +149,7 @@ shape, and returns `200` only when the Runtime is running; otherwise it returns
 `503`.
 
 The desktop composition root is `apps/desktop`. Electron Main calls
-`startServer(0, { databaseFile, studioOrigin, providerSecretCodec })`, so the operating system
+`startServer(0, { databaseFile, dataDirectory, studioOrigin, providerSecretCodec })`, so the operating system
 chooses an available local port and the Server can allow the exact Studio
 origin through CORS. The Renderer never opens SQLite or reads an API Key. Its
 Workspace, Provider, and Agent clients use the same `runtimeApiUrl()` helper in
@@ -851,3 +851,6 @@ guard and expose no model tool. Desktop supplies its user data directory so
 local plugins use the same data root. Both discovery and the kernel use the
 Server package product version. PluginHost drains before ServerHost and stores
 close. The wire/config/persistence contracts are in local-plugin design §10.5.
+Embedded configured kernel plugins use factories to create independent instances
+for every candidate generation; a retiring generation never disposes an instance
+borrowed by its replacement. Legacy registered plugins retain ServerHost ownership.

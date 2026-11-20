@@ -619,12 +619,16 @@ trustSequence、当前代状态和 active 元数据，不序列化 runner、kern
 - 插件所有写路径共享 middleware：JSON media type；严格解析 Host hostname 为 localhost/127.0.0.1/[::1]；
   Origin 必须是合法 HTTP(S) 纯 origin，与配置一致（开发模式允许回环）；拒绝 cross-site。
   trust strict JSON `{digest}`；其余允许空正文或 `{}`，仍要求 JSON Content-Type。
-  immediate query 仅允许缺省、true、false，拒绝重复和其它值；无强制布尔转换。
+  immediate query 仅撤销信任、停用接受，允许缺省、true、false，拒绝重复和其它值；其它写操作拒绝该参数。
 - 错误：400 参数/JSON；403 来源或 Host；404 plugin-not-found/管理未启用；409 未信任/不可加载/摘要不符；
-  415 media type；503 host disposed；500 存储/发现错误。已追加但发现失败仍按错误返回，缓存保留事实与阻止准入；
+  415 media type；503 host disposed 或 trust store closed；500 存储/发现错误。错误映射只识别实际宿主/存储错误实例，
+  未知异常使用通用消息，不暴露内部 cause。已追加但发现失败仍按错误返回，缓存保留事实与阻止准入；
   客户端须 GET 缓存以展示最新决定。装配失败 ReloadResult.error 属成功响应。
 - 启动先创建纯宿主基线，继而 PluginHost，候选组装附加本地 wrapper，port 直接委托 ServerHost.publish，
   同步验证提交指针；不创建第二门面/队列。所有内置/已注册/配置 kernel id 预留。
+  嵌入式 `createServerLocalPluginHost` 的配置 kernel 插件使用 `kernelPluginFactories`，每次候选装配创建独立实例，
+  不复用基线或旧代的 KernelPlugin 实例；runnerOptions 不接受 kernelPlugins。工厂产出的插件 id 必须与基线配置身份一致，
+  调用者负责为每次工厂调用分配独立资源，实例由所属 generation 清理。旧注册插件继续由 ServerHost 借用包装器统一管理。
   关闭先 PluginHost 控制操作与 generation 排空，再 ServerHost legacy cleanup，最后共享存储及 trust store。
 - Electron 以现有 tsc 输出执行实际 ESM 主进程外部 file: 导入冒烟测试；仓库尚无发行包构建器，
   不把此检查表述成发行包验证。

@@ -10,6 +10,14 @@ import { createSessionService } from './session-service.js';
 import { createWorkspaceRootResolver } from './workspace-root.js';
 import { createServerLlmProviders } from './llm-providers.js';
 import { resolveDatabaseFile } from './persistence-path.js';
+import { resolvePluginsDirectory } from './plugin-path.js';
+import { serverHostVersion } from './host-version.js';
+import { createSqlitePluginTrustStore } from './plugin-trust-store.js';
+import {
+  createServerLocalPluginHost,
+  type ClosablePluginTrustStore,
+  type ServerLocalPluginHost,
+} from './local-plugin-host.js';
 import type { ProviderSecretCodec } from './provider-secret-codec.js';
 import {
   createProviderSettingsManager,
@@ -28,6 +36,7 @@ import {
   listServerCommands,
   listServerPlugins,
   registerServerPlugins,
+  type ServerAgentRunnerOptions,
 } from './runtime.js';
 
 const portSchema = z.coerce.number().int().min(0).max(65535);
@@ -71,6 +80,10 @@ export interface StartServerOptions {
   readonly projectStore?: ProjectStore;
   readonly sessionStoreFactory?: () => SessionEventStore | Promise<SessionEventStore>;
   readonly plugins?: readonly WeavePlugin[];
+  /** `false` disables local discovery and trust persistence. */
+  readonly pluginsDirectory?: string | false;
+  /** Optional trust persistence override, owned and closed by this Server. */
+  readonly pluginTrustStore?: ClosablePluginTrustStore;
 }
 
 async function closeServer(server: ServerType): Promise<void> {
@@ -131,6 +144,7 @@ export async function startServer(
   const persistence = persistenceOptionsSchema.parse(options);
   const studioOrigin = studioOriginSchema.parse(options.studioOrigin);
   const maxSteps = parseAgentMaxSteps((options.environment ?? process.env).WEAVE_AGENT_MAX_STEPS);
+  const pluginsDirectory = resolvePluginsDirectory(options);
   const databaseFile = resolveDatabaseFile({
     ...(persistence.databaseFile === undefined ? {} : { databaseFile: persistence.databaseFile }),
     ...(persistence.dataDirectory === undefined
@@ -144,44 +158,61 @@ export async function startServer(
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
   });
 
-  const providerSettingsStore =
-    options.providerSettingsStore ??
-    (options.providerSecretCodec === undefined
-      ? undefined
-      : createSqliteProviderSettingsStore({ filename: databaseFile }));
-  const projectStore = options.projectStore ?? createSqliteProjectStore({ filename: databaseFile });
   const sessionStoreFactory =
     options.sessionStoreFactory ??
     (() => createSqliteSessionEventStore({ filename: databaseFile }));
   const runtime = createServerRuntime({ sessionStoreFactory, providerSettings });
-  const providerSettingsManager: ProviderSettingsManager | undefined =
-    providerSettingsStore === undefined || options.providerSecretCodec === undefined
-      ? undefined
-      : createProviderSettingsManager({
-          store: providerSettingsStore,
-          registry: runtime.serverHost.hostProviderRegistry,
-          catalog: () => runtime.serverHost.providerRegistry,
-          reserveProvider: (id) => runtime.serverHost.reserveProvider(id),
-          claimProvider: (id) => runtime.serverHost.claimProvider(id),
-          releaseProviderClaim: (id) => runtime.serverHost.releaseProviderClaim(id),
-          secretCodec: options.providerSecretCodec,
-          initialDefaultProvider: providerSettings.defaultProvider,
-        });
-
+  let providerSettingsStore: ProviderSettingsStore | undefined;
+  let projectStore: ProjectStore | undefined;
+  let pluginTrustStore: ClosablePluginTrustStore | undefined;
+  let pluginHost: ServerLocalPluginHost | undefined;
   let server: ServerType | undefined;
 
   try {
+    providerSettingsStore =
+      options.providerSettingsStore ??
+      (options.providerSecretCodec === undefined
+        ? undefined
+        : createSqliteProviderSettingsStore({ filename: databaseFile }));
+    const projects = options.projectStore ?? createSqliteProjectStore({ filename: databaseFile });
+    projectStore = projects;
+    if (pluginsDirectory !== false) {
+      pluginTrustStore =
+        options.pluginTrustStore ?? createSqlitePluginTrustStore({ filename: databaseFile });
+    }
+    const providerSettingsManager: ProviderSettingsManager | undefined =
+      providerSettingsStore === undefined || options.providerSecretCodec === undefined
+        ? undefined
+        : createProviderSettingsManager({
+            store: providerSettingsStore,
+            registry: runtime.serverHost.hostProviderRegistry,
+            catalog: () => runtime.serverHost.providerRegistry,
+            reserveProvider: (id) => runtime.serverHost.reserveProvider(id),
+            claimProvider: (id) => runtime.serverHost.claimProvider(id),
+            releaseProviderClaim: (id) => runtime.serverHost.releaseProviderClaim(id),
+            secretCodec: options.providerSecretCodec,
+            initialDefaultProvider: providerSettings.defaultProvider,
+          });
     if (providerSettingsManager !== undefined) {
       await providerSettingsManager.refresh();
     }
     await runtime.start();
     await registerServerPlugins(runtime, options.plugins);
     const sessionStore = getServerSessionStore(runtime);
-    const sessionService = createSessionService({ projectStore, sessionStore });
-    const agentRunner = await createServerAgentRunner(runtime, {
-      resolveWorkspaceRoot: createWorkspaceRootResolver(projectStore),
+    const sessionService = createSessionService({ projectStore: projects, sessionStore });
+    const runnerOptions = Object.freeze({
+      hostVersion: serverHostVersion,
+      resolveWorkspaceRoot: createWorkspaceRootResolver(projects),
       ...(maxSteps === undefined ? {} : { maxSteps }),
-    });
+    }) satisfies ServerAgentRunnerOptions;
+    const agentRunner = await createServerAgentRunner(runtime, runnerOptions);
+    if (pluginsDirectory !== false && pluginTrustStore !== undefined) {
+      pluginHost = await createServerLocalPluginHost(runtime, {
+        directory: pluginsDirectory,
+        trustStore: pluginTrustStore,
+        runnerOptions,
+      });
+    }
 
     let resolveListening!: () => void;
     let rejectListening!: (error: unknown) => void;
@@ -194,7 +225,7 @@ export async function startServer(
         fetch: createApp(runtime, {
           approvalBrokerService,
           agentRunner,
-          projectStore,
+          projectStore: projects,
           sessionService,
           providerRegistry: runtime.serverHost.providerRegistry,
           defaultProvider: providerSettings.defaultProvider,
@@ -202,6 +233,7 @@ export async function startServer(
           canManageProviders: providerSettingsManager !== undefined,
           pluginCatalog: () => listServerPlugins(runtime),
           commandCatalog: () => listServerCommands(runtime),
+          ...(pluginHost === undefined ? {} : { pluginManager: pluginHost }),
           ...(studioOrigin === undefined ? {} : { studioOrigin }),
         }).fetch,
         hostname: '127.0.0.1',
@@ -262,6 +294,7 @@ export async function startServer(
           () => undefined,
           (error: unknown) => error,
         );
+        await cleanup(async () => pluginHost?.dispose());
         await cleanup(() => disposeServerPlugins(runtime));
         // Approval SSE and other idle streams do not belong to an Agent iterator.
         // Their sockets can close once Agent terminal writes have settled.
@@ -273,6 +306,7 @@ export async function startServer(
         await cleanup(() => runtime.stop());
         await cleanup(() => closeProjectStore(projectStore));
         await cleanup(() => closeProviderSettingsStore(providerSettingsStore));
+        await cleanup(async () => pluginTrustStore?.close());
 
         if (hasError) {
           throw firstError;
@@ -284,15 +318,18 @@ export async function startServer(
     process.on('SIGINT', onSigint);
     process.on('SIGTERM', onSigterm);
 
-    return { port: address.port, runtime, server: createdServer, stop };
+    return { port: address.port, runtime, pluginHost, server: createdServer, stop };
   } catch (error) {
-    if (server !== undefined) {
-      await closeServer(server).catch(() => undefined);
-    }
+    // Begin closing HTTP, then cancel generations before awaiting SSE sockets.
+    const closed = server === undefined ? undefined : closeServer(server).catch(() => undefined);
+    await pluginHost?.dispose().catch(() => undefined);
     await disposeServerPlugins(runtime).catch(() => undefined);
+    if (server !== undefined && 'closeAllConnections' in server) server.closeAllConnections();
+    await closed;
     await runtime.stop().catch(() => undefined);
     await closeProjectStore(projectStore).catch(() => undefined);
     await closeProviderSettingsStore(providerSettingsStore).catch(() => undefined);
+    await pluginTrustStore?.close().catch(() => undefined);
     throw error;
   }
 }

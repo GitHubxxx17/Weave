@@ -34,6 +34,7 @@ import {
   type ServerRuntime,
 } from './server-host.js';
 import { observeTurns } from './turn-observer.js';
+import { serverHostVersion } from './host-version.js';
 
 export type { ServerRuntime } from './server-host.js';
 
@@ -60,6 +61,8 @@ export interface ServerRuntimeOptions {
 export const defaultToolTimeoutMs = 10 * 60 * 1000;
 
 export interface ServerAgentRunnerOptions {
+  /** Product compatibility version passed to every generation's kernel. */
+  readonly hostVersion?: string;
   /** Returns the absolute Workspace folder of a Session, when its Project has one. */
   readonly resolveWorkspaceRoot?: (sessionId: string) => Promise<string | undefined>;
   /** Overrides {@link defaultToolTimeoutMs}; mainly for tests. */
@@ -180,6 +183,7 @@ export async function assembleServerGeneration(
   const sessionStore = runtime.get(host.sessionStoreService);
   const resolveWorkspaceRoot = options.resolveWorkspaceRoot;
   const assembled = await assembleAgentKernel({
+    hostVersion: options.hostVersion ?? serverHostVersion,
     toolRegistry,
     providerRegistry,
     approvalBroker: runtime.get(approvalBrokerService),
