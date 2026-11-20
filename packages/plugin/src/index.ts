@@ -70,6 +70,7 @@ export {
   approvalBrokerRef,
   llmProviderRegistryRef,
   llmProvidersExtensionPoint,
+  llmRequestHook,
   promptSectionsExtensionPoint,
   sessionStoreRef,
   toolAroundHook,

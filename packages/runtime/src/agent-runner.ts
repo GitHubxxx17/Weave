@@ -1,11 +1,13 @@
 import type { LlmClient } from '@weave/llm';
-import type {
-  ContextBreakdown,
-  FinishReason,
-  LlmRequest,
-  Message,
-  TokenUsage,
-  ToolCall,
+import {
+  streamEventSchema,
+  type ContextBreakdown,
+  type FinishReason,
+  type LlmRequest,
+  type Message,
+  type StreamEvent,
+  type TokenUsage,
+  type ToolCall,
 } from '@weave/protocol';
 import type { NewSessionEvent } from '@weave/session';
 import { projectSession } from '@weave/session';
@@ -15,6 +17,8 @@ import {
   type AgentRunner,
   type AgentRunnerOptions,
   type AgentRuntimeEvent,
+  type LlmCall,
+  type LlmMiddleware,
 } from './agent-types.js';
 import { buildModelContext, type ContextBudget } from './context/build-context.js';
 import { parsePlanFromToolCall } from './update-plan-tool.js';
@@ -37,6 +41,46 @@ const defaultMaxToolResultTokens = 8000;
 
 /** Retry attempts for a model step that fails before emitting any output. */
 const maxModelRetries = 2;
+
+/**
+ * Runs `request` through `middleware` and checks what comes back.
+ *
+ * `next` reaches the model with the run's cancellation signal whatever signal
+ * the middleware passes, and refuses a request for a different provider or
+ * model. Each event the middleware yields must be a valid stream event.
+ */
+function middlewareStream(
+  middleware: LlmMiddleware,
+  llm: LlmClient,
+  request: LlmRequest,
+  signal: AbortSignal,
+): AsyncIterable<StreamEvent> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      const next = (call: LlmCall): AsyncIterable<StreamEvent> => {
+        if (call.request.provider !== request.provider || call.request.model !== request.model) {
+          throw new AgentRunError(
+            'agent-stream-protocol',
+            'An LLM middleware may not change the provider or model of a request',
+          );
+        }
+        return llm.stream(call.request, { signal: AbortSignal.any([signal, call.signal]) });
+      };
+      const events = await middleware({ request, signal }, next);
+      for await (const event of events) {
+        const checked = streamEventSchema.safeParse(event);
+        if (!checked.success) {
+          throw new AgentRunError(
+            'agent-stream-protocol',
+            'An LLM middleware emitted an invalid stream event',
+            { cause: checked.error },
+          );
+        }
+        yield event;
+      }
+    },
+  };
+}
 
 /** Reads the retry hint off a normalized LlmError without importing its type. */
 function isRetryableLlmError(error: unknown): boolean {
@@ -591,7 +635,11 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
 
               signal.throwIfAborted();
               try {
-                for await (const event of llm.stream(llmRequest, { signal })) {
+                const stream =
+                  options.llmMiddleware === undefined
+                    ? llm.stream(llmRequest, { signal })
+                    : middlewareStream(options.llmMiddleware, llm, llmRequest, signal);
+                for await (const event of stream) {
                   if (finishSeen) {
                     throw new AgentRunError(
                       'agent-stream-protocol',

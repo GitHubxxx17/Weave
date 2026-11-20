@@ -1,4 +1,5 @@
 import {
+  llmRequestHook,
   turnEndHook,
   turnStartHook,
   type KernelPlugin,
@@ -160,6 +161,13 @@ export async function createServerAgentRunner(
     sessionStore: runnerStore,
     toolRegistry,
     toolPipeline: assembled.toolPipeline,
+    // Plugins wrap the model stream only when one registered a handler.
+    ...(hooks.count(llmRequestHook) === 0
+      ? {}
+      : {
+          llmMiddleware: (call, next) =>
+            hooks.runWrap(llmRequestHook, call, async (wrapped) => next(wrapped)),
+        }),
     ...(options.maxSteps === undefined ? {} : { maxSteps: options.maxSteps }),
     instructions: createAgentInstructions({
       tools: () => toolRegistry.list(),

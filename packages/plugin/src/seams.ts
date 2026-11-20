@@ -1,7 +1,8 @@
-import type { LlmProviderRegistration, LlmProviderRegistry } from '@weave/llm';
+import type { LlmProviderRegistration, LlmProviderRegistry, StreamEvent } from '@weave/llm';
 import type {
   AgentRunner,
   ApprovalBroker,
+  LlmCall,
   SessionEventStore,
   ToolDefinition,
   ToolExecutionRequest,
@@ -147,6 +148,16 @@ export const toolAroundHook: Hook<ToolExecutionRequest, ToolExecutionResult> = d
 export const toolResultHook: Hook<ToolExecutionResult> = defineHook({
   id: 'weave.tools.result',
   mode: 'observe',
+});
+
+/**
+ * Middleware around the model stream of one step (retry, timeout, redaction of
+ * what is sent). It wraps the whole stream, never each chunk. The runner keeps
+ * the provider and model of the request fixed and checks every event it yields.
+ */
+export const llmRequestHook: Hook<LlmCall, AsyncIterable<StreamEvent>> = defineHook({
+  id: 'weave.llm.request',
+  mode: 'wrap',
 });
 
 /** Identifies a turn to lifecycle observers. */

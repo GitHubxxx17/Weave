@@ -7,12 +7,15 @@ import { type PluginManifest } from '../src/manifest.js';
 import {
   approvalBrokerRef,
   llmProviderRegistryRef,
+  llmRequestHook,
   sessionStoreRef,
+  toolAroundHook,
   toolPipelineRef,
   toolPolicyHook,
   toolRegistryRef,
   toolResultHook,
   toolsExtensionPoint,
+  turnEndHook,
   turnStartHook,
 } from '../src/seams.js';
 
@@ -47,8 +50,11 @@ describe('seams', () => {
     expect(toolPipelineRef.scope).toBe('root');
     expect(sessionStoreRef.id).toBe('weave.session.store');
     expect(toolPolicyHook.mode).toBe('decide');
+    expect(toolAroundHook.mode).toBe('wrap');
+    expect(llmRequestHook.mode).toBe('wrap');
     expect(toolResultHook.mode).toBe('observe');
     expect(turnStartHook.mode).toBe('observe');
+    expect(turnEndHook.mode).toBe('observe');
     expect(toolsExtensionPoint.id).toBe('weave.tools');
   });
 

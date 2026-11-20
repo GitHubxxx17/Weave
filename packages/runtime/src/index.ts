@@ -23,6 +23,8 @@ export type {
   AgentContextOptions,
   AgentRunRequest,
   AgentRuntimeEvent,
+  LlmCall,
+  LlmMiddleware,
 } from './agent-types.js';
 export { createAgentRunner } from './agent-runner.js';
 export {
