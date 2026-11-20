@@ -1,4 +1,5 @@
 export { pluginApiVersion } from './constants.js';
+export { assertEngineSupported, assertHostVersion } from './declaration.js';
 
 export {
   commandArgumentsPlaceholder,

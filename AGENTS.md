@@ -59,8 +59,11 @@ the Session, Agent, Tool Pipeline, and Plugin boundaries defined for Weave.
 ## Package boundaries
 
 Tests belong in each package's or app's `test/` directory, not in `src/`.
-Internal dependencies follow `protocol -> {llm, session} -> runtime -> plugin -> server -> desktop`;
+Internal dependencies follow `protocol -> {llm, session} -> runtime -> plugin -> {plugin-builtins, plugin-host} -> server -> desktop`;
 `workspace` has no internal dependencies and is consumed only by `server`.
+`plugin-host` depends only on `plugin` and is consumed only by `server`; it
+reads and loads plugins from disk but knows nothing of the Runtime, HTTP, or
+any Agent behavior.
 `studio` imports no `@weave/*` package and no Node or Electron module; it
 reaches the Runtime only through the Server HTTP/SSE contract. Lower layers
 must not import higher layers. Any cross-package change must update the

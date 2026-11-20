@@ -163,11 +163,13 @@ export default (sdk) => ({
 
 时机：服务启动、`POST /plugins/reload`、信任或启用或停用之后。
 
-只扫描插件目录的一级子目录，跳过隐藏目录和没有 `weave-plugin.json` 的目录，最多 200 个。每个目录产出一个候选：
+只扫描插件目录的一级子目录，跳过隐藏目录和没有 `weave-plugin.json` 的目录，最多 200 个（超出的忽略，结果带 `truncated`）。目录本身不存在不算错误，结果带 `exists: false`。一级子目录本身是指向目录的符号链接时报 `invalid`，不跟随，因为摘要无法保证它的内容稳定。目录按名字的 UTF-8 字节序排列，结果的顺序因此确定。每个目录产出一个候选：
 
 - `ready`：清单合法，附摘要。
-- `invalid`：JSON 坏了、schema 不过、入口逃逸、目录过大、含符号链接、id 重复或被占用。附错误码和说明。
-- `incompatible`：`apiVersion` 或 `engines.weave` 不满足，或 `host` 不是进程内。提前给出友好的状态，不留到装配时才报错。
+- `invalid`：JSON 坏了、schema 不过、入口缺失或逃逸、目录过大、含符号链接或特殊文件、读取出错、id 重复或被占用。附错误码和说明。
+- `incompatible`：`apiVersion` 或 `engines.weave` 不满足，或 `host` 不是进程内。提前给出友好的状态，不留到装配时才报错。兼容性在入口与摘要之前检查，所以不兼容的插件不读取它的内容，也不会因为别的毛病被报成 `invalid`。
+
+同一个 id 出现在两个目录里，两个都 `invalid`（`plugin-duplicate-id`）；id 与宿主占用的 id 相同，`invalid`（`plugin-id-reserved`）。只有清单合法的候选（`ready`、`incompatible`）参与这两项判断，已经 `invalid` 的不会连累别人。
 
 ### 5.2 状态
 
@@ -191,7 +193,7 @@ invalid / incompatible        → 同名状态
 其余                           → loaded 或 failed，取决于最近一次重载的结果
 ```
 
-`failed` 不持久化。下次启动或重载时重新尝试。
+`failed` 不持久化。下次启动或重载时重新尝试。`@weave/plugin-host` 的 `resolveLocalPlugins` 只做上面这张图的前半：它给出 `invalid`、`incompatible`、`pending-trust`、`changed`、`disabled`，以及"可以加载"的 `eligible`。`eligible` 变成 `loaded` 还是 `failed`，由重载（4.4）按装配结果决定，因为只有宿主知道装配成没成。
 
 状态转移：
 
@@ -204,12 +206,13 @@ invalid / incompatible        → 同名状态
 ### 5.3 摘要
 
 ```text
-文件   = 目录下所有常规文件，不含 .git、.DS_Store、Thumbs.db
+文件   = 目录下所有常规文件，不含 .git、.DS_Store、Thumbs.db（任意深度）
 条目   = 相对路径（POSIX 分隔，按 UTF-8 字节序排序）
-digest = sha256( 对每个条目：utf8(路径) 0x00 十进制(大小) 0x00 sha256(内容) 0x0a )
+digest = sha256( 对每个条目：utf8(路径) 0x00 十进制(大小) 0x00 内容的 sha256（64 位小写十六进制）0x0a )，结果同样是 64 位小写十六进制
 ```
 
 - 上限 1000 个文件、总计 20 MB，超出就 `invalid`（`plugin-too-large`），提示"请打包成单文件"。
+- 只允许常规文件和目录。符号链接、套接字、设备文件一律 `invalid`（`plugin-unsupported-file`）。
 - 清单文件也在摘要里，所以声明变了摘要就变。
 - 摘要在发现时计算，加载前再算一次，与信任记录比对。
 
@@ -467,6 +470,23 @@ Vite 开发代理现在只转发 `/agent`、`/approvals`、`/projects`、`/sessi
 - `AGENTS.md` 的"Package boundaries"一段随 4.2 更新。
 - SQLite 信任库放 `apps/server/src/plugin-trust-store.ts`，与 `provider-settings-store.ts` 同一模式。
 - 测试放各包自己的 `test/`。
+
+### 12.1 4.2 的公开面
+
+`@weave/plugin` 增导出 `assertEngineSupported` 和 `assertHostVersion`（原本只在包内），发现阶段用它们判断 `incompatible`，与内核注册时的判断是同一份代码。没有别的改动。
+
+`@weave/plugin-host` 导出：
+
+| 模块 | 导出 | 作用 |
+|---|---|---|
+| 错误 | `PluginHostError`（`code`、`pluginId?`、`cause`） | 本包的错误。错误码：`plugin-invalid-descriptor`、`plugin-entry-invalid`、`plugin-unsupported-file`、`plugin-too-large`、`plugin-unreadable`、`plugin-duplicate-id`、`plugin-id-reserved`、`plugin-host-unsupported`、`plugin-digest-mismatch`、`plugin-load-failed`、`plugin-invalid-module`、`plugin-manifest-mismatch`。不兼容候选的错误码还会是内核的 `plugin-api-version-unsupported` 和 `plugin-engine-unsupported`，与内核一致。`plugin-setup-timeout` 属于 4.4 的重载，不在本包 |
+| 清单文件 | `descriptorFileName`、`parseDescriptor(text)`、`PluginDescriptor` | 解析 `weave-plugin.json`，含第 4.1 节的本地插件规则 |
+| 摘要 | `computeDirectoryDigest(directory, options?)`、`defaultDigestLimits` | 第 5.3 节 |
+| 发现 | `discoverLocalPlugins(options)`、`LocalPluginCandidate`（`ready`、`incompatible`、`invalid`）、`DiscoveryResult` | 第 5.1 节。只读磁盘，不执行任何插件代码 |
+| 信任 | `PluginTrustEvent`、`PluginTrustStore`、`createMemoryTrustStore()`、`pluginTrustEventSchema`、`foldTrust(events)`、`resolveLocalPlugins(candidates, trust)`、`diffManifests(previous, next)` | 第 5.2、6.2、6.4 节 |
+| 加载器 | `loadLocalPlugin(plugin, options)` | 第 7 节。只在信任确认之后调用 |
+
+信任存储接口是异步的（`append`、`events`），SQLite 实现在 4.4 里同步实现也能满足。`pluginTrustEventSchema` 供存储层在读回持久化行时校验。`diffManifests` 只比较版本、`capabilities`、`contributes` 各键和 `permissions`；名字、说明和 `engines` 的变化不算声明变化，因为它们不改变插件能做什么。
 
 ## 13. 测试策略
 
