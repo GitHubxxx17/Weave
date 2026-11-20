@@ -129,6 +129,38 @@ describe('createPluginKernel', () => {
     ).rejects.toBeInstanceOf(PluginError);
   });
 
+  it('lets a service owner collect extension-point contributions, order-independent', async () => {
+    const point = defineExtensionPoint<{ add(name: string): void }>({ id: 'items' });
+    const collectedRef = defineServiceRef<string[]>({ id: 'collected' });
+    const kernel = createPluginKernel();
+    // Owner is registered BEFORE the contributor; collection still sees it.
+    await kernel.register(
+      definePlugin({
+        manifest: manifest('owner'),
+        setup(env) {
+          env.provide(collectedRef, {
+            factory: (_deps, context) => {
+              const items: string[] = [];
+              context.collect(point, { add: (name) => items.push(name) });
+              return items;
+            },
+          });
+        },
+      }),
+    );
+    await kernel.register(
+      definePlugin({
+        manifest: manifest('contrib'),
+        setup(env) {
+          env.contribute(point, (api) => api.add('x'));
+        },
+      }),
+    );
+    const generation = await kernel.seal();
+    expect(await generation.resolve(collectedRef)).toEqual(['x']);
+    await kernel.dispose();
+  });
+
   it('rolls back registrations when setup throws', async () => {
     const ref = defineServiceRef<number>({ id: 'a' });
     const kernel = createPluginKernel();

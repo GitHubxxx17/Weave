@@ -61,9 +61,11 @@ export interface PluginKernelOptions {
 /** Creates an empty plugin kernel. */
 export function createPluginKernel(options: PluginKernelOptions = {}): PluginKernel {
   const expectedApiVersion = options.apiVersion ?? pluginApiVersion;
-  const container = new ServiceContainer();
   const extensions = new ExtensionRegistry();
   const hooks = new HookRegistry();
+  const container = new ServiceContainer({
+    collect: (point, api) => extensions.collect(point, api),
+  });
   const loaded = new Map<string, LoadedPlugin>();
   const order: LoadedPlugin[] = [];
   let sealed = false;

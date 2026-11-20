@@ -26,7 +26,7 @@ export type {
   ServiceScope,
 } from './service.js';
 export { defineExtensionPoint, ExtensionRegistry } from './extension-point.js';
-export type { ExtensionPoint } from './extension-point.js';
+export type { ExtensionCollector, ExtensionPoint } from './extension-point.js';
 export { defineHook, HookRegistry } from './hook.js';
 export type {
   DecideHandler,

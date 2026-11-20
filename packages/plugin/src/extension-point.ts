@@ -25,6 +25,14 @@ export function defineExtensionPoint<T>(spec: {
   return Object.freeze({ id: spec.id, singleSlot: spec.singleSlot ?? false }) as ExtensionPoint<T>;
 }
 
+/**
+ * Runs every contribution to a point against an owner-supplied `api` and
+ * returns it. A service owner calls this (via {@link ServiceInitContext.collect})
+ * from its factory, which runs after the kernel is sealed, so every plugin's
+ * contribution is present regardless of registration order.
+ */
+export type ExtensionCollector = <T>(point: ExtensionPoint<T>, api: T) => T;
+
 type Contributor<T> = (api: T) => void;
 
 interface ContributionEntry {
