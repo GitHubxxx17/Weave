@@ -18,13 +18,14 @@ export const pluginListItemSchema = z.object({
   description: z.string().optional(),
   origin: z.enum(['builtin', 'registered', 'kernel']),
   host: z.enum(['in-process', 'mcp', 'subprocess']),
-  capabilities: z.array(z.enum(['tool', 'llm-provider', 'prompt'])),
+  capabilities: z.array(z.enum(['tool', 'llm-provider', 'prompt', 'event'])),
   engines: z.object({ weave: z.string() }).optional(),
   contributes: z
     .object({
       tools: nameListSchema.optional(),
       providers: nameListSchema.optional(),
       promptSections: nameListSchema.optional(),
+      events: nameListSchema.optional(),
       services: nameListSchema.optional(),
     })
     .optional(),
@@ -33,6 +34,7 @@ export const pluginListItemSchema = z.object({
     tools: nameListSchema,
     providers: nameListSchema,
     promptSections: nameListSchema,
+    events: nameListSchema,
     services: nameListSchema,
   }),
 });
@@ -49,6 +51,7 @@ function declared(contributes: PluginContributes): NonNullable<PluginListItem['c
     ...(contributes.promptSections === undefined
       ? {}
       : { promptSections: [...contributes.promptSections] }),
+    ...(contributes.events === undefined ? {} : { events: [...contributes.events] }),
     ...(contributes.services === undefined ? {} : { services: [...contributes.services] }),
   };
 }
@@ -71,6 +74,7 @@ export function describePlugin(info: PluginInfo, origin: PluginOrigin): PluginLi
       tools: [...contributed.tools],
       providers: [...contributed.providers],
       promptSections: [...contributed.promptSections],
+      events: [...contributed.events],
       services: [...contributed.services],
     },
   });

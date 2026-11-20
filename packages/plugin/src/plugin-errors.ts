@@ -20,7 +20,10 @@ export type PluginErrorCode =
   | 'plugin-permission-denied'
   | 'plugin-engine-unsupported'
   // Kernel: hooks
-  | 'plugin-hook-invalid-vote';
+  | 'plugin-hook-invalid-vote'
+  // Kernel: session events
+  | 'plugin-event-unknown'
+  | 'plugin-event-invalid';
 
 /** Error raised when a Plugin cannot be validated, registered or disposed. */
 export class PluginError extends Error {

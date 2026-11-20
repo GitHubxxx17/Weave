@@ -13,6 +13,8 @@ import type {
 
 import { defineExtensionPoint, type ExtensionPoint } from './extension-point.js';
 import { defineHook, type Hook, type PolicyVote } from './hook.js';
+import { PluginError } from './plugin-errors.js';
+import type { PluginEventDefinition, PluginEventRegistry } from './plugin-events.js';
 import { defineServiceRef, type ServiceRef } from './service.js';
 
 /**
@@ -47,6 +49,11 @@ export const sessionStoreRef: ServiceRef<SessionEventStore> = defineServiceRef({
 /** The Tool Registry that holds every contributed tool definition. */
 export const toolRegistryRef: ServiceRef<ToolRegistry> = defineServiceRef({
   id: 'weave.tools.registry',
+});
+
+/** The plugin events the host accepts; plugin projections read through it. */
+export const pluginEventsRef: ServiceRef<PluginEventRegistry> = defineServiceRef({
+  id: 'weave.session.plugin-events',
 });
 
 /** The shared Tool Pipeline — the only path a tool's `execute` runs through. */
@@ -129,6 +136,38 @@ export const promptSectionsExtensionPoint: ExtensionPoint<PromptSectionsExtensio
       }),
     },
   });
+
+/** Contributor API for the `weave.session.events` extension point. */
+export interface SessionEventsExtensionApi {
+  addEvent(definition: PluginEventDefinition): void;
+}
+
+/**
+ * Plugin event types are contributed here; the plugin event registry owner
+ * collects them. A plugin may define only events under its own id, so no
+ * plugin writes into another's namespace.
+ */
+export const eventsExtensionPoint: ExtensionPoint<SessionEventsExtensionApi> = defineExtensionPoint(
+  {
+    id: 'weave.session.events',
+    governed: {
+      capability: 'event',
+      key: 'events',
+      guard: (api, check, pluginId) => ({
+        addEvent(definition) {
+          if (!definition.type.startsWith(`${pluginId}/`)) {
+            throw new PluginError(
+              'plugin-event-invalid',
+              `Plugin "${pluginId}" cannot define event "${definition.type}": its events must start with "${pluginId}/"`,
+            );
+          }
+          check(definition.type);
+          api.addEvent(definition);
+        },
+      }),
+    },
+  },
+);
 
 // --- Hooks ---
 

@@ -23,7 +23,7 @@ function plugin(over: Partial<PluginListItem> = {}): PluginListItem {
     origin: 'registered',
     host: 'in-process',
     capabilities: ['tool'],
-    provides: { tools: ['echo'], providers: [], promptSections: [], services: [] },
+    provides: { tools: ['echo'], providers: [], promptSections: [], events: [], services: [] },
     ...over,
   };
 }
@@ -104,13 +104,14 @@ describe('PluginsPanel', () => {
       plugin({
         description: '回显文本',
         host: 'mcp',
-        capabilities: ['tool', 'prompt'],
+        capabilities: ['tool', 'prompt', 'event'],
         engines: { weave: '>=1.0.0' },
         permissions: ['workspace:read', 'service:weave.session.store'],
         provides: {
           tools: ['echo', 'shout'],
           providers: [],
           promptSections: ['style'],
+          events: ['server-echo/entry-added'],
           services: [],
         },
       }),
@@ -127,9 +128,11 @@ describe('PluginsPanel', () => {
     expect(detail.getByText('回显文本')).toBeTruthy();
     expect(detail.getByText('工具', { selector: '.plugin-chip' })).toBeTruthy();
     expect(detail.getByText('提示词', { selector: '.plugin-chip' })).toBeTruthy();
+    expect(detail.getByText('会话事件', { selector: '.plugin-chip' })).toBeTruthy();
     expect(detail.getByText('echo')).toBeTruthy();
     expect(detail.getByText('shout')).toBeTruthy();
     expect(detail.getByText('style')).toBeTruthy();
+    expect(detail.getByText('server-echo/entry-added')).toBeTruthy();
     expect(detail.getByText('读取工作区')).toBeTruthy();
     expect(detail.getByText('使用服务 weave.session.store')).toBeTruthy();
     expect(detail.getByText('>=1.0.0')).toBeTruthy();

@@ -1,10 +1,13 @@
 import { type LlmProviderRegistry } from '@weave/llm';
 import {
   approvalBrokerRef,
+  createPluginEventRegistry,
   createPluginKernel,
+  createPluginSessionStore,
   definePlugin,
   llmProviderRegistryRef,
   pluginApiVersion,
+  pluginEventsRef,
   promptSectionsExtensionPoint,
   toolAroundHook,
   toolPipelineRef,
@@ -17,6 +20,7 @@ import {
   type PromptSection,
 } from '@weave/plugin';
 import {
+  createEventRegistryPlugin,
   createProviderRegistryPlugin,
   createToolRegistryPlugin,
   hostServicesPlugin,
@@ -85,8 +89,11 @@ export interface AssembledAgentKernel {
  * to `weave.tools.result` observers. Plugins can also wrap every execution
  * through `weave.tools.around`, and vote on every call through
  * `weave.tools.policy`, which can only make the outcome stricter; the pipeline
- * applies both itself, around outermost. A failure while assembling disposes
- * the kernel before it propagates.
+ * applies both itself, around outermost. Plugins record their own Session
+ * events (`<pluginId>/<name>`, defined through `env.defineEvent`) in the
+ * Session Store they get as `weave.session.store`, which checks each append
+ * against the registered definitions and refuses every core event. A failure
+ * while assembling disposes the kernel before it propagates.
  */
 export async function assembleAgentKernel(
   assembly: AgentKernelAssembly,
@@ -95,10 +102,19 @@ export async function assembleAgentKernel(
   const { timeoutMs, resolveWorkspaceRoot } = assembly;
   const kernel = createPluginKernel();
 
+  // Plugins record their own events through a Session Store that accepts only
+  // the events they registered: they cannot write the core events (turns,
+  // messages, tool results) that the Runtime alone owns. The server's own
+  // tools keep using the real store.
+  const pluginEvents = createPluginEventRegistry();
   const owners = [
     createToolRegistryPlugin({ registry: toolRegistry, existing: 'skip' }),
     createProviderRegistryPlugin({ registry: providerRegistry, existing: 'skip' }),
-    hostServicesPlugin({ approvalBroker, sessionStore }),
+    createEventRegistryPlugin({ registry: pluginEvents }),
+    hostServicesPlugin({
+      approvalBroker,
+      sessionStore: createPluginSessionStore(sessionStore, pluginEvents),
+    }),
   ];
   const serverToolHost = definePlugin({
     manifest: {
@@ -190,6 +206,9 @@ export async function assembleAgentKernel(
     const basePipeline = await generation.resolve(toolPipelineRef);
     // Resolving the provider registry collects the providers plugins contributed.
     await generation.resolve(llmProviderRegistryRef);
+    // Resolving the event registry collects the events plugins defined, so
+    // their appends are accepted from here on.
+    await generation.resolve(pluginEventsRef);
     // A plugin observes completed tool results; observation is read-only and its
     // failures are isolated, so the pipeline's result is returned unchanged.
     const toolPipeline: ToolPipeline =

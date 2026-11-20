@@ -9,6 +9,15 @@ import {
 } from './hook.js';
 import { type ExtensionPoint, type ExtensionRegistry } from './extension-point.js';
 import {
+  createPluginEventDefinition,
+  type PluginEventHandle,
+  type PluginEventProjection,
+  type PluginEventSpec,
+  type ProjectedPluginEventHandle,
+  type ProjectedPluginEventSpec,
+} from './plugin-events.js';
+import { eventsExtensionPoint } from './seams.js';
+import {
   type DepMap,
   type Disposer,
   type ServiceContainer,
@@ -44,6 +53,22 @@ export interface PluginEnv {
    * `contributes` adds must be listed there.
    */
   contribute<T>(point: ExtensionPoint<T>, contributor: (api: T) => void): Disposer;
+  /**
+   * Defines one of this plugin's Session events, `<pluginId>/<name>`, and
+   * returns a handle for building events to append. With a `project` the
+   * handle also folds a Session's events into a state. Needs the `event`
+   * capability, and a plugin that declared `contributes` must list the full
+   * type under `events`. The host's event registry takes the definition once
+   * the kernel is sealed; until then nothing can append the event.
+   */
+  defineEvent<P extends Record<string, unknown>>(
+    name: string,
+    spec: PluginEventSpec<P>,
+  ): PluginEventHandle<P>;
+  defineEvent<P extends Record<string, unknown>, S>(
+    name: string,
+    spec: ProjectedPluginEventSpec<P, S>,
+  ): ProjectedPluginEventHandle<P, S>;
   /** Registers a hook handler. Returns a disposer. */
   onHook<I, O>(
     hook: Hook<I, O>,
@@ -77,6 +102,24 @@ export function createPluginEnv(deps: PluginEnvDeps): PluginEnv {
     return disposer;
   };
 
+  const defineEvent = ((
+    name: string,
+    spec: PluginEventSpec<Record<string, unknown>> & {
+      readonly project?: PluginEventProjection<Record<string, unknown>, unknown>;
+    },
+  ) => {
+    const { definition, handle } = createPluginEventDefinition(pluginId, name, spec);
+    tracked(
+      extensions.contribute(
+        eventsExtensionPoint,
+        (api) => api.addEvent(definition),
+        pluginId,
+        manifest,
+      ),
+    );
+    return handle;
+  }) as PluginEnv['defineEvent'];
+
   return {
     manifest,
     signal,
@@ -102,6 +145,7 @@ export function createPluginEnv(deps: PluginEnvDeps): PluginEnv {
     contribute(point, contributor) {
       return tracked(extensions.contribute(point, contributor, pluginId, manifest));
     },
+    defineEvent,
     onHook(hook, handler) {
       return tracked(hooks.on(hook, handler, pluginId));
     },

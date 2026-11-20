@@ -23,6 +23,7 @@ export const pluginListItemSchema = z.object({
       tools: nameListSchema.optional(),
       providers: nameListSchema.optional(),
       promptSections: nameListSchema.optional(),
+      events: nameListSchema.optional(),
       services: nameListSchema.optional(),
     })
     .optional(),
@@ -32,6 +33,8 @@ export const pluginListItemSchema = z.object({
     tools: nameListSchema,
     providers: nameListSchema,
     promptSections: nameListSchema,
+    /** Left out by a Server that predates plugin events. */
+    events: nameListSchema.default([]),
     services: nameListSchema,
   }),
 });

@@ -1,8 +1,9 @@
 import { z } from 'zod';
+import { pluginEventTypePattern } from './event-type.js';
 import { isValidVersionRange } from './version-range.js';
 
 /** Capabilities that a trusted plugin may register through Plugin Context. */
-export type PluginCapability = 'tool' | 'llm-provider' | 'prompt';
+export type PluginCapability = 'tool' | 'llm-provider' | 'prompt' | 'event';
 
 /**
  * How a plugin is hosted. The kernel only records it; hosts and loaders decide
@@ -29,12 +30,14 @@ export interface PluginContributes {
   readonly providers?: readonly string[] | undefined;
   /** Prompt section ids added through `weave.prompt.sections`. */
   readonly promptSections?: readonly string[] | undefined;
+  /** Session event types, `<pluginId>/<name>`, added through `weave.session.events`. */
+  readonly events?: readonly string[] | undefined;
   /** Ids of the services the plugin provides. */
   readonly services?: readonly string[] | undefined;
 }
 
 /** The `contributes` keys whose names arrive through a governed extension point. */
-export type ContributedNameKey = 'tools' | 'providers' | 'promptSections';
+export type ContributedNameKey = 'tools' | 'providers' | 'promptSections' | 'events';
 
 /** Declarative identity and capability metadata for one Weave plugin. */
 export interface PluginManifest {
@@ -54,7 +57,7 @@ export interface PluginManifest {
 
 const pluginIdSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 const versionSchema = z.string().regex(/^\d+\.\d+\.\d+$/);
-const pluginCapabilitySchema = z.enum(['tool', 'llm-provider', 'prompt']);
+const pluginCapabilitySchema = z.enum(['tool', 'llm-provider', 'prompt', 'event']);
 const pluginHostSchema = z.enum(['in-process', 'mcp', 'subprocess']);
 
 const serviceIdPattern = '[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*';
@@ -85,11 +88,20 @@ const nameListSchema = z
   .array(z.string().min(1))
   .refine(hasUniqueEntries, { message: 'Contributed names must be unique' });
 
+const eventTypeListSchema = z
+  .array(
+    z.string().regex(pluginEventTypePattern, {
+      message: 'Event types must look like <pluginId>/<name>, lowercase and hyphen-separated',
+    }),
+  )
+  .refine(hasUniqueEntries, { message: 'Contributed names must be unique' });
+
 /** Each contributed kind needs the capability that governs its extension point. */
 const requiredCapabilities: ReadonlyArray<readonly [ContributedNameKey, PluginCapability]> = [
   ['tools', 'tool'],
   ['providers', 'llm-provider'],
   ['promptSections', 'prompt'],
+  ['events', 'event'],
 ];
 
 /** Validates the structural shape of a Plugin Manifest. */
@@ -126,6 +138,7 @@ export const pluginManifestSchema: z.ZodType<PluginManifest> = z
         tools: nameListSchema.optional(),
         providers: nameListSchema.optional(),
         promptSections: nameListSchema.optional(),
+        events: eventTypeListSchema.optional(),
         services: z
           .array(serviceIdSchema)
           .refine(hasUniqueEntries, { message: 'Contributed names must be unique' })
@@ -150,4 +163,15 @@ export const pluginManifestSchema: z.ZodType<PluginManifest> = z
         });
       }
     }
+    // A plugin's events live under its own id, so no plugin can write into
+    // another plugin's namespace or into one a later plugin might claim.
+    manifest.contributes?.events?.forEach((type, index) => {
+      if (!type.startsWith(`${manifest.id}/`)) {
+        context.addIssue({
+          code: 'custom',
+          path: ['contributes', 'events', index],
+          message: `Event type "${type}" must start with the plugin id: "${manifest.id}/"`,
+        });
+      }
+    });
   });

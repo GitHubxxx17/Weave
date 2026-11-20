@@ -11,7 +11,7 @@ const plugin = {
   origin: 'registered',
   host: 'in-process',
   capabilities: ['tool'],
-  provides: { tools: ['echo'], providers: [], promptSections: [], services: [] },
+  provides: { tools: ['echo'], providers: [], promptSections: [], events: [], services: [] },
 };
 
 function jsonResponse(payload: unknown, status = 200): Response {
@@ -55,6 +55,16 @@ describe('Plugin API client', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ plugins: [future] })));
 
     await expect(fetchPlugins()).resolves.toEqual([future]);
+  });
+
+  it('reads a list from a Server that predates plugin events', async () => {
+    const older = {
+      ...plugin,
+      provides: { tools: ['echo'], providers: [], promptSections: [], services: [] },
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ plugins: [older] })));
+
+    await expect(fetchPlugins()).resolves.toEqual([plugin]);
   });
 
   it('calls the desktop Server when the bridge is present', async () => {

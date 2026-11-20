@@ -40,6 +40,8 @@ export interface PluginContributed {
   readonly tools: readonly string[];
   readonly providers: readonly string[];
   readonly promptSections: readonly string[];
+  /** Session event types, `<pluginId>/<name>`. */
+  readonly events: readonly string[];
   readonly services: readonly string[];
 }
 
@@ -180,6 +182,7 @@ export function createPluginKernel(options: PluginKernelOptions = {}): PluginKer
             tools: Object.freeze(collected.tools),
             providers: Object.freeze(collected.providers),
             promptSections: Object.freeze(collected.promptSections),
+            events: Object.freeze(collected.events),
             services: Object.freeze([...entry.usage.provided]),
           }),
         });

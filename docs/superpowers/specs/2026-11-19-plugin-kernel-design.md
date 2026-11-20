@@ -152,7 +152,7 @@ export interface Generation {
 现有 `{ id, name, version, apiVersion, description?, capabilities[] }` 之上新增可选字段。下列字段已在 Stage 3.1 落地：
 
 ```ts
-type PluginCapability = 'tool' | 'llm-provider' | 'prompt'; // 新增 'prompt'
+type PluginCapability = 'tool' | 'llm-provider' | 'prompt' | 'event'; // 'prompt'、'event' 为后增
 type PluginHost = 'in-process' | 'mcp' | 'subprocess';
 type PluginPermission =
   | 'workspace:read' | 'workspace:write' | 'process:spawn' | 'network:request'
@@ -166,19 +166,20 @@ interface PluginManifest {
     tools?: string[];                            // 工具名
     providers?: string[];                        // LLM provider id
     promptSections?: string[];                   // 提示词片段 id
+    events?: string[];                           // 会话事件类型，形如 `<插件 id>/<名字>`
     services?: string[];                         // 本插件 provide 的服务 id
   };
   permissions?: PluginPermission[];
 }
 ```
 
-`commands` / `events` / `ui` 三类贡献随各自的扩展点落地时再加入 `contributes`（新增可选键，向后兼容）。`capabilities` 保留（旧插件不变）。`contributes` / `permissions` 是声明式面：Studio 不运行代码即可列出插件加了什么、要什么权限。
+`commands` / `ui` 两类贡献随各自的扩展点落地时再加入 `contributes`（新增可选键，向后兼容）；`events` 已随 Stage 3.7 加入。`capabilities` 保留（旧插件不变）。`contributes` / `permissions` 是声明式面：Studio 不运行代码即可列出插件加了什么、要什么权限。
 
 **语义**
 
 - **未声明即不校验，声明即封闭。** 没有 `contributes` / `permissions` 的插件行为与之前完全一致。一旦声明，该清单是封闭的：未列出的键视为空列表，贡献该类的任何名字都会被拒绝。
-- **跨字段一致性**（解析 manifest 时检查，违反为 `plugin-invalid-manifest`）：`contributes.tools` 非空要求 `capabilities` 含 `tool`，`providers` 要求 `llm-provider`，`promptSections` 要求 `prompt`。每个列表内不得重复。
-- **受治理的扩展点**：`weave.tools`、`weave.llm.providers`、`weave.prompt.sections` 各绑定一个 capability 与一个 `contributes` 键。向这些点贡献前，插件必须声明对应 capability（`env.contribute` 时抛 `plugin-capability-not-declared`，与旧路径 `registerTool` 的规则一致）。插件声明了 `contributes` 时，owner 回放贡献的那一刻逐个核对名字，不在清单内则抛 `plugin-contributes-exceeds-manifest`，该名字不会进入 owner。
+- **跨字段一致性**（解析 manifest 时检查，违反为 `plugin-invalid-manifest`）：`contributes.tools` 非空要求 `capabilities` 含 `tool`，`providers` 要求 `llm-provider`，`promptSections` 要求 `prompt`，`events` 要求 `event`。每个列表内不得重复。`events` 里的每个类型还必须是 `<插件 id>/<名字>` 的形状，且以本插件自己的 id 开头：插件只能在自己的命名空间里写事件。
+- **受治理的扩展点**：`weave.tools`、`weave.llm.providers`、`weave.prompt.sections`、`weave.session.events` 各绑定一个 capability 与一个 `contributes` 键。向这些点贡献前，插件必须声明对应 capability（`env.contribute` 时抛 `plugin-capability-not-declared`，与旧路径 `registerTool` 的规则一致）。插件声明了 `contributes` 时，owner 回放贡献的那一刻逐个核对名字，不在清单内则抛 `plugin-contributes-exceeds-manifest`，该名字不会进入 owner。
 - **服务**：声明了 `contributes` 的插件，`env.provide(ref)` 的 `ref.id` 必须在 `contributes.services` 内。
 - **`permissions`**：内核只强制 `service:<id>`。声明了 `permissions` 的插件，经 `env.use` 或 `provide` 的 `deps` 使用的服务必须在列表内，本插件自己提供的服务除外；在 `setup` 结束后统一检查，违反为 `plugin-permission-denied`；`setup` 结束之后才调用的 `env.use` 即时检查。`workspace:*`、`process:spawn`、`network:request` 只是声明，供信任确认界面展示，内核不强制（进程内不是安全边界，见第 3 节；进程外宿主再由代理强制）。
 - **`engines.weave`**：使用 semver 范围的子集，版本一律写完整的 `x.y.z`。支持 `*`、`1.x`、`1.2.x`，以及带可选前缀 `>=` `>` `<=` `<` `=` `^` `~` 的 `x.y.z`；多个条件用空格连接，表示"且"。不支持预发布标签、`||`、连字符范围和省略补零的简写（如 `>=1.2`），写法不受支持时 manifest 无效。内核与旧注册表通过选项 `hostVersion`（完整的 `x.y.z`）得知宿主的 Weave 版本；插件声明了 `engines` 而宿主没有提供 `hostVersion` 时一律拒载（不满足与无法判断都不放行），错误码 `plugin-engine-unsupported`。
@@ -207,7 +208,7 @@ interface PluginManifest {
 | Approval Broker (`createApprovalBroker`) | `approval.broker` 服务；`approval.channels` 扩展点（现 Studio 卡片） | core |
 | Workspace policy / tools | `workspace` 服务（**session 作用域**，取代按 sessionId 反查）；`workspace-policy` core + `tools-fs` builtin | core / builtin |
 | `@weave/llm` providers (mock / openai-compatible) | `llm.providers` 扩展点；`llm.router` 服务；`llm.request`（wrap：重试 / 超时） | builtin |
-| `@weave/session` store (memory / sqlite) | `session.store` 服务；`session.events` 扩展点（类型 + 投影） | builtin |
+| `@weave/session` store (memory / sqlite) | `session.store` 服务；`session.events` 扩展点（类型 + 投影）；`session.plugin-events` 服务（插件事件注册表） | builtin |
 | `@weave/workspace` projects | `projects.store` 服务 | builtin |
 | Agent Runner (`createAgentRunner`) | `agent.loop` 服务（builtin，可替换）；`turn.start` / `step.before` / `turn.end` 钩子 | builtin |
 | `agent-instructions.ts`（server） | `prompt.sections` 扩展点（`prompt-core` builtin；提示移进 runtime 侧插件） | builtin |
@@ -216,20 +217,20 @@ interface PluginManifest {
 
 ## 10. 事件模型改造（`packages/session/src/events.ts`）
 
-现在是封闭 `discriminatedUnion`。改为 **内核事件（固定）+ 插件事件（开放命名空间）**：
+原先是封闭 `discriminatedUnion`。改为 **内核事件（固定）+ 插件事件（开放命名空间）**。Stage 3.7 已落地，细节见第 18 节。
 
 ```ts
-// 插件事件：type 形如 "git/commit-captured"，payload 由插件 schema 校验
+// 插件事件：type 形如 "git/commit-captured"，payload 在 Store 里只确认是对象
 const pluginEventSchema = z.object({
-  type: z.string().regex(/^[a-z0-9-]+\/[a-z0-9-]+$/),
-  payload: z.record(z.unknown()),   // 具体校验在投影注册表里按 type 做
+  type: z.custom<`${string}/${string}`>(/* 匹配 ^<段>/<段>$，段为小写字母数字加连字符 */),
+  payload: z.record(z.string(), z.unknown()),
 });
 export const newSessionEventSchema = z.union([coreEventSchema, pluginEventSchema]);
 ```
 
-- 插件经 `env.defineEvent(name, { schema, project })` 注册；投影注册表按 type 路由。
-- 卸载插件后：旧事件**保留**，投影时该 type 无注册 → **跳过**（会话仍能打开），不报错。
-- 向后兼容：现有 core 事件 schema 不动；只是把"未知 type 直接拒绝"改成"core 严格 + 插件命名空间走注册表"。new / persisted 两套并集同步改。
+- 插件经 `env.defineEvent(name, { schema, project? })` 注册，由宿主的插件事件注册表持有；Store 只检查信封，具体的 payload schema 由注册表在插件追加时检查。
+- 卸载插件后：旧事件**保留**，投影时该 type 无注册 → **跳过**（会话仍能打开），不报错。读取和 `projectSession` 从不依赖注册。
+- 向后兼容：现有 core 事件 schema 不动；只是把"未知 type 直接拒绝"改成"core 严格 + 带斜杠的插件命名空间"。new / persisted 两套并集同步改。
 
 ## 11. 兼容与迁移
 
@@ -238,7 +239,7 @@ export const newSessionEventSchema = z.union([coreEventSchema, pluginEventSchema
 
 ## 12. 校验与错误（新增错误码）
 
-`plugin-service-missing-dependency` / `-cycle` / `-duplicate` / `-scope-violation`、`plugin-extension-single-slot`、`plugin-contributes-exceeds-manifest`（提供的服务或贡献的名字不在 `contributes` 内）、`plugin-permission-denied`（使用了 `permissions` 未授权的 `service:<id>`）、`plugin-engine-unsupported`（`engines.weave` 不满足，或宿主没有声明 `hostVersion`）。`plugin-capability-not-declared` 原本只用于旧路径，Stage 3.1 起内核路径向受治理扩展点贡献时同样适用。全部在**启动 / 注册时**抛出，不拖到运行时；贡献名字的核对发生在 owner 服务初始化时，时机见第 8 节的校验时机表。
+`plugin-service-missing-dependency` / `-cycle` / `-duplicate` / `-scope-violation`、`plugin-extension-single-slot`、`plugin-contributes-exceeds-manifest`（提供的服务或贡献的名字不在 `contributes` 内）、`plugin-permission-denied`（使用了 `permissions` 未授权的 `service:<id>`）、`plugin-engine-unsupported`（`engines.weave` 不满足，或宿主没有声明 `hostVersion`）。`plugin-capability-not-declared` 原本只用于旧路径，Stage 3.1 起内核路径向受治理扩展点贡献时同样适用。`plugin-event-unknown`（追加了没有任何插件注册的事件类型，包括所有内核事件类型；或为没有投影的事件求投影）、`plugin-event-invalid`（事件的类型或名字形状不对、插件在别人的命名空间里定义事件、payload 不符合注册的 schema 或存不成 JSON 对象）。除了追加与投影事件时的检查发生在运行时，其余都在**启动 / 注册时**抛出，不拖到运行时；贡献名字的核对发生在 owner 服务初始化时，时机见第 8 节的校验时机表。钩子的错误码（`plugin-hook-invalid-vote` 等）见第 17 节。
 
 ## 13. 测试策略
 
@@ -254,17 +255,17 @@ export const newSessionEventSchema = z.union([coreEventSchema, pluginEventSchema
 
 `apps/server` 的手工装配收口为一个 `ServerHost`，由 `createServerRuntime` 创建并挂在返回的 Runtime 上（`runtime.serverHost`），取代原先的 4 个 `WeakMap` 与对 `createPluginRegistry` 的使用。
 
-- **根服务仍由 Runtime 持有。** 审批 broker 与 Session Store 的创建和关闭属于宿主 Runtime 的生命周期（`runtime.get(approvalBrokerService)` 不变）。内置插件 `host-services` 把这两个实例作为 `weave.approval.broker`、`weave.session.store` 提供给内核插件，只借出，不销毁。工具与 provider 注册表同样由宿主持有，内置的 `tool-registry`、`provider-registry` 通过 `registry` 与 `existing: 'skip'` 选项把贡献收进宿主的注册表，重复回放是无害的。
+- **根服务仍由 Runtime 持有。** 审批 broker 与 Session Store 的创建和关闭属于宿主 Runtime 的生命周期（`runtime.get(approvalBrokerService)` 不变）。内置插件 `host-services` 把这两个实例作为 `weave.approval.broker`、`weave.session.store` 提供给内核插件，只借出，不销毁；其中 Session Store 是只接受插件已注册事件的受限视图（第 18 节），读取不受限。工具与 provider 注册表同样由宿主持有，内置的 `tool-registry`、`provider-registry` 通过 `registry` 与 `existing: 'skip'` 选项把贡献收进宿主的注册表，重复回放是无害的。
 - **旧插件路径是扩展点贡献。** `registerServerPlugins` 不再把工具与 provider 直接提交到注册表，而是用 `adaptLegacyPlugin` 把旧的 `registerTool` / `registerProvider` 插件改写成内核插件：旧 `setup` 只执行一次并在注册时校验（错误码与旧注册表一致），之后只重放暂存的工具与 provider。`createPluginRegistry` 仍然导出，供嵌入式宿主使用，server 不再使用它。
 - **注册时机。** 旧插件必须在创建 Agent Runner 之前注册，之后注册会被拒绝。旧路径曾允许晚注册，但没有调用方依赖它，晚注册何时生效统一留给 Stage 4 的"下一轮生效"重载。
-- **每个 runner 一个 kernel，装配顺序即工具顺序。** 顺序是：注册表与宿主服务、已注册的旧插件、`server-tool-host`（Tool Pipeline 与 server 自带工具）、`kernelPlugins`。模型看到的工具顺序因此仍是：旧插件工具、server 工具、内核插件工具，与重构前一致。装配失败时先销毁这个 kernel 再抛出。
+- **每个 runner 一个 kernel，装配顺序即工具顺序。** 顺序是：注册表与宿主服务（`tool-registry`、`provider-registry`、`event-registry`、`host-services`）、已注册的旧插件、`server-tool-host`（Tool Pipeline 与 server 自带工具）、`kernelPlugins`。模型看到的工具顺序因此仍是：旧插件工具、server 工具、内核插件工具，与重构前一致。装配失败时先销毁这个 kernel 再抛出。
 - **销毁。** `disposeServerPlugins(runtime)` 先销毁各 runner 的 kernel，再销毁没有进过 kernel 的已注册插件，后注册的先销毁，每个插件的 `dispose` 至多执行一次。
 
 ## 16. 插件列表接口（Stage 3.2）
 
 Studio 不运行插件代码，就能列出已加载的插件加了什么、要什么权限。内核与 server 各出一半。
 
-**内核**：`kernel.plugins()`（`Generation.plugins()` 是同一个函数）按注册顺序返回已加载的插件，每项是 `{ manifest, contributed }`。`contributed` 是插件实际放进内核的名字：`tools`、`providers`、`promptSections` 由受治理的扩展点在 owner 回放贡献时记录，无论插件有没有声明 `contributes`；`services` 在 `setup` 里 `provide` 时即知。因此 owner 回放之前，前三类是空的，宿主应在装配完成后再读取。同一个名字重复回放只记一次，插件被销毁后不再列出。
+**内核**：`kernel.plugins()`（`Generation.plugins()` 是同一个函数）按注册顺序返回已加载的插件，每项是 `{ manifest, contributed }`。`contributed` 是插件实际放进内核的名字：`tools`、`providers`、`promptSections`、`events` 由受治理的扩展点在 owner 回放贡献时记录，无论插件有没有声明 `contributes`；`services` 在 `setup` 里 `provide` 时即知。因此 owner 回放之前，前四类是空的，宿主应在装配完成后再读取。同一个名字重复回放只记一次，插件被销毁后不再列出。
 
 **server**：`GET /plugins`，只读，响应 `{ plugins: PluginListItem[] }`，对象按装配时的注册顺序排列，指最近一个 Agent Runner 装配时加载的插件，没有 Agent Runner 时为空。
 
@@ -273,17 +274,17 @@ interface PluginListItem {
   id: string; name: string; version: string; description?: string;
   origin: 'builtin' | 'registered' | 'kernel';  // server 自带 | registerServerPlugins 注册的旧插件 | kernelPlugins
   host: 'in-process' | 'mcp' | 'subprocess';    // manifest 未写时为 in-process
-  capabilities: ('tool' | 'llm-provider' | 'prompt')[];
+  capabilities: ('tool' | 'llm-provider' | 'prompt' | 'event')[];
   engines?: { weave: string };
-  contributes?: { tools?: string[]; providers?: string[]; promptSections?: string[]; services?: string[] }; // manifest 声明的清单，未声明则省略
+  contributes?: { tools?: string[]; providers?: string[]; promptSections?: string[]; events?: string[]; services?: string[] }; // manifest 声明的清单，未声明则省略
   permissions?: string[];                        // manifest 声明的权限，未声明则省略
-  provides: { tools: string[]; providers: string[]; promptSections: string[]; services: string[] }; // 实际加入内核的名字
+  provides: { tools: string[]; providers: string[]; promptSections: string[]; events: string[]; services: string[] }; // 实际加入内核的名字
 }
 ```
 
 `contributes` / `permissions` 是插件声明的，`provides` 是实际发生的，二者可以不同：没有声明 `contributes` 的插件不受限制，所以 `provides` 才是它真实的足迹。接口本身没有写操作，启用 / 停用 / 重载属于 Stage 4。
 
-**Studio**：右侧面板新增「插件」（面板种类 `plugins`，单实例，默认不固定，从面板的添加菜单打开）。列表按来源分为内置、已注册、扩展三组，每项可展开，查看实际提供的工具、模型提供方、提示词片段和服务，以及声明的权限与适用版本。面板打开时请求一次 `GET /plugins`，标题行的刷新按钮重新请求。Studio 不引用 `@weave/*`，自己定义响应类型，对不认识的来源、运行方式和能力原样显示，不让整个列表失败。
+**Studio**：右侧面板新增「插件」（面板种类 `plugins`，单实例，默认不固定，从面板的添加菜单打开）。列表按来源分为内置、已注册、扩展三组，每项可展开，查看实际提供的工具、模型提供方、提示词片段、会话事件和服务，以及声明的权限与适用版本。面板打开时请求一次 `GET /plugins`，标题行的刷新按钮重新请求。Studio 不引用 `@weave/*`，自己定义响应类型，对不认识的来源、运行方式和能力原样显示，不让整个列表失败。
 
 ## 17. 钩子的落点（Stage 3.3 起）
 
@@ -340,3 +341,54 @@ interface PluginListItem {
 - 洋葱顺序即注册顺序，先注册的在最外层。
 
 故意的取舍：不限制请求里的 `tools` 字段，增删它只影响模型能看到什么，真正能执行什么仍由 Tool Pipeline 和它的策略、审批决定。也没有逐分片的观察钩子，那会把高频的临时流事件变成持久化接口。
+
+## 18. 插件事件（Stage 3.7）
+
+插件可以把自己的事实写进会话日志，并自己定义这些事实如何投影成状态。日志仍然只增不改，插件事件与内核事件共用同一条日志和同一个序号。
+
+**类型与命名空间。** 插件事件的 `type` 是 `<插件 id>/<名字>`，两段都是小写字母数字加连字符。内核事件的类型从不含斜杠，所以两类不会撞名。`manifest.contributes.events` 列出完整类型，每个类型必须以本插件的 id 开头。`defineEvent` 自己拼出类型，直接向扩展点贡献别人命名空间里的类型会被拒绝（`plugin-event-invalid`）。
+
+**三层各管一件事。**
+
+| 层 | 管什么 | 不管什么 |
+|---|---|---|
+| `@weave/session` 的 Store | 信封：类型形如 `<段>/<段>`，payload 是对象；序号、时间、事件 id 仍由 Store 分配 | 谁拥有这个类型，payload 长什么样 |
+| `@weave/plugin` 的注册表 | 每个类型的 schema 与可选投影；追加前 `parse`；按类型求投影 | 存储 |
+| 宿主（server） | 给每个 kernel 一个注册表，把插件拿到的 Session Store 换成受限视图 | 业务语义 |
+
+Store 不依赖注册，所以读取与 `projectSession` 在任何时候都能打开会话：卸载一个插件后，它的事件留在日志里，核心投影自然跳过未知类型。
+
+**插件侧 API**
+
+```ts
+const noteAdded = env.defineEvent('note-added', {
+  schema: z.object({ text: z.string().min(1) }),
+  project: {                                    // 可选
+    initial: () => [] as string[],
+    apply: (notes, event) => [...notes, event.payload.text],
+  },
+});
+
+const store = await env.use(sessionStoreRef).get();
+await store.append(sessionId, [noteAdded.create({ text: '记一笔' })]);
+const notes = noteAdded.project(await store.read(sessionId)); // 有 project 时才有
+```
+
+- `defineEvent` 需要 `event` 能力，是对受治理扩展点 `weave.session.events` 贡献的语法糖，返回的句柄只含 `type`、`create`，以及有投影时的 `project`。
+- 事件在 kernel seal 之后、宿主解析 `weave.session.plugin-events` 时进入注册表（与工具、provider 同一时机）。在此之前不能追加。
+- `schema` 的输出就是被存的内容：多余字段按 schema 的规则处理（zod 默认剔除）。`parse` 之后再走一遍 JSON 往返，因此内存 Store 与 SQLite Store 保存和读回的值一致；存不成 JSON 对象的 payload 报 `plugin-event-invalid`。
+- 投影是纯函数的折叠：`apply(state, { sequence, occurredAt, payload })`。它只看自己类型的事件，**不再符合当前 schema 的旧事件被跳过**，不会让会话投影失败；日志只增不改，所以插件的 schema 要自己兼容想继续看到的旧形状。
+
+**受限的 Session Store。** 插件通过 `weave.session.store` 拿到的不再是宿主的 Store，而是 `createPluginSessionStore(store, registry)`：
+
+- `read` 原样透传（含内核事件，这与之前一致）。
+- `append` 对每个事件先 `parse`：不是已注册的插件事件类型就报 `plugin-event-unknown`，**所有内核事件类型一律拒绝**，所以插件无法伪造回合、消息或工具结果；payload 不合 schema 报 `plugin-event-invalid`。一批里任何一个事件被拒，整批不写。
+- `close` 什么也不做，Store 的生命周期属于宿主。
+- server 自己的工具（`recall`、文件快照）继续用真实的 Store，不经过这一层。
+
+**已知限制**
+
+- 受限视图不区分是哪个插件在追加：插件 B 可以追加插件 A 已注册的事件类型，只要 payload 合 A 的 schema。进程内插件互相信任，这不是安全边界；要强制"只能写自己的"，需要每个插件一个 Store 视图，留给 Stage 4 与信任模型一起做。
+- 追加的事件不会出现在 Agent 的实时流里，只在日志里。Studio 目前不展示插件事件，也没有读取它们的 HTTP 接口。
+- 注册表属于单个 kernel，不跨 kernel 复用；同一类型定义两次会报 `plugin-registration-conflict`。
+- 没有为插件事件做大小限制。

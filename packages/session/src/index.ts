@@ -5,8 +5,14 @@
  * event contract without importing SQLite-specific details.
  */
 
-export { newSessionEventSchema, sessionEventPayloadSchema, sessionEventSchema } from './events.js';
-export type { NewSessionEvent, SessionEvent, SessionEventType } from './events.js';
+export {
+  isPluginEventType,
+  newSessionEventSchema,
+  pluginEventTypePattern,
+  sessionEventPayloadSchema,
+  sessionEventSchema,
+} from './events.js';
+export type { NewSessionEvent, PluginEventType, SessionEvent, SessionEventType } from './events.js';
 
 export { readSessionEventsOptionsSchema, sessionIdSchema, SessionStoreError } from './store.js';
 export type { SessionEventStore, SessionStoreErrorCode } from './store.js';

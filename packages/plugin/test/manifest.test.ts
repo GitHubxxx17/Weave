@@ -52,13 +52,14 @@ describe('Plugin Manifest', () => {
 describe('Plugin Manifest declarations', () => {
   const declared = {
     ...validManifest,
-    capabilities: ['tool', 'llm-provider', 'prompt'],
+    capabilities: ['tool', 'llm-provider', 'prompt', 'event'],
     host: 'in-process',
     engines: { weave: '>=1.2.0 <2.0.0' },
     contributes: {
       tools: ['echo'],
       providers: ['local-model'],
       promptSections: ['style'],
+      events: ['example-tools/note-added'],
       services: ['example.cache'],
     },
     permissions: [
@@ -139,6 +140,64 @@ describe('Plugin Manifest declarations', () => {
         contributes: { tools: [] },
       }),
     ).toMatchObject({ contributes: { tools: [] } });
+  });
+
+  describe('contributes.events', () => {
+    const withEvents = (events: string[], capabilities: string[] = ['event']) => ({
+      ...validManifest,
+      capabilities,
+      contributes: { events },
+    });
+
+    it('accepts event types under the plugin id with the event capability', () => {
+      expect(
+        pluginManifestSchema.safeParse(
+          withEvents(['example-tools/note-added', 'example-tools/note-removed']),
+        ).success,
+      ).toBe(true);
+    });
+
+    it('requires the event capability', () => {
+      const rejected = pluginManifestSchema.safeParse(
+        withEvents(['example-tools/note-added'], ['tool']),
+      );
+
+      expect(rejected.success).toBe(false);
+      expect(rejected.error?.issues.map((issue) => issue.message)).toContain(
+        'contributes.events requires the "event" capability',
+      );
+    });
+
+    it('rejects an event type outside the plugin id, naming where it went wrong', () => {
+      const rejected = pluginManifestSchema.safeParse(withEvents(['other-plugin/note-added']));
+
+      expect(rejected.success).toBe(false);
+      expect(rejected.error?.issues).toMatchObject([
+        {
+          path: ['contributes', 'events', 0],
+          message: expect.stringContaining('must start with the plugin id: "example-tools/"'),
+        },
+      ]);
+    });
+
+    it.each([
+      ['a bare name', 'note-added'],
+      ['a core event type', 'turn.started'],
+      ['uppercase letters', 'example-tools/Note'],
+      ['an extra segment', 'example-tools/note/added'],
+      ['an empty name', 'example-tools/'],
+      ['a trailing hyphen', 'example-tools/note-'],
+    ])('rejects %s', (_label, type) => {
+      expect(pluginManifestSchema.safeParse(withEvents([type])).success).toBe(false);
+    });
+
+    it('rejects a duplicate event type', () => {
+      expect(
+        pluginManifestSchema.safeParse(
+          withEvents(['example-tools/note-added', 'example-tools/note-added']),
+        ).success,
+      ).toBe(false);
+    });
   });
 
   it('keeps accepting the original manifest shape unchanged', () => {

@@ -18,9 +18,10 @@ export interface GovernedContribution<T> {
   readonly key: ContributedNameKey;
   /**
    * Wraps the owner's API so every name a contributor adds passes `check`
-   * before it reaches the owner.
+   * before it reaches the owner. `pluginId` is the contributor, for points
+   * whose names must belong to it.
    */
-  readonly guard: (api: T, check: ContributionCheck) => T;
+  readonly guard: (api: T, check: ContributionCheck, pluginId: string) => T;
 }
 
 /**
@@ -159,10 +160,14 @@ export class ExtensionRegistry {
       return api;
     }
     const contributes = entry.declaration?.contributes;
-    return governed.guard(api, (name) => {
-      assertNameDeclared(entry.pluginId, contributes, governed.key, name);
-      this.#record(entry.pluginId, governed.key, name);
-    });
+    return governed.guard(
+      api,
+      (name) => {
+        assertNameDeclared(entry.pluginId, contributes, governed.key, name);
+        this.#record(entry.pluginId, governed.key, name);
+      },
+      entry.pluginId,
+    );
   }
 
   #record(pluginId: string, key: ContributedNameKey, name: string): void {
@@ -189,6 +194,7 @@ export class ExtensionRegistry {
       tools: [...(byKind?.get('tools') ?? [])],
       providers: [...(byKind?.get('providers') ?? [])],
       promptSections: [...(byKind?.get('promptSections') ?? [])],
+      events: [...(byKind?.get('events') ?? [])],
     };
   }
 

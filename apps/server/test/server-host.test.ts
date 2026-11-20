@@ -9,8 +9,11 @@ import {
   toolsExtensionPoint,
   type KernelPlugin,
   type PluginManifest,
+  type ProjectedPluginEventHandle,
+  type ServiceHandle,
   type WeavePlugin,
 } from '@weave/plugin';
+import { projectSession, type SessionEventStore } from '@weave/session';
 import {
   approvalBrokerService,
   createServerAgentRunner,
@@ -195,7 +198,7 @@ describe('Server host', () => {
     }
   });
 
-  it('lets kernel plugins use the Session Store and Approval Broker the Server owns', async () => {
+  it('lets kernel plugins use the Approval Broker the Server owns and read its Session Store', async () => {
     const runtime = await startRuntime();
     const seen: Promise<unknown>[] = [];
     const probe: KernelPlugin = definePlugin({
@@ -212,14 +215,135 @@ describe('Server host', () => {
 
     try {
       await createServerAgentRunner(runtime, { kernelPlugins: [probe] });
+      const serverStore = getServerSessionStore(runtime);
+      await serverStore.append('session-1', [{ type: 'session.created', payload: {} }]);
 
       const [store, broker] = await Promise.all(seen);
-      expect(store).toBe(getServerSessionStore(runtime));
+      expect(await (store as SessionEventStore).read('session-1')).toEqual(
+        await serverStore.read('session-1'),
+      );
       expect(broker).toBe(runtime.get(approvalBrokerService));
     } finally {
       await disposeServerPlugins(runtime);
       await runtime.stop();
     }
+  });
+
+  describe('plugin events', () => {
+    const entrySchema = z.object({ text: z.string().min(1) });
+
+    interface Journal {
+      readonly handle: ProjectedPluginEventHandle<{ text: string }, readonly string[]>;
+      readonly store: () => Promise<SessionEventStore>;
+      readonly plugin: KernelPlugin;
+    }
+
+    function journal(): Journal {
+      let handle: Journal['handle'] | undefined;
+      let store: ServiceHandle<SessionEventStore> | undefined;
+      const plugin = definePlugin({
+        manifest: manifest('journal', { capabilities: ['event'] }),
+        setup(env) {
+          handle = env.defineEvent('entry-added', {
+            schema: entrySchema,
+            project: {
+              initial: () => [],
+              apply: (entries, event) => [...entries, event.payload.text],
+            },
+          });
+          store = env.use(sessionStoreRef);
+        },
+      });
+      return {
+        plugin,
+        get handle() {
+          if (handle === undefined) {
+            throw new Error('The journal plugin has not been set up');
+          }
+          return handle;
+        },
+        store: () => {
+          if (store === undefined) {
+            throw new Error('The journal plugin has not been set up');
+          }
+          return store.get();
+        },
+      };
+    }
+
+    it('records a plugin event in the Server Session Store and projects it back', async () => {
+      const runtime = await startRuntime();
+      const entries = journal();
+
+      try {
+        await createServerAgentRunner(runtime, { kernelPlugins: [entries.plugin] });
+        const store = await entries.store();
+
+        await store.append('session-1', [
+          entries.handle.create({ text: 'first' }),
+          entries.handle.create({ text: 'second' }),
+        ]);
+
+        const stored = await getServerSessionStore(runtime).read('session-1');
+        expect(stored.map((event) => [event.type, event.payload])).toEqual([
+          ['journal/entry-added', { text: 'first' }],
+          ['journal/entry-added', { text: 'second' }],
+        ]);
+        expect(entries.handle.project(await store.read('session-1'))).toEqual(['first', 'second']);
+      } finally {
+        await disposeServerPlugins(runtime);
+        await runtime.stop();
+      }
+    });
+
+    it('refuses core events and payloads the plugin schema rejects, writing nothing', async () => {
+      const runtime = await startRuntime();
+      const entries = journal();
+
+      try {
+        await createServerAgentRunner(runtime, { kernelPlugins: [entries.plugin] });
+        const store = await entries.store();
+
+        await expect(
+          store.append('session-1', [{ type: 'session.created', payload: {} }]),
+        ).rejects.toMatchObject({ code: 'plugin-event-unknown' });
+        await expect(
+          store.append('session-1', [{ type: 'journal/entry-added', payload: { text: '' } }]),
+        ).rejects.toMatchObject({ code: 'plugin-event-invalid' });
+        await expect(
+          store.append('session-1', [{ type: 'other/entry-added', payload: { text: 'x' } }]),
+        ).rejects.toMatchObject({ code: 'plugin-event-unknown' });
+
+        expect(await getServerSessionStore(runtime).read('session-1')).toEqual([]);
+      } finally {
+        await disposeServerPlugins(runtime);
+        await runtime.stop();
+      }
+    });
+
+    it('keeps the events in the log, and the Session readable, after the plugin is gone', async () => {
+      const runtime = await startRuntime();
+      const entries = journal();
+
+      try {
+        await createServerAgentRunner(runtime, { kernelPlugins: [entries.plugin] });
+        const store = await entries.store();
+        await getServerSessionStore(runtime).append('session-1', [
+          { type: 'session.created', payload: { title: 'Notes' } },
+        ]);
+        await store.append('session-1', [entries.handle.create({ text: 'kept' })]);
+
+        await disposeServerPlugins(runtime);
+
+        // Nothing registers the plugin's event any more, yet the log still holds
+        // it and the Session projects as before.
+        const log = await getServerSessionStore(runtime).read('session-1');
+        expect(log.map((event) => event.type)).toEqual(['session.created', 'journal/entry-added']);
+        expect(projectSession(log).title).toBe('Notes');
+      } finally {
+        await runtime.stop();
+      }
+    });
   });
 
   it('disposes registered plugins last registered first, once, with or without a runner', async () => {

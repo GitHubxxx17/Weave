@@ -169,12 +169,43 @@ export const sessionEventPayloadSchema = z.discriminatedUnion('type', [
 ]);
 
 /**
+ * Where a plugin's own events live in the log: `<pluginId>/<name>`. The slash
+ * is what keeps them apart from the core events, whose types never contain one.
+ */
+export const pluginEventTypePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/** The type of a plugin event, `<pluginId>/<name>`. */
+export type PluginEventType = `${string}/${string}`;
+
+/** Whether `type` has the shape of a plugin event type. */
+export function isPluginEventType(type: string): type is PluginEventType {
+  return pluginEventTypePattern.test(type);
+}
+
+const pluginEventTypeSchema = z.custom<PluginEventType>(
+  (value) => typeof value === 'string' && pluginEventTypePattern.test(value),
+  { message: 'Plugin event type must look like <pluginId>/<name>' },
+);
+
+/**
+ * A plugin's event as the log holds it. The Store only checks the envelope:
+ * who owns the type and what its payload must look like is the plugin's
+ * contract, checked by the host that registered it when the event is appended.
+ * Reading never depends on that registration, so a Session still opens after a
+ * plugin is removed and its old events simply stay in the log.
+ */
+const pluginNewEventSchema = z.object({
+  type: pluginEventTypeSchema,
+  payload: z.record(z.string(), z.unknown()),
+});
+
+/**
  * An event accepted from a caller before the Store assigns persistence fields.
  *
  * `eventId`, `sequence`, and `occurredAt` are intentionally absent because
  * callers must not control durable identity or ordering.
  */
-export type NewSessionEvent = z.infer<typeof sessionEventPayloadSchema>;
+export type NewSessionEvent = z.infer<typeof newSessionEventSchema>;
 
 /**
  * The event type discriminator used by the durable Session log.
@@ -182,9 +213,9 @@ export type NewSessionEvent = z.infer<typeof sessionEventPayloadSchema>;
 export type SessionEventType = NewSessionEvent['type'];
 
 /**
- * Runtime schema for caller-provided events.
+ * Runtime schema for caller-provided events: a core fact, or a plugin's event.
  */
-export const newSessionEventSchema = sessionEventPayloadSchema;
+export const newSessionEventSchema = z.union([sessionEventPayloadSchema, pluginNewEventSchema]);
 
 const persistedEventSchemas = [
   z.object({
@@ -296,7 +327,17 @@ const persistedEventSchemas = [
 /**
  * Runtime schema for events after a Store has assigned persistence fields.
  */
-export const sessionEventSchema = z.discriminatedUnion('type', persistedEventSchemas);
+export const sessionEventSchema = z.union([
+  z.discriminatedUnion('type', persistedEventSchemas),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: pluginEventTypeSchema,
+    payload: z.record(z.string(), z.unknown()),
+  }),
+]);
 
 /**
  * The persisted event envelope with a type-safe payload discriminator.
