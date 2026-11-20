@@ -17,6 +17,8 @@ import {
 } from '../src/prompt-audit.js';
 import {
   createServerAgentRunner,
+  assembleServerGeneration,
+  replaceServerGeneration,
   createServerRuntime,
   disposeServerPlugins,
   getServerSessionStore,
@@ -474,7 +476,11 @@ describe('prompt audit in the Server', () => {
       const first = await createServerAgentRunner(runtime, { kernelPlugins: [brief] });
       await runTurn(first, 'one');
       await runTurn(first, 'two');
-      const restarted = await createServerAgentRunner(runtime, { kernelPlugins: [brief] });
+      await replaceServerGeneration(
+        runtime,
+        await assembleServerGeneration(runtime, { kernelPlugins: [brief] }),
+      );
+      const restarted = await createServerAgentRunner(runtime);
       await runTurn(restarted, 'three');
       expect(auditTypes(await store.read(sessionId))).toEqual([
         'prompt.section-content',
@@ -482,14 +488,19 @@ describe('prompt audit in the Server', () => {
       ]);
 
       // The plugin changes its text: the new set and only the new text are written.
-      await runTurn(await createServerAgentRunner(runtime, { kernelPlugins: [briefer] }), 'four');
+      await replaceServerGeneration(
+        runtime,
+        await assembleServerGeneration(runtime, { kernelPlugins: [briefer] }),
+      );
+      await runTurn(first, 'four');
       expect(auditTypes(await store.read(sessionId)).slice(2)).toEqual([
         'prompt.section-content',
         'prompt.sections-applied',
       ]);
 
       // The plugin is gone: the log says no sections apply from this turn on.
-      await runTurn(await createServerAgentRunner(runtime), 'five');
+      await replaceServerGeneration(runtime, await assembleServerGeneration(runtime));
+      await runTurn(first, 'five');
       const log = await store.read(sessionId);
       expect(auditTypes(log).slice(4)).toEqual(['prompt.sections-applied']);
 

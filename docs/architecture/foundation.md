@@ -88,10 +88,40 @@ protocol. A disconnected browser cannot use this endpoint to reconstruct
 missed transient events; durable Session facts remain the recovery boundary.
 
 The Server does not create a model client per request or invoke a tool
-definition directly. `main.ts` starts the Runtime, resolves its LLM and
-Session Store services, creates one `AgentRunner` in the composition root, and
-injects it into `createApp()`. Tests can inject a fake Runner without a real
-provider or TCP socket.
+definition directly. `main.ts` starts the Runtime and injects one stable
+Runner facade into `createApp()`. Server generations behind that facade own
+their kernel, Tool Registry, plugin Providers, Tool Pipeline, Agent Runner,
+prompt audit and plugin/command catalogs. Tests can inject a fake Runner
+without a real provider or TCP socket.
+
+`@weave/plugin-host` owns the generic generation controller; it knows only
+requests with `sessionId`, an optional `signal`, and asynchronous event
+iterables. The first `next()` queues a turn. When that Session's earlier turn
+has finished producing, the next turn pins the current generation. Different
+Sessions can run concurrently. An independent pump releases the pin and Session
+queue when production ends, even if a consumer has not read its buffered
+events. Returning an iterator aborts its execution and waits for cancellation
+to settle before the Session can advance.
+
+Server assembles a candidate with fresh registries, then publishes its runner
+and catalogs together. Repeated `createServerAgentRunner` calls return the
+existing facade; concurrent first calls share one initialization and its first
+options, with retries allowed after failure. Configuration changes use explicit
+assembly and publication. A failed candidate is disposed without replacing the
+current generation. An old generation retires after its final running turn;
+an immediate replacement also aborts turns in all retired generations.
+Retirement errors do not undo a published replacement and are reported at final
+host disposal. The controller can block new turns until a successful
+replacement; later trust-management code uses that to honor durable revocation
+when rebuilding fails.
+
+Runtime owns the shared Approval Broker and Session Store. Legacy plugins
+registered through `registerServerPlugins` run setup once and lend their
+contributions to each generation; only final ServerHost disposal closes those
+resources. Generation-owned kernel plugins dispose with their own generation.
+Shutdown stops accepting HTTP connections and aborts/drains the facade before
+closing stores, so cancellation can still persist terminal Session facts while
+an SSE response or Approval is pending.
 
 Approval control requests follow a separate path:
 
@@ -586,9 +616,22 @@ optional `defaultModel`. The client can capture the Server-side API Key, but
 
 The Server reads `WEAVE_LLM_PROVIDERS` as a Zod-validated JSON array. It always
 registers the deterministic `mock` Provider, then creates an
-OpenAI-compatible client for each configured entry. The same Registry is used
-by both the Agent Runner and `GET /settings/providers`; this keeps the list in
-Studio aligned with the clients Runtime can actually resolve.
+OpenAI-compatible client for each configured entry. Environment and Settings
+Providers share a Runtime-owned source. Each generation adds a private plugin
+Provider table and reads a combined view; candidate assembly cannot change the
+current catalog. Settings writes change only the shared source and reject ids
+owned by current plugins. A Settings create reserves its id at ServerHost across
+the asynchronous persistence and registration; publication rejects reserved ids
+as well as source collisions. Retiring an old generation cannot remove a
+replacement generation's Providers. The Settings API reads the current combined catalog, keeping Studio aligned with
+the clients Runtime can resolve.
+
+Persisted Settings records also claim their ids when their API Key is cleared
+and no client is registered. The Manager synchronizes these claims on refresh,
+create and deletion, independently of temporary write reservations. Assembly
+and publication reject claimed ids, so a plugin cannot take an id that Settings
+still owns or become mislabeled as an editable Settings Provider. Removing the
+record releases its claim.
 
 The built-in `mock` uses `createToolCommandMockLlmClient()`: it replays a fixed
 demo answer, but a user message with `/tool <name> <json>` lines becomes one
@@ -599,7 +642,9 @@ through the shared Tool Pipeline. The design is in
 `docs/superpowers/specs/2026-11-19-mock-tool-commands-design.md`.
 
 When an Agent request contains `provider: "deepseek"`, Runtime resolves that
-id before it appends the first running Turn event. An unknown id returns the
+id and its frozen descriptor before the first Session Store await. That turn
+keeps the client, sampling defaults and context window through every model and
+tool step. A subsequent turn reads the latest settings. An unknown id returns the
 stable `agent-provider-unavailable` error and does not create a misleading
 partial Turn. Runtime still accepts the older single `llm` option for callers
 that do not need a Registry; Server uses Registry mode.

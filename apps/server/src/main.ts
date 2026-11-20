@@ -149,20 +149,25 @@ export async function startServer(
     (options.providerSecretCodec === undefined
       ? undefined
       : createSqliteProviderSettingsStore({ filename: databaseFile }));
-  const providerSettingsManager: ProviderSettingsManager | undefined =
-    providerSettingsStore === undefined || options.providerSecretCodec === undefined
-      ? undefined
-      : createProviderSettingsManager({
-          store: providerSettingsStore,
-          registry: providerSettings.registry,
-          secretCodec: options.providerSecretCodec,
-          initialDefaultProvider: providerSettings.defaultProvider,
-        });
   const projectStore = options.projectStore ?? createSqliteProjectStore({ filename: databaseFile });
   const sessionStoreFactory =
     options.sessionStoreFactory ??
     (() => createSqliteSessionEventStore({ filename: databaseFile }));
   const runtime = createServerRuntime({ sessionStoreFactory, providerSettings });
+  const providerSettingsManager: ProviderSettingsManager | undefined =
+    providerSettingsStore === undefined || options.providerSecretCodec === undefined
+      ? undefined
+      : createProviderSettingsManager({
+          store: providerSettingsStore,
+          registry: runtime.serverHost.hostProviderRegistry,
+          catalog: () => runtime.serverHost.providerRegistry,
+          reserveProvider: (id) => runtime.serverHost.reserveProvider(id),
+          claimProvider: (id) => runtime.serverHost.claimProvider(id),
+          releaseProviderClaim: (id) => runtime.serverHost.releaseProviderClaim(id),
+          secretCodec: options.providerSecretCodec,
+          initialDefaultProvider: providerSettings.defaultProvider,
+        });
+
   let server: ServerType | undefined;
 
   try {
@@ -191,7 +196,7 @@ export async function startServer(
           agentRunner,
           projectStore,
           sessionService,
-          providerRegistry: providerSettings.registry,
+          providerRegistry: runtime.serverHost.providerRegistry,
           defaultProvider: providerSettings.defaultProvider,
           providerSettingsManager,
           canManageProviders: providerSettingsManager !== undefined,
@@ -248,8 +253,23 @@ export async function startServer(
           }
         };
 
-        await cleanup(() => closeServer(createdServer));
+        // Stop accepting connections now, then cancel/drain Agent streams while
+        // their durable Session store is still open. Awaiting HTTP first would
+        // deadlock on an SSE stream blocked in Approval.
+        const closed = closeServer(createdServer);
+        // Attach rejection handling immediately while generation cancellation runs.
+        const closeOutcome = closed.then(
+          () => undefined,
+          (error: unknown) => error,
+        );
         await cleanup(() => disposeServerPlugins(runtime));
+        // Approval SSE and other idle streams do not belong to an Agent iterator.
+        // Their sockets can close once Agent terminal writes have settled.
+        if ('closeAllConnections' in createdServer) createdServer.closeAllConnections();
+        await cleanup(async () => {
+          const error = await closeOutcome;
+          if (error !== undefined) throw error;
+        });
         await cleanup(() => runtime.stop());
         await cleanup(() => closeProjectStore(projectStore));
         await cleanup(() => closeProviderSettingsStore(providerSettingsStore));

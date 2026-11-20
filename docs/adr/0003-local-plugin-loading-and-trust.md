@@ -257,6 +257,15 @@ steered to ask for it, and an approval prompt is then the only barrier. Rejected
   separate Tool Registries, provider ids owned by a generation, and per-session
   ordering across generations (each Agent Runner has its own queue today). This is
   the riskiest part, so it ships alone and without changing behavior (4.3).
+- Stage 4.3 uses a generic stable Runner facade in `plugin-host`, with a
+  Session queue spanning generations and cancellation that waits for production
+  to settle. Server publishes a fully assembled candidate's resources and
+  catalogs together. Environment and Settings Providers remain a shared Runtime
+  source, while plugin Providers belong to their generation; each turn captures
+  the selected client and descriptor together. Legacy registration resources
+  belong to ServerHost and lend contributions to generations. Shutdown drains
+  turns before closing shared stores, and retirement failures are reported at
+  final disposal without undoing a successful publication.
 - Plugin authors bundle to one file, expect `setup` to run more than once, and
   re-confirm trust after each rebuild. A development mode is deferred.
 - In-process plugins remain without a security boundary. The trust prompt says that

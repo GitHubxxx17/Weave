@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { createServer } from 'node:http';
 import { access, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -219,6 +220,115 @@ describe('startServer', () => {
       await database.cleanup();
     }
   });
+
+  it('drains an open Agent SSE waiting for Approval before closing durable stores', async () => {
+    const database = createTemporaryDatabaseFile();
+    const baseStore = createInMemorySessionEventStore();
+    let closed = false;
+    const terminalStatuses: string[] = [];
+    let statusesAtClose: readonly string[] = [];
+    const sessionStore: SessionEventStore = {
+      ...baseStore,
+      async append(id, events) {
+        if (closed) throw new Error('store closed before terminal append');
+        for (const event of events) {
+          if (event.type === 'turn.completed') terminalStatuses.push(event.payload.status);
+        }
+        return baseStore.append(id, events);
+      },
+      async close() {
+        statusesAtClose = [...terminalStatuses];
+        closed = true;
+        await baseStore.close();
+      },
+    };
+    const projectStore = createInMemoryProjectStore();
+    const project = await projectStore.createProject({ name: 'Shutdown', folderName: 'shutdown' });
+    await baseStore.append('shutdown-session', [
+      { type: 'session.created', payload: { title: 'Shutdown' } },
+    ]);
+    await projectStore.attachSession(project.id, 'shutdown-session');
+    const server = await startServer(0, {
+      databaseFile: database.filename,
+      projectStore,
+      sessionStoreFactory: () => sessionStore,
+      environment: {},
+      plugins: [
+        {
+          manifest: {
+            id: 'approval-test',
+            name: 'Approval Test',
+            version: '1.0.0',
+            apiVersion: '1.0.0',
+            capabilities: ['tool'],
+          },
+          setup(context) {
+            context.registerTool({
+              name: 'protected',
+              description: 'Protected',
+              parameters: { type: 'object' },
+              inputSchema: z.object({}),
+              approval: {
+                operation: 'test.protected',
+                risk: 'high',
+                summarize: () => ({ summary: 'Protected', inputSummary: {} }),
+              },
+              execute: () => 'done',
+            });
+          },
+        },
+      ],
+    });
+    const broker = server.runtime.get(approvalBrokerService);
+    let unsubscribe = () => {};
+    const pendingApproval = new Promise<void>((resolve) => {
+      unsubscribe = broker.subscribe((event) => {
+        if (event.request.status === 'pending') resolve();
+      });
+    });
+    let response: Response | undefined;
+    const approvalsResponse = await fetch(`http://127.0.0.1:${server.port}/approvals/stream`);
+    expect(approvalsResponse.status).toBe(200);
+    const approvalReader = approvalsResponse.body!.getReader();
+    expect((await approvalReader.read()).done).toBe(false);
+    try {
+      response = await fetch(`http://127.0.0.1:${server.port}/agent/runs/stream`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: 'shutdown-session',
+          provider: 'mock',
+          model: 'test',
+          userMessage: { role: 'user', content: [{ type: 'text', text: '/tool protected {}' }] },
+        }),
+      });
+      expect(response.status).toBe(200);
+      await pendingApproval;
+      const body = response.text();
+      await Promise.all([server.stop(), server.stop()]);
+      // Shutdown may close the HTTP stream immediately after durable
+      // cancellation has been recorded, so the final frame is transport
+      // dependent. The lifecycle assertions below are the contract boundary.
+      await body;
+      expect(broker.list()[0]?.status).toBe('cancelled');
+      expect(terminalStatuses).toEqual(['cancelled']);
+      expect(statusesAtClose).toEqual(['cancelled']);
+      expect(closed).toBe(true);
+      try {
+        while (!(await approvalReader.read()).done) {
+          /* drain buffered frames */
+        }
+      } catch {
+        /* shutdown closed the Approval SSE socket */
+      }
+    } finally {
+      await approvalReader.cancel().catch(() => undefined);
+      unsubscribe();
+      await response?.body?.cancel().catch(() => undefined);
+      await server.stop();
+      await database.cleanup();
+    }
+  }, 5000);
 
   it('returns the actual port when started with port zero', async () => {
     const database = createTemporaryDatabaseFile();

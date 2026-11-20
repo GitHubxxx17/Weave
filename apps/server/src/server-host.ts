@@ -4,46 +4,63 @@ import {
   PluginError,
   type AdaptedLegacyPlugin,
   type KernelPlugin,
-  type PluginKernel,
   type PluginSnapshot,
   type WeavePlugin,
 } from '@weave/plugin';
 import { type SessionEventStore } from '@weave/session';
-import { type Runtime, type RuntimeService, type ToolRegistry } from '@weave/runtime';
+import {
+  type AgentRunRequest,
+  type AgentRuntimeEvent,
+  type Runtime,
+  type RuntimeService,
+  type ToolRegistry,
+} from '@weave/runtime';
+import {
+  createGenerationRunner,
+  type GenerationController,
+  type RunnerGeneration,
+} from '@weave/plugin-host';
+import type { AssembledAgentKernel } from './agent-kernel.js';
+import { createProviderView } from './provider-view.js';
 import { type CommandListItem, type PluginListItem } from './plugin-catalog.js';
 
-/**
- * What the Server keeps for one Runtime between `createServerRuntime` and the
- * Agent Runner: the registries the runner reads, the plugins registered for
- * it, and the kernels it assembled, so they can be disposed together.
- */
-export interface ServerHost {
-  /** The Tool Registry the Agent Runner executes from; plugin tools are collected into it. */
+/** Resources exclusively owned by a sealed Server generation. */
+export interface ServerGenerationResources extends AssembledAgentKernel {
   readonly toolRegistry: ToolRegistry;
-  /** The provider registry; plugin providers are collected into it. */
+  readonly pluginProviderRegistry: LlmProviderRegistry;
   readonly providerRegistry: LlmProviderRegistry;
-  /** The Runtime service holding the Session Store. */
+}
+export type ServerGeneration = RunnerGeneration<
+  AgentRunRequest,
+  AgentRuntimeEvent,
+  ServerGenerationResources
+>;
+export type ServerGenerationController = GenerationController<
+  AgentRunRequest,
+  AgentRuntimeEvent,
+  ServerGenerationResources
+>;
+
+/** Shared Server resources plus the current, atomically published generation. */
+export interface ServerHost {
+  readonly toolRegistry: ToolRegistry;
+  readonly providerRegistry: LlmProviderRegistry;
+  readonly hostProviderRegistry: LlmProviderRegistry;
   readonly sessionStoreService: RuntimeService<SessionEventStore>;
-  /**
-   * Registers a trusted in-process plugin (the `registerTool` / `registerProvider`
-   * form). It is validated now and contributes when the Agent Runner is created.
-   */
   registerPlugin(plugin: WeavePlugin): Promise<PluginSnapshot>;
-  /** The registered plugins as kernel plugins, in registration order. */
   registeredPlugins(): readonly KernelPlugin[];
-  /** Closes plugin registration; the Agent Runner calls this once it has taken the set. */
   lockPlugins(): void;
-  /** Keeps an Agent Runner's kernel so it is disposed with the host. */
-  trackKernel(kernel: PluginKernel): void;
-  /** The plugins loaded for the most recently created Agent Runner. */
+  hostTools(): ToolRegistry;
+  /** Reserves a host Provider id while its settings write is pending. */
+  reserveProvider(id: string): () => void;
+  claimProvider(id: string): void;
+  hasProviderClaim(id: string): boolean;
+  releaseProviderClaim(id: string): void;
+  nextGenerationId(): number;
+  controller(): ServerGenerationController | undefined;
+  publish(generation: ServerGeneration, options?: { immediate?: boolean }): Promise<void>;
   plugins(): readonly PluginListItem[];
-  /** Records the plugins an Agent Runner was assembled with. */
-  setPlugins(plugins: readonly PluginListItem[]): void;
-  /** The slash commands of the most recently created Agent Runner. */
   commands(): readonly CommandListItem[];
-  /** Records the commands an Agent Runner was assembled with. */
-  setCommands(commands: readonly CommandListItem[]): void;
-  /** Disposes the kernels and every registered plugin, last registered first. */
   dispose(): Promise<void>;
 }
 
@@ -69,10 +86,16 @@ function conflict(kind: 'Tool' | 'Provider', name: string, pluginId: string): Pl
 export function createServerHost(options: ServerHostOptions): ServerHost {
   const { toolRegistry, providerRegistry, sessionStoreService } = options;
   const registered: AdaptedLegacyPlugin[] = [];
-  const kernels: PluginKernel[] = [];
+  let controller: ServerGenerationController | undefined;
+  let generationId = 0;
+  const reservedProviders = new Set<string>();
+  const claimedProviders = new Set<string>();
+  let disposePromise: Promise<void> | undefined;
   let locked = false;
-  let loadedPlugins: readonly PluginListItem[] = [];
-  let loadedCommands: readonly CommandListItem[] = [];
+  const currentPlugins = () => controller?.current().resources.pluginProviderRegistry;
+  const providers = createProviderView(providerRegistry, currentPlugins, 'host');
+  const currentTools = () => controller?.current().resources.toolRegistry ?? toolRegistry;
+
   let pending: Promise<unknown> = Promise.resolve();
 
   // Registrations are checked against each other, so they run one at a time.
@@ -105,8 +128,18 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
   };
 
   return {
-    toolRegistry,
-    providerRegistry,
+    toolRegistry: {
+      register: (tool) => currentTools().register(tool),
+      get: (name) => currentTools().get(name),
+      list: () => currentTools().list(),
+    },
+    providerRegistry: providers,
+    hostProviderRegistry: Object.freeze({
+      ...providers,
+      get: (id: string) => providerRegistry.get(id),
+      getDescriptor: (id: string) => providerRegistry.getDescriptor(id),
+      list: () => providerRegistry.list(),
+    }),
     sessionStoreService,
 
     registerPlugin: (plugin) =>
@@ -124,80 +157,123 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
             }
           },
         });
-        assertNoConflicts(adapted.snapshot);
+        try {
+          assertNoConflicts(adapted.snapshot);
+        } catch (error: unknown) {
+          await adapted.plugin.dispose?.();
+          throw error;
+        }
         registered.push(adapted);
         return adapted.snapshot;
       }),
 
-    registeredPlugins: () => registered.map((adapted) => adapted.plugin),
-
+    // Each kernel borrows a fresh wrapper; only ServerHost owns legacy disposal.
+    registeredPlugins: () =>
+      registered.map(({ plugin }) => ({
+        manifest: plugin.manifest,
+        setup: (env) => plugin.setup(env),
+      })),
     lockPlugins() {
       locked = true;
     },
-
-    trackKernel(kernel) {
-      kernels.push(kernel);
-    },
-
-    plugins: () => loadedPlugins,
-
-    setPlugins(plugins) {
-      loadedPlugins = plugins;
-    },
-
-    commands: () => loadedCommands,
-
-    setCommands(commands) {
-      loadedCommands = commands;
-    },
-
-    async dispose() {
-      await pending;
-      const errors: unknown[] = [];
-      const attempt = async (operation: () => void | Promise<void>): Promise<void> => {
-        try {
-          await operation();
-        } catch (error: unknown) {
-          errors.push(error);
+    hostTools: () => toolRegistry,
+    reserveProvider(id) {
+      if (
+        providers.getDescriptor(id) !== undefined ||
+        reservedProviders.has(id) ||
+        claimedProviders.has(id)
+      ) {
+        throw new Error(`Provider "${id}" is already registered or reserved`);
+      }
+      reservedProviders.add(id);
+      let released = false;
+      return () => {
+        if (!released) {
+          released = true;
+          reservedProviders.delete(id);
         }
       };
-
-      for (let index = kernels.length - 1; index >= 0; index -= 1) {
-        const kernel = kernels[index];
-        if (kernel !== undefined) {
-          await attempt(() => kernel.dispose());
+    },
+    claimProvider(id) {
+      if (currentPlugins()?.getDescriptor(id) !== undefined)
+        throw new Error(`Provider "${id}" belongs to a plugin`);
+      claimedProviders.add(id);
+    },
+    hasProviderClaim: (id) => claimedProviders.has(id),
+    releaseProviderClaim(id) {
+      claimedProviders.delete(id);
+    },
+    nextGenerationId: () => ++generationId,
+    controller: () => controller,
+    async publish(generation, publishOptions) {
+      if (disposePromise !== undefined) throw new Error('Server host is disposed');
+      for (const descriptor of generation.resources.pluginProviderRegistry.list()) {
+        if (
+          providerRegistry.getDescriptor(descriptor.id) !== undefined ||
+          reservedProviders.has(descriptor.id) ||
+          claimedProviders.has(descriptor.id)
+        ) {
+          const owner = generation.resources.plugins.find((plugin) =>
+            plugin.provides.providers.includes(descriptor.id),
+          );
+          throw new PluginError(
+            'plugin-registration-conflict',
+            `Provider "${descriptor.id}" conflicts with a host registration`,
+            { pluginId: owner?.id },
+          );
         }
       }
-      // A plugin registered after the last kernel was assembled, or before any
-      // runner existed, was never handed to a kernel. Its dispose runs at most
-      // once, so this is a no-op for the ones a kernel already disposed.
-      for (let index = registered.length - 1; index >= 0; index -= 1) {
-        const adapted = registered[index];
-        if (adapted !== undefined) {
-          await attempt(async () => {
-            try {
-              await adapted.plugin.dispose?.();
-            } catch (error: unknown) {
-              throw new PluginError(
-                'plugin-dispose-failed',
-                `Plugin "${adapted.snapshot.id}" dispose failed`,
-                { cause: error },
-              );
-            }
-          });
-        }
-      }
-      kernels.length = 0;
-      registered.length = 0;
-      loadedPlugins = [];
-      loadedCommands = [];
+      if (controller === undefined) controller = createGenerationRunner(generation);
+      else await controller.replace(generation, publishOptions);
+      locked = true;
+    },
+    plugins: () => controller?.current().resources.plugins ?? [],
+    commands: () => controller?.current().resources.commands ?? [],
 
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, 'Plugin disposal failed', { cause: errors[0] });
-      }
+    dispose() {
+      if (disposePromise !== undefined) return disposePromise;
+      disposePromise = (async () => {
+        locked = true;
+        await pending;
+        const errors: unknown[] = [];
+        const attempt = async (operation: () => void | Promise<void>): Promise<void> => {
+          try {
+            await operation();
+          } catch (error: unknown) {
+            errors.push(error);
+          }
+        };
+
+        if (controller !== undefined) {
+          const activeController = controller;
+          await attempt(() => activeController.dispose());
+        }
+        for (let index = registered.length - 1; index >= 0; index -= 1) {
+          const adapted = registered[index];
+          if (adapted !== undefined) {
+            await attempt(async () => {
+              try {
+                await adapted.plugin.dispose?.();
+              } catch (error: unknown) {
+                throw new PluginError(
+                  'plugin-dispose-failed',
+                  `Plugin "${adapted.snapshot.id}" dispose failed`,
+                  { cause: error },
+                );
+              }
+            });
+          }
+        }
+        registered.length = 0;
+
+        if (errors.length === 1) {
+          throw errors[0];
+        }
+        if (errors.length > 1) {
+          throw new AggregateError(errors, 'Plugin disposal failed', { cause: errors[0] });
+        }
+      })();
+      return disposePromise;
     },
   };
 }
