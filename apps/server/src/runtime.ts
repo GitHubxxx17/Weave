@@ -5,6 +5,7 @@ import {
   createPluginRegistry,
   definePlugin,
   pluginApiVersion,
+  promptSectionsExtensionPoint,
   toolPipelineRef,
   toolRegistryRef,
   toolResultHook,
@@ -12,6 +13,7 @@ import {
   type KernelPlugin,
   type PluginRegistry,
   type PluginSnapshot,
+  type PromptSection,
   type WeavePlugin,
 } from '@weave/plugin';
 import type { SessionEventStore } from '@weave/session';
@@ -143,8 +145,17 @@ interface AgentToolAssembly {
   readonly kernelPlugins?: readonly KernelPlugin[] | undefined;
 }
 
+/** What one sealed per-run kernel contributes to the Agent Runner. */
+interface AssembledAgentKernel {
+  /** The resolved Tool Pipeline, wrapped to fan out `weave.tools.result`. */
+  readonly toolPipeline: ToolPipeline;
+  /** Plugin-contributed system-prompt sections, ordered by `order` ascending. */
+  readonly promptSections: readonly PromptSection[];
+}
+
 /**
- * Assembles the Tool Pipeline through the plugin kernel.
+ * Assembles the per-run plugin kernel: the Tool Pipeline and the plugin
+ * contributions the Agent Runner needs.
  *
  * A single server-host plugin owns the `weave.tools` extension point over the
  * shared Tool Registry (so tools already registered by trusted plugins are
@@ -153,8 +164,12 @@ interface AgentToolAssembly {
  * reach for them — `list_dir`, `glob`, `grep`, `read_file`, `edit_file`,
  * `write_file`, `run_command`, then `recall` and `update_plan`. Contributing a
  * tool whose name is already taken is skipped, so re-assembly is idempotent.
+ *
+ * After sealing, the host collects `weave.prompt.sections` so plugins can add
+ * system-prompt sections, and wraps the pipeline to fan completed results out
+ * to `weave.tools.result` observers.
  */
-async function assembleToolPipeline(assembly: AgentToolAssembly): Promise<ToolPipeline> {
+async function assembleAgentKernel(assembly: AgentToolAssembly): Promise<AssembledAgentKernel> {
   const { toolRegistry, approvalBroker, sessionStore, timeoutMs, resolveWorkspaceRoot } = assembly;
   const kernel = createPluginKernel();
   await kernel.register(
@@ -233,29 +248,42 @@ async function assembleToolPipeline(assembly: AgentToolAssembly): Promise<ToolPi
     await kernel.register(plugin);
   }
   const generation = await kernel.seal();
-  const pipeline = await generation.resolve(toolPipelineRef);
-  if (kernel.hooks.count(toolResultHook) === 0) {
-    return pipeline;
-  }
+  const basePipeline = await generation.resolve(toolPipelineRef);
   // A plugin observes completed tool results; observation is read-only and its
   // failures are isolated, so the pipeline's result is returned unchanged.
-  return {
-    async execute(request) {
-      const result = await pipeline.execute(request);
-      await kernel.hooks.runObserve(toolResultHook, result);
-      return result;
-    },
-  };
+  const toolPipeline: ToolPipeline =
+    kernel.hooks.count(toolResultHook) === 0
+      ? basePipeline
+      : {
+          async execute(request) {
+            const result = await basePipeline.execute(request);
+            await kernel.hooks.runObserve(toolResultHook, result);
+            return result;
+          },
+        };
+
+  // The host owns prompt assembly for now, so it collects the contributed
+  // sections directly and orders them; `createAgentInstructions` appends them.
+  const collected: PromptSection[] = [];
+  kernel.extensions.collect(promptSectionsExtensionPoint, {
+    addSection: (section) => collected.push(section),
+  });
+  const promptSections = Object.freeze(
+    [...collected].sort((left, right) => left.order - right.order),
+  );
+
+  return { toolPipeline, promptSections };
 }
 
 /**
  * Creates the Agent Runner after the Runtime has started.
  *
- * Tool assembly runs through the plugin kernel ({@link assembleToolPipeline}):
+ * Tool assembly runs through the plugin kernel ({@link assembleAgentKernel}):
  * the server's tools are contributed to the shared Tool Registry in model-facing
  * order, and the Tool Pipeline is resolved from the registry and Approval
- * Broker. Each tool call resolves the Workspace of its Session; a Session whose
- * Project has no folder gets `workspace-file-unavailable`.
+ * Broker. Plugins may also contribute system-prompt sections, which the Agent's
+ * instructions append. Each tool call resolves the Workspace of its Session; a
+ * Session whose Project has no folder gets `workspace-file-unavailable`.
  */
 export async function createServerAgentRunner(
   runtime: Runtime,
@@ -274,7 +302,7 @@ export async function createServerAgentRunner(
 
   const sessionStore = runtime.get(sessionStoreService);
   const resolveWorkspaceRoot = options.resolveWorkspaceRoot;
-  const toolPipeline = await assembleToolPipeline({
+  const { toolPipeline, promptSections } = await assembleAgentKernel({
     toolRegistry,
     approvalBroker: runtime.get(approvalBrokerService),
     sessionStore,
@@ -293,6 +321,7 @@ export async function createServerAgentRunner(
     instructions: createAgentInstructions({
       tools: () => toolRegistry.list(),
       resolveWorkspaceRoot,
+      extraSections: () => promptSections.map((section) => section.text),
     }),
   });
 }

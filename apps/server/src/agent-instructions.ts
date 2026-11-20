@@ -144,6 +144,12 @@ export function createAgentInstructions(options: {
   readonly tools: () => readonly InstructionTool[];
   readonly resolveWorkspaceRoot?: ((sessionId: string) => Promise<string | undefined>) | undefined;
   readonly environment?: Partial<AgentEnvironment> | undefined;
+  /**
+   * Extra system-prompt sections contributed by plugins, already ordered.
+   * They render after the server's built-in sections; blank entries are
+   * dropped so an empty contribution never adds a stray separator.
+   */
+  readonly extraSections?: (() => readonly string[]) | undefined;
 }): (context: {
   readonly sessionId: string;
   readonly permissionMode?: ToolPermissionMode | undefined;
@@ -250,6 +256,13 @@ export function createAgentInstructions(options: {
             ...(project.truncated ? ['[AGENTS.md 超过 32 KB，后面的内容没有包含]'] : []),
           ].join('\n'),
         );
+      }
+    }
+
+    for (const section of options.extraSections?.() ?? []) {
+      const text = section.trim();
+      if (text !== '') {
+        sections.push(text);
       }
     }
 
