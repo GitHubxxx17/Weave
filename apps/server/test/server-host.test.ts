@@ -88,7 +88,8 @@ describe('Server host', () => {
 
       await createServerAgentRunner(runtime);
 
-      expect(providerRegistry.getDescriptor('plugin-mock')).toBeDefined();
+      expect(runtime.serverHost.providerRegistry.getDescriptor('plugin-mock')).toBeDefined();
+      expect(providerRegistry.getDescriptor('plugin-mock')).toBeUndefined();
     } finally {
       await disposeServerPlugins(runtime);
       await runtime.stop();

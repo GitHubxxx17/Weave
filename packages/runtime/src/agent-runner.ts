@@ -1,4 +1,4 @@
-import type { LlmClient } from '@weave/llm';
+import type { LlmClient, LlmProviderDescriptor } from '@weave/llm';
 import {
   streamEventSchema,
   type ContextBreakdown,
@@ -112,26 +112,32 @@ function backoffDelay(attempt: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-function resolveLlm(options: AgentRunnerOptions, provider: string): LlmClient {
-  if (options.llmRegistry !== undefined) {
-    const client = options.llmRegistry.get(provider);
+function resolveLlmProvider(
+  options: AgentRunnerOptions,
+  provider: string,
+): { readonly client: LlmClient; readonly descriptor: LlmProviderDescriptor | undefined } {
+  const registry = options.llmRegistry;
+  if (registry !== undefined) {
+    const client = registry.get(provider);
     if (client === undefined) {
       throw new AgentRunError(
         'agent-provider-unavailable',
         `LLM provider "${provider}" is not configured`,
       );
     }
-    return client;
+    return { client, descriptor: registry.getDescriptor(provider) };
   }
   if (options.llm !== undefined) {
-    return options.llm;
+    return { client: options.llm, descriptor: undefined };
   }
   throw new AgentRunError('agent-provider-unavailable', 'No LLM provider is configured');
 }
 
 /** Resolves the context window for one Provider, descriptor first then default. */
-function resolveContextWindowTokens(options: AgentRunnerOptions, provider: string): number {
-  const descriptor = options.llmRegistry?.getDescriptor(provider);
+function resolveContextWindowTokens(
+  options: AgentRunnerOptions,
+  descriptor: LlmProviderDescriptor | undefined,
+): number {
   const configured = descriptor?.contextWindowTokens;
   if (configured !== undefined && Number.isFinite(configured) && configured > 0) {
     return configured;
@@ -139,26 +145,14 @@ function resolveContextWindowTokens(options: AgentRunnerOptions, provider: strin
   return options.context?.defaultWindowTokens ?? defaultContextWindowTokens;
 }
 
-/** Reads the Provider's default sampling params from its descriptor, if any. */
-function resolveProviderSamplingDefaults(
-  options: AgentRunnerOptions,
-  provider: string,
-): { readonly temperature?: number; readonly maxTokens?: number } {
-  const descriptor = options.llmRegistry?.getDescriptor(provider);
-  return {
-    ...(descriptor?.temperature === undefined ? {} : { temperature: descriptor.temperature }),
-    ...(descriptor?.maxTokens === undefined ? {} : { maxTokens: descriptor.maxTokens }),
-  };
-}
-
 /** Builds the send-window budget for one model step from options and request. */
 function resolveContextBudget(
   options: AgentRunnerOptions,
-  provider: string,
+  descriptor: LlmProviderDescriptor | undefined,
   maxTokens: number | undefined,
 ): ContextBudget {
   return {
-    windowTokens: resolveContextWindowTokens(options, provider),
+    windowTokens: resolveContextWindowTokens(options, descriptor),
     reserveOutputTokens:
       maxTokens ?? options.context?.reserveOutputTokens ?? defaultReserveOutputTokens,
     marginRatio: options.context?.marginRatio ?? defaultContextMarginRatio,
@@ -487,7 +481,8 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
             throw new AgentRunError('agent-invalid-input', 'Agent Run input is invalid');
           }
           const validRequest = requestResult.data;
-          const llm = resolveLlm(options, validRequest.provider);
+          // Provider settings may change while the turn is awaiting the session store or a tool.
+          const { client: llm, descriptor } = resolveLlmProvider(options, validRequest.provider);
           sessionId = validRequest.sessionId;
           let storedEvents = await options.sessionStore.read(validRequest.sessionId);
           if (storedEvents.length === 0) {
@@ -545,9 +540,8 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
               : [{ role: 'system', content: [{ type: 'text', text: instructionText }] }];
 
           // Provider defaults fill sampling params the request did not set.
-          const samplingDefaults = resolveProviderSamplingDefaults(options, validRequest.provider);
-          const effectiveTemperature = validRequest.temperature ?? samplingDefaults.temperature;
-          const effectiveMaxTokens = validRequest.maxTokens ?? samplingDefaults.maxTokens;
+          const effectiveTemperature = validRequest.temperature ?? descriptor?.temperature;
+          const effectiveMaxTokens = validRequest.maxTokens ?? descriptor?.maxTokens;
 
           while (true) {
             if (modelSteps >= maxSteps) {
@@ -589,7 +583,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
             let finishSeen = false;
             let finishReason: FinishReason | undefined;
             let toolCalls = new Map<string, ToolCallState>();
-            const budget = resolveContextBudget(options, validRequest.provider, effectiveMaxTokens);
+            const budget = resolveContextBudget(options, descriptor, effectiveMaxTokens);
             const built = buildModelContext({
               system: systemMessages,
               history: messages,

@@ -2603,6 +2603,140 @@ describe('Agent Runner update_plan', () => {
   });
 });
 
+describe('Agent Runner provider snapshots', () => {
+  it('uses the provider selected at turn start while a replacement takes effect next turn', async () => {
+    const store = createInMemorySessionEventStore();
+    let markReadStarted: (() => void) | undefined;
+    const readStarted = new Promise<void>((resolve) => {
+      markReadStarted = resolve;
+    });
+    let resumeRead: (() => void) | undefined;
+    const readGate = new Promise<void>((resolve) => {
+      resumeRead = resolve;
+    });
+    const originalRequests: LlmRequest[] = [];
+    const replacementRequests: LlmRequest[] = [];
+    const provider = { id: 'mock', label: 'Mock', type: 'mock' } as const;
+    const registry = createLlmProviderRegistry([
+      {
+        ...provider,
+        client: recordingClient(
+          [
+            { type: 'text-delta', text: 'original' },
+            { type: 'finish', reason: 'stop' },
+          ],
+          originalRequests,
+        ),
+        temperature: 0.2,
+        maxTokens: 1500,
+        contextWindowTokens: 20_000,
+      },
+    ]);
+    const runner = createAgentRunner({
+      llmRegistry: registry,
+      sessionStore: {
+        ...store,
+        async read(sessionId, readOptions) {
+          markReadStarted?.();
+          await readGate;
+          return store.read(sessionId, readOptions);
+        },
+      },
+    });
+
+    const firstTurn = collect(runner.run(validRequest));
+    await readStarted;
+    try {
+      registry.replace({
+        ...provider,
+        client: recordingClient(
+          [
+            { type: 'text-delta', text: 'replacement' },
+            { type: 'finish', reason: 'stop' },
+          ],
+          replacementRequests,
+        ),
+        temperature: 0.8,
+        maxTokens: 3000,
+        contextWindowTokens: 40_000,
+      });
+    } finally {
+      resumeRead?.();
+    }
+
+    const firstEvents = await firstTurn;
+    const secondEvents = await collect(runner.run(validRequest));
+    expect(firstEvents).toContainEqual({ type: 'text-delta', text: 'original' });
+    expect(secondEvents).toContainEqual({ type: 'text-delta', text: 'replacement' });
+    expect(originalRequests).toMatchObject([{ temperature: 0.2, maxTokens: 1500 }]);
+    expect(replacementRequests).toMatchObject([{ temperature: 0.8, maxTokens: 3000 }]);
+    expect(firstEvents.find((event) => event.type === 'context')?.breakdown.windowTokens).toBe(
+      20_000,
+    );
+    expect(secondEvents.find((event) => event.type === 'context')?.breakdown.windowTokens).toBe(
+      40_000,
+    );
+    await store.close();
+  });
+
+  it('keeps the original provider through a tool cycle that removes it', async () => {
+    const store = createInMemorySessionEventStore();
+    const requests: LlmRequest[] = [];
+    const registry = createLlmProviderRegistry([
+      {
+        id: 'mock',
+        label: 'Mock',
+        type: 'mock',
+        client: sequenceClient(
+          [
+            [
+              { type: 'tool-call-start', id: 'call-1', name: 'remove_provider' },
+              { type: 'tool-call-delta', id: 'call-1', argumentsDelta: '{}' },
+              { type: 'finish', reason: 'tool-call' },
+            ],
+            [{ type: 'finish', reason: 'stop' }],
+          ],
+          requests,
+        ),
+        temperature: 0.2,
+        maxTokens: 1500,
+        contextWindowTokens: 20_000,
+      },
+    ]);
+    const toolRegistry = createToolRegistry();
+    toolRegistry.register({
+      name: 'remove_provider',
+      description: 'Removes the provider from the test registry',
+      readOnly: true,
+      parameters: { type: 'object', properties: {} },
+      inputSchema: z.object({}),
+      execute: () => registry.remove('mock'),
+    });
+    const runner = createAgentRunner({
+      llmRegistry: registry,
+      sessionStore: store,
+      toolRegistry,
+      toolPipeline: createToolPipeline({ registry: toolRegistry }),
+    });
+
+    const events = await collect(runner.run(validRequest));
+    expect(events.at(-1)).toMatchObject({ type: 'completed' });
+    expect(requests).toMatchObject([
+      { temperature: 0.2, maxTokens: 1500 },
+      { temperature: 0.2, maxTokens: 1500 },
+    ]);
+    expect(
+      events
+        .filter((event) => event.type === 'context')
+        .map(({ breakdown }) => breakdown.windowTokens),
+    ).toEqual([20_000, 20_000]);
+    await expect(collect(runner.run(validRequest))).rejects.toMatchObject({
+      code: 'agent-provider-unavailable',
+    });
+    await store.close();
+  });
+});
+
 describe('Agent Runner provider sampling defaults', () => {
   const okScript: readonly StreamEvent[] = [
     { type: 'text-delta', text: 'hi' },

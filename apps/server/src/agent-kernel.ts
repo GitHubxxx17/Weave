@@ -8,6 +8,7 @@ import {
   definePlugin,
   llmProviderRegistryRef,
   PluginError,
+  attributePluginError,
   pluginApiVersion,
   pluginEventsRef,
   promptSectionsExtensionPoint,
@@ -90,8 +91,7 @@ export interface AssembledAgentKernel {
  * plugin provides the Tool Pipeline from the registry plus the Approval Broker
  * and contributes the server's own tools in the order the model should reach for
  * them: `list_dir`, `glob`, `grep`, `read_file`, `edit_file`, `write_file`,
- * `run_command`, then `recall` and `update_plan`. A tool whose name is already
- * taken keeps the existing one, so re-assembly is idempotent.
+ * `run_command`, then `recall` and `update_plan`. Duplicate contribution names fail assembly and retain their plugin attribution.
  *
  * After sealing, the host collects `weave.prompt.sections` so plugins can add
  * system-prompt sections, and wraps the pipeline to fan completed results out
@@ -119,8 +119,8 @@ export async function assembleAgentKernel(
   // tools keep using the real store.
   const pluginEvents = createPluginEventRegistry();
   const owners = [
-    createToolRegistryPlugin({ registry: toolRegistry, existing: 'skip' }),
-    createProviderRegistryPlugin({ registry: providerRegistry, existing: 'skip' }),
+    createToolRegistryPlugin({ registry: toolRegistry }),
+    createProviderRegistryPlugin({ registry: providerRegistry }),
     createEventRegistryPlugin({ registry: pluginEvents }),
     hostServicesPlugin({
       approvalBroker,
@@ -210,7 +210,28 @@ export async function assembleAgentKernel(
     }
     await kernel.register(serverToolHost);
     for (const plugin of assembly.kernelPlugins ?? []) {
-      await kernel.register(plugin);
+      let disposal: Promise<void> | undefined;
+      const dispose = (): Promise<void> => {
+        disposal ??= Promise.resolve().then(() => plugin.dispose?.());
+        return disposal;
+      };
+      // Kernel rolls back declarations on setup failure. Server also owns the
+      // candidate instance's external resources, even when setup only partially ran.
+      // Borrowed legacy contributions above deliberately have no such disposer.
+      try {
+        await kernel.register({
+          manifest: plugin.manifest,
+          setup: (env) => plugin.setup(env),
+          dispose,
+        });
+      } catch (error: unknown) {
+        await dispose().catch(() => undefined);
+        throw attributePluginError(
+          error,
+          plugin.manifest.id,
+          `Plugin "${plugin.manifest.id}" registration failed`,
+        );
+      }
     }
 
     const generation = await kernel.seal();

@@ -332,7 +332,7 @@ interface PluginHost<Runner> {
 |---|---|---|
 | Tool Registry | `ServerHost` 持有的全局注册表，接口只有 `register`、`get`、`list`，没有 `remove` | 每个 generation 一个新注册表。否则被移除的插件的工具会一直留在注册表里。`serverHost.toolRegistry` 改为读当前 generation 的 |
 | 工具重名 | 现在用 `existing: 'skip'` 保持重复装配无害，重名的工具被静默丢弃，用户不知道 | 每代一个新注册表之后不需要 `skip`。重名变成装配错误，经第 9.2 节归因到后到的插件，显示为该插件 `failed` |
-| Provider Registry | 全局，用户在设置里配的 provider 也在其中。接口有 `remove` | 插件注册的 provider id 由其 generation 登记，销毁时只在仍属于自己时移除（比较 client 对象）。否则新旧 generation 登记同一个 id 时，旧的销毁会把新的删掉。进行中的回合开始时已取得 client，不受影响 |
+| Provider Registry | 全局，用户在设置里配的 provider 也在其中。接口有 `remove` | 宿主与设置 provider 保留 Runtime 级来源；每代独立持有插件 provider，读取时组合，不能覆盖宿主 id。候选装配不改当前代。设置写入只改宿主来源，查重包括当前代插件；每轮开始一起捕获 client 和 descriptor，整轮使用同一快照，下一轮读取设置更新。旧代释放只处理本代资源，不删除新代 provider |
 | 会话串行队列 | `createAgentRunner` 内部一个 Map，每个 Runner 实例一份。两个 generation 的 Runner 互不知道 | 门面接管"同一会话的回合按序执行"，新回合等同一会话更早的回合结束，不论它在哪个 generation 上 |
 | 插件事件注册表、提示词审计、回合观察者 | 已经是每个 kernel 或每个 Runner 一份 | 不变 |
 | 审批 broker、会话 Store | Runtime 级单例 | 不变，所有 generation 共享 |
@@ -345,6 +345,17 @@ interface PluginHost<Runner> {
 - 回合 pin 保持了一轮内工具集、提示前缀不变，有利于 provider 的前缀缓存。插件集变了才会让缓存失效。DeepSeek Harness 的 HMR 立即作用于所有会话，它的文档也承认重载可能改变后续请求的前缀。
 - 不监听文件，也不做配置即代码（B3）。Harness 的热重载让改动在几秒内生效，第三方审计把它列为投毒途径。Weave 里插件集只因用户的明确操作而变，作者改完代码要手动点一次「重新加载」。
 - 重载失败保留旧 generation。Harness 的做法是替换失败的插件停在未运行状态，之前的版本不恢复。
+
+### 8.5 4.3 接续契约
+
+- 稳定 Runner 门面属于 `@weave/plugin-host`，只依赖带 `sessionId`、可选 `signal` 的请求和 `AsyncIterable`，不导入 Runtime。第一次 `next()` 入队，真正轮到执行才 pin 当前代。独立 pump 驱动内层迭代器，生产结束即释放会话队列和 pin；消费者没有读完临时事件不延长运行占用。`return()` 主动中止，包括内层 `next()` 正在等待的情形。
+- 每代拥有 kernel、工具表、插件 provider、pipeline、runner、提示词审计和插件/命令快照。候选成功后一次性发布；失败候选完整回收，不发布部分目录。Runtime 共享审批 broker、Session Store 和宿主 provider 来源。`createServerAgentRunner` 首次创建门面，并发首次调用共享同一次初始化（首次选项生效，失败后可重试），重复调用只返回已有门面；重新配置必须显式调用候选装配与发布接口。
+- 设置创建 Provider 时，ServerHost 同步预留该 id，预留跨越持久化与源注册，最后在 `finally` 释放。候选发布同时检查已注册与预留的宿主 id，避免设置写入等待期间被插件抢占同名 id，留下已落库但无法注册的设置。
+- 持久化设置记录持有其 Provider id，即使清除了 API Key、暂时没有客户端。ServerHost 的持久 id 占用与临时写入预留分开管理；设置删除或刷新移除记录时释放占用，候选装配和发布不能覆盖这些 id。这样重新填写密钥不会与后来加载的插件冲突，设置列表也不会把插件错误识别为可编辑记录。
+- `registerServerPlugins` 的旧插件在 Runtime 内只 setup 一次，其资源由 ServerHost 最终释放；每代只重放其贡献，不让旧代的销毁提前清理新代共享资源。内核插件的代际实例资源由该代持有；重载用工厂重新创建本地插件实例，不复用实例状态。
+- 普通重载装配失败保留当前代。停用或撤销已追加后若 replacement 失败，旧代可以完成已开始的回合，但不得再承接新回合；门面阻止新回合并返回明确错误，成功装配符合最新信任状态的代后恢复。`immediate` 另行取消受影响旧代回合。信任事实与当前运行代分别报告。
+- 关闭时先禁止新回合并中止所有排队和运行请求，等待终态持久化、回收 generation，再关闭共享存储；HTTP 停止接受连接与取消并行启动，不能先等待长 SSE 连接关闭再触发取消。
+- Generation 退休释放错误不撤销已发布的新代；保留错误并在宿主关闭时汇总报告。销毁必须幂等。
 
 ## 9. 对内核的增补（4.1）
 

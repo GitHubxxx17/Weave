@@ -57,6 +57,11 @@ export interface CreateProviderSettingsManagerOptions {
   readonly store: ProviderSettingsStore;
   readonly registry: LlmProviderRegistry;
   readonly secretCodec: ProviderSecretCodec;
+  /** Current combined catalog; writes remain in the host-owned source registry. */
+  readonly catalog?: (() => LlmProviderRegistry) | undefined;
+  readonly reserveProvider?: ((id: string) => () => void) | undefined;
+  readonly claimProvider?: ((id: string) => void) | undefined;
+  readonly releaseProviderClaim?: ((id: string) => void) | undefined;
   readonly createClient?: (options: {
     readonly baseUrl: string;
     readonly apiKey: string;
@@ -162,6 +167,7 @@ export function createProviderSettingsManager(
   options: CreateProviderSettingsManagerOptions,
 ): ProviderSettingsManager {
   const createClient = options.createClient ?? defaultCreateClient;
+  const catalog = () => options.catalog?.() ?? options.registry;
   const managedRecords = new Map<string, ProviderSettingsRecord>();
   let defaultProvider = options.initialDefaultProvider ?? 'mock';
 
@@ -236,17 +242,19 @@ export function createProviderSettingsManager(
       return mapStoreError(error);
     }
     const recordMap = new Map(records.map((record) => [record.id, record]));
-    const descriptors = options.registry.list().map((descriptor: LlmProviderDescriptor) => {
-      const record = recordMap.get(descriptor.id);
-      if (record !== undefined) {
-        return getDescriptor(record);
-      }
-      return providerSettingsDescriptorSchema.parse({
-        ...descriptor,
-        hasApiKey: descriptor.type !== 'mock',
-        editable: false,
+    const descriptors = catalog()
+      .list()
+      .map((descriptor: LlmProviderDescriptor) => {
+        const record = recordMap.get(descriptor.id);
+        if (record !== undefined) {
+          return getDescriptor(record);
+        }
+        return providerSettingsDescriptorSchema.parse({
+          ...descriptor,
+          hasApiKey: descriptor.type !== 'mock',
+          editable: false,
+        });
       });
-    });
     for (const record of records) {
       if (!descriptors.some((descriptor) => descriptor.id === record.id)) {
         descriptors.push(getDescriptor(record));
@@ -263,8 +271,10 @@ export function createProviderSettingsManager(
       return mapStoreError(error);
     }
 
+    const refreshedIds = new Set(records.map((record) => record.id));
     for (const id of managedRecords.keys()) {
       options.registry.remove(id);
+      if (!refreshedIds.has(id)) options.releaseProviderClaim?.(id);
     }
     managedRecords.clear();
 
@@ -279,6 +289,7 @@ export function createProviderSettingsManager(
       }
       const record = parsed.data;
       managedRecords.set(record.id, record);
+      options.claimProvider?.(record.id);
       try {
         registerRecord(record);
       } catch (error: unknown) {
@@ -325,53 +336,72 @@ export function createProviderSettingsManager(
           `Provider "${id}" 已存在`,
         );
       }
-      if (options.registry.getDescriptor(id) !== undefined) {
+      if (catalog().getDescriptor(id) !== undefined) {
         throw new ProviderSettingsManagerError(
           'provider-settings-protected',
           `Provider "${id}" 由其他模块管理`,
         );
       }
 
-      const now = new Date().toISOString();
-      const record: ProviderSettingsRecord = {
-        id,
-        label: parsed.data.label,
-        type: parsed.data.type,
-        baseUrl: parsed.data.baseUrl,
-        encryptedApiKey: options.secretCodec.encrypt(parsed.data.apiKey),
-        defaultModel: parsed.data.defaultModel,
-        isDefault: parsed.data.makeDefault,
-        ...(parsed.data.contextWindowTokens === undefined
-          ? {}
-          : { contextWindowTokens: parsed.data.contextWindowTokens }),
-        ...(parsed.data.temperature === undefined ? {} : { temperature: parsed.data.temperature }),
-        ...(parsed.data.maxTokens === undefined ? {} : { maxTokens: parsed.data.maxTokens }),
-        createdAt: now,
-        updatedAt: now,
-      };
+      let release: (() => void) | undefined;
       try {
-        await options.store.create(record);
+        release = options.reserveProvider?.(id);
       } catch (error: unknown) {
-        return mapStoreError(error);
+        throw new ProviderSettingsManagerError(
+          'provider-settings-protected',
+          `Provider "${id}" 由其他模块管理`,
+          { cause: error },
+        );
       }
-      if (record.isDefault) {
-        for (const existing of managedRecords.values()) {
-          if (existing.isDefault) {
-            try {
-              await options.store.update({ ...existing, isDefault: false });
-            } catch (error: unknown) {
-              return mapStoreError(error);
+      try {
+        const now = new Date().toISOString();
+        const record: ProviderSettingsRecord = {
+          id,
+          label: parsed.data.label,
+          type: parsed.data.type,
+          baseUrl: parsed.data.baseUrl,
+          encryptedApiKey: options.secretCodec.encrypt(parsed.data.apiKey),
+          defaultModel: parsed.data.defaultModel,
+          isDefault: parsed.data.makeDefault,
+          ...(parsed.data.contextWindowTokens === undefined
+            ? {}
+            : { contextWindowTokens: parsed.data.contextWindowTokens }),
+          ...(parsed.data.temperature === undefined
+            ? {}
+            : { temperature: parsed.data.temperature }),
+          ...(parsed.data.maxTokens === undefined ? {} : { maxTokens: parsed.data.maxTokens }),
+          createdAt: now,
+          updatedAt: now,
+        };
+        try {
+          await options.store.create(record);
+        } catch (error: unknown) {
+          return mapStoreError(error);
+        }
+        // A successful create is already durable even if a later default update
+        // fails. Retain its ownership and managed record before the next await.
+        managedRecords.set(record.id, record);
+        options.claimProvider?.(record.id);
+        if (record.isDefault) {
+          for (const existing of managedRecords.values()) {
+            if (existing.id !== record.id && existing.isDefault) {
+              try {
+                await options.store.update({ ...existing, isDefault: false });
+              } catch (error: unknown) {
+                return mapStoreError(error);
+              }
+              managedRecords.set(existing.id, { ...existing, isDefault: false });
             }
-            managedRecords.set(existing.id, { ...existing, isDefault: false });
           }
         }
+        registerRecord(record);
+        if (parsed.data.makeDefault) {
+          defaultProvider = record.id;
+        }
+        return getDescriptor(record);
+      } finally {
+        release?.();
       }
-      managedRecords.set(record.id, record);
-      registerRecord(record);
-      if (parsed.data.makeDefault) {
-        defaultProvider = record.id;
-      }
-      return getDescriptor(record);
     },
 
     async update(
@@ -489,6 +519,7 @@ export function createProviderSettingsManager(
         return mapStoreError(error);
       }
       managedRecords.delete(id);
+      options.releaseProviderClaim?.(id);
       options.registry.remove(id);
       if (defaultProvider === id) {
         defaultProvider = 'mock';
@@ -500,13 +531,13 @@ export function createProviderSettingsManager(
       if (id.length === 0) {
         return throwInvalid();
       }
-      if (id !== 'mock' && options.registry.getDescriptor(id) === undefined) {
+      if (id !== 'mock' && catalog().getDescriptor(id) === undefined) {
         throw new ProviderSettingsManagerError(
           'provider-settings-not-found',
           `Provider "${id}" 不存在`,
         );
       }
-      if (id !== 'mock' && options.registry.get(id) === undefined) {
+      if (id !== 'mock' && catalog().get(id) === undefined) {
         throw new ProviderSettingsManagerError(
           'provider-settings-provider-invalid',
           `Provider "${id}" 尚未配置可用 API Key`,
@@ -538,7 +569,7 @@ export function createProviderSettingsManager(
     },
 
     getDefaultProvider(): string {
-      return defaultProvider;
+      return catalog().get(defaultProvider) === undefined ? 'mock' : defaultProvider;
     },
 
     refresh,
