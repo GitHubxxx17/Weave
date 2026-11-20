@@ -208,4 +208,75 @@ describe('Plugin Registry', () => {
     expect((caught as AggregateError).errors).toHaveLength(2);
     expect(registry.list()).toEqual([]);
   });
+
+  it('rejects a plugin whose engines the host does not satisfy before setup executes', async () => {
+    const registry = createPluginRegistry({
+      toolRegistry: createToolRegistry(),
+      providerRegistry: createLlmProviderRegistry(),
+      hostVersion: '1.2.0',
+    });
+    const setup = vi.fn();
+
+    await expect(
+      registry.register({
+        manifest: { ...validManifest, engines: { weave: '>=2.0.0' } },
+        setup,
+      }),
+    ).rejects.toMatchObject({ code: 'plugin-engine-unsupported' });
+
+    expect(setup).not.toHaveBeenCalled();
+    expect(registry.get('example-tools')).toBeUndefined();
+  });
+
+  it('registers a plugin whose engines the host satisfies', async () => {
+    const registry = createPluginRegistry({
+      toolRegistry: createToolRegistry(),
+      providerRegistry: createLlmProviderRegistry(),
+      hostVersion: '1.2.0',
+    });
+
+    await expect(
+      registry.register({
+        manifest: { ...validManifest, engines: { weave: '^1.0.0' } },
+        setup: () => undefined,
+      }),
+    ).resolves.toMatchObject({ id: 'example-tools' });
+  });
+
+  it('rejects a plugin that declares engines when the host declared no version', async () => {
+    const { registry } = createTestRegistry();
+
+    await expect(
+      registry.register({
+        manifest: { ...validManifest, engines: { weave: '*' } },
+        setup: () => undefined,
+      }),
+    ).rejects.toMatchObject({ code: 'plugin-engine-unsupported' });
+  });
+
+  it('rejects a host version that is not a full x.y.z', () => {
+    expect(() =>
+      createPluginRegistry({
+        toolRegistry: createToolRegistry(),
+        providerRegistry: createLlmProviderRegistry(),
+        hostVersion: '1.2',
+      }),
+    ).toThrowError(TypeError);
+  });
+
+  it('does not commit a Tool that the manifest contributes list leaves out', async () => {
+    const { registry, toolRegistry } = createTestRegistry();
+
+    await expect(
+      registry.register({
+        manifest: { ...validManifest, contributes: { tools: ['another'] } },
+        setup(context) {
+          context.registerTool(echoTool);
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'plugin-contributes-exceeds-manifest' });
+
+    expect(toolRegistry.get('echo')).toBeUndefined();
+    expect(registry.get('example-tools')).toBeUndefined();
+  });
 });

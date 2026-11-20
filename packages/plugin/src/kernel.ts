@@ -1,4 +1,10 @@
 import { pluginApiVersion } from './constants.js';
+import {
+  assertEngineSupported,
+  assertHostVersion,
+  assertServicePermissions,
+  createServiceUsage,
+} from './declaration.js';
 import { ExtensionRegistry } from './extension-point.js';
 import { HookRegistry } from './hook.js';
 import { pluginManifestSchema, type PluginManifest } from './manifest.js';
@@ -56,11 +62,18 @@ interface LoadedPlugin {
 
 export interface PluginKernelOptions {
   readonly apiVersion?: string;
+  /**
+   * The host's Weave version, a full `x.y.z`. Plugins that declare
+   * `engines.weave` are rejected when it is missing or not in their range.
+   */
+  readonly hostVersion?: string | undefined;
 }
 
 /** Creates an empty plugin kernel. */
 export function createPluginKernel(options: PluginKernelOptions = {}): PluginKernel {
   const expectedApiVersion = options.apiVersion ?? pluginApiVersion;
+  const hostVersion = options.hostVersion;
+  assertHostVersion(hostVersion);
   const extensions = new ExtensionRegistry();
   const hooks = new HookRegistry();
   const container = new ServiceContainer({
@@ -91,6 +104,7 @@ export function createPluginKernel(options: PluginKernelOptions = {}): PluginKer
         `Plugin "${manifest.id}" requires API version "${manifest.apiVersion}", expected "${expectedApiVersion}"`,
       );
     }
+    assertEngineSupported(manifest, hostVersion);
     if (loaded.has(manifest.id)) {
       throw new PluginError('plugin-duplicate-id', `Plugin "${manifest.id}" is already registered`);
     }
@@ -98,6 +112,7 @@ export function createPluginKernel(options: PluginKernelOptions = {}): PluginKer
     const abort = new AbortController();
     const disposers: (() => void)[] = [];
     const entry: LoadedPlugin = { plugin, disposers, abort };
+    const usage = createServiceUsage();
     const env = createPluginEnv({
       manifest,
       signal: abort.signal,
@@ -105,10 +120,13 @@ export function createPluginKernel(options: PluginKernelOptions = {}): PluginKer
       extensions,
       hooks,
       track: (disposer) => disposers.push(disposer),
+      usage,
     });
 
     try {
       await plugin.setup(env);
+      assertServicePermissions(manifest, usage);
+      usage.closed = true;
     } catch (error: unknown) {
       for (let index = disposers.length - 1; index >= 0; index -= 1) {
         disposers[index]?.();

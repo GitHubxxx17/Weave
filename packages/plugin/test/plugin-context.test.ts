@@ -115,4 +115,53 @@ describe('Plugin Context', () => {
     expect(Object.isFrozen(tools)).toBe(true);
     expect(() => (tools as unknown[]).push(echoTool)).toThrow();
   });
+
+  it('stages the Tools and Providers a manifest lists in contributes', () => {
+    const context = createPluginContext({
+      ...validManifest,
+      contributes: { tools: ['echo'], providers: ['local-model'] },
+    });
+    const provider = {
+      id: 'local-model',
+      label: 'Local Model',
+      type: 'mock' as const,
+      client: createMockLlmClient([]),
+    };
+
+    context.registerTool(echoTool);
+    context.registerProvider(provider);
+
+    expect(context.getTools()).toEqual([echoTool]);
+    expect(context.getProviders()).toEqual([provider]);
+  });
+
+  it('treats contributes as a closed list for Tools and Providers', () => {
+    const context = createPluginContext({
+      ...validManifest,
+      contributes: { tools: ['other'] },
+    });
+
+    expect(() => context.registerTool(echoTool)).toThrowError(
+      expect.objectContaining({ code: 'plugin-contributes-exceeds-manifest' }),
+    );
+    // `providers` is not listed, so it is an empty list rather than unrestricted.
+    expect(() =>
+      context.registerProvider({
+        id: 'local-model',
+        label: 'Local Model',
+        type: 'mock',
+        client: createMockLlmClient([]),
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'plugin-contributes-exceeds-manifest' }));
+    expect(context.getTools()).toEqual([]);
+    expect(context.getProviders()).toEqual([]);
+  });
+
+  it('reports a malformed Tool before checking contributes', () => {
+    const context = createPluginContext({ ...validManifest, contributes: { tools: [] } });
+
+    expect(() => context.registerTool({ ...echoTool, name: '' })).toThrowError(
+      expect.objectContaining({ code: 'plugin-invalid-definition' }),
+    );
+  });
 });

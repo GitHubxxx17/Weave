@@ -149,22 +149,55 @@ export interface Generation {
 
 ## 8. Manifest 增补（向后兼容）
 
-现有 `{ id, name, version, apiVersion, description?, capabilities[] }` 之上新增可选字段：
+现有 `{ id, name, version, apiVersion, description?, capabilities[] }` 之上新增可选字段。下列字段已在 Stage 3.1 落地：
 
 ```ts
+type PluginCapability = 'tool' | 'llm-provider' | 'prompt'; // 新增 'prompt'
+type PluginHost = 'in-process' | 'mcp' | 'subprocess';
+type PluginPermission =
+  | 'workspace:read' | 'workspace:write' | 'process:spawn' | 'network:request'
+  | `service:${string}`;                         // 内核唯一会强制的一类
+
 interface PluginManifest {
   // …现有字段…
-  host?: 'in-process' | 'mcp' | 'subprocess';   // 默认 in-process
-  engines?: { weave: string };                   // semver range，不满足则拒载
-  contributes?: {                                // 声明贡献，内核校验实际注册不超集
-    tools?: string[]; providers?: string[]; commands?: string[];
-    events?: string[]; promptSections?: string[]; ui?: UiContribution[];
+  host?: PluginHost;                             // 默认 in-process
+  engines?: { weave: string };                   // 宿主 Weave 版本需满足的范围
+  contributes?: {                                // 声明贡献的名字
+    tools?: string[];                            // 工具名
+    providers?: string[];                        // LLM provider id
+    promptSections?: string[];                   // 提示词片段 id
+    services?: string[];                         // 本插件 provide 的服务 id
   };
-  permissions?: PluginPermission[];              // 'workspace:read' | 'process:spawn' | 'service:<id>' | …
+  permissions?: PluginPermission[];
 }
 ```
 
-`capabilities` 保留（旧插件不变）。`contributes` / `permissions` 是声明式面：Studio 不运行代码即可列出插件加了什么、要什么权限。内核在 commit 时校验：注册的工具 / 服务 / 事件名必须在 `contributes` 内，`use(ref)` 的 ref 必须在 `permissions` 的 `service:<id>` 内。
+`commands` / `events` / `ui` 三类贡献随各自的扩展点落地时再加入 `contributes`（新增可选键，向后兼容）。`capabilities` 保留（旧插件不变）。`contributes` / `permissions` 是声明式面：Studio 不运行代码即可列出插件加了什么、要什么权限。
+
+**语义**
+
+- **未声明即不校验，声明即封闭。** 没有 `contributes` / `permissions` 的插件行为与之前完全一致。一旦声明，该清单是封闭的：未列出的键视为空列表，贡献该类的任何名字都会被拒绝。
+- **跨字段一致性**（解析 manifest 时检查，违反为 `plugin-invalid-manifest`）：`contributes.tools` 非空要求 `capabilities` 含 `tool`，`providers` 要求 `llm-provider`，`promptSections` 要求 `prompt`。每个列表内不得重复。
+- **受治理的扩展点**：`weave.tools`、`weave.llm.providers`、`weave.prompt.sections` 各绑定一个 capability 与一个 `contributes` 键。向这些点贡献前，插件必须声明对应 capability（`env.contribute` 时抛 `plugin-capability-not-declared`，与旧路径 `registerTool` 的规则一致）。插件声明了 `contributes` 时，owner 回放贡献的那一刻逐个核对名字，不在清单内则抛 `plugin-contributes-exceeds-manifest`，该名字不会进入 owner。
+- **服务**：声明了 `contributes` 的插件，`env.provide(ref)` 的 `ref.id` 必须在 `contributes.services` 内。
+- **`permissions`**：内核只强制 `service:<id>`。声明了 `permissions` 的插件，经 `env.use` 或 `provide` 的 `deps` 使用的服务必须在列表内，本插件自己提供的服务除外；在 `setup` 结束后统一检查，违反为 `plugin-permission-denied`；`setup` 结束之后才调用的 `env.use` 即时检查。`workspace:*`、`process:spawn`、`network:request` 只是声明，供信任确认界面展示，内核不强制（进程内不是安全边界，见第 3 节；进程外宿主再由代理强制）。
+- **`engines.weave`**：使用 semver 范围的子集，版本一律写完整的 `x.y.z`。支持 `*`、`1.x`、`1.2.x`，以及带可选前缀 `>=` `>` `<=` `<` `=` `^` `~` 的 `x.y.z`；多个条件用空格连接，表示"且"。不支持预发布标签、`||`、连字符范围和省略补零的简写（如 `>=1.2`），写法不受支持时 manifest 无效。内核与旧注册表通过选项 `hostVersion`（完整的 `x.y.z`）得知宿主的 Weave 版本；插件声明了 `engines` 而宿主没有提供 `hostVersion` 时一律拒载（不满足与无法判断都不放行），错误码 `plugin-engine-unsupported`。
+- **`host`**：内核不解释，只记录。宿主 / 加载器据此决定如何装载，Studio 据此展示运行方式。
+
+**校验时机**
+
+| 检查 | 触发点 | 时机 | 错误码 |
+|---|---|---|---|
+| manifest 形状、跨字段一致性、`engines` 语法、权限词表 | `register()` 解析 | 注册 | `plugin-invalid-manifest` |
+| `engines.weave` 与宿主版本 | `register()` | 注册 | `plugin-engine-unsupported` |
+| 对受治理扩展点声明了对应 capability | `env.contribute` | `setup` 内 | `plugin-capability-not-declared` |
+| `provide` 的服务在 `contributes.services` 内 | `env.provide` | `setup` 内 | `plugin-contributes-exceeds-manifest` |
+| 使用的服务在 `permissions` 的 `service:<id>` 内 | `register()` 末尾 | 注册 | `plugin-permission-denied` |
+| 贡献的名字在 `contributes.<key>` 内 | owner 回放贡献（`collect`） | owner 服务初始化 | `plugin-contributes-exceeds-manifest` |
+
+最后一项发生在宿主 seal 之后首次解析 owner 服务时，宿主应在启动阶段立即解析（现有 server 装配已如此），使它等同于启动期错误。旧的 `createPluginRegistry` 路径同样遵守 `contributes` 与 `engines`：`registerTool` / `registerProvider` 的名字在 `setup` 内即时核对。
+
+**已知缺口**：钩子（`onHook`）目前不在 `contributes` 内声明。钩子可以观察工具结果，将来还可以对工具调用投 `deny` / `ask`。信任确认界面（Stage 4）展示"插件要什么"之前，需要给 `contributes` 增补 `hooks` 键。
 
 ## 9. 内核接缝清单（现有库 → 服务 / 扩展点 / 钩子）
 
@@ -205,7 +238,7 @@ export const newSessionEventSchema = z.union([coreEventSchema, pluginEventSchema
 
 ## 12. 校验与错误（新增错误码）
 
-`plugin-service-missing-dependency` / `-cycle` / `-duplicate` / `-scope-violation`、`plugin-extension-single-slot`、`plugin-contributes-exceeds-manifest`（注册超出 contributes）、`plugin-permission-denied`（use 未授权 service）、`plugin-engine-unsupported`。全部在**启动 / 注册时**抛出，不拖到运行时。
+`plugin-service-missing-dependency` / `-cycle` / `-duplicate` / `-scope-violation`、`plugin-extension-single-slot`、`plugin-contributes-exceeds-manifest`（提供的服务或贡献的名字不在 `contributes` 内）、`plugin-permission-denied`（使用了 `permissions` 未授权的 `service:<id>`）、`plugin-engine-unsupported`（`engines.weave` 不满足，或宿主没有声明 `hostVersion`）。`plugin-capability-not-declared` 原本只用于旧路径，Stage 3.1 起内核路径向受治理扩展点贡献时同样适用。全部在**启动 / 注册时**抛出，不拖到运行时；贡献名字的核对发生在 owner 服务初始化时，时机见第 8 节的校验时机表。
 
 ## 13. 测试策略
 

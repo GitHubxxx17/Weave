@@ -1,3 +1,4 @@
+import { assertNameDeclared, assertServiceUse, type ServiceUsage } from './declaration.js';
 import { type PluginManifest } from './manifest.js';
 import {
   type DecideHandler,
@@ -26,11 +27,22 @@ export interface PluginEnv {
   readonly manifest: PluginManifest;
   /** Aborted when the plugin is unloaded or its generation is replaced. */
   readonly signal: AbortSignal;
-  /** Provides a service implementation. Returns a disposer. */
+  /**
+   * Provides a service implementation. Returns a disposer. A plugin that
+   * declared `contributes` may only provide the services it lists there.
+   */
   provide<T, D extends DepMap>(ref: ServiceRef<T>, impl: ServiceImpl<T, D>): Disposer;
-  /** Consumes a service; `get()` resolves lazily after the kernel is sealed. */
+  /**
+   * Consumes a service; `get()` resolves lazily after the kernel is sealed. A
+   * plugin that declared `permissions` may only use services it grants as
+   * `service:<id>`, which is checked once `setup` has finished.
+   */
   use<T>(ref: ServiceRef<T>): ServiceHandle<T>;
-  /** Contributes into an extension point. Returns a disposer. */
+  /**
+   * Contributes into an extension point. Returns a disposer. A governed point
+   * requires the matching capability, and the names a plugin that declared
+   * `contributes` adds must be listed there.
+   */
   contribute<T>(point: ExtensionPoint<T>, contributor: (api: T) => void): Disposer;
   /** Registers a hook handler. Returns a disposer. */
   onHook<I, O>(
@@ -48,11 +60,16 @@ export interface PluginEnvDeps {
   readonly hooks: HookRegistry;
   /** Records a disposer so the kernel can reclaim it when the plugin unloads. */
   readonly track: (disposer: Disposer) => void;
+  /**
+   * Records the services the plugin provides and uses, so the kernel can check
+   * them against the manifest's `permissions` once `setup` has finished.
+   */
+  readonly usage?: ServiceUsage | undefined;
 }
 
 /** Builds the `env` passed to one plugin's `setup`, tracking its registrations. */
 export function createPluginEnv(deps: PluginEnvDeps): PluginEnv {
-  const { manifest, signal, container, extensions, hooks, track } = deps;
+  const { manifest, signal, container, extensions, hooks, track, usage } = deps;
   const pluginId = manifest.id;
 
   const tracked = (disposer: Disposer): Disposer => {
@@ -64,15 +81,26 @@ export function createPluginEnv(deps: PluginEnvDeps): PluginEnv {
     manifest,
     signal,
     provide(ref, impl) {
+      assertNameDeclared(pluginId, manifest.contributes, 'services', ref.id);
+      usage?.provided.add(ref.id);
+      for (const dependency of Object.values(impl.deps ?? {})) {
+        usage?.used.add(dependency.id);
+      }
       return tracked(container.register(ref, impl, pluginId));
     },
     use(ref) {
+      if (usage !== undefined) {
+        if (usage.closed) {
+          assertServiceUse(manifest, usage, ref.id);
+        }
+        usage.used.add(ref.id);
+      }
       return {
         get: () => container.rootScope().resolve(ref),
       };
     },
     contribute(point, contributor) {
-      return tracked(extensions.contribute(point, contributor, pluginId));
+      return tracked(extensions.contribute(point, contributor, pluginId, manifest));
     },
     onHook(hook, handler) {
       return tracked(hooks.on(hook, handler, pluginId));

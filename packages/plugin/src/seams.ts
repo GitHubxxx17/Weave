@@ -68,6 +68,16 @@ export interface ToolsExtensionApi {
 /** Tools are contributed here; the Tool Registry owner collects them. */
 export const toolsExtensionPoint: ExtensionPoint<ToolsExtensionApi> = defineExtensionPoint({
   id: 'weave.tools',
+  governed: {
+    capability: 'tool',
+    key: 'tools',
+    guard: (api, check) => ({
+      addTool(tool) {
+        check(tool.name);
+        api.addTool(tool);
+      },
+    }),
+  },
 });
 
 /** Contributor API for the `weave.llm.providers` extension point. */
@@ -77,7 +87,19 @@ export interface LlmProvidersExtensionApi {
 
 /** LLM providers are contributed here; the provider registry owner collects them. */
 export const llmProvidersExtensionPoint: ExtensionPoint<LlmProvidersExtensionApi> =
-  defineExtensionPoint({ id: 'weave.llm.providers' });
+  defineExtensionPoint({
+    id: 'weave.llm.providers',
+    governed: {
+      capability: 'llm-provider',
+      key: 'providers',
+      guard: (api, check) => ({
+        addProvider(registration) {
+          check(registration.id);
+          api.addProvider(registration);
+        },
+      }),
+    },
+  });
 
 /** One addressable piece of the system prompt. Lower `order` renders earlier. */
 export interface PromptSection {
@@ -93,7 +115,19 @@ export interface PromptSectionsExtensionApi {
 
 /** System-prompt sections are contributed here; `prompt-core` owns assembly. */
 export const promptSectionsExtensionPoint: ExtensionPoint<PromptSectionsExtensionApi> =
-  defineExtensionPoint({ id: 'weave.prompt.sections' });
+  defineExtensionPoint({
+    id: 'weave.prompt.sections',
+    governed: {
+      capability: 'prompt',
+      key: 'promptSections',
+      guard: (api, check) => ({
+        addSection(section) {
+          check(section.id);
+          api.addSection(section);
+        },
+      }),
+    },
+  });
 
 // --- Hooks ---
 
