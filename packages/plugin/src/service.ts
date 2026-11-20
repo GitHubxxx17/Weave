@@ -1,3 +1,4 @@
+import type { ExtensionCollector, ExtensionPoint } from './extension-point.js';
 import { PluginError } from './plugin-errors.js';
 
 /**
@@ -59,6 +60,8 @@ export interface ServiceInitContext {
   readonly scope: ServiceScope;
   /** The scope key (`root`, or a workspace/session identifier). */
   readonly scopeKey: string;
+  /** Collects contributions to an extension point this service owns. */
+  readonly collect: ExtensionCollector;
 }
 
 /** A service implementation: dependencies, a factory and an optional disposer. */
@@ -97,6 +100,11 @@ export class ServiceContainer {
   readonly #registrations = new Map<string, Registration[]>();
   #rootScope: ScopeContextImpl | undefined;
   readonly #rootAbort = new AbortController();
+  readonly #collect: ExtensionCollector;
+
+  constructor(options: { collect?: ExtensionCollector } = {}) {
+    this.#collect = options.collect ?? (<T>(_point: ExtensionPoint<T>, api: T): T => api);
+  }
 
   /** Registers one implementation of `ref`. Returns a disposer that unregisters it. */
   register<T, D extends DepMap>(
@@ -216,6 +224,7 @@ export class ServiceContainer {
         this.#rootAbort.signal,
         this,
         undefined,
+        this.#collect,
       );
     }
     return this.#rootScope;
@@ -223,7 +232,14 @@ export class ServiceContainer {
 
   /** Creates a child scope (`workspace` or `session`) under `parent`. */
   createScope(scope: 'workspace' | 'session', key: string, parent: ScopeContext): ScopeContext {
-    return new ScopeContextImpl(scope, key, parent.signal, this, parent as ScopeContextImpl);
+    return new ScopeContextImpl(
+      scope,
+      key,
+      parent.signal,
+      this,
+      parent as ScopeContextImpl,
+      this.#collect,
+    );
   }
 
   /** Disposes the root scope and every instance created under it. */
@@ -252,6 +268,7 @@ class ScopeContextImpl implements ScopeContext {
   readonly signal: AbortSignal;
   readonly #container: ServiceContainer;
   readonly #parent: ScopeContextImpl | undefined;
+  readonly #collect: ExtensionCollector;
   readonly #instances = new Map<string, Promise<unknown>>();
   readonly #live: LiveInstance[] = [];
   readonly #abort = new AbortController();
@@ -262,11 +279,13 @@ class ScopeContextImpl implements ScopeContext {
     parentSignal: AbortSignal,
     container: ServiceContainer,
     parent: ScopeContextImpl | undefined,
+    collect: ExtensionCollector,
   ) {
     this.scope = scope;
     this.key = key;
     this.#container = container;
     this.#parent = parent;
+    this.#collect = collect;
     if (parentSignal.aborted) {
       this.#abort.abort();
     } else {
@@ -334,6 +353,7 @@ class ScopeContextImpl implements ScopeContext {
         signal: this.signal,
         scope: this.scope,
         scopeKey: this.key,
+        collect: this.#collect,
       });
       this.#live.push({
         value,
