@@ -7,6 +7,7 @@ import {
   Globe,
   LayoutGrid,
   ListChecks,
+  Puzzle,
   SquareTerminal,
   Wrench,
   type LucideIcon,
@@ -22,6 +23,7 @@ import { PlanPanel } from './plan-panel.js';
 import { PreviewPanel } from './preview-panel.js';
 import { TerminalPanel } from './terminal-panel.js';
 import { FileTreePanel } from '../files-tree/file-tree-panel.js';
+import { PluginsPanel } from '../plugins/plugins-panel.js';
 
 /** Every side-panel kind. */
 export type PanelKind =
@@ -32,6 +34,7 @@ export type PanelKind =
   | 'usage'
   | 'context'
   | 'plan'
+  | 'plugins'
   | 'preview'
   | 'terminal';
 
@@ -130,6 +133,16 @@ export const panelDescriptors: readonly PanelDescriptor[] = [
     keepAlive: false,
     multi: false,
     render: (context) => <PlanPanel {...context} />,
+  },
+  {
+    kind: 'plugins',
+    label: '插件',
+    Icon: Puzzle,
+    defaultPinned: false,
+    comingSoon: false,
+    keepAlive: false,
+    multi: false,
+    render: () => <PluginsPanel />,
   },
   {
     kind: 'preview',
