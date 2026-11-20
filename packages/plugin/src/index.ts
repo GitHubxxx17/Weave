@@ -1,7 +1,14 @@
 export { pluginApiVersion } from './constants.js';
 
 export { pluginManifestSchema } from './manifest.js';
-export type { PluginCapability, PluginManifest } from './manifest.js';
+export type {
+  ContributedNameKey,
+  PluginCapability,
+  PluginContributes,
+  PluginHost,
+  PluginManifest,
+  PluginPermission,
+} from './manifest.js';
 export { PluginError } from './plugin-errors.js';
 export type { PluginErrorCode } from './plugin-errors.js';
 export type {
@@ -26,7 +33,13 @@ export type {
   ServiceScope,
 } from './service.js';
 export { defineExtensionPoint, ExtensionRegistry } from './extension-point.js';
-export type { ExtensionCollector, ExtensionPoint } from './extension-point.js';
+export type {
+  ContributionCheck,
+  ExtensionCollector,
+  ExtensionPoint,
+  GovernedContribution,
+  PluginDeclaration,
+} from './extension-point.js';
 export { defineHook, HookRegistry } from './hook.js';
 export type {
   DecideHandler,

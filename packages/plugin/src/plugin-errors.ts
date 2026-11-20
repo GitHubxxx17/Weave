@@ -15,6 +15,10 @@ export type PluginErrorCode =
   | 'plugin-service-scope-violation'
   // Kernel: extension points
   | 'plugin-extension-single-slot'
+  // Kernel: manifest declarations
+  | 'plugin-contributes-exceeds-manifest'
+  | 'plugin-permission-denied'
+  | 'plugin-engine-unsupported'
   // Kernel: hooks
   | 'plugin-hook-invalid-vote';
 

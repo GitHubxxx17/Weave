@@ -49,6 +49,108 @@ describe('Plugin Manifest', () => {
   });
 });
 
+describe('Plugin Manifest declarations', () => {
+  const declared = {
+    ...validManifest,
+    capabilities: ['tool', 'llm-provider', 'prompt'],
+    host: 'in-process',
+    engines: { weave: '>=1.2.0 <2.0.0' },
+    contributes: {
+      tools: ['echo'],
+      providers: ['local-model'],
+      promptSections: ['style'],
+      services: ['example.cache'],
+    },
+    permissions: [
+      'workspace:read',
+      'workspace:write',
+      'process:spawn',
+      'network:request',
+      'service:weave.tools.registry',
+    ],
+  };
+
+  it('accepts a manifest that declares every optional field', () => {
+    expect(pluginManifestSchema.parse(declared)).toEqual(declared);
+  });
+
+  it('accepts empty declarations, which close the list instead of leaving it open', () => {
+    const parsed = pluginManifestSchema.parse({
+      ...validManifest,
+      contributes: {},
+      permissions: [],
+    });
+
+    expect(parsed.contributes).toEqual({});
+    expect(parsed.permissions).toEqual([]);
+  });
+
+  it.each(['in-process', 'mcp', 'subprocess'])('accepts host %s', (host) => {
+    expect(pluginManifestSchema.parse({ ...validManifest, host }).host).toBe(host);
+  });
+
+  it.each([
+    ['an unknown host', { host: 'docker' }],
+    ['an engines range outside the supported subset', { engines: { weave: '>=1.2' } }],
+    ['an empty engines range', { engines: { weave: '' } }],
+    ['an unknown engines field', { engines: { weave: '*', node: '>=20.0.0' } }],
+    ['an unknown contributes kind', { contributes: { commands: ['review'] } }],
+    ['an empty contributed name', { contributes: { tools: [''] } }],
+    ['a duplicate contributed tool', { contributes: { tools: ['echo', 'echo'] } }],
+    ['a malformed service id', { contributes: { services: ['Not A Service'] } }],
+    ['an unknown permission', { permissions: ['workspace:delete'] }],
+    ['a malformed service permission', { permissions: ['service:Not A Service'] }],
+    ['a bare service permission', { permissions: ['service:'] }],
+    ['a duplicate permission', { permissions: ['process:spawn', 'process:spawn'] }],
+  ])('rejects %s', (_label, extra) => {
+    expect(() => pluginManifestSchema.parse({ ...validManifest, ...extra })).toThrow();
+  });
+
+  it.each([
+    ['tools', 'tool', 'prompt'],
+    ['providers', 'llm-provider', 'tool'],
+    ['promptSections', 'prompt', 'tool'],
+  ])('requires the capability behind contributes.%s', (key, capability, other) => {
+    const names = { [key]: ['x'] };
+
+    const rejected = pluginManifestSchema.safeParse({
+      ...validManifest,
+      capabilities: [other],
+      contributes: names,
+    });
+    expect(rejected.success).toBe(false);
+    expect(rejected.error?.issues.map((issue) => issue.message)).toContain(
+      `contributes.${key} requires the "${capability}" capability`,
+    );
+    expect(
+      pluginManifestSchema.safeParse({
+        ...validManifest,
+        capabilities: [capability],
+        contributes: names,
+      }).success,
+    ).toBe(true);
+  });
+
+  it('does not require a capability for a kind that lists no names', () => {
+    expect(
+      pluginManifestSchema.parse({
+        ...validManifest,
+        capabilities: ['prompt'],
+        contributes: { tools: [] },
+      }),
+    ).toMatchObject({ contributes: { tools: [] } });
+  });
+
+  it('keeps accepting the original manifest shape unchanged', () => {
+    const parsed = pluginManifestSchema.parse(validManifest);
+
+    expect(parsed.host).toBeUndefined();
+    expect(parsed.engines).toBeUndefined();
+    expect(parsed.contributes).toBeUndefined();
+    expect(parsed.permissions).toBeUndefined();
+  });
+});
+
 describe('PluginError', () => {
   it('keeps a stable name, code and cause', () => {
     const cause = new Error('invalid manifest');

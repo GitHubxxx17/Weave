@@ -1,5 +1,27 @@
+import { assertNameDeclared } from './declaration.js';
+import { type ContributedNameKey, type PluginCapability, type PluginManifest } from './manifest.js';
 import { PluginError } from './plugin-errors.js';
 import { type Disposer } from './service.js';
+
+/** Throws when a contributed name is not declared in the contributor's manifest. */
+export type ContributionCheck = (name: string) => void;
+
+/**
+ * Ties an extension point to the manifest: contributors must declare
+ * `capability`, and a contributor that declares `contributes` may only add the
+ * names it lists under `key`.
+ */
+export interface GovernedContribution<T> {
+  /** The capability a contributor must declare. */
+  readonly capability: PluginCapability;
+  /** The `contributes` key that lists the names added through this point. */
+  readonly key: ContributedNameKey;
+  /**
+   * Wraps the owner's API so every name a contributor adds passes `check`
+   * before it reaches the owner.
+   */
+  readonly guard: (api: T, check: ContributionCheck) => T;
+}
 
 /**
  * Extension points let one plugin own an aggregation that other plugins
@@ -13,6 +35,8 @@ import { type Disposer } from './service.js';
 export interface ExtensionPoint<T> {
   readonly id: string;
   readonly singleSlot: boolean;
+  /** Present when contributions are checked against the contributor's manifest. */
+  readonly governed?: GovernedContribution<T> | undefined;
   /** Phantom carrier of the contributor API type; never set at runtime. */
   readonly __api?: T;
 }
@@ -21,8 +45,13 @@ export interface ExtensionPoint<T> {
 export function defineExtensionPoint<T>(spec: {
   id: string;
   singleSlot?: boolean;
+  governed?: GovernedContribution<T>;
 }): ExtensionPoint<T> {
-  return Object.freeze({ id: spec.id, singleSlot: spec.singleSlot ?? false }) as ExtensionPoint<T>;
+  return Object.freeze({
+    id: spec.id,
+    singleSlot: spec.singleSlot ?? false,
+    ...(spec.governed === undefined ? {} : { governed: spec.governed }),
+  }) as ExtensionPoint<T>;
 }
 
 /**
@@ -35,9 +64,13 @@ export type ExtensionCollector = <T>(point: ExtensionPoint<T>, api: T) => T;
 
 type Contributor<T> = (api: T) => void;
 
+/** The parts of a plugin's manifest an extension point checks contributions against. */
+export type PluginDeclaration = Pick<PluginManifest, 'capabilities' | 'contributes'>;
+
 interface ContributionEntry {
   readonly fn: Contributor<unknown>;
   readonly pluginId: string;
+  readonly declaration: PluginDeclaration | undefined;
 }
 
 /** Collects contributions per extension point and replays them against an owner API. */
@@ -45,10 +78,32 @@ export class ExtensionRegistry {
   readonly #contributions = new Map<string, ContributionEntry[]>();
   readonly #singleSlot = new Map<string, boolean>();
 
-  /** Records a contribution to `point`. Returns a disposer that removes it. */
-  contribute<T>(point: ExtensionPoint<T>, fn: Contributor<T>, pluginId: string): Disposer {
+  /**
+   * Records a contribution to `point`. Returns a disposer that removes it.
+   *
+   * When the plugin's `declaration` is given and `point` is governed, the
+   * plugin must have declared the point's capability, and (once collected) a
+   * declared `contributes` list limits the names it may add.
+   */
+  contribute<T>(
+    point: ExtensionPoint<T>,
+    fn: Contributor<T>,
+    pluginId: string,
+    declaration?: PluginDeclaration,
+  ): Disposer {
+    const governed = point.governed;
+    if (
+      governed !== undefined &&
+      declaration !== undefined &&
+      !declaration.capabilities.includes(governed.capability)
+    ) {
+      throw new PluginError(
+        'plugin-capability-not-declared',
+        `Plugin "${pluginId}" contributes to "${point.id}" but did not declare the "${governed.capability}" capability`,
+      );
+    }
     this.#singleSlot.set(point.id, point.singleSlot);
-    const entry: ContributionEntry = { fn: fn as Contributor<unknown>, pluginId };
+    const entry: ContributionEntry = { fn: fn as Contributor<unknown>, pluginId, declaration };
     const list = this.#contributions.get(point.id);
     if (list === undefined) {
       this.#contributions.set(point.id, [entry]);
@@ -75,7 +130,7 @@ export class ExtensionRegistry {
   /**
    * Runs every contribution to `point` against `api` in registration order and
    * returns `api`. Throws when a single-slot point has more than one
-   * contribution.
+   * contribution, or when a contributor adds a name its manifest does not list.
    */
   collect<T>(point: ExtensionPoint<T>, api: T): T {
     const list = this.#contributions.get(point.id) ?? [];
@@ -87,13 +142,25 @@ export class ExtensionRegistry {
       );
     }
     for (const entry of list) {
-      (entry.fn as Contributor<T>)(api);
+      (entry.fn as Contributor<T>)(this.#guarded(point, api, entry));
     }
     return api;
   }
 
+  /** The API a contributor receives: guarded when its manifest declared `contributes`. */
+  #guarded<T>(point: ExtensionPoint<T>, api: T, entry: ContributionEntry): T {
+    const governed = point.governed;
+    const contributes = entry.declaration?.contributes;
+    if (governed === undefined || contributes === undefined) {
+      return api;
+    }
+    return governed.guard(api, (name) =>
+      assertNameDeclared(entry.pluginId, contributes, governed.key, name),
+    );
+  }
+
   /** Number of contributions recorded for a point (test/introspection aid). */
-  count(point: ExtensionPoint<unknown>): number {
+  count<T>(point: ExtensionPoint<T>): number {
     return this.#contributions.get(point.id)?.length ?? 0;
   }
 }

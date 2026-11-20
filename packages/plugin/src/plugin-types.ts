@@ -6,6 +6,7 @@ import {
 } from '@weave/runtime';
 import { z } from 'zod';
 import { PluginError, type PluginErrorCode } from './plugin-errors.js';
+import { assertNameDeclared } from './declaration.js';
 import { type PluginCapability, type PluginManifest } from './manifest.js';
 
 /** Methods exposed to a trusted plugin during setup. */
@@ -92,7 +93,8 @@ function createDuplicateRegistrationError(
  * Creates the private staged Context used by Plugin Registry.
  *
  * The returned Context only collects validated registrations. It has no access
- * to host services, filesystem APIs, HTTP objects or Runtime internals.
+ * to host services, filesystem APIs, HTTP objects or Runtime internals. A
+ * plugin that declared `contributes` may only register the names it lists.
  */
 export function createPluginContext(manifest: PluginManifest): StagedPluginContext {
   const tools: RegisteredToolDefinition[] = [];
@@ -108,6 +110,7 @@ export function createPluginContext(manifest: PluginManifest): StagedPluginConte
       if (!parsed.success) {
         throw createInvalidDefinitionError('Tool', manifest.id, parsed.error);
       }
+      assertNameDeclared(manifest.id, manifest.contributes, 'tools', tool.name);
       if (tools.some((registered) => registered.name === tool.name)) {
         throw createDuplicateRegistrationError('Tool', tool.name, manifest.id);
       }
@@ -124,6 +127,7 @@ export function createPluginContext(manifest: PluginManifest): StagedPluginConte
       if (!parsed.success) {
         throw createInvalidDefinitionError('Provider', manifest.id, parsed.error);
       }
+      assertNameDeclared(manifest.id, manifest.contributes, 'providers', provider.id);
       if (providers.some((registered) => registered.id === provider.id)) {
         throw createDuplicateRegistrationError('Provider', provider.id, manifest.id);
       }

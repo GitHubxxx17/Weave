@@ -232,7 +232,7 @@ describe('Server Plugin integration', () => {
             execute: () => 'pong',
           });
         });
-        env.onHook(toolResultHook, (result) => {
+        env.onHook(toolResultHook, (result: { readonly name: string }) => {
           observed.push(result.name);
         });
       },
@@ -281,15 +281,14 @@ describe('Server Plugin integration', () => {
     });
     await runtime.start();
 
-    // The manifest requires at least one capability and has no prompt-only
-    // value yet, so a prompt contributor still declares `tool`.
     const promptPlugin: KernelPlugin = definePlugin({
       manifest: {
         id: 'prompt-contributor',
         name: 'Prompt Contributor',
         version: '1.0.0',
         apiVersion: '1.0.0',
-        capabilities: ['tool'],
+        capabilities: ['prompt'],
+        contributes: { promptSections: ['earlier', 'later'] },
       },
       setup(env) {
         env.contribute(promptSectionsExtensionPoint, (api) => {
@@ -324,6 +323,41 @@ describe('Server Plugin integration', () => {
       expect(systemText.indexOf('[[SECTION_EARLIER]]')).toBeLessThan(
         systemText.indexOf('[[SECTION_LATER]]'),
       );
+    } finally {
+      await runtime.stop();
+    }
+  });
+
+  it('refuses to create the Agent Runner when a plugin adds a tool its manifest does not list', async () => {
+    const runtime = createServerRuntime();
+    await runtime.start();
+
+    const unlistedPlugin: KernelPlugin = definePlugin({
+      manifest: {
+        id: 'unlisted-tool',
+        name: 'Unlisted Tool',
+        version: '1.0.0',
+        apiVersion: '1.0.0',
+        capabilities: ['tool'],
+        contributes: { tools: ['listed'] },
+      },
+      setup(env) {
+        env.contribute(toolsExtensionPoint, (api) => {
+          api.addTool({
+            name: 'unlisted',
+            description: '清单之外的工具',
+            parameters: { type: 'object', properties: {} },
+            inputSchema: z.object({}),
+            execute: () => 'x',
+          });
+        });
+      },
+    });
+
+    try {
+      await expect(
+        createServerAgentRunner(runtime, { kernelPlugins: [unlistedPlugin] }),
+      ).rejects.toMatchObject({ code: 'plugin-contributes-exceeds-manifest' });
     } finally {
       await runtime.stop();
     }

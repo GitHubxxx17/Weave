@@ -2,6 +2,7 @@ import { type LlmProviderRegistry, type LlmProviderRegistration } from '@weave/l
 import { type RegisteredToolDefinition, type ToolRegistry } from '@weave/runtime';
 import { z } from 'zod';
 import { pluginApiVersion } from './constants.js';
+import { assertEngineSupported, assertHostVersion } from './declaration.js';
 import { pluginManifestSchema, type PluginManifest } from './manifest.js';
 import { PluginError } from './plugin-errors.js';
 import {
@@ -26,6 +27,11 @@ export interface PluginRegistryOptions {
   readonly toolRegistry: ToolRegistry;
   readonly providerRegistry: LlmProviderRegistry;
   readonly apiVersion?: string | undefined;
+  /**
+   * The host's Weave version, a full `x.y.z`. Plugins that declare
+   * `engines.weave` are rejected when it is missing or not in their range.
+   */
+  readonly hostVersion?: string | undefined;
 }
 
 export interface PluginRegistry {
@@ -151,6 +157,7 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
   const orderedPlugins: RegisteredPlugin[] = [];
   const registrationQueue = createRegistrationQueue();
   const expectedApiVersion = options.apiVersion ?? pluginApiVersion;
+  assertHostVersion(options.hostVersion);
 
   return {
     register(pluginInput): Promise<PluginSnapshot> {
@@ -161,6 +168,7 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
         if (manifest.apiVersion !== expectedApiVersion) {
           throw createApiVersionError(manifest, expectedApiVersion);
         }
+        assertEngineSupported(manifest, options.hostVersion);
         if (plugins.has(manifest.id)) {
           throw new PluginError(
             'plugin-duplicate-id',
