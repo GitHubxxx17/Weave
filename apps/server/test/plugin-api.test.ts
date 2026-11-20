@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
+  commandsExtensionPoint,
   definePlugin,
   promptSectionsExtensionPoint,
   toolsExtensionPoint,
@@ -8,11 +9,12 @@ import {
   type WeavePlugin,
 } from '@weave/plugin';
 import { createApp } from '../src/app.js';
-import { pluginListResponseSchema } from '../src/plugin-catalog.js';
+import { commandListResponseSchema, pluginListResponseSchema } from '../src/plugin-catalog.js';
 import {
   createServerAgentRunner,
   createServerRuntime,
   disposeServerPlugins,
+  listServerCommands,
   listServerPlugins,
   registerServerPlugins,
 } from '../src/runtime.js';
@@ -43,17 +45,26 @@ const noteKernelPlugin: KernelPlugin = definePlugin({
     name: 'Note Kernel',
     version: '0.4.0',
     apiVersion: '1.0.0',
-    capabilities: ['tool', 'prompt', 'event'],
+    capabilities: ['tool', 'prompt', 'event', 'command'],
     host: 'mcp',
     contributes: {
       tools: ['note'],
       promptSections: ['note-style'],
       events: ['note-kernel/note-added'],
+      commands: ['summarize'],
     },
     permissions: ['workspace:read'],
   },
   setup(env) {
     env.defineEvent('note-added', { schema: z.object({ text: z.string() }) });
+    env.contribute(commandsExtensionPoint, (api) =>
+      api.addCommand({
+        name: 'summarize',
+        title: '总结要点',
+        description: '把当前内容总结成要点',
+        prompt: '请把下面的内容总结成要点：\n$ARGUMENTS',
+      }),
+    );
     env.contribute(toolsExtensionPoint, (api) =>
       api.addTool({
         name: 'note',
@@ -146,6 +157,7 @@ describe('GET /plugins', () => {
           providers: [],
           promptSections: [],
           events: [],
+          commands: [],
           services: [],
         },
       });
@@ -155,11 +167,12 @@ describe('GET /plugins', () => {
         version: '0.4.0',
         origin: 'kernel',
         host: 'mcp',
-        capabilities: ['tool', 'prompt', 'event'],
+        capabilities: ['tool', 'prompt', 'event', 'command'],
         contributes: {
           tools: ['note'],
           promptSections: ['note-style'],
           events: ['note-kernel/note-added'],
+          commands: ['summarize'],
         },
         permissions: ['workspace:read'],
         provides: {
@@ -167,6 +180,7 @@ describe('GET /plugins', () => {
           providers: [],
           promptSections: ['note-style'],
           events: ['note-kernel/note-added'],
+          commands: ['summarize'],
           services: [],
         },
       });
@@ -198,6 +212,113 @@ describe('GET /plugins', () => {
         tools: ['recall', 'update_plan'],
         services: ['weave.tools.pipeline'],
       });
+    } finally {
+      await disposeServerPlugins(runtime);
+      await runtime.stop();
+    }
+  });
+});
+
+describe('GET /commands', () => {
+  const commandPlugin = (id: string, names: readonly string[]): KernelPlugin =>
+    definePlugin({
+      manifest: {
+        id,
+        name: id,
+        version: '1.0.0',
+        apiVersion: '1.0.0',
+        capabilities: ['command'],
+      },
+      setup(env) {
+        env.contribute(commandsExtensionPoint, (api) => {
+          for (const name of names) {
+            api.addCommand({ name, title: `Command ${name}`, prompt: `Do ${name}: $ARGUMENTS` });
+          }
+        });
+      },
+    });
+
+  async function getCommands(runtime: ReturnType<typeof createServerRuntime>) {
+    const response = await createApp(runtime, {
+      commandCatalog: () => listServerCommands(runtime),
+    }).request('/commands');
+    expect(response.status).toBe(200);
+    return commandListResponseSchema.parse(await response.json()).commands;
+  }
+
+  it('lists nothing when the app has no catalog', async () => {
+    const runtime = createServerRuntime();
+
+    const response = await createApp(runtime).request('/commands');
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ commands: [] });
+  });
+
+  it('lists nothing before an Agent Runner exists', async () => {
+    const runtime = createServerRuntime();
+    await runtime.start();
+
+    try {
+      expect(await getCommands(runtime)).toEqual([]);
+    } finally {
+      await runtime.stop();
+    }
+  });
+
+  it('lists every contributed command with its plugin, in registration order', async () => {
+    const runtime = createServerRuntime();
+    await runtime.start();
+
+    try {
+      await createServerAgentRunner(runtime, {
+        kernelPlugins: [noteKernelPlugin, commandPlugin('review-kit', ['review', 'explain'])],
+      });
+
+      expect(await getCommands(runtime)).toEqual([
+        {
+          name: 'summarize',
+          title: '总结要点',
+          description: '把当前内容总结成要点',
+          prompt: '请把下面的内容总结成要点：\n$ARGUMENTS',
+          pluginId: 'note-kernel',
+        },
+        {
+          name: 'review',
+          title: 'Command review',
+          prompt: 'Do review: $ARGUMENTS',
+          pluginId: 'review-kit',
+        },
+        {
+          name: 'explain',
+          title: 'Command explain',
+          prompt: 'Do explain: $ARGUMENTS',
+          pluginId: 'review-kit',
+        },
+      ]);
+    } finally {
+      await disposeServerPlugins(runtime);
+      await runtime.stop();
+    }
+  });
+
+  it('refuses to assemble when two plugins contribute the same command name', async () => {
+    const runtime = createServerRuntime();
+    await runtime.start();
+
+    try {
+      await expect(
+        createServerAgentRunner(runtime, {
+          kernelPlugins: [
+            commandPlugin('first-kit', ['review']),
+            commandPlugin('second-kit', ['review']),
+          ],
+        }),
+      ).rejects.toMatchObject({
+        code: 'plugin-registration-conflict',
+        message: expect.stringContaining('first-kit, second-kit'),
+      });
+      expect(listServerCommands(runtime)).toEqual([]);
     } finally {
       await disposeServerPlugins(runtime);
       await runtime.stop();

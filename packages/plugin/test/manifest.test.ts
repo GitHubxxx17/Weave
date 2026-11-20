@@ -52,7 +52,7 @@ describe('Plugin Manifest', () => {
 describe('Plugin Manifest declarations', () => {
   const declared = {
     ...validManifest,
-    capabilities: ['tool', 'llm-provider', 'prompt', 'event'],
+    capabilities: ['tool', 'llm-provider', 'prompt', 'event', 'command'],
     host: 'in-process',
     engines: { weave: '>=1.2.0 <2.0.0' },
     contributes: {
@@ -60,6 +60,7 @@ describe('Plugin Manifest declarations', () => {
       providers: ['local-model'],
       promptSections: ['style'],
       events: ['example-tools/note-added'],
+      commands: ['review'],
       services: ['example.cache'],
     },
     permissions: [
@@ -95,7 +96,7 @@ describe('Plugin Manifest declarations', () => {
     ['an engines range outside the supported subset', { engines: { weave: '>=1.2' } }],
     ['an empty engines range', { engines: { weave: '' } }],
     ['an unknown engines field', { engines: { weave: '*', node: '>=20.0.0' } }],
-    ['an unknown contributes kind', { contributes: { commands: ['review'] } }],
+    ['an unknown contributes kind', { contributes: { widgets: ['panel'] } }],
     ['an empty contributed name', { contributes: { tools: [''] } }],
     ['a duplicate contributed tool', { contributes: { tools: ['echo', 'echo'] } }],
     ['a malformed service id', { contributes: { services: ['Not A Service'] } }],
@@ -140,6 +141,47 @@ describe('Plugin Manifest declarations', () => {
         contributes: { tools: [] },
       }),
     ).toMatchObject({ contributes: { tools: [] } });
+  });
+
+  describe('contributes.commands', () => {
+    const withCommands = (commands: string[], capabilities: string[] = ['command']) => ({
+      ...validManifest,
+      capabilities,
+      contributes: { commands },
+    });
+
+    it('accepts command names with the command capability', () => {
+      expect(
+        pluginManifestSchema.safeParse(withCommands(['review', 'fix-tests', 'a1'])).success,
+      ).toBe(true);
+    });
+
+    it('requires the command capability', () => {
+      const rejected = pluginManifestSchema.safeParse(withCommands(['review'], ['tool']));
+
+      expect(rejected.success).toBe(false);
+      expect(rejected.error?.issues.map((issue) => issue.message)).toContain(
+        'contributes.commands requires the "command" capability',
+      );
+    });
+
+    it.each([
+      ['a leading slash', '/review'],
+      ['uppercase letters', 'Review'],
+      ['a space', 'fix tests'],
+      ['an underscore', 'fix_tests'],
+      ['a trailing hyphen', 'review-'],
+      ['an empty name', ''],
+      ['a plugin-qualified name', 'example-tools/review'],
+    ])('rejects %s', (_label, name) => {
+      expect(pluginManifestSchema.safeParse(withCommands([name])).success).toBe(false);
+    });
+
+    it('rejects a duplicate command name', () => {
+      expect(pluginManifestSchema.safeParse(withCommands(['review', 'review'])).success).toBe(
+        false,
+      );
+    });
   });
 
   describe('contributes.events', () => {

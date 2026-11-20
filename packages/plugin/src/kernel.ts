@@ -42,6 +42,8 @@ export interface PluginContributed {
   readonly promptSections: readonly string[];
   /** Session event types, `<pluginId>/<name>`. */
   readonly events: readonly string[];
+  /** Slash command names. */
+  readonly commands: readonly string[];
   readonly services: readonly string[];
 }
 
@@ -183,6 +185,7 @@ export function createPluginKernel(options: PluginKernelOptions = {}): PluginKer
             providers: Object.freeze(collected.providers),
             promptSections: Object.freeze(collected.promptSections),
             events: Object.freeze(collected.events),
+            commands: Object.freeze(collected.commands),
             services: Object.freeze([...entry.usage.provided]),
           }),
         });

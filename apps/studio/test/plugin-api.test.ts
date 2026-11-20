@@ -11,7 +11,14 @@ const plugin = {
   origin: 'registered',
   host: 'in-process',
   capabilities: ['tool'],
-  provides: { tools: ['echo'], providers: [], promptSections: [], events: [], services: [] },
+  provides: {
+    tools: ['echo'],
+    providers: [],
+    promptSections: [],
+    events: [],
+    commands: [],
+    services: [],
+  },
 };
 
 function jsonResponse(payload: unknown, status = 200): Response {
@@ -57,7 +64,7 @@ describe('Plugin API client', () => {
     await expect(fetchPlugins()).resolves.toEqual([future]);
   });
 
-  it('reads a list from a Server that predates plugin events', async () => {
+  it('reads a list from a Server that predates plugin events and commands', async () => {
     const older = {
       ...plugin,
       provides: { tools: ['echo'], providers: [], promptSections: [], services: [] },

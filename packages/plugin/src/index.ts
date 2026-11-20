@@ -1,5 +1,11 @@
 export { pluginApiVersion } from './constants.js';
 
+export {
+  commandArgumentsPlaceholder,
+  commandNamePattern,
+  pluginCommandSchema,
+} from './commands.js';
+export type { PluginCommand } from './commands.js';
 export { pluginManifestSchema } from './manifest.js';
 export type {
   ContributedNameKey,
@@ -80,6 +86,7 @@ export type {
 export {
   agentRunnerRef,
   approvalBrokerRef,
+  commandsExtensionPoint,
   eventsExtensionPoint,
   llmProviderRegistryRef,
   llmProvidersExtensionPoint,
@@ -97,6 +104,7 @@ export {
   turnStartHook,
 } from './seams.js';
 export type {
+  CommandsExtensionApi,
   LlmProvidersExtensionApi,
   PromptSection,
   PromptSectionsExtensionApi,

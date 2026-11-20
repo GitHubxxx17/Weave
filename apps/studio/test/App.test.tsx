@@ -103,7 +103,11 @@ function sessionDetail(
 
 function createWorkspaceFetchMock(
   providerSettings?: Record<string, unknown>,
-  options?: { readonly emptyWorkspace?: boolean; readonly emptyProject?: boolean },
+  options?: {
+    readonly emptyWorkspace?: boolean;
+    readonly emptyProject?: boolean;
+    readonly commands?: readonly Record<string, unknown>[];
+  },
 ): ReturnType<typeof vi.fn> {
   const sessions = new Map<string, Record<string, unknown>>([
     [sessionIds.local, sessionDetail(sessionIds.local, '本地 Agent 演示')],
@@ -188,6 +192,12 @@ function createWorkspaceFetchMock(
     const url = String(input);
     const method = init?.method ?? 'GET';
     const requestPath = new URL(url, 'http://weave.local').pathname;
+    if (requestPath === '/commands') {
+      return new Response(JSON.stringify({ commands: options?.commands ?? [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
     if (requestPath === '/settings/providers') {
       if (currentProviderSettings === undefined) {
         return new Response(
@@ -2150,5 +2160,128 @@ describe('Studio Agent Chat', () => {
     expect(await screen.findByRole('dialog', { name: '图片预览' })).toBeTruthy();
     fireEvent.keyDown(document.body, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog', { name: '图片预览' })).toBeNull());
+  });
+
+  describe('slash commands from plugins', () => {
+    const recap = {
+      name: 'recap',
+      title: '回顾进展',
+      description: '总结目前为止做了什么',
+      prompt: '请回顾目前的进展：\n$ARGUMENTS',
+      pluginId: 'recap-kit',
+    };
+    const review = {
+      name: 'review',
+      title: '审查改动',
+      prompt: '请审查这些改动',
+      pluginId: 'recap-kit',
+    };
+
+    async function renderWithCommands(): Promise<HTMLTextAreaElement> {
+      fetchMock = createWorkspaceFetchMock(undefined, { commands: [recap, review] });
+      vi.stubGlobal('fetch', fetchMock);
+      await renderApp();
+      return screen.getByLabelText('发送消息') as HTMLTextAreaElement;
+    }
+
+    it('lists the commands while the draft is a slash and narrows them as it is typed', async () => {
+      const input = await renderWithCommands();
+      expect(screen.queryByRole('listbox')).toBeNull();
+
+      fireEvent.change(input, { target: { value: '/' } });
+      const list = await screen.findByRole('listbox', { name: '斜杠命令' });
+      expect(within(list).getAllByRole('option')).toHaveLength(2);
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/commands',
+        expect.objectContaining({ method: 'GET' }),
+      );
+
+      fireEvent.change(input, { target: { value: '/rec' } });
+      await waitFor(() => {
+        const options = within(screen.getByRole('listbox', { name: '斜杠命令' })).getAllByRole(
+          'option',
+        );
+        expect(options).toHaveLength(1);
+        expect(within(options[0] as HTMLElement).getByText('回顾进展')).toBeTruthy();
+      });
+
+      fireEvent.change(input, { target: { value: '/rec 已经有参数' } });
+      expect(screen.queryByRole('listbox')).toBeNull();
+    });
+
+    it('puts the chosen command into the draft with the caret where the arguments go', async () => {
+      const input = await renderWithCommands();
+      fireEvent.change(input, { target: { value: '/rec' } });
+
+      fireEvent.mouseDown(await screen.findByRole('option', { name: /回顾进展/ }));
+
+      expect(input.value).toBe('请回顾目前的进展：\n');
+      expect(input.selectionStart).toBe(input.value.length);
+      expect(screen.queryByRole('listbox')).toBeNull();
+      expect(streamAgentRunMock).not.toHaveBeenCalled();
+    });
+
+    it('moves through the list with the arrow keys and takes the highlighted command on Enter', async () => {
+      const input = await renderWithCommands();
+      fireEvent.change(input, { target: { value: '/' } });
+      await screen.findByRole('listbox', { name: '斜杠命令' });
+
+      fireEvent.keyDown(input, { key: 'ArrowDown' });
+      fireEvent.keyDown(input, { key: 'Enter' });
+
+      expect(input.value).toBe('请审查这些改动');
+      expect(streamAgentRunMock).not.toHaveBeenCalled();
+    });
+
+    it('closes the list on Escape and opens it again when typing continues', async () => {
+      const input = await renderWithCommands();
+      fireEvent.change(input, { target: { value: '/' } });
+      await screen.findByRole('listbox', { name: '斜杠命令' });
+
+      fireEvent.keyDown(input, { key: 'Escape' });
+      expect(screen.queryByRole('listbox')).toBeNull();
+      expect(input.value).toBe('/');
+
+      fireEvent.change(input, { target: { value: '/r' } });
+      expect(await screen.findByRole('listbox', { name: '斜杠命令' })).toBeTruthy();
+    });
+
+    it('expands a typed command with its arguments before sending', async () => {
+      streamAgentRunMock.mockImplementation(async (_request, handlers) => {
+        handlers.onEvent({ type: 'completed', turnId: 'turn-command' });
+      });
+      const input = await renderWithCommands();
+      // The list is requested when the draft starts with a slash.
+      fireEvent.change(input, { target: { value: '/' } });
+      await screen.findByRole('listbox', { name: '斜杠命令' });
+
+      fireEvent.change(input, { target: { value: '/recap 登录页和注册页' } });
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+
+      expect((await screen.findAllByText(/请回顾目前的进展：/)).length).toBeGreaterThan(0);
+      expect(streamAgentRunMock.mock.calls[0]?.[0]).toMatchObject({
+        userMessage: {
+          role: 'user',
+          content: [{ type: 'text', text: '请回顾目前的进展：\n登录页和注册页' }],
+        },
+      });
+    });
+
+    it('sends a slash word nobody contributed as typed', async () => {
+      streamAgentRunMock.mockImplementation(async (_request, handlers) => {
+        handlers.onEvent({ type: 'completed', turnId: 'turn-unknown-command' });
+      });
+      const input = await renderWithCommands();
+      fireEvent.change(input, { target: { value: '/' } });
+      await screen.findByRole('listbox', { name: '斜杠命令' });
+
+      fireEvent.change(input, { target: { value: '/unknown 参数' } });
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+
+      await waitFor(() => expect(streamAgentRunMock).toHaveBeenCalled());
+      expect(streamAgentRunMock.mock.calls[0]?.[0]).toMatchObject({
+        userMessage: { content: [{ type: 'text', text: '/unknown 参数' }] },
+      });
+    });
   });
 });

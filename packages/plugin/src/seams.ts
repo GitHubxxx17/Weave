@@ -11,6 +11,7 @@ import type {
   ToolRegistry,
 } from '@weave/runtime';
 
+import { pluginCommandSchema, type PluginCommand } from './commands.js';
 import { defineExtensionPoint, type ExtensionPoint } from './extension-point.js';
 import { defineHook, type Hook, type PolicyVote } from './hook.js';
 import { PluginError } from './plugin-errors.js';
@@ -168,6 +169,41 @@ export const eventsExtensionPoint: ExtensionPoint<SessionEventsExtensionApi> = d
     },
   },
 );
+
+/** Contributor API for the `weave.commands` extension point. */
+export interface CommandsExtensionApi {
+  addCommand(command: PluginCommand): void;
+}
+
+/**
+ * Slash commands are contributed here. They are declarative prompt templates,
+ * so the host collects them directly and serves them to Studio. A command is
+ * checked against {@link pluginCommandSchema} before the owner sees it, and the
+ * owner receives the checked copy.
+ */
+export const commandsExtensionPoint: ExtensionPoint<CommandsExtensionApi> = defineExtensionPoint({
+  id: 'weave.commands',
+  governed: {
+    capability: 'command',
+    key: 'commands',
+    guard: (api, check, pluginId) => ({
+      addCommand(command) {
+        const parsed = pluginCommandSchema.safeParse(command);
+        if (!parsed.success) {
+          throw new PluginError(
+            'plugin-invalid-definition',
+            `Plugin "${pluginId}" contributed an invalid command: ${parsed.error.issues
+              .map((issue) => `${issue.path.join('.') || '(command)'}: ${issue.message}`)
+              .join('; ')}`,
+            { cause: parsed.error },
+          );
+        }
+        check(parsed.data.name);
+        api.addCommand(Object.freeze(parsed.data));
+      },
+    }),
+  },
+});
 
 // --- Hooks ---
 

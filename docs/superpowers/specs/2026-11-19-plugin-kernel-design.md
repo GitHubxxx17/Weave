@@ -152,7 +152,7 @@ export interface Generation {
 现有 `{ id, name, version, apiVersion, description?, capabilities[] }` 之上新增可选字段。下列字段已在 Stage 3.1 落地：
 
 ```ts
-type PluginCapability = 'tool' | 'llm-provider' | 'prompt' | 'event'; // 'prompt'、'event' 为后增
+type PluginCapability = 'tool' | 'llm-provider' | 'prompt' | 'event' | 'command'; // 'prompt'、'event'、'command' 为后增
 type PluginHost = 'in-process' | 'mcp' | 'subprocess';
 type PluginPermission =
   | 'workspace:read' | 'workspace:write' | 'process:spawn' | 'network:request'
@@ -167,19 +167,20 @@ interface PluginManifest {
     providers?: string[];                        // LLM provider id
     promptSections?: string[];                   // 提示词片段 id
     events?: string[];                           // 会话事件类型，形如 `<插件 id>/<名字>`
+    commands?: string[];                         // 斜杠命令名
     services?: string[];                         // 本插件 provide 的服务 id
   };
   permissions?: PluginPermission[];
 }
 ```
 
-`commands` / `ui` 两类贡献随各自的扩展点落地时再加入 `contributes`（新增可选键，向后兼容）；`events` 已随 Stage 3.7 加入。`capabilities` 保留（旧插件不变）。`contributes` / `permissions` 是声明式面：Studio 不运行代码即可列出插件加了什么、要什么权限。
+`ui` 类贡献随它的扩展点落地时再加入 `contributes`（新增可选键，向后兼容）；`events` 随 Stage 3.7、`commands` 随 Stage 3.8 加入。`capabilities` 保留（旧插件不变）。`contributes` / `permissions` 是声明式面：Studio 不运行代码即可列出插件加了什么、要什么权限。
 
 **语义**
 
 - **未声明即不校验，声明即封闭。** 没有 `contributes` / `permissions` 的插件行为与之前完全一致。一旦声明，该清单是封闭的：未列出的键视为空列表，贡献该类的任何名字都会被拒绝。
-- **跨字段一致性**（解析 manifest 时检查，违反为 `plugin-invalid-manifest`）：`contributes.tools` 非空要求 `capabilities` 含 `tool`，`providers` 要求 `llm-provider`，`promptSections` 要求 `prompt`，`events` 要求 `event`。每个列表内不得重复。`events` 里的每个类型还必须是 `<插件 id>/<名字>` 的形状，且以本插件自己的 id 开头：插件只能在自己的命名空间里写事件。
-- **受治理的扩展点**：`weave.tools`、`weave.llm.providers`、`weave.prompt.sections`、`weave.session.events` 各绑定一个 capability 与一个 `contributes` 键。向这些点贡献前，插件必须声明对应 capability（`env.contribute` 时抛 `plugin-capability-not-declared`，与旧路径 `registerTool` 的规则一致）。插件声明了 `contributes` 时，owner 回放贡献的那一刻逐个核对名字，不在清单内则抛 `plugin-contributes-exceeds-manifest`，该名字不会进入 owner。
+- **跨字段一致性**（解析 manifest 时检查，违反为 `plugin-invalid-manifest`）：`contributes.tools` 非空要求 `capabilities` 含 `tool`，`providers` 要求 `llm-provider`，`promptSections` 要求 `prompt`，`events` 要求 `event`，`commands` 要求 `command`。每个列表内不得重复。`events` 里的每个类型还必须是 `<插件 id>/<名字>` 的形状，且以本插件自己的 id 开头：插件只能在自己的命名空间里写事件；`commands` 里的名字是小写字母数字加连字符。
+- **受治理的扩展点**：`weave.tools`、`weave.llm.providers`、`weave.prompt.sections`、`weave.session.events`、`weave.commands` 各绑定一个 capability 与一个 `contributes` 键。向这些点贡献前，插件必须声明对应 capability（`env.contribute` 时抛 `plugin-capability-not-declared`，与旧路径 `registerTool` 的规则一致）。插件声明了 `contributes` 时，owner 回放贡献的那一刻逐个核对名字，不在清单内则抛 `plugin-contributes-exceeds-manifest`，该名字不会进入 owner。
 - **服务**：声明了 `contributes` 的插件，`env.provide(ref)` 的 `ref.id` 必须在 `contributes.services` 内。
 - **`permissions`**：内核只强制 `service:<id>`。声明了 `permissions` 的插件，经 `env.use` 或 `provide` 的 `deps` 使用的服务必须在列表内，本插件自己提供的服务除外；在 `setup` 结束后统一检查，违反为 `plugin-permission-denied`；`setup` 结束之后才调用的 `env.use` 即时检查。`workspace:*`、`process:spawn`、`network:request` 只是声明，供信任确认界面展示，内核不强制（进程内不是安全边界，见第 3 节；进程外宿主再由代理强制）。
 - **`engines.weave`**：使用 semver 范围的子集，版本一律写完整的 `x.y.z`。支持 `*`、`1.x`、`1.2.x`，以及带可选前缀 `>=` `>` `<=` `<` `=` `^` `~` 的 `x.y.z`；多个条件用空格连接，表示"且"。不支持预发布标签、`||`、连字符范围和省略补零的简写（如 `>=1.2`），写法不受支持时 manifest 无效。内核与旧注册表通过选项 `hostVersion`（完整的 `x.y.z`）得知宿主的 Weave 版本；插件声明了 `engines` 而宿主没有提供 `hostVersion` 时一律拒载（不满足与无法判断都不放行），错误码 `plugin-engine-unsupported`。
@@ -213,7 +214,8 @@ interface PluginManifest {
 | Agent Runner (`createAgentRunner`) | `agent.loop` 服务（builtin，可替换）；`turn.start` / `step.before` / `turn.end` 钩子 | builtin |
 | `agent-instructions.ts`（server） | `prompt.sections` 扩展点（`prompt-core` builtin；提示移进 runtime 侧插件） | builtin |
 | recall / update_plan / command 工具 | 各自向 `tools` 扩展点贡献 | builtin |
-| 未来命令 / 压缩 / UI | `commands` 扩展点、`context.compaction`（单槽）、`ui.contributions` | — |
+| 斜杠命令（Stage 3.8） | `weave.commands` 扩展点（声明式提示词模板）；server 直接收集并经 `GET /commands` 提供 | core |
+| 未来压缩 / UI 面板 | `context.compaction`（单槽）、`ui.contributions` | — |
 
 ## 10. 事件模型改造（`packages/session/src/events.ts`）
 
@@ -265,7 +267,7 @@ export const newSessionEventSchema = z.union([coreEventSchema, pluginEventSchema
 
 Studio 不运行插件代码，就能列出已加载的插件加了什么、要什么权限。内核与 server 各出一半。
 
-**内核**：`kernel.plugins()`（`Generation.plugins()` 是同一个函数）按注册顺序返回已加载的插件，每项是 `{ manifest, contributed }`。`contributed` 是插件实际放进内核的名字：`tools`、`providers`、`promptSections`、`events` 由受治理的扩展点在 owner 回放贡献时记录，无论插件有没有声明 `contributes`；`services` 在 `setup` 里 `provide` 时即知。因此 owner 回放之前，前四类是空的，宿主应在装配完成后再读取。同一个名字重复回放只记一次，插件被销毁后不再列出。
+**内核**：`kernel.plugins()`（`Generation.plugins()` 是同一个函数）按注册顺序返回已加载的插件，每项是 `{ manifest, contributed }`。`contributed` 是插件实际放进内核的名字：`tools`、`providers`、`promptSections`、`events`、`commands` 由受治理的扩展点在 owner 回放贡献时记录，无论插件有没有声明 `contributes`；`services` 在 `setup` 里 `provide` 时即知。因此 owner 回放之前，前五类是空的，宿主应在装配完成后再读取。同一个名字重复回放只记一次，插件被销毁后不再列出。
 
 **server**：`GET /plugins`，只读，响应 `{ plugins: PluginListItem[] }`，对象按装配时的注册顺序排列，指最近一个 Agent Runner 装配时加载的插件，没有 Agent Runner 时为空。
 
@@ -274,17 +276,17 @@ interface PluginListItem {
   id: string; name: string; version: string; description?: string;
   origin: 'builtin' | 'registered' | 'kernel';  // server 自带 | registerServerPlugins 注册的旧插件 | kernelPlugins
   host: 'in-process' | 'mcp' | 'subprocess';    // manifest 未写时为 in-process
-  capabilities: ('tool' | 'llm-provider' | 'prompt' | 'event')[];
+  capabilities: ('tool' | 'llm-provider' | 'prompt' | 'event' | 'command')[];
   engines?: { weave: string };
-  contributes?: { tools?: string[]; providers?: string[]; promptSections?: string[]; events?: string[]; services?: string[] }; // manifest 声明的清单，未声明则省略
+  contributes?: { tools?: string[]; providers?: string[]; promptSections?: string[]; events?: string[]; commands?: string[]; services?: string[] }; // manifest 声明的清单，未声明则省略
   permissions?: string[];                        // manifest 声明的权限，未声明则省略
-  provides: { tools: string[]; providers: string[]; promptSections: string[]; events: string[]; services: string[] }; // 实际加入内核的名字
+  provides: { tools: string[]; providers: string[]; promptSections: string[]; events: string[]; commands: string[]; services: string[] }; // 实际加入内核的名字
 }
 ```
 
 `contributes` / `permissions` 是插件声明的，`provides` 是实际发生的，二者可以不同：没有声明 `contributes` 的插件不受限制，所以 `provides` 才是它真实的足迹。接口本身没有写操作，启用 / 停用 / 重载属于 Stage 4。
 
-**Studio**：右侧面板新增「插件」（面板种类 `plugins`，单实例，默认不固定，从面板的添加菜单打开）。列表按来源分为内置、已注册、扩展三组，每项可展开，查看实际提供的工具、模型提供方、提示词片段、会话事件和服务，以及声明的权限与适用版本。面板打开时请求一次 `GET /plugins`，标题行的刷新按钮重新请求。Studio 不引用 `@weave/*`，自己定义响应类型，对不认识的来源、运行方式和能力原样显示，不让整个列表失败。
+**Studio**：右侧面板新增「插件」（面板种类 `plugins`，单实例，默认不固定，从面板的添加菜单打开）。列表按来源分为内置、已注册、扩展三组，每项可展开，查看实际提供的工具、模型提供方、提示词片段、会话事件、命令和服务，以及声明的权限与适用版本。面板打开时请求一次 `GET /plugins`，标题行的刷新按钮重新请求。Studio 不引用 `@weave/*`，自己定义响应类型，对不认识的来源、运行方式和能力原样显示，不让整个列表失败。
 
 ## 17. 钩子的落点（Stage 3.3 起）
 
@@ -392,3 +394,35 @@ const notes = noteAdded.project(await store.read(sessionId)); // 有 project 时
 - 追加的事件不会出现在 Agent 的实时流里，只在日志里。Studio 目前不展示插件事件，也没有读取它们的 HTTP 接口。
 - 注册表属于单个 kernel，不跨 kernel 复用；同一类型定义两次会报 `plugin-registration-conflict`。
 - 没有为插件事件做大小限制。
+
+## 19. 命令（Stage 3.8）
+
+插件贡献用户在输入框里用斜杠调用的命令。命令是纯声明的：一段提示词模板，不执行任何插件代码。这也是目前"声明式 UI"的全部范围：Studio 渲染插件给出的数据，没有插件的渲染代码进入浏览器。
+
+```ts
+interface PluginCommand {
+  name: string;          // 斜杠后输入的名字：小写字母数字加连字符
+  title: string;         // 选择器里显示的名称，1–80 字
+  description?: string;  // 一句话说明，1–300 字
+  prompt: string;        // 提示词模板，1–20000 字；`$ARGUMENTS` 标出用户在命令后输入的内容放哪里
+}
+```
+
+**内核。** 能力 `command`；`contributes.commands` 列命令名；受治理的扩展点 `weave.commands`（`env.contribute(commandsExtensionPoint, (api) => api.addCommand({...}))`）。贡献时校验形状，不合格报 `plugin-invalid-definition`，名字不在 `contributes.commands` 内报 `plugin-contributes-exceeds-manifest`。
+
+**server。** 装配 kernel 时由宿主直接收集（与提示词片段一样，宿主持有，没有单独的 owner 服务）。命令名在整个 Server 内唯一：两个插件贡献同一个名字，装配失败并报 `plugin-registration-conflict`，信息里列出两个插件的 id。`GET /commands` 只读，响应 `{ commands: CommandListItem[] }`，`CommandListItem` 是 `PluginCommand` 加上贡献它的 `pluginId`，按注册顺序排列，指最近一个 Agent Runner 装配时的命令，没有 Agent Runner 时为空。
+
+**Studio。** 草稿以 `/` 开头且还没有空白时弹出选择器，按名字前缀或标题包含过滤，最多列 8 条。↑ ↓ 选择，Enter 或 Tab 采用，Esc 关闭，继续输入会重新打开。
+
+- 采用一个命令，是把模板展开进输入框：`$ARGUMENTS` 被去掉，光标停在它原来的位置，用户可以先改再发送。
+- 直接键入 `/名字 参数` 并发送，发送前按同一规则展开：参数替换 `$ARGUMENTS`；模板里没有 `$ARGUMENTS` 时，参数接在模板后面，隔一个空行。
+- 不认识的 `/xxx` 原样发送。
+- 展开后的文本就是发出去的用户消息，所以用户看到的就是发给模型的内容，也是会话里记下的内容。
+- 选择器在草稿第一次以 `/` 开头时才请求命令列表，每次重新打开都会刷新。
+
+**已知限制**
+
+- 命令只能展开成文本，不能执行代码、调用工具或写会话事件。需要处理函数的命令要等 Stage 4 的信任模型。
+- 没有参数结构与补全。
+- 命令名全局唯一，没有 `/插件:命令` 的限定写法。
+- 复杂的面板（插件自带组件）仍留后，需要沙箱 iframe（第 14 节）。

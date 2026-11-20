@@ -195,6 +195,7 @@ export class ExtensionRegistry {
       providers: [...(byKind?.get('providers') ?? [])],
       promptSections: [...(byKind?.get('promptSections') ?? [])],
       events: [...(byKind?.get('events') ?? [])],
+      commands: [...(byKind?.get('commands') ?? [])],
     };
   }
 

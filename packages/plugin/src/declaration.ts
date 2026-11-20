@@ -33,6 +33,7 @@ const kindLabels: Record<ContributedNameKey | 'services', string> = {
   providers: 'provider',
   promptSections: 'prompt section',
   events: 'event',
+  commands: 'command',
   services: 'service',
 };
 

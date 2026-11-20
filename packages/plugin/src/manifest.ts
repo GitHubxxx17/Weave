@@ -1,9 +1,10 @@
 import { z } from 'zod';
+import { commandNamePattern } from './commands.js';
 import { pluginEventTypePattern } from './event-type.js';
 import { isValidVersionRange } from './version-range.js';
 
 /** Capabilities that a trusted plugin may register through Plugin Context. */
-export type PluginCapability = 'tool' | 'llm-provider' | 'prompt' | 'event';
+export type PluginCapability = 'tool' | 'llm-provider' | 'prompt' | 'event' | 'command';
 
 /**
  * How a plugin is hosted. The kernel only records it; hosts and loaders decide
@@ -32,12 +33,14 @@ export interface PluginContributes {
   readonly promptSections?: readonly string[] | undefined;
   /** Session event types, `<pluginId>/<name>`, added through `weave.session.events`. */
   readonly events?: readonly string[] | undefined;
+  /** Slash command names added through `weave.commands`. */
+  readonly commands?: readonly string[] | undefined;
   /** Ids of the services the plugin provides. */
   readonly services?: readonly string[] | undefined;
 }
 
 /** The `contributes` keys whose names arrive through a governed extension point. */
-export type ContributedNameKey = 'tools' | 'providers' | 'promptSections' | 'events';
+export type ContributedNameKey = 'tools' | 'providers' | 'promptSections' | 'events' | 'commands';
 
 /** Declarative identity and capability metadata for one Weave plugin. */
 export interface PluginManifest {
@@ -57,7 +60,7 @@ export interface PluginManifest {
 
 const pluginIdSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 const versionSchema = z.string().regex(/^\d+\.\d+\.\d+$/);
-const pluginCapabilitySchema = z.enum(['tool', 'llm-provider', 'prompt', 'event']);
+const pluginCapabilitySchema = z.enum(['tool', 'llm-provider', 'prompt', 'event', 'command']);
 const pluginHostSchema = z.enum(['in-process', 'mcp', 'subprocess']);
 
 const serviceIdPattern = '[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*';
@@ -96,12 +99,21 @@ const eventTypeListSchema = z
   )
   .refine(hasUniqueEntries, { message: 'Contributed names must be unique' });
 
+const commandNameListSchema = z
+  .array(
+    z.string().regex(commandNamePattern, {
+      message: 'Command names are lowercase letters and digits separated by single hyphens',
+    }),
+  )
+  .refine(hasUniqueEntries, { message: 'Contributed names must be unique' });
+
 /** Each contributed kind needs the capability that governs its extension point. */
 const requiredCapabilities: ReadonlyArray<readonly [ContributedNameKey, PluginCapability]> = [
   ['tools', 'tool'],
   ['providers', 'llm-provider'],
   ['promptSections', 'prompt'],
   ['events', 'event'],
+  ['commands', 'command'],
 ];
 
 /** Validates the structural shape of a Plugin Manifest. */
@@ -139,6 +151,7 @@ export const pluginManifestSchema: z.ZodType<PluginManifest> = z
         providers: nameListSchema.optional(),
         promptSections: nameListSchema.optional(),
         events: eventTypeListSchema.optional(),
+        commands: commandNameListSchema.optional(),
         services: z
           .array(serviceIdSchema)
           .refine(hasUniqueEntries, { message: 'Contributed names must be unique' })

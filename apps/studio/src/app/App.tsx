@@ -57,6 +57,12 @@ import { useSidePanelWidth } from '../features/panel/panel-resizer.js';
 import { contextWarnThreshold, latestContext } from '../features/panel/panel-data.js';
 import { formatTokens, sumUsage } from '../features/conversation/turn-stats.js';
 import { ApprovalPanel, useApprovals } from '../features/approvals/approval-panel.js';
+import {
+  CommandPickerList,
+  commandOptionId,
+  commandPickerListId,
+} from '../features/commands/command-picker-list.js';
+import { useCommandPicker } from '../features/commands/use-command-picker.js';
 import { createProviderApi, ProviderApiError } from '../features/providers/provider-api.js';
 import {
   customProviderPresetId,
@@ -823,6 +829,11 @@ export function App() {
   const errorMessage = activeRunState.errorMessage;
   const activeSessionIdRef = useRef('');
   const messageInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const commandPicker = useCommandPicker({
+    draft: messageInput,
+    setDraft: setMessageInput,
+    inputRef: messageInputRef,
+  });
   const directoryInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const activeProject = projects.find((project) => project.id === activeProjectId);
@@ -1394,7 +1405,10 @@ export function App() {
    * (the previous Turn stays in history) without touching the draft input.
    */
   async function submitMessage(retryText?: string): Promise<void> {
-    const text = (retryText ?? messageInput).trim();
+    const typed = (retryText ?? messageInput).trim();
+    // A draft that invokes a slash command is sent as the command's prompt, so
+    // the message shown and stored is the text the model receives.
+    const text = retryText === undefined ? commandPicker.expand(typed) : typed;
     const images = retryText === undefined ? pendingImages : [];
     if ((text === '' && images.length === 0) || status === 'streaming') {
       return;
@@ -2191,6 +2205,9 @@ export function App() {
   }
 
   function handleMessageKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>): void {
+    if (commandPicker.handleKeyDown(event)) {
+      return;
+    }
     if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) {
       return;
     }
@@ -2856,6 +2873,14 @@ export function App() {
               onDecide={approvals.decide}
             />
             <div className="composer-box">
+              {commandPicker.open ? (
+                <CommandPickerList
+                  commands={commandPicker.items}
+                  activeIndex={commandPicker.activeIndex}
+                  onSelect={commandPicker.select}
+                  onHover={commandPicker.setActiveIndex}
+                />
+              ) : null}
               <label className="sr-only" htmlFor="message-input">
                 发送消息
               </label>
@@ -2869,6 +2894,14 @@ export function App() {
                 onKeyDown={handleMessageKeyDown}
                 onPaste={handleComposerPaste}
                 placeholder="给 Agent 分配一个任务…"
+                {...(commandPicker.open
+                  ? {
+                      'aria-controls': commandPickerListId,
+                      'aria-activedescendant': commandOptionId(
+                        commandPicker.items[commandPicker.activeIndex]?.name ?? '',
+                      ),
+                    }
+                  : {})}
               />
               {pendingImages.length > 0 ? (
                 <div className="composer-attachments" aria-label="待发送图片">
