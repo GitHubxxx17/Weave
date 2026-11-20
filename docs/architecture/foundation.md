@@ -425,10 +425,13 @@ same route renames a Project when the body carries `name`
 folder is validated before anything is written. `folderName` does not change on
 rename because it describes the folder on disk, not the display name.
 
-`AgentRunnerOptions.instructions({ sessionId, permissionMode })` returns system
+`AgentRunnerOptions.instructions({ sessionId, permissionMode, turnId })` returns system
 instructions that the Runner resolves once per run and prepends to every model
-request as a `system` message. They are never appended to the Session, so they
-always describe current state. The Server's default instructions name the
+request as a `system` message. The Runner never appends them to the Session, so
+they always describe current state. The one exception is what plugins add: the
+Server records each plugin-contributed section by hash (`prompt.section-content`
+and `prompt.sections-applied`) before the turn's first model request, and a turn
+fails without calling the model if that record cannot be written (design §20). The Server's default instructions name the
 Agent, list the tools available in the run's permission mode and how to use
 them, describe the host (OS, shell, date) and the Session's Project folder and
 Git branch (or that no folder is set), and include the first 32 KB of the

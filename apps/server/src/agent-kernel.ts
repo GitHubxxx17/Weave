@@ -44,6 +44,7 @@ import {
   type WorkspaceResolver,
 } from '@weave/runtime';
 import { describePlugin, type CommandListItem, type PluginListItem } from './plugin-catalog.js';
+import { appliedPromptSections, type AppliedPromptSection } from './prompt-audit.js';
 
 export interface AgentKernelAssembly {
   readonly toolRegistry: ToolRegistry;
@@ -68,8 +69,11 @@ export interface AssembledAgentKernel {
   readonly kernel: PluginKernel;
   /** The resolved Tool Pipeline, wrapped to fan out `weave.tools.result`. */
   readonly toolPipeline: ToolPipeline;
-  /** Plugin-contributed system-prompt sections, ordered by `order` ascending. */
-  readonly promptSections: readonly PromptSection[];
+  /**
+   * Plugin-contributed system-prompt sections as they reach the prompt: ordered
+   * by `order` ascending, trimmed, blank ones dropped, each with its plugin.
+   */
+  readonly promptSections: readonly AppliedPromptSection[];
   /** The loaded plugins, in registration order, as `GET /plugins` lists them. */
   readonly plugins: readonly PluginListItem[];
   /** The slash commands plugins contributed, in registration order, as `GET /commands` lists them. */
@@ -236,7 +240,7 @@ export async function assembleAgentKernel(
       addSection: (section) => collected.push(section),
     });
     const promptSections = Object.freeze(
-      [...collected].sort((left, right) => left.order - right.order),
+      appliedPromptSections([...collected].sort((left, right) => left.order - right.order)),
     );
 
     // Commands are declarative prompt templates the host serves to Studio. A

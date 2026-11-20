@@ -537,6 +537,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
               : await options.instructions({
                   sessionId: validRequest.sessionId,
                   permissionMode,
+                  turnId,
                 });
           const systemMessages: readonly Message[] =
             instructionText === undefined || instructionText.trim() === ''

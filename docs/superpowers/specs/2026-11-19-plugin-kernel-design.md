@@ -426,3 +426,33 @@ interface PluginCommand {
 - 没有参数结构与补全。
 - 命令名全局唯一，没有 `/插件:命令` 的限定写法。
 - 复杂的面板（插件自带组件）仍留后，需要沙箱 iframe（第 14 节）。
+
+## 20. 提示词片段审计（Stage 3.7b）
+
+ADR 0002 的不变量 4 和决策 2：模型看得见的内容必须有记录。插件通过 `weave.prompt.sections` 加进系统提示词的文本，按哈希写进会话日志，这样任何一次模型请求里插件加了什么都能还原。这推翻了 PR #32 的"系统提示词不落库"，但只针对插件的部分，Server 自带的指令文本仍不落库。
+
+**两个内核事件**（`@weave/session`，由 Server 写入，插件拿到的受限 Store 写不了，见第 18 节）
+
+| 事件 | 载荷 | 写入规则 |
+|---|---|---|
+| `prompt.section-content` | `{ sha256, text }` | 一段文本，按哈希。每个会话里每个哈希写一次。 |
+| `prompt.sections-applied` | `{ turnId, sections: [{ id, pluginId, sha256, bytes }] }` | 从该回合起生效的片段集合，按渲染顺序。只在集合与会话里最后一次记录不同时才写。空集合表示插件片段不再生效。 |
+
+同一次写入里，文本事件在前，集合事件在后，所以读到集合事件时，它引用的哈希都已经在日志里。`bytes` 是文本的 UTF-8 字节数，`sha256` 是同一段 UTF-8 的小写十六进制摘要。
+
+**还原某个回合的片段**：回合 T 生效的集合，是日志里序号小于 T 的 `turn.completed` 的最后一个 `prompt.sections-applied`。该事件的 `turnId` 说明它是从哪个回合开始生效的。哈希在同一会话的 `prompt.section-content` 里换回文本。没有任何集合事件的会话，插件片段为空。
+
+**记录的是什么。** 是实际进入提示词的文本：`appliedPromptSections` 与 `createAgentInstructions` 共用同一处规范化（去掉首尾空白，空白片段既不渲染也不记录），所以记录的就是发出去的。归属取自内核：`PromptSection.pluginId` 由受治理的扩展点在贡献时写入，插件自己写的值会被替换，无法冒名。集合的比较包含顺序，因为顺序就是提示词的顺序。
+
+**写入时机与失败语义。** `AgentRunnerOptions.instructions` 的上下文新增 `turnId`（`turn.started` 已落盘）。Server 的 `instructions` 先调用 `record`，再返回文本：此时回合已开始，模型还没有被调用。
+
+- 写入失败时 `record` 抛 `PromptAuditError`（`code: 'prompt-audit-failed'`），Runner 把这个回合记为 `failed`，`reason` 就是这个错误码，模型没有被调用，文本也没有发出去。无法留下记录，就不发。
+- 没有插件片段、日志里也没有过集合记录时，什么也不写。只多每回合一次增量读取。
+- 每个 Agent Runner 一个 `createPromptAudit`。它只是日志的缓存：每次先读 `afterSequence` 之后的事件，折叠出最后一个集合和已有的哈希，再决定写不写。因此重启、同一 Server 里有多个 Runner、或别的写入方，都不会让它与日志不一致。会话第一次被看到时读全量日志。
+
+**已知限制**
+
+- 只覆盖插件的提示词片段。ADR 提到的其他"注入上下文"目前没有，出现时同样要经过这里。
+- 只写不读：Studio 与 HTTP 接口还不展示它们，`projectSession` 忽略这两个事件。
+- 文本大小没有限制，同一会话里每个哈希只写一次。
+- 两个 Runner 同时对同一会话写入时，可能各写一次相同的集合；多余的一条无害，不影响还原。

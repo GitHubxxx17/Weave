@@ -8,6 +8,7 @@ import {
   approvalBrokerRef,
   llmProviderRegistryRef,
   llmRequestHook,
+  promptSectionsExtensionPoint,
   sessionStoreRef,
   toolAroundHook,
   toolPipelineRef,
@@ -17,6 +18,7 @@ import {
   toolsExtensionPoint,
   turnEndHook,
   turnStartHook,
+  type PromptSection,
 } from '../src/seams.js';
 
 function manifest(id: string): PluginManifest {
@@ -84,5 +86,64 @@ describe('seams', () => {
     const second = await generation.resolve(toolRegistryRef);
     expect(first).toBe(second);
     await kernel.dispose();
+  });
+});
+
+describe('weave.prompt.sections', () => {
+  const sectionPlugin = (id: string, sections: readonly PromptSection[]) =>
+    definePlugin({
+      manifest: { id, name: id, version: '0.1.0', apiVersion: '1.0.0', capabilities: ['prompt'] },
+      setup(env) {
+        env.contribute(promptSectionsExtensionPoint, (api) => {
+          for (const section of sections) {
+            api.addSection(section);
+          }
+        });
+      },
+    });
+
+  async function collect(...plugins: ReturnType<typeof sectionPlugin>[]) {
+    const kernel = createPluginKernel();
+    for (const plugin of plugins) {
+      await kernel.register(plugin);
+    }
+    await kernel.seal();
+    const sections: PromptSection[] = [];
+    kernel.extensions.collect(promptSectionsExtensionPoint, {
+      addSection: (section) => sections.push(section),
+    });
+    return sections;
+  }
+
+  it('hands the owner each section with the plugin that contributed it', async () => {
+    const sections = await collect(
+      sectionPlugin('style-kit', [{ id: 'tone', order: 10, text: 'Be brief.' }]),
+      sectionPlugin('safety-kit', [{ id: 'care', order: 20, text: 'Ask first.' }]),
+    );
+
+    expect(sections).toEqual([
+      { id: 'tone', order: 10, text: 'Be brief.', pluginId: 'style-kit' },
+      { id: 'care', order: 20, text: 'Ask first.', pluginId: 'safety-kit' },
+    ]);
+  });
+
+  it('replaces a plugin id the contributor wrote, so a plugin cannot sign as another', async () => {
+    const sections = await collect(
+      sectionPlugin('style-kit', [
+        { id: 'tone', order: 10, text: 'Be brief.', pluginId: 'safety-kit' },
+      ]),
+    );
+
+    expect(sections[0]?.pluginId).toBe('style-kit');
+  });
+
+  it('hands the owner a copy, so changing the original afterwards changes nothing', async () => {
+    const original = { id: 'tone', order: 10, text: 'Be brief.' };
+    const sections = await collect(sectionPlugin('style-kit', [original]));
+
+    (original as { text: string }).text = 'Changed after the fact.';
+
+    expect(sections[0]?.text).toBe('Be brief.');
+    expect(Object.isFrozen(sections[0])).toBe(true);
   });
 });

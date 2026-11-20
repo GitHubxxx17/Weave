@@ -291,6 +291,56 @@ describe('Agent Runner contracts', () => {
     await store.close();
   });
 
+  it('tells the instructions which turn they are for, after its start is recorded', async () => {
+    const store = createInMemorySessionEventStore();
+    const seen: { turnId: string; startRecorded: boolean }[] = [];
+    const runner = createAgentRunner({
+      llm: recordingClient([{ type: 'finish', reason: 'stop' }], []),
+      sessionStore: store,
+      instructions: async ({ sessionId, turnId }) => {
+        const events = await store.read(sessionId);
+        seen.push({
+          turnId,
+          startRecorded: events.some(
+            (event) => event.type === 'turn.started' && event.payload.turnId === turnId,
+          ),
+        });
+        return undefined;
+      },
+    });
+
+    await collect(runner.run(validRequest));
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.startRecorded).toBe(true);
+    await store.close();
+  });
+
+  it('fails the turn before any model call when the instructions fail, keeping their error code', async () => {
+    const store = createInMemorySessionEventStore();
+    const requests: LlmRequest[] = [];
+    const runner = createAgentRunner({
+      llm: recordingClient([{ type: 'finish', reason: 'stop' }], requests),
+      sessionStore: store,
+      instructions: () => {
+        throw Object.assign(new Error('cannot record what would be applied'), {
+          code: 'prompt-audit-failed',
+        });
+      },
+    });
+
+    await expect(collect(runner.run(validRequest))).rejects.toMatchObject({
+      code: 'prompt-audit-failed',
+    });
+
+    expect(requests).toEqual([]);
+    const completed = (await store.read(validRequest.sessionId)).find(
+      (event) => event.type === 'turn.completed',
+    );
+    expect(completed?.payload).toMatchObject({ status: 'failed', reason: 'prompt-audit-failed' });
+    await store.close();
+  });
+
   it('persists usage on each model step and emits it as a live event', async () => {
     const store = createInMemorySessionEventStore();
     const registry = createToolRegistry();
