@@ -2,7 +2,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createLlmProviderRegistry, type LlmProviderRegistry } from '@weave/llm';
 import type { StreamEvent } from '@weave/protocol';
-import type { WeavePlugin } from '@weave/plugin';
+import {
+  definePlugin,
+  toolResultHook,
+  toolsExtensionPoint,
+  type KernelPlugin,
+  type WeavePlugin,
+} from '@weave/plugin';
 import { createInMemoryProjectStore } from '@weave/workspace';
 import { createApp } from '../src/app.js';
 import { createSessionService } from '../src/session-service.js';
@@ -158,6 +164,81 @@ describe('Server Plugin integration', () => {
           },
         ]),
       ).rejects.toMatchObject({ code: 'plugin-api-version-unsupported' });
+    } finally {
+      await runtime.stop();
+    }
+  });
+
+  it('lets a kernel plugin contribute a tool and observe its result', async () => {
+    const providerRegistry = createLlmProviderRegistry([
+      {
+        id: 'mock',
+        label: '本地演示',
+        type: 'mock',
+        client: createSequenceClient([
+          [
+            { type: 'tool-call-start', id: 'call-1', name: 'ping' },
+            { type: 'tool-call-delta', id: 'call-1', argumentsDelta: '{}' },
+            { type: 'finish', reason: 'tool-call' },
+          ],
+          [
+            { type: 'text-delta', text: '完成' },
+            { type: 'finish', reason: 'stop' },
+          ],
+        ]),
+        defaultModel: 'test-model',
+      },
+    ]);
+    const runtime = createServerRuntime({
+      providerSettings: createProviderSettings(providerRegistry),
+    });
+    await runtime.start();
+
+    const observed: string[] = [];
+    const pingPlugin: KernelPlugin = definePlugin({
+      manifest: {
+        id: 'ping',
+        name: 'Ping',
+        version: '1.0.0',
+        apiVersion: '1.0.0',
+        capabilities: ['tool'],
+      },
+      setup(env) {
+        env.contribute(toolsExtensionPoint, (api) => {
+          api.addTool({
+            name: 'ping',
+            description: '回 pong',
+            parameters: { type: 'object', properties: {} },
+            inputSchema: z.object({}),
+            execute: () => 'pong',
+          });
+        });
+        env.onHook(toolResultHook, (result) => {
+          observed.push(result.name);
+        });
+      },
+    });
+
+    try {
+      const sessionService = await createSessionServiceForRuntime(runtime);
+      const response = await createApp(runtime, {
+        agentRunner: await createServerAgentRunner(runtime, { kernelPlugins: [pingPlugin] }),
+        sessionService,
+      }).request('/agent/runs/stream', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          userMessage: { role: 'user', content: [{ type: 'text', text: '调用 ping' }] },
+          provider: 'mock',
+          model: 'test-model',
+        }),
+      });
+
+      const body = await response.text();
+      expect(response.status).toBe(200);
+      expect(body).toContain('"name":"ping","content":"pong"');
+      expect(observed).toEqual(['ping']);
     } finally {
       await runtime.stop();
     }
