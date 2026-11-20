@@ -19,6 +19,7 @@ export interface GenerationController<R extends GenerationRequest, E, T> {
   current(): RunnerGeneration<R, E, T>;
   replace(next: RunnerGeneration<R, E, T>, options?: { immediate?: boolean }): Promise<void>;
   blockNewRuns(error: Error): void;
+  abortActiveRuns(reason?: unknown): void;
   dispose(): Promise<void>;
 }
 
@@ -155,7 +156,12 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
       return this.production;
     }
 
+    abortIfRunning(reason?: unknown): void {
+      if (this.phase === 'running') this.cancel(reason);
+    }
+
     cancel(reason: unknown = this.request.signal?.reason): void {
+      if (this.abort.signal.aborted) return;
       this.abort.abort(reason);
       // A custom iterator may use return() itself to release a blocked next().
       // Async generators instead unblock next() through the forwarded signal.
@@ -296,6 +302,9 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
     },
     blockNewRuns(error) {
       blocked = error;
+    },
+    abortActiveRuns(reason) {
+      for (const run of [...sessions.values()].flat()) run.abortIfRunning(reason);
     },
     dispose() {
       if (!closing) {
