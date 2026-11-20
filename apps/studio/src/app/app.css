@@ -5430,3 +5430,133 @@ body:has(.panel-resizer-active) {
 .file-diff .diff-tailwindcss-wrapper {
   --diff-font-family--: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
+
+/* Plugins panel: loaded plugins grouped by origin, each expandable for details. */
+.plugin-group {
+  display: grid;
+  gap: 6px;
+}
+
+.plugin-group-title {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.64rem;
+  font-weight: 700;
+}
+
+.plugin-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plugin-item {
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.plugin-item[open] {
+  background: var(--surface-soft);
+}
+
+.plugin-summary {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.plugin-summary::-webkit-details-marker {
+  display: none;
+}
+
+.plugin-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 0.7rem;
+  font-weight: 680;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-version {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 0.6rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.plugin-chip {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  color: var(--accent-dark);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  font-size: 0.56rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.plugin-detail {
+  display: grid;
+  gap: 6px;
+  padding: 0 10px 10px;
+}
+
+.plugin-id {
+  margin: 0;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6rem;
+  overflow-wrap: anywhere;
+}
+
+.plugin-description {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.66rem;
+  line-height: 1.6;
+}
+
+.plugin-facts {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.plugin-fact {
+  display: grid;
+  grid-template-columns: 4.6em minmax(0, 1fr);
+  gap: 8px;
+  font-size: 0.62rem;
+}
+
+.plugin-fact dt {
+  color: var(--muted);
+}
+
+.plugin-fact dd {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+}
+
+.plugin-tag {
+  padding: 0 6px;
+  color: var(--ink);
+  background: var(--surface-muted);
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6rem;
+  overflow-wrap: anywhere;
+}
