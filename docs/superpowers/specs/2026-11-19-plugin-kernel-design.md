@@ -146,6 +146,7 @@ export interface Generation {
 - 一个 **turn 在开始时 pin 一份 generation**，整轮工具集 / 提示前缀不变（利于 provider 前缀缓存）。
 - 重载 = 构建**新 generation**，**从下一轮生效**；未变的插件实例在新快照里沿用。
 - 必须立刻撤下的插件：可 `cancelTurn()` 取消正在跑的那一轮，再切新 generation。
+- Stage 4 的落地方式（重载流程、回合 pin、按 generation 隔离的注册表）见《本地插件加载与信任确认设计》（`2026-11-20-plugin-host-design.md`）第 8 节。
 
 ## 8. Manifest 增补（向后兼容）
 
@@ -199,7 +200,7 @@ interface PluginManifest {
 
 最后一项发生在宿主 seal 之后首次解析 owner 服务时，宿主应在启动阶段立即解析（现有 server 装配已如此），使它等同于启动期错误。旧的 `createPluginRegistry` 路径同样遵守 `contributes` 与 `engines`：`registerTool` / `registerProvider` 的名字在 `setup` 内即时核对。
 
-**已知缺口**：钩子（`onHook`）目前不在 `contributes` 内声明。钩子可以观察工具结果，将来还可以对工具调用投 `deny` / `ask`。信任确认界面（Stage 4）展示"插件要什么"之前，需要给 `contributes` 增补 `hooks` 键。
+**已知缺口**：钩子（`onHook`）目前不在 `contributes` 内声明。钩子可以观察工具结果，将来还可以对工具调用投 `deny` / `ask`。信任确认界面（Stage 4）展示"插件要什么"之前，需要给 `contributes` 增补 `hooks` 键。设计见《本地插件加载与信任确认设计》第 9.1 节，随 Stage 4.1 落地。
 
 ## 9. 内核接缝清单（现有库 → 服务 / 扩展点 / 钩子）
 
