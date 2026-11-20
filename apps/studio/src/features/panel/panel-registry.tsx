@@ -142,7 +142,7 @@ export const panelDescriptors: readonly PanelDescriptor[] = [
     comingSoon: false,
     keepAlive: false,
     multi: false,
-    render: () => <PluginsPanel />,
+    render: (context) => <PluginsPanel hasRunningSessions={context.hasRunningSessions} />,
   },
   {
     kind: 'preview',

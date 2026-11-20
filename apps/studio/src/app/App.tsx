@@ -53,6 +53,8 @@ import { MarkdownMessage } from '../features/conversation/markdown-message.js';
 import { ToolStep } from '../features/conversation/tool-step.js';
 import { MessageFooter } from '../features/conversation/message-footer.js';
 import { PanelContainer } from '../features/panel/panel-container.js';
+import { createPluginCatalogStore } from '../features/plugins/plugin-catalog-store.js';
+import { PluginCatalogProvider } from '../features/plugins/plugin-catalog-context.js';
 import { useSidePanelWidth } from '../features/panel/panel-resizer.js';
 import { contextWarnThreshold, latestContext } from '../features/panel/panel-data.js';
 import { formatTokens, sumUsage } from '../features/conversation/turn-stats.js';
@@ -749,7 +751,16 @@ function workspaceErrorMessage(error: unknown): string {
 }
 
 /** Studio's first local Agent workspace, combining chat state and stream events. */
-export function App() {
+export function App(): ReactElement {
+  const [pluginStore] = useState(createPluginCatalogStore);
+  return (
+    <PluginCatalogProvider store={pluginStore}>
+      <StudioApp />
+    </PluginCatalogProvider>
+  );
+}
+
+function StudioApp(): ReactElement {
   const [messageInput, setMessageInput] = useState('');
   const [pendingImages, setPendingImages] = useState<readonly PendingImage[]>([]);
   const [previewImage, setPreviewImage] = useState<{
@@ -1110,7 +1121,11 @@ export function App() {
   function clearActiveRunState(): void {
     setExpandedMessageIds([]);
     setRunStateBySession((current) => {
-      if (current[activeSessionId] === undefined) {
+      // Clearing presentation must not erase a live stream or its global run signal.
+      if (
+        current[activeSessionId] === undefined ||
+        current[activeSessionId].status === 'streaming'
+      ) {
         return current;
       }
       return Object.fromEntries(
@@ -1419,6 +1434,7 @@ export function App() {
       return;
     }
     const { projectId, sessionId } = sessionContext;
+    const previousTurnIds = new Set(sessionContext.session.turns.map((turn) => turn.turnId));
 
     // Persist a generated title on the first message of an untitled session so
     // it survives a reload (the local title update below is only cosmetic).
@@ -1509,6 +1525,7 @@ export function App() {
     setExpandedMessageIds([assistantId]);
     setSessionRunState(sessionId, { status: 'streaming', errorMessage: null });
 
+    let completedObserved = false;
     try {
       await streamAgentRun(
         {
@@ -1529,9 +1546,46 @@ export function App() {
           reasoningEffort,
           permissionMode,
         },
-        { onEvent: (event) => handleEvent(event, runId, assistantId, projectId, sessionId) },
+        {
+          onEvent: (event) => {
+            if (event.type === 'completed') completedObserved = true;
+            handleEvent(event, runId, assistantId, projectId, sessionId);
+          },
+        },
         { signal: requestController.signal },
       );
+      if (!completedObserved && runHandles.current.get(sessionId)?.runId === runId) {
+        // Host cancellation can close SSE after durable terminal persistence without
+        // yielding completed. EOF alone cannot tell us the Turn's outcome.
+        try {
+          const detail = await workspaceApi.getSession(sessionId);
+          if (runHandles.current.get(sessionId)?.runId !== runId) return;
+          // Studio and its local Server share a clock. Older durable ids may be
+          // unknown after a local Stop or a not-yet-loaded Session summary.
+          const newTurns = detail.turns.filter(
+            (turn) => !previousTurnIds.has(turn.turnId) && turn.startedAt >= occurredAt,
+          );
+          const terminal = newTurns.length === 1 ? newTurns[0] : undefined;
+          if (detail.id !== sessionId || terminal === undefined || terminal.status === 'running') {
+            setSessionRunState(sessionId, {
+              status: 'error',
+              errorMessage: '响应流已结束，无法确认会话终态。请重新打开会话读取最新状态。',
+            });
+          } else {
+            applySessionDetail(projectId, detail);
+            setSessionRunState(sessionId, {
+              status: terminal.status === 'failed' ? 'error' : terminal.status,
+              errorMessage: terminal.status === 'failed' ? '本次运行失败；会话记录已更新。' : null,
+            });
+          }
+        } catch (error: unknown) {
+          if (runHandles.current.get(sessionId)?.runId !== runId) return;
+          setSessionRunState(sessionId, {
+            status: 'error',
+            errorMessage: `响应流已结束，无法确认会话终态。${workspaceErrorMessage(error)}`,
+          });
+        }
+      }
     } catch (error: unknown) {
       if (runHandles.current.get(sessionId)?.runId !== runId) {
         return;
@@ -3510,6 +3564,9 @@ export function App() {
             projectId: activeProjectId,
             statusLabel: statusLabels[status],
             isRunning: status === 'streaming',
+            hasRunningSessions: Object.values(runStateBySession).some(
+              (run) => run.status === 'streaming',
+            ),
             sessionLabel: getSessionLabel(activeSessionId),
             folderPath: activeProject?.folderPath,
             modelLabel: formatModelLabel(

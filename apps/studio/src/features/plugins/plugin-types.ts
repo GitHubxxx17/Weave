@@ -1,51 +1,155 @@
 import { z } from 'zod';
 
-const nameListSchema = z.array(z.string());
+const nameListSchema = z.array(z.string()).readonly();
+const digestSchema = z.string().regex(/^[0-9a-f]{64}$/);
+const generationSchema = z.number().int().positive();
 
-/**
- * One plugin as `GET /plugins` lists it. Studio does not share types with the
- * Server, so this mirrors the contract in the plugin kernel design (section 16)
- * and stays tolerant of values it does not know yet: unknown origins, hosts and
- * capabilities are shown as they are instead of failing the whole list.
- */
-export const pluginListItemSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  version: z.string(),
-  description: z.string().optional(),
-  origin: z.string(),
-  host: z.string(),
-  capabilities: z.array(z.string()),
-  engines: z.object({ weave: z.string() }).optional(),
-  /** What the manifest declares; absent when the plugin declares nothing. */
-  contributes: z
-    .object({
-      tools: nameListSchema.optional(),
-      providers: nameListSchema.optional(),
-      promptSections: nameListSchema.optional(),
-      events: nameListSchema.optional(),
-      commands: nameListSchema.optional(),
-      /** Left out by a Server that predates plugin hooks. */
-      hooks: nameListSchema.optional(),
-      services: nameListSchema.optional(),
-    })
-    .optional(),
-  permissions: z.array(z.string()).optional(),
-  /** What the plugin actually added to the Agent. */
-  provides: z.object({
-    tools: nameListSchema,
-    providers: nameListSchema,
-    promptSections: nameListSchema,
-    /** Left out by a Server that predates plugin events. */
-    events: nameListSchema.default([]),
-    /** Left out by a Server that predates plugin commands. */
-    commands: nameListSchema.default([]),
-    /** Left out by a Server that predates plugin hooks. */
-    hooks: nameListSchema.default([]),
-    services: nameListSchema,
-  }),
-});
+export const pluginIssueSchema = z.object({ code: z.string(), message: z.string() }).readonly();
+export type PluginIssue = z.infer<typeof pluginIssueSchema>;
 
+export const pluginDeclarationsSchema = z
+  .object({
+    tools: nameListSchema.optional(),
+    providers: nameListSchema.optional(),
+    promptSections: nameListSchema.optional(),
+    events: nameListSchema.optional(),
+    commands: nameListSchema.optional(),
+    hooks: nameListSchema.optional(),
+    services: nameListSchema.optional(),
+  })
+  .readonly();
+export type PluginDeclarations = z.infer<typeof pluginDeclarationsSchema>;
+
+/** Display projections deliberately accept future declaration and version strings. */
+export const pluginManifestProjectionSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    version: z.string(),
+    apiVersion: z.string(),
+    description: z.string().optional(),
+    host: z.string().optional(),
+    capabilities: nameListSchema,
+    engines: z.object({ weave: z.string() }).readonly().optional(),
+    contributes: pluginDeclarationsSchema.optional(),
+    permissions: nameListSchema.optional(),
+  })
+  .readonly();
+export type PluginManifestProjection = z.infer<typeof pluginManifestProjectionSchema>;
+
+export const localPluginMetadataSchema = z
+  .object({
+    directory: z.string(),
+    digest: digestSchema.optional(),
+    enabled: z.boolean(),
+    manifest: pluginManifestProjectionSchema.optional(),
+    trusted: z
+      .object({
+        digest: digestSchema,
+        trustedAt: z.string(),
+        manifest: pluginManifestProjectionSchema,
+      })
+      .readonly()
+      .optional(),
+    active: z
+      .object({
+        generation: generationSchema,
+        digest: digestSchema,
+        manifest: pluginManifestProjectionSchema,
+      })
+      .readonly()
+      .optional(),
+  })
+  .readonly();
+export type LocalPluginMetadata = z.infer<typeof localPluginMetadataSchema>;
+
+/** One cached Server row; unknown states and origins remain readable. */
+export const pluginListItemSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    version: z.string(),
+    description: z.string().optional(),
+    origin: z.string(),
+    host: z.string(),
+    state: z.string().default('loaded'),
+    capabilities: nameListSchema,
+    engines: z.object({ weave: z.string() }).readonly().optional(),
+    contributes: pluginDeclarationsSchema.optional(),
+    permissions: nameListSchema.optional(),
+    error: pluginIssueSchema.optional(),
+    local: localPluginMetadataSchema.optional(),
+    /** Actual contributions, independent of the desired and retained manifests. */
+    provides: z
+      .object({
+        tools: nameListSchema,
+        providers: nameListSchema,
+        promptSections: nameListSchema,
+        events: nameListSchema.default([]).readonly(),
+        commands: nameListSchema.default([]).readonly(),
+        hooks: nameListSchema.default([]).readonly(),
+        services: nameListSchema,
+      })
+      .readonly(),
+  })
+  .readonly();
 export type PluginListItem = z.infer<typeof pluginListItemSchema>;
 
-export const pluginListSchema = z.object({ plugins: z.array(pluginListItemSchema) });
+export const localPluginHostSummarySchema = z
+  .object({
+    directory: z.string(),
+    exists: z.boolean(),
+    truncated: z.boolean(),
+    trustSequence: z.number().int().nonnegative(),
+    generation: z
+      .object({
+        id: generationSchema,
+        acceptingRuns: z.boolean(),
+        plugins: z
+          .array(
+            z
+              .object({
+                id: z.string(),
+                digest: digestSchema,
+                manifest: pluginManifestProjectionSchema,
+              })
+              .readonly(),
+          )
+          .readonly(),
+        blocked: pluginIssueSchema.optional(),
+      })
+      .readonly(),
+    error: pluginIssueSchema.optional(),
+  })
+  .readonly();
+export type LocalPluginHostSummary = z.infer<typeof localPluginHostSummarySchema>;
+
+export const pluginCatalogSchema = z
+  .object({
+    plugins: z.array(pluginListItemSchema).readonly(),
+    local: localPluginHostSummarySchema.optional(),
+  })
+  .readonly();
+export type PluginCatalog = z.infer<typeof pluginCatalogSchema>;
+
+/** Backwards-compatible name for callers that only read the list. */
+export const pluginListSchema = pluginCatalogSchema;
+
+export const pluginReloadResultSchema = z
+  .object({
+    generation: generationSchema,
+    unchanged: z.boolean(),
+    failed: z.array(z.object({ id: z.string(), error: pluginIssueSchema }).readonly()).readonly(),
+    error: pluginIssueSchema.optional(),
+  })
+  .readonly();
+export type PluginReloadResult = z.infer<typeof pluginReloadResultSchema>;
+
+export const pluginMutationResponseSchema = z
+  .object({
+    plugins: z.array(pluginListItemSchema).readonly(),
+    local: localPluginHostSummarySchema,
+    result: pluginReloadResultSchema,
+  })
+  .readonly();
+export type PluginMutationResponse = z.infer<typeof pluginMutationResponseSchema>;

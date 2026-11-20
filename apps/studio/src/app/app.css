@@ -5562,6 +5562,144 @@ body:has(.panel-resizer-active) {
   overflow-wrap: anywhere;
 }
 
+/* Plugin decisions share the App cache; row content remains readable while busy. */
+.plugins-panel {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.plugin-summary {
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 8px;
+}
+
+.plugin-name {
+  flex: 1 1 80px;
+}
+
+.plugin-state {
+  color: var(--ink-soft);
+  background: var(--surface-muted);
+}
+
+.plugin-state-pending-trust,
+.plugin-state-changed {
+  color: var(--accent-dark);
+  background: var(--accent-soft);
+}
+
+.plugin-state-failed,
+.plugin-state-invalid,
+.plugin-state-incompatible {
+  color: #9b3547;
+  background: #fff0f2;
+}
+
+.plugin-contributions {
+  display: grid;
+  gap: 6px;
+  padding-top: 7px;
+  border-top: 1px solid var(--line);
+}
+
+.plugin-contributions h5 {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.64rem;
+}
+
+.plugin-local-facts dd,
+.plugin-local-facts code,
+.plugin-host-summary code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.plugin-note,
+.plugin-error,
+.plugin-host-summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.64rem;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.plugin-error {
+  color: #9b3547;
+}
+
+.plugin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 5px;
+}
+
+.plugin-actions .secondary-button {
+  min-height: 27px;
+  padding: 4px 8px;
+  font-size: 0.63rem;
+}
+
+.plugin-host-summary,
+.plugin-operation-result {
+  padding: 10px;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.plugin-host-summary p,
+.plugin-operation-result p {
+  margin: 0;
+}
+
+.plugin-operation-result {
+  color: var(--ink-soft);
+  font-size: 0.64rem;
+  line-height: 1.65;
+}
+
+.plugin-generation-members {
+  display: grid;
+  gap: 7px;
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line);
+}
+
+.plugin-generation-members h5 {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: inherit;
+}
+
+.plugin-generation-members li {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.plugin-pending-badge {
+  display: inline-flex;
+  min-width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  color: var(--accent-dark);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  font-size: 0.58rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
 .command-picker {
   position: absolute;
   z-index: 101;

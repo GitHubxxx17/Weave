@@ -11,6 +11,12 @@ export default defineConfig({
       '/approvals': {
         target: 'http://127.0.0.1:4317',
       },
+      '/plugins': {
+        target: 'http://127.0.0.1:4317',
+      },
+      '/commands': {
+        target: 'http://127.0.0.1:4317',
+      },
       '/projects': {
         target: 'http://127.0.0.1:4317',
       },
