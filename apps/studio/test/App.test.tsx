@@ -192,6 +192,12 @@ function createWorkspaceFetchMock(
     const url = String(input);
     const method = init?.method ?? 'GET';
     const requestPath = new URL(url, 'http://weave.local').pathname;
+    if (requestPath === '/plugins' && method === 'GET') {
+      return new Response(JSON.stringify({ plugins: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
     if (requestPath === '/commands') {
       return new Response(JSON.stringify({ commands: options?.commands ?? [] }), {
         status: 200,
@@ -462,6 +468,55 @@ afterEach(() => {
 });
 
 describe('Studio Agent Chat', () => {
+  it.each([false, true])(
+    'reads the plugin catalog at startup without writes (restored=%s)',
+    async (restored) => {
+      if (restored) {
+        localStorage.setItem(
+          'weave.studio.panelTabs.v2',
+          JSON.stringify({
+            tabs: [{ id: 'plugins', kind: 'plugins' }],
+            active: 'plugins',
+            pinned: [],
+          }),
+        );
+      }
+      await renderApp();
+      await waitFor(() =>
+        expect(
+          fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/plugins')),
+        ).toHaveLength(1),
+      );
+      const pluginCalls = fetchMock.mock.calls.filter(([input]) =>
+        String(input).includes('/plugins'),
+      );
+      expect(pluginCalls.map(([, init]) => init?.method ?? 'GET')).toEqual(['GET']);
+      expect(screen.queryByRole('dialog')).toBeNull();
+    },
+  );
+
+  it('preserves the plugin catalog while settings unmounts and remounts the panel', async () => {
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: '添加面板' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '插件' }));
+    await screen.findByRole('region', { name: '插件' });
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('button', { name: '刷新插件列表' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    const before = fetchMock.mock.calls.filter(([input]) =>
+      String(input).includes('/plugins'),
+    ).length;
+    fireEvent.click(screen.getByRole('button', { name: '设置' }));
+    expect(screen.queryByRole('region', { name: '插件' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '工作台' }));
+    await screen.findByRole('region', { name: '插件' });
+    expect(
+      fetchMock.mock.calls.filter(([input]) => String(input).includes('/plugins')),
+    ).toHaveLength(before);
+  });
+
   it('renders the workspace with Chinese interface labels by default', async () => {
     await renderApp();
 
@@ -1316,6 +1371,90 @@ describe('Studio Agent Chat', () => {
     });
   });
 
+  it('offers immediate plugin decisions when another session is streaming and keeps the selected session idle', async () => {
+    const baseFetch = fetchMock;
+    const manifest = {
+      id: 'local-example',
+      name: 'Local Example',
+      version: '1.0.0',
+      apiVersion: '1',
+      capabilities: [],
+      contributes: {},
+      permissions: [],
+    };
+    const digest = 'a'.repeat(64);
+    const pluginCatalog = {
+      plugins: [
+        {
+          ...manifest,
+          host: 'in-process',
+          origin: 'local',
+          state: 'loaded',
+          provides: {
+            tools: [],
+            providers: [],
+            promptSections: [],
+            events: [],
+            commands: [],
+            hooks: [],
+            services: [],
+          },
+          local: {
+            directory: '/plugins/local-example',
+            enabled: true,
+            digest,
+            manifest,
+            trusted: { digest, trustedAt: 'today', manifest },
+            active: { generation: 1, digest, manifest },
+          },
+        },
+      ],
+      local: {
+        directory: '/plugins',
+        exists: true,
+        truncated: false,
+        trustSequence: 1,
+        generation: { id: 1, acceptingRuns: true, plugins: [] },
+      },
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).includes('/plugins')) {
+          return new Response(
+            JSON.stringify(
+              init?.method === 'POST'
+                ? { ...pluginCatalog, result: { generation: 1, unchanged: true, failed: [] } }
+                : pluginCatalog,
+            ),
+            { status: 200 },
+          );
+        }
+        return baseFetch(input, init);
+      }),
+    );
+    streamAgentRunMock.mockImplementation(() => new Promise<void>(() => undefined));
+    await renderApp();
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '保持运行' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    fireEvent.click(screen.getByRole('button', { name: '更多操作' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '清空运行状态' }));
+    expect(screen.getByRole('button', { name: '停止运行' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Session event store/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: '添加面板' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '插件' }));
+    await screen.findByText('Local Example', { selector: '.plugin-name' });
+    fireEvent.click(screen.getByText('Local Example', { selector: '.plugin-name' }));
+    const disable = screen.getByRole('button', { name: '停用' });
+    await waitFor(() => expect((disable as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(disable);
+    expect(screen.getByRole('checkbox', { name: '立即生效（取消进行中的回合）' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    fireEvent.click(screen.getByRole('tab', { name: '概览' }));
+    expect(within(screen.getByRole('region', { name: '概览' })).queryByText('运行中')).toBeNull();
+  });
+
   it('streams two concurrent runs into their own sessions', async () => {
     const emitters = new Map<string, AgentStreamHandlers['onEvent']>();
     streamAgentRunMock.mockImplementation(
@@ -1610,6 +1749,262 @@ describe('Studio Agent Chat', () => {
     );
     expect(screen.getByText('已取消')).toBeTruthy();
     expect(screen.getByText('本次运行已取消')).toBeTruthy();
+  });
+
+  it.each(['completed', 'failed', 'cancelled'] as const)(
+    'reconciles a normal EOF with the new durable %s turn after switching sessions',
+    async (terminalStatus) => {
+      let resolveStream: () => void = () => undefined;
+      let ended = false;
+      const baseFetch = fetchMock;
+      const reads: string[] = [];
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          if (
+            ended &&
+            url === `/sessions/${sessionIds.local}` &&
+            (init?.method ?? 'GET') === 'GET'
+          ) {
+            reads.push(url);
+            return new Response(
+              JSON.stringify({
+                ...sessionDetail(sessionIds.local, '本地 Agent 演示', [
+                  { role: 'user', content: [{ type: 'text', text: 'durable question' }] },
+                ]),
+                turns: [
+                  {
+                    turnId: 'durable-new-turn',
+                    status: terminalStatus,
+                    startedAt: new Date(Date.now() + 1000).toISOString(),
+                    completedAt: new Date(Date.now() + 2000).toISOString(),
+                  },
+                ],
+              }),
+              { status: 200 },
+            );
+          }
+          return baseFetch(input, init);
+        }),
+      );
+      streamAgentRunMock.mockImplementation(
+        (_request, handlers) =>
+          new Promise<void>((resolve) => {
+            resolveStream = resolve;
+            handlers.onEvent({ type: 'text-delta', text: 'live partial' });
+          }),
+      );
+      await renderApp();
+      fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '结束后校准' } });
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      fireEvent.click(screen.getByRole('button', { name: /Session event store/ }));
+      await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeTruthy());
+      await act(async () => {
+        ended = true;
+        resolveStream();
+      });
+      expect(reads).toEqual([`/sessions/${sessionIds.local}`]);
+      expect(screen.queryByTitle('运行中')).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: /本地 Agent 演示/ }));
+      await screen.findByText('durable question');
+      const expectedLabel =
+        terminalStatus === 'completed'
+          ? '已完成'
+          : terminalStatus === 'cancelled'
+            ? '已取消'
+            : '出错';
+      expect(screen.getByText(expectedLabel, { selector: '.run-status' })).toBeTruthy();
+      expect(screen.queryByText('live partial')).toBeNull();
+      expect(screen.queryByRole('button', { name: '停止运行' })).toBeNull();
+    },
+  );
+
+  it('ignores an earlier durable cancelled turn when the current EOF turn is terminal', async () => {
+    const baseFetch = fetchMock;
+    let ended = false;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (
+          ended &&
+          String(input) === `/sessions/${sessionIds.local}` &&
+          (init?.method ?? 'GET') === 'GET'
+        ) {
+          return new Response(
+            JSON.stringify({
+              ...sessionDetail(sessionIds.local, '本地 Agent 演示'),
+              turns: [
+                {
+                  turnId: 'old-cancelled',
+                  status: 'cancelled',
+                  startedAt: new Date(Date.now() - 120_000).toISOString(),
+                  completedAt: new Date(Date.now() - 60_000).toISOString(),
+                },
+                {
+                  turnId: 'fresh-cancelled',
+                  status: 'cancelled',
+                  startedAt: new Date(Date.now() + 1000).toISOString(),
+                  completedAt: new Date(Date.now() + 2000).toISOString(),
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+        return baseFetch(input, init);
+      }),
+    );
+    streamAgentRunMock.mockImplementation(async (_request, handlers) => {
+      handlers.onEvent({ type: 'text-delta', text: '旧回合之后' });
+      ended = true;
+    });
+    await renderApp();
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '忽略旧终态' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() =>
+      expect(screen.getByText('已取消', { selector: '.run-status' })).toBeTruthy(),
+    );
+  });
+
+  it('does not reconcile a stream that supplied its completed event', async () => {
+    streamAgentRunMock.mockImplementation(async (_request, handlers) => {
+      handlers.onEvent({ type: 'completed', turnId: 'complete' });
+    });
+    await renderApp();
+    const before = fetchMock.mock.calls.filter(
+      ([url]) => String(url) === `/sessions/${sessionIds.local}`,
+    ).length;
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '正常完成' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await screen.findByText('已完成', { selector: '.run-status' });
+    expect(
+      fetchMock.mock.calls.filter(([url]) => String(url) === `/sessions/${sessionIds.local}`),
+    ).toHaveLength(before);
+  });
+
+  it.each(['read-failure', 'old-terminal', 'still-running', 'ambiguous', 'wrong-session'])(
+    'keeps live content without inventing a terminal fact when EOF reconciliation has %s',
+    async (mode) => {
+      const baseFetch = fetchMock;
+      let ended = false;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+          if (
+            ended &&
+            String(input) === `/sessions/${sessionIds.local}` &&
+            (init?.method ?? 'GET') === 'GET'
+          ) {
+            if (mode === 'read-failure') return new Response('{}', { status: 500 });
+            return new Response(
+              JSON.stringify({
+                ...sessionDetail(
+                  mode === 'wrong-session' ? 'other-session' : sessionIds.local,
+                  '本地 Agent 演示',
+                ),
+                turns:
+                  mode === 'still-running' || mode === 'wrong-session'
+                    ? [
+                        {
+                          turnId: 'new-turn',
+                          status: mode === 'wrong-session' ? 'completed' : 'running',
+                          startedAt: new Date(Date.now() + 1000).toISOString(),
+                        },
+                      ]
+                    : mode === 'ambiguous'
+                      ? ['a', 'b'].map((turnId) => ({
+                          turnId,
+                          status: 'cancelled',
+                          startedAt: new Date(Date.now() + 1000).toISOString(),
+                        }))
+                      : [
+                          {
+                            turnId: 'old-unknown-terminal',
+                            status: 'completed',
+                            startedAt: new Date(Date.now() - 60_000).toISOString(),
+                          },
+                        ],
+              }),
+              { status: 200 },
+            );
+          }
+          return baseFetch(input, init);
+        }),
+      );
+      streamAgentRunMock.mockImplementation(async (_request, handlers) => {
+        handlers.onEvent({ type: 'text-delta', text: '保留未确认内容' });
+        ended = true;
+      });
+      await renderApp();
+      fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '校准失败' } });
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await screen.findByText(/无法确认会话终态/);
+      expect(screen.getByText('保留未确认内容')).toBeTruthy();
+      expect(screen.queryByText('已取消')).toBeNull();
+      expect(screen.queryByText('已完成', { selector: '.run-status' })).toBeNull();
+      expect(screen.queryByRole('button', { name: '停止运行' })).toBeNull();
+    },
+  );
+
+  it('ignores a late EOF reconciliation after the user stops and starts a new run', async () => {
+    const baseFetch = fetchMock;
+    let ended = false;
+    let resolveSnapshot: (response: Response) => void = () => undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (
+          ended &&
+          String(input) === `/sessions/${sessionIds.local}` &&
+          (init?.method ?? 'GET') === 'GET'
+        )
+          return new Promise<Response>((resolve) => {
+            resolveSnapshot = resolve;
+          });
+        return baseFetch(input, init);
+      }),
+    );
+    streamAgentRunMock
+      .mockImplementationOnce(async () => {
+        ended = true;
+      })
+      .mockImplementation(
+        (_request, handlers) =>
+          new Promise<void>(() => {
+            handlers.onEvent({ type: 'text-delta', text: '新请求内容' });
+          }),
+      );
+    await renderApp();
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '旧请求' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(ended).toBe(true));
+    fireEvent.click(screen.getByRole('button', { name: '停止运行' }));
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '新请求' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await screen.findByText('新请求内容');
+    await act(async () => {
+      resolveSnapshot(
+        new Response(
+          JSON.stringify({
+            ...sessionDetail(sessionIds.local, '本地 Agent 演示', [
+              { role: 'assistant', content: [{ type: 'text', text: '过时快照' }] },
+            ]),
+            turns: [
+              {
+                turnId: 'old-durable',
+                status: 'cancelled',
+                startedAt: new Date(Date.now() + 1000).toISOString(),
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+      );
+    });
+    expect(screen.getByText('新请求内容')).toBeTruthy();
+    expect(screen.queryByText('过时快照')).toBeNull();
+    expect(screen.getByRole('button', { name: '停止运行' })).toBeTruthy();
   });
 
   it('does not submit a second message while streaming', async () => {

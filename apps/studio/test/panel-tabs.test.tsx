@@ -2,14 +2,23 @@
 
 import { createRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 import { PanelContainer } from '../src/features/panel/panel-container.js';
+import { PluginCatalogProvider } from '../src/features/plugins/plugin-catalog-context.js';
+import { createPluginCatalogStore } from '../src/features/plugins/plugin-catalog-store.js';
 import type { PanelContext } from '../src/features/panel/panel-data.js';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 beforeEach(() => {
   localStorage.clear();
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => new Response(JSON.stringify({ plugins: [] }), { status: 200 })),
+  );
 });
 
 function panelContext(): PanelContext {
@@ -17,6 +26,7 @@ function panelContext(): PanelContext {
     statusKey: 'completed',
     statusLabel: '已完成',
     isRunning: false,
+    hasRunningSessions: false,
     sessionLabel: '会话',
     folderPath: '/Users/me/project',
     projectId: 'project-1',
@@ -32,15 +42,17 @@ function panelContext(): PanelContext {
 
 function renderPanel() {
   return render(
-    <PanelContainer
-      context={panelContext()}
-      collapsed={false}
-      width={360}
-      shellRef={createRef<HTMLElement>()}
-      conversationRef={createRef<HTMLElement>()}
-      onResize={vi.fn()}
-      onCollapse={vi.fn()}
-    />,
+    <PluginCatalogProvider store={createPluginCatalogStore()}>
+      <PanelContainer
+        context={panelContext()}
+        collapsed={false}
+        width={360}
+        shellRef={createRef<HTMLElement>()}
+        conversationRef={createRef<HTMLElement>()}
+        onResize={vi.fn()}
+        onCollapse={vi.fn()}
+      />
+    </PluginCatalogProvider>,
   );
 }
 
@@ -140,5 +152,137 @@ describe('PanelContainer multi-tab', () => {
       tabs: { kind: string }[];
     };
     expect(layout.tabs[0]?.kind).toBe('context');
+  });
+});
+
+const managedCatalog = {
+  plugins: [],
+  local: {
+    directory: '/plugins',
+    exists: true,
+    truncated: false,
+    trustSequence: 0,
+    generation: { id: 1, acceptingRuns: true, plugins: [] },
+  },
+};
+
+describe('plugin activation boundary', () => {
+  it('only reads on restored active mount and reloads once for every explicit activation', async () => {
+    localStorage.setItem(
+      'weave.studio.panelTabs.v2',
+      JSON.stringify({ tabs: [{ id: 'plugins', kind: 'plugins' }], active: 'plugins', pinned: [] }),
+    );
+    const methods: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const method = init?.method ?? 'GET';
+        methods.push(method);
+        return new Response(
+          JSON.stringify(
+            method === 'GET'
+              ? managedCatalog
+              : { ...managedCatalog, result: { generation: 1, unchanged: true, failed: [] } },
+          ),
+          { status: 200 },
+        );
+      }),
+    );
+    renderPanel();
+    await screen.findByText('0 个');
+    expect(methods).toEqual(['GET']);
+    fireEvent.click(screen.getByRole('tab', { name: '插件' }));
+    await waitFor(() => expect(methods).toEqual(['GET', 'POST']));
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('button', { name: '刷新插件列表' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    addPanel('插件');
+    await waitFor(() => expect(methods).toEqual(['GET', 'POST', 'POST']));
+    expect(screen.getAllByRole('tab', { name: '插件' })).toHaveLength(1);
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('button', { name: '刷新插件列表' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    fireEvent.click(screen.getByRole('button', { name: '关闭插件' }));
+    addPanel('插件');
+    await waitFor(() => expect(methods).toEqual(['GET', 'POST', 'POST', 'POST']));
+  });
+
+  it('shares a pending-review badge between the add menu and plugin tab', async () => {
+    const manifest = {
+      id: 'new-plugin',
+      name: 'New Plugin',
+      version: '1.0.0',
+      apiVersion: '1',
+      capabilities: [],
+    };
+    const plugins = [
+      {
+        ...manifest,
+        origin: 'local',
+        host: 'in-process',
+        state: 'pending-trust',
+        provides: {
+          tools: [],
+          providers: [],
+          promptSections: [],
+          events: [],
+          commands: [],
+          hooks: [],
+          services: [],
+        },
+        local: {
+          directory: '/plugins/new-plugin',
+          digest: 'a'.repeat(64),
+          enabled: false,
+          manifest,
+        },
+      },
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async (_input: RequestInfo | URL, init?: RequestInit) =>
+          new Response(
+            JSON.stringify(
+              init?.method === 'POST'
+                ? { ...managedCatalog, result: { generation: 1, unchanged: false, failed: [] } }
+                : { ...managedCatalog, plugins },
+            ),
+            { status: 200 },
+          ),
+      ),
+    );
+    renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: '添加面板' }));
+    await screen.findByLabelText('1 个插件待审阅');
+    fireEvent.click(screen.getByRole('menuitem', { name: /插件/ }));
+    expect(screen.getByRole('tab', { name: /插件/ }).textContent).toContain('1');
+    await waitFor(() => expect(screen.queryByLabelText('1 个插件待审阅')).toBeNull());
+  });
+
+  it('keeps old-server explicit activation and refresh on GET', async () => {
+    const methods: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        methods.push(init?.method ?? 'GET');
+        return new Response(JSON.stringify({ plugins: [] }), { status: 200 });
+      }),
+    );
+    renderPanel();
+    await waitFor(() => expect(methods).toEqual(['GET']));
+    addPanel('插件');
+    await waitFor(() => expect(methods).toEqual(['GET', 'GET']));
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('button', { name: '刷新插件列表' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    fireEvent.click(screen.getByRole('button', { name: '刷新插件列表' }));
+    await waitFor(() => expect(methods).toEqual(['GET', 'GET', 'GET']));
   });
 });

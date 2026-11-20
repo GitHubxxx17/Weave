@@ -46,6 +46,7 @@ function panelContext(turns: readonly TurnSummary[]): PanelContext {
     statusKey: 'completed',
     statusLabel: '已完成',
     isRunning: false,
+    hasRunningSessions: false,
     sessionLabel: '会话',
     folderPath: undefined,
     projectId: undefined,

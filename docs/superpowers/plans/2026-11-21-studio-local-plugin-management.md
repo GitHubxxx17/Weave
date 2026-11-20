@@ -255,78 +255,88 @@ Other agents request seam changes through C; nobody edits a neighbor's files.
 
 ### Task 1: Browser boundary and observable cache
 
-- [ ] Freeze schemas/exports first and notify B/C. Add API behavior tests for
+- [x] Freeze schemas/exports first and notify B/C. Add API behavior tests for
   every method/body/header/query, encoded ids, desktop base URL, signal/abort,
   old GET/unknown strings, malformed success/error, 409, disabled management,
   result.error and nonmatching result/current generation ids; then implement.
-- [ ] Test the coordinator with controlled promises: StrictMode dedup; initial
+- [x] Test the coordinator with controlled promises: StrictMode dedup; initial
   GET settled before POST; same reload shares a promise; double-click trust
   cannot duplicate; new catalog immediately changes badge; rejected disable
   then GET reflects durable disabled/blocked state; GET failure keeps cache and
   original error; separate factories are isolated. Implement the contract above.
-- [ ] Badge counts only local pending-trust+changed rows; zero absent, nonzero
+- [x] Badge counts only local pending-trust+changed rows; zero absent, nonzero
   exposes text such as “2 个插件待审阅”. Provider and badge perform no POST.
   Test provider unmount/subscriber independence and stable external snapshots.
 
 ### Task 2: Review, diffs and accessible decisions
 
-- [ ] Test then implement diffs across capabilities, all seven contributes keys
+- [x] Test then implement diffs across capabilities, all seven contributes keys
   and permissions; missing arrays are empty, Set membership avoids duplicates,
   stable display order, added/removed clear, version a→b. Equal declarations but
   changed digest says “声明没有变化，但代码已更新”.
-- [ ] Render this warning **verbatim and uncollapsed**: “信任后，这个插件的代码会以和 Weave 相同的权限在你的电脑上运行。它可以读写你能访问的文件、联网、读取所有会话内容。下面是插件自己的声明，Weave 无法限制进程内插件的实际行为。只信任你了解其来源的插件。” Display identity/version,
+- [x] Render this warning **verbatim and uncollapsed**: “信任后，这个插件的代码会以和 Weave 相同的权限在你的电脑上运行。它可以读写你能访问的文件、联网、读取所有会话内容。下面是插件自己的声明，Weave 无法限制进程内插件的实际行为。只信任你了解其来源的插件。” Display identity/version,
   description, directory, first 12 digest characters and keyboard-accessible full
   digest. High impact before medium/low; highlight added high impact entries.
   Use exact §11.2 hook/permission table; unknown hooks/permissions are high and
   explicitly unrecognized. Show providers/services as declarations too.
-- [ ] Dialog shell portals to a dedicated document.body child outside #root;
+- [x] Dialog shell portals to a dedicated document.body child outside #root;
   inert background body children except portal, preserve/restore prior inert
   values, trap Tab/Shift+Tab among enabled controls, focus Cancel initially,
   stop Escape in capture before App's window listener, restore connected enabled
   origin or supplied visible plugin-tab/region fallback after removing inert.
   Clean up on unmount; strict replay must not leak listeners/inert state.
-- [ ] Header/risk and action row stay visible with a separately scrolling body
+- [x] Header/risk and action row stay visible with a separately scrolling body
   on short/narrow windows. Buttons type=button; Enter on Cancel never trusts.
   Busy blocks repeat submit; Escape may close after sending without pretending
   to cancel the durable operation (shared store owns completion/error).
-- [ ] Disable/revoke say “下一回合起生效”. Only global hasRunningSessions shows
+- [x] Disable/revoke say “下一回合起生效”. Only global hasRunningSessions shows
   unchecked “立即生效（取消进行中的回合）”; explain cancellation of all current and
   retired-generation turns. When true→false reset/hide; false→true starts
   unchecked. Submit false if currently no runs. Enable has no dialog/immediate.
-- [ ] Tests cover frozen digest after replacement, stale 409 invalidation, all
+- [x] Tests cover frozen digest after replacement, stale 409 invalidation, all
   diff/risk rules, both Tab directions/Escape/Cancel Enter, restoration when row
   changes, root already inert, panel inert/collapse, pending close/double submit,
   and global run-state transitions resetting the checkbox.
 
 ### Task 3: Panel and integration after frozen seams
 
-- [ ] Document contracts before code. Add App-lifetime provider/store and
+- [x] Document contracts before code. Add App-lifetime provider/store and
   hasRunningSessions; update every typed PanelContext fixture. Standalone panel
   tests inject a store/provider; existing App/panel tests answer GET /plugins
   with a read-only fixture so the new startup read does not hit real transport.
-- [ ] Origins: builtin, registered, kernel, local, then future encountered order.
+- [x] Origins: builtin, registered, kernel, local, then future encountered order.
   Local statuses: pending-trust, changed, loaded, disabled, failed, invalid,
   incompatible, unknown. Preserve discovery order within status and arrays.
   Key rows by `(origin,id,directory)`; invalid/duplicate/reserved ids and future
   states expose no ambiguous management button.
-- [ ] Actions: pending→Review; changed→Review differences/Revoke;
+- [x] Actions: pending→Review; changed→Review differences/Revoke;
   loaded→Disable/Revoke; disabled→Enable/Revoke; failed→error/Disable/Revoke;
   invalid/incompatible→reason only. Require trustworthy local metadata and
   unambiguous valid id; nonlocal rows read-only. Review must use B's capture.
-- [ ] Keep declarations separate from actual provides; show errors and retained
+- [x] Keep declarations separate from actual provides; show errors and retained
   active digest/generation honestly. Footer: configured directory, missing-dir,
   truncated and host error. Show acceptingRuns/blocked and result.error without
   claiming persisted decisions failed or retained turns lost their plugin.
-- [ ] Keep cached rows during reload/error; global pending disables row writes
+- [x] Display `local.generation.plugins` as a separate read-only current-generation
+  membership summary (id/version/digest), including members whose desired directory
+  disappeared; do not fabricate a discovered row or management actions. Empty
+  discovery copy must not claim no plugins are loaded in a retained generation.
+- [x] After a normal SSE EOF without an observed terminal event, reconcile once
+  with the existing Session GET. Match this run's new durable turn, guard the run
+  identity before/after reading, and apply its actual terminal state. Preserve
+  content and report an incomplete stream if reading fails or no terminal exists;
+  never manufacture a durable completed/cancelled/failed result from EOF. Keep
+  streaming lifecycle state when clearing the displayed run details.
+- [x] Keep cached rows during reload/error; global pending disables row writes
   and spins/disables Refresh. Add badge to plugin tab and add menu without
   changing panel kind/id. Provide dialog focus fallback to current visible plugin
   tab, then panel region (tabIndex=-1); if whole view vanished use visible App nav.
-- [ ] Add `/plugins` and `/commands` proxies to `http://127.0.0.1:4317`. Test
+- [x] Add `/plugins` and `/commands` proxies to `http://127.0.0.1:4317`. Test
   startup including restored active plugins tab issues GET only/no modal;
   explicit tab/add-menu activation (including already active) POSTs once;
   reopen, Refresh and StrictMode dedup; old Server refresh stays GET; selected
   idle session plus another streaming session supplies global true.
-- [ ] Integrate A/B, run focused tests, then Studio lint/typecheck/test/build and
+- [x] Integrate A/B, run focused tests, then Studio lint/typecheck/test/build and
   root `pnpm check`, format:check, diff --check. Fresh review before any requested
   commit/PR; follow the authorized PR/CI/squash workflow after review.
 
@@ -352,8 +362,32 @@ cancellation state machine.
 
 ### Task 4: Verification and integration
 
-- [ ] Run independent task reviews and fix concrete findings with behavioral regressions.
-- [ ] Run focused Studio tests, lint/typecheck/build and root pnpm check.
-- [ ] Verify real temporary Server/Vite in a browser: initial GET, pending badge, explicit reload, trust, stale digest 409, slash command after trust, disable/revoke, global immediate choice, keyboard focus and narrow layout.
-- [ ] Run whole-branch independent review; fix findings and rerun relevant checks.
+- [x] Run independent task reviews and fix concrete findings with behavioral regressions.
+- [x] Run focused Studio tests, lint/typecheck/build and root pnpm check.
+- [x] Verify real temporary Server/Vite in a browser: initial GET, pending badge, explicit reload, trust, stale digest 409, slash command after trust, disable/revoke, global immediate choice, keyboard focus and narrow layout.
+- [x] Run whole-branch independent review; fix findings and rerun relevant checks.
 - [ ] Commit Chinese Conventional Commit, push explicit feature branch, open/attach PR, wait for CI and squash merge to main, delete remote feature branch.
+
+### Execution evidence — 2026-11-21
+
+Implementation and independent task/branch reviews are complete. Review findings
+were corrected with behavior regressions: immutable mutation catalogs, unknown
+prototype-key display strings, retained generation membership, clearing live
+stream presentation, and EOF reconciliation after administrative cancellation.
+
+Studio now has 325 behavior tests across 24 files. Root `pnpm check` passed with
+1,807 tests across all packages (including cached unchanged packages), formatting,
+lint, typecheck and builds. The final repeat after test-fixture/date and documentation
+polish also passed; the PR must pass CI before squash merge.
+
+Real temporary-Server/Vite browser verification covered the seven local states,
+shared pending badges, explicit reload, trust, real stale-digest 409, declaration
+differences and code-only update copy, published slash commands, enable/disable/
+revoke, default vs immediate cancellation across retired generations and inactive
+Sessions, EOF durable cancellation reconciliation, Cancel focus/Tab/Escape/inert
+restoration, settings remount and 520×620 layout. Final browser error/warning log
+was empty. Discovery-directory/truncation/blocked/rebuild-error displays were
+verified in tests rather than injected in that browser run. Screenshots and review
+reports are ignored local execution evidence; no user stores or provider keys
+were used. Electron external-ESM smoke coverage and distribution-packaging limits
+are recorded in the plugin-host design §14.1.

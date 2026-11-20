@@ -865,3 +865,8 @@ state before reporting its error. Desired disk state and current generation
 membership remain separate. Global Studio session streaming state controls the
 optional immediate cancellation choice. See local-plugin design §11.4 for the
 shared cache, exact-digest and keyboard/focus contracts.
+When an administrative cancellation closes SSE before its terminal event is
+delivered, Studio reconciles the current run with one existing Session GET and
+uses the durable terminal fact; it does not infer a successful or cancelled turn
+from EOF. Both sides of this asynchronous read check run identity so a previous
+request cannot overwrite a later turn.

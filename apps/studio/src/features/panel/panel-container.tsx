@@ -1,6 +1,8 @@
 import { useState, type ReactElement, type RefObject } from 'react';
 import { Check, PanelRight, Pin, PinOff, Plus, X } from 'lucide-react';
 
+import { PluginPendingBadge, usePluginCatalogStore } from '../plugins/plugin-catalog-context.js';
+
 import type { PanelContext } from './panel-data.js';
 import { PanelResizer } from './panel-resizer.js';
 import {
@@ -72,6 +74,10 @@ export function PanelContainer({
   onCollapse,
 }: PanelContainerProps): ReactElement {
   const tabs = usePanelTabs();
+  const pluginStore = usePluginCatalogStore();
+  const reloadPlugins = (): void => {
+    void pluginStore.reload().catch(() => undefined);
+  };
   const [menu, setMenu] = useState<OpenMenu>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const activeTab = tabs.layout.tabs.find((tab) => tab.id === tabs.layout.active);
@@ -156,10 +162,17 @@ export function PanelContainer({
                   role="tab"
                   aria-selected={isActive}
                   className="panel-tab-button"
-                  onClick={() => tabs.activate(tab.id)}
+                  onClick={() => {
+                    tabs.activate(tab.id);
+                    if (tab.kind === 'plugins') {
+                      reloadPlugins();
+                    }
+                  }}
+                  data-plugin-tab={tab.kind === 'plugins' ? '' : undefined}
                 >
                   <descriptor.Icon aria-hidden="true" />
                   <span className="panel-tab-label">{label}</span>
+                  {tab.kind === 'plugins' ? <PluginPendingBadge /> : null}
                 </button>
                 {isPinned ? null : (
                   <button
@@ -238,6 +251,9 @@ export function PanelContainer({
                       disabled={descriptor.comingSoon}
                       onClick={() => {
                         tabs.open(descriptor.kind);
+                        if (descriptor.kind === 'plugins') {
+                          reloadPlugins();
+                        }
                         setMenu(null);
                       }}
                     >
@@ -245,6 +261,7 @@ export function PanelContainer({
                         <descriptor.Icon aria-hidden="true" />
                       </span>
                       <span className="panel-add-label">{descriptor.label}</span>
+                      {descriptor.kind === 'plugins' ? <PluginPendingBadge /> : null}
                       {descriptor.comingSoon ? (
                         <small className="panel-add-soon">即将推出</small>
                       ) : descriptor.multi ? (
