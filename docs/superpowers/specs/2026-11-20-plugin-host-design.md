@@ -597,6 +597,38 @@ trustSequence、当前代状态和 active 元数据，不序列化 runner、kern
 
 `startServer` 增 `pluginsDirectory?: string | false`。默认值：显式配置 > `WEAVE_PLUGINS_DIR` > `<数据目录>/plugins`；但调用方显式给了 `databaseFile`（测试的常见做法）而没给数据目录时默认不加载本地插件，避免测试碰到真实的用户目录。`false` 明确关闭。目录不存在不报错，也不自动创建，面板上显示它的路径。
 
+### 10.5 Stage 4.4b 接入契约
+
+- `ServerPluginManager` 为 HTTP 的结构化视图，只含 snapshot/reload/trust/revoke/setEnabled，
+  返回 4.4a 的 PluginHostSnapshot/ReloadResult，不暴露 runner 或泛型资源。实现由 Server 组合根注入。
+- 原 GET 在没有 manager 时仍是 `{ plugins }`；启用时增加 `local`，其字段为
+  `{directory,exists,truncated,trustSequence,generation:{id,plugins:[{id,digest,manifest}],acceptingRuns,blocked?},error?}`。
+  写操作返回同样的 `{plugins,local,result:{generation,unchanged,failed,error?}}`，不含内部 snapshot/cause/entry。
+- 目录中本地项从 desired snapshot 投影，过滤当前代 catalog 的同名 local 行以免重复；
+  非本地 state 恒 loaded。仅 state=loaded 且当前摘要匹配时使用实际 provides，其余为空。
+  local 含 directory、digest?、enabled、manifest?、trusted?（原始完整信任清单）、active?。
+  无法读取清单的行 name 使用目录 id，version 使用 `unknown`，capabilities 空数组。
+- hostVersion 从 `apps/server/package.json` 产品 version（当前 0.0.0）读取并校验，
+  discovery 和每次 createPluginKernel 使用相同值，不以 pluginApiVersion 代替。
+- 默认目录：显式 false > 显式字符串 > WEAVE_PLUGINS_DIR > 数据目录/plugins。
+  显式 databaseFile 且无 dataDirectory 时默认关闭，但显式 pluginsDirectory 或环境覆盖可开启。
+  Desktop 传入其 userDataDirectory 作为 dataDirectory，使默认插件路径和 Electron 数据位置一致。
+- `plugin_trust_events` 表使用 sequence 整数主键、occurred_at、scope、event_json；追加事务取 MAX+1，
+  schema 校验完整 recorded event，读取校验行与 payload/连续 sequence。无 UPDATE/DELETE API。
+  独立连接与 Session/Project/Settings 共用 weave.sqlite，不占用 user_version。
+- 插件所有写路径共享 middleware：JSON media type；严格解析 Host hostname 为 localhost/127.0.0.1/[::1]；
+  Origin 必须是合法 HTTP(S) 纯 origin，与配置一致（开发模式允许回环）；拒绝 cross-site。
+  trust strict JSON `{digest}`；其余允许空正文或 `{}`，仍要求 JSON Content-Type。
+  immediate query 仅允许缺省、true、false，拒绝重复和其它值；无强制布尔转换。
+- 错误：400 参数/JSON；403 来源或 Host；404 plugin-not-found/管理未启用；409 未信任/不可加载/摘要不符；
+  415 media type；503 host disposed；500 存储/发现错误。已追加但发现失败仍按错误返回，缓存保留事实与阻止准入；
+  客户端须 GET 缓存以展示最新决定。装配失败 ReloadResult.error 属成功响应。
+- 启动先创建纯宿主基线，继而 PluginHost，候选组装附加本地 wrapper，port 直接委托 ServerHost.publish，
+  同步验证提交指针；不创建第二门面/队列。所有内置/已注册/配置 kernel id 预留。
+  关闭先 PluginHost 控制操作与 generation 排空，再 ServerHost legacy cleanup，最后共享存储及 trust store。
+- Electron 以现有 tsc 输出执行实际 ESM 主进程外部 file: 导入冒烟测试；仓库尚无发行包构建器，
+  不把此检查表述成发行包验证。
+
 ## 11. Studio
 
 ### 11.1 插件面板

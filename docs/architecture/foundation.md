@@ -840,3 +840,14 @@ and current generation membership are reported separately. Setup wrappers own
 partial cleanup and deadlines; every discarded assembly uses fresh factory
 instances on retry. Full contracts and cooperative cancellation limits are in
 the local-plugin design section 8.6. Server persistence/routes remain Stage 4.4b.
+
+## Server local-plugin composition (Stage 4.4b)
+
+Server injects its existing stable generation controller and guarded publisher
+into PluginHost, opens an append-only SQLite trust event store alongside the
+other shared stores, and projects desired local state separately from retained
+active membership. Thin plugin management routes share one JSON/loopback/origin
+guard and expose no model tool. Desktop supplies its user data directory so
+local plugins use the same data root. Both discovery and the kernel use the
+Server package product version. PluginHost drains before ServerHost and stores
+close. The wire/config/persistence contracts are in local-plugin design §10.5.
