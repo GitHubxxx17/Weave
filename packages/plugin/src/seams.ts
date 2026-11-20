@@ -2,8 +2,8 @@ import type { LlmProviderRegistration, LlmProviderRegistry } from '@weave/llm';
 import type {
   AgentRunner,
   ApprovalBroker,
-  RegisteredToolDefinition,
   SessionEventStore,
+  ToolDefinition,
   ToolExecutionRequest,
   ToolExecutionResult,
   ToolPipeline,
@@ -62,7 +62,7 @@ export const agentRunnerRef: ServiceRef<AgentRunner> = defineServiceRef({
 
 /** Contributor API for the `weave.tools` extension point. */
 export interface ToolsExtensionApi {
-  addTool(tool: RegisteredToolDefinition): void;
+  addTool<TInput, TOutput>(tool: ToolDefinition<TInput, TOutput>): void;
 }
 
 /** Tools are contributed here; the Tool Registry owner collects them. */

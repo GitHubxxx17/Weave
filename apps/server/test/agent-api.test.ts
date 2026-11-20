@@ -82,7 +82,7 @@ describe('Agent HTTP/SSE API', () => {
 
     try {
       const response = await createApp(runtime, {
-        agentRunner: createServerAgentRunner(runtime),
+        agentRunner: await createServerAgentRunner(runtime),
         sessionService,
       }).request('/agent/runs/stream', {
         method: 'POST',
