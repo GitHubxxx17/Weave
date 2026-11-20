@@ -252,6 +252,7 @@ export function createPluginEventDefinition<P extends Record<string, unknown>, S
     throw new PluginError(
       'plugin-event-invalid',
       `Event name "${name}" of plugin "${pluginId}" must be lowercase and hyphen-separated`,
+      { pluginId },
     );
   }
   const type = `${pluginId}/${name}` as PluginEventType;

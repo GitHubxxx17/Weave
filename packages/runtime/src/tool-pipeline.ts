@@ -52,8 +52,11 @@ export type ToolPolicy = (
 export interface ToolPipelineOptions {
   /** Registry containing executable tool definitions. */
   readonly registry: ToolRegistry;
-  /** Broker used to pause protected tools until an external decision arrives. */
-  readonly approvalBroker?: ApprovalBroker | undefined;
+  /**
+   * Broker used to pause protected tools until an external decision arrives.
+   * Only `request` is used, so a view that cannot approve or reject is enough.
+   */
+  readonly approvalBroker?: Pick<ApprovalBroker, 'request'> | undefined;
   /** Default timeout applied when a request does not specify one. */
   readonly timeoutMs?: number | undefined;
   /** Maximum UTF-8 byte length returned in tool content. */

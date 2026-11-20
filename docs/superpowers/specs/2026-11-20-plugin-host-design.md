@@ -129,7 +129,12 @@ export interface PluginModule {
 ```
 
 - 入口默认导出一个工厂。工厂在信任之后、重载的加载这一步才被调用（早于装配），返回 `setup` 和 `dispose`。`manifest` 永远取自清单 JSON，也就是用户批准的那一份。模块如果自带 `manifest`，必须与清单逐字段相等，否则报 `plugin-manifest-mismatch`。
-- `PluginSdk` 是创作词汇表，不是内核：服务引用、扩展点、钩子（`toolsExtensionPoint`、`commandsExtensionPoint`、`toolPolicyHook`、`sessionStoreRef` 等）、`defineServiceRef`、`defineExtensionPoint`、`defineHook`、与宿主同一份的 `z`（zod）、`apiVersion`。它不含 `createPluginKernel`、`ServiceContainer`、`createPluginEnv`、`createPluginSessionStore`、旧注册表等宿主专用 API。
+- `PluginSdk` 是创作词汇表，不是内核。它是一个冻结的对象，内容正好是下面这些，多一个少一个都是 API 变更（测试里有一份清单）：
+  - 创作工具：`defineServiceRef`、`defineExtensionPoint`、`defineHook`，与宿主同一份的 `z`（zod），`apiVersion`。
+  - 服务引用：`approvalBrokerRef`（受限视图，见 9.4）、`pluginEventsRef`、`sessionStoreRef`（只接受插件注册过的事件）。
+  - 扩展点：`toolsExtensionPoint`、`commandsExtensionPoint`、`llmProvidersExtensionPoint`、`promptSectionsExtensionPoint`。
+  - 钩子：`toolPolicyHook`、`toolAroundHook`、`toolResultHook`、`llmRequestHook`、`turnStartHook`、`turnEndHook`。
+  - 刻意不给：`toolRegistryRef`、`toolPipelineRef`、`agentRunnerRef`、`llmProviderRegistryRef`（拿到它们的插件可以绕过贡献流程，直接改注册表、直接执行工具或起一轮 Agent）和 `eventsExtensionPoint`（事件走 `env.defineEvent`）。也不含 `createPluginKernel`、`ServiceContainer`、`createPluginEnv`、`createPluginSessionStore`、`createRestrictedApprovalBroker`、旧注册表等宿主专用 API。需要时再按用例逐个加，加一个不破坏已有插件，收回一个会。
 - 为什么注入，而不是让插件 `import '@weave/plugin'`：插件目录在仓库之外，Node 解析不到这个包。让插件自带一份副本，会出现两份内核词汇表。内核按 id 匹配，所以还能工作，但 `instanceof PluginError` 之类会失效，版本也会漂移。注入保证只有一份，也让"SDK 就是插件能拿到的全部宿主 API"成为一条清晰的边界。类型照常用仅类型导入从 `@weave/plugin` 取。
 - 插件自己的依赖由作者打包进入口文件。摘要覆盖整个目录，所以打包成单文件最简单。
 
@@ -346,7 +351,7 @@ interface PluginHost<Runner> {
 
 ### 9.2 可归因的错误
 
-`PluginError` 增可选字段 `pluginId`。`setup` 失败、能力未声明、贡献超出清单、权限被拒、定义不合法这些本来就知道是谁的错，直接带上。`ExtensionRegistry.collect` 把回放某个插件的贡献时抛出的**任何**错误包成带 `pluginId` 的 `PluginError`（原错误放 `cause`），已经带 `pluginId` 的 `PluginError` 原样抛出。这样 owner 一侧的失败，例如工具重名，也能归因。
+`PluginError` 增可选字段 `pluginId`。`setup` 失败、版本不兼容、重复的插件 id、能力未声明、贡献超出清单、权限被拒、定义不合法、服务工厂失败、依赖缺失、服务重复、作用域违规、`dispose` 失败，这些本来就知道是谁的错，直接带上。`ExtensionRegistry.collect` 把回放某个插件的贡献时抛出的**任何**错误归到这个插件：已带 `pluginId` 的 `PluginError` 原样抛出，没带的复制一份补上，其它错误包成 `plugin-contribution-failed`（原错误放 `cause`）。这样 owner 一侧的失败，例如工具重名，也能归因。服务工厂抛出的错误按注册该服务的插件归属，工厂里 `collect` 抛出的错误已经带着贡献者的 id，保持不变。没有单一责任人的失败不带 `pluginId`：manifest 无效（id 不可信）、环形依赖。宿主遇到这类失败时保留旧的 generation（D6）。导出的 `attributePluginError(error, pluginId, context)` 给宿主在自己的收集代码里做同样的归属。已知的限制：owner 自己 API 里的 bug 也会记到触发它的贡献者头上，内核分不出这两种情况。
 
 ### 9.3 `PluginSdk` 与 `PluginFactory`
 
@@ -354,7 +359,9 @@ interface PluginHost<Runner> {
 
 ### 9.4 受限审批视图
 
-`createRestrictedApprovalBroker(broker)` 返回只含 `request`、`get`、`list`、`subscribe` 的视图。`hostServicesPlugin` 提供的 `weave.approval.broker` 改为这个视图。Tool Pipeline 只调用 `request`（取消和超时通过传入的 `signal` 和 `timeoutMs` 由 broker 自己处理），所以内置的使用方不受影响。HTTP 审批接口直接用 Runtime 里真正的 broker。这只是 API 形状，不是边界，进程内插件仍然可以直接 `import` 别的东西，但它防住了按内核 API 写的越权，也是将来进程外插件会用的形状。
+`createRestrictedApprovalBroker(broker)` 返回只含 `request`、`get`、`list`、`subscribe` 的冻结视图，类型是 `PluginApprovalBroker`，`approvalBrokerRef` 的类型随之改为它。`hostServicesPlugin` 在内部做这层包装：宿主传进去的仍是真正的 broker，插件拿到的永远是视图，调用方不会忘记。Tool Pipeline 只调用 `request`（取消和超时通过传入的 `signal` 和 `timeoutMs` 由 broker 自己处理），所以 `@weave/runtime` 的 `ToolPipelineOptions.approvalBroker` 放宽为 `Pick<ApprovalBroker, 'request'>`。这是只放宽类型的改动，行为不变，内置的使用方不受影响。HTTP 审批接口直接用 Runtime 里真正的 broker。这只是 API 形状，不是边界，进程内插件仍然可以直接 `import` 别的东西，但它防住了按内核 API 写的越权，也是将来进程外插件会用的形状。
+
+`sessionStoreRef` 已经是受限的：宿主传给 `hostServicesPlugin` 的是 `createPluginSessionStore(store, pluginEvents)`，只接受插件注册过的事件，核心事件写不进去。这一层由宿主装配（`apps/server/src/agent-kernel.ts`），因为它需要宿主的事件注册表；4.4 把装配搬进宿主时保持不变。
 
 ## 10. Server
 

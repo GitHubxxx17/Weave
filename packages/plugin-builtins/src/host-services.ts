@@ -1,7 +1,14 @@
-import { approvalBrokerRef, definePlugin, sessionStoreRef, type KernelPlugin } from '@weave/plugin';
+import {
+  approvalBrokerRef,
+  createRestrictedApprovalBroker,
+  definePlugin,
+  sessionStoreRef,
+  type KernelPlugin,
+} from '@weave/plugin';
 import { type ApprovalBroker, type SessionEventStore } from '@weave/runtime';
 
 export interface HostServicesOptions {
+  /** The host's real broker. Plugins get a view of it that cannot decide requests. */
   readonly approvalBroker?: ApprovalBroker | undefined;
   readonly sessionStore?: SessionEventStore | undefined;
 }
@@ -14,6 +21,10 @@ export interface HostServicesOptions {
  * host's Runtime, so the plugin only hands them out and never disposes them.
  * Only the services passed in are provided, and the manifest lists exactly
  * those under `contributes.services`.
+ *
+ * Plugins never get the broker itself. `weave.approval.broker` is a view with
+ * `request`, `get`, `list` and `subscribe`, made here so a host cannot hand out
+ * the full broker by mistake. The host's own approval API keeps the real one.
  */
 export function hostServicesPlugin(options: HostServicesOptions): KernelPlugin {
   const { approvalBroker, sessionStore } = options;
@@ -35,7 +46,8 @@ export function hostServicesPlugin(options: HostServicesOptions): KernelPlugin {
     },
     setup(env) {
       if (approvalBroker !== undefined) {
-        env.provide(approvalBrokerRef, { factory: () => approvalBroker });
+        const view = createRestrictedApprovalBroker(approvalBroker);
+        env.provide(approvalBrokerRef, { factory: () => view });
       }
       if (sessionStore !== undefined) {
         env.provide(sessionStoreRef, { factory: () => sessionStore });

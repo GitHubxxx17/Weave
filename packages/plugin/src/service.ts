@@ -1,5 +1,5 @@
 import type { ExtensionCollector, ExtensionPoint } from './extension-point.js';
-import { PluginError } from './plugin-errors.js';
+import { attributePluginError, PluginError } from './plugin-errors.js';
 
 /**
  * Typed service machinery for the plugin kernel.
@@ -156,10 +156,13 @@ export class ServiceContainer {
         continue;
       }
       if (!first.ref.multi && list.length > 1) {
+        // The last to register is the one that made it a duplicate.
+        const latest = list[list.length - 1];
         throw new PluginError(
           'plugin-service-duplicate',
           `Service "${id}" has ${list.length} implementations but is single-implementation ` +
             `(from plugins ${list.map((item) => item.pluginId).join(', ')})`,
+          { pluginId: latest?.pluginId },
         );
       }
       for (const registration of list) {
@@ -169,6 +172,7 @@ export class ServiceContainer {
               'plugin-service-scope-violation',
               `Service "${id}" (${registration.ref.scope}) from plugin "${registration.pluginId}" ` +
                 `cannot depend on finer-scoped service "${dep.id}" (${dep.scope})`,
+              { pluginId: registration.pluginId },
             );
           }
         }
@@ -181,7 +185,7 @@ export class ServiceContainer {
     const visited = new Set<string>();
     const stack: string[] = [];
 
-    const walk = (id: string, requiredBy: string | undefined): void => {
+    const walk = (id: string, requiredBy: string | undefined, requiredByPlugin?: string): void => {
       const list = this.#registrations.get(id);
       if (list === undefined || list.length === 0) {
         throw new PluginError(
@@ -189,6 +193,7 @@ export class ServiceContainer {
           requiredBy === undefined
             ? `Service "${id}" has no implementation`
             : `Service "${id}" required by "${requiredBy}" has no implementation`,
+          { pluginId: requiredByPlugin },
         );
       }
       if (visited.has(id)) {
@@ -202,7 +207,7 @@ export class ServiceContainer {
       stack.push(id);
       for (const registration of list) {
         for (const dep of depsOf(registration)) {
-          walk(dep.id, id);
+          walk(dep.id, id, registration.pluginId);
         }
       }
       stack.pop();
@@ -349,12 +354,21 @@ class ScopeContextImpl implements ScopeContext {
         ),
       );
       const resolved = Object.fromEntries(resolvedEntries) as Resolved<DepMap>;
-      const value = await registration.impl.factory(resolved, {
-        signal: this.signal,
-        scope: this.scope,
-        scopeKey: this.key,
-        collect: this.#collect,
-      });
+      let value: unknown;
+      try {
+        value = await registration.impl.factory(resolved, {
+          signal: this.signal,
+          scope: this.scope,
+          scopeKey: this.key,
+          collect: this.#collect,
+        });
+      } catch (error: unknown) {
+        throw attributePluginError(
+          error,
+          registration.pluginId,
+          `Service "${ref.id}" from plugin "${registration.pluginId}" failed to initialise`,
+        );
+      }
       this.#live.push({
         value,
         ...(registration.impl.dispose === undefined

@@ -12,10 +12,11 @@ import { parseVersion, parseVersionRange } from './version-range.js';
  * that declares one is held to it exactly.
  */
 
-/** Service ids a plugin provides and uses, recorded while its `setup` runs. */
+/** Service ids a plugin provides and uses, and hook ids it listens to, recorded while its `setup` runs. */
 export interface ServiceUsage {
   readonly provided: Set<string>;
   readonly used: Set<string>;
+  readonly hooks: Set<string>;
   /**
    * Set by the kernel once `setup` has been checked. A `use` after that point
    * can no longer be deferred to the end of `setup`, so it is checked at once.
@@ -25,15 +26,16 @@ export interface ServiceUsage {
 
 /** Creates an empty usage record for one plugin's `setup`. */
 export function createServiceUsage(): ServiceUsage {
-  return { provided: new Set(), used: new Set(), closed: false };
+  return { provided: new Set(), used: new Set(), hooks: new Set(), closed: false };
 }
 
-const kindLabels: Record<ContributedNameKey | 'services', string> = {
+const kindLabels: Record<ContributedNameKey | 'services' | 'hooks', string> = {
   tools: 'tool',
   providers: 'provider',
   promptSections: 'prompt section',
   events: 'event',
   commands: 'command',
+  hooks: 'hook',
   services: 'service',
 };
 
@@ -60,12 +62,14 @@ export function assertEngineSupported(
     throw new PluginError(
       'plugin-engine-unsupported',
       `Plugin "${manifest.id}" requires Weave "${range}" but the host did not declare its Weave version`,
+      { pluginId: manifest.id },
     );
   }
   if (!parseVersionRange(range).test(hostVersion)) {
     throw new PluginError(
       'plugin-engine-unsupported',
       `Plugin "${manifest.id}" requires Weave "${range}", host is "${hostVersion}"`,
+      { pluginId: manifest.id },
     );
   }
 }
@@ -74,7 +78,7 @@ export function assertEngineSupported(
 export function assertNameDeclared(
   pluginId: string,
   contributes: PluginContributes | undefined,
-  key: ContributedNameKey | 'services',
+  key: ContributedNameKey | 'services' | 'hooks',
   name: string,
 ): void {
   if (contributes === undefined || contributes[key]?.includes(name) === true) {
@@ -83,6 +87,7 @@ export function assertNameDeclared(
   throw new PluginError(
     'plugin-contributes-exceeds-manifest',
     `Plugin "${pluginId}" contributed ${kindLabels[key]} "${name}" but its manifest contributes.${key} does not list it`,
+    { pluginId },
   );
 }
 
@@ -90,6 +95,7 @@ function permissionDenied(manifest: PluginManifest, id: string): PluginError {
   return new PluginError(
     'plugin-permission-denied',
     `Plugin "${manifest.id}" uses service "${id}" but its manifest permissions do not include "service:${id}"`,
+    { pluginId: manifest.id },
   );
 }
 

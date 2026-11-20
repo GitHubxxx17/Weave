@@ -29,6 +29,7 @@ function plugin(over: Partial<PluginListItem> = {}): PluginListItem {
       promptSections: [],
       events: [],
       commands: [],
+      hooks: [],
       services: [],
     },
     ...over,
@@ -120,6 +121,7 @@ describe('PluginsPanel', () => {
           promptSections: ['style'],
           events: ['server-echo/entry-added'],
           commands: ['recap'],
+          hooks: ['weave.tools.policy'],
           services: [],
         },
       }),
@@ -143,6 +145,8 @@ describe('PluginsPanel', () => {
     expect(detail.getByText('style')).toBeTruthy();
     expect(detail.getByText('server-echo/entry-added')).toBeTruthy();
     expect(detail.getByText('recap')).toBeTruthy();
+    expect(detail.getByText('钩子', { selector: 'dt' })).toBeTruthy();
+    expect(detail.getByText('weave.tools.policy')).toBeTruthy();
     expect(detail.getByText('读取工作区')).toBeTruthy();
     expect(detail.getByText('使用服务 weave.session.store')).toBeTruthy();
     expect(detail.getByText('>=1.0.0')).toBeTruthy();

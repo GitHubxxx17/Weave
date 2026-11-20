@@ -86,6 +86,7 @@ function PluginItem({ plugin }: { readonly plugin: PluginListItem }): ReactEleme
     ['提示词片段', plugin.provides.promptSections],
     ['会话事件', plugin.provides.events],
     ['命令', plugin.provides.commands],
+    ['钩子', plugin.provides.hooks],
     ['服务', plugin.provides.services],
   ];
 
