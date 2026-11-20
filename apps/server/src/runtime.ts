@@ -16,6 +16,7 @@ import { createInMemorySessionEventStore } from '@weave/session';
 import { createServerLlmProviders, type ServerLlmProviderSettings } from './llm-providers.js';
 import { createAgentInstructions } from './agent-instructions.js';
 import { assembleAgentKernel } from './agent-kernel.js';
+import { type PluginListItem } from './plugin-catalog.js';
 import { createServerHost, serverHostOf, type ServerRuntime } from './server-host.js';
 
 export type { ServerRuntime } from './server-host.js';
@@ -132,6 +133,7 @@ export async function createServerAgentRunner(
   });
   host.lockPlugins();
   host.trackKernel(assembled.kernel);
+  host.setPlugins(assembled.plugins);
   const { toolRegistry } = host;
   const { promptSections } = assembled;
 
@@ -160,4 +162,12 @@ export function getServerSessionStore(runtime: Runtime): SessionEventStore {
  */
 export async function disposeServerPlugins(runtime: Runtime): Promise<void> {
   await serverHostOf(runtime).dispose();
+}
+
+/**
+ * Lists the plugins loaded for the most recently created Agent Runner, empty
+ * until one exists. This is what `GET /plugins` serves.
+ */
+export function listServerPlugins(runtime: Runtime): readonly PluginListItem[] {
+  return serverHostOf(runtime).plugins();
 }

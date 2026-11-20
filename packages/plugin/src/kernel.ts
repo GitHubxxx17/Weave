@@ -4,6 +4,7 @@ import {
   assertHostVersion,
   assertServicePermissions,
   createServiceUsage,
+  type ServiceUsage,
 } from './declaration.js';
 import { ExtensionRegistry } from './extension-point.js';
 import { HookRegistry } from './hook.js';
@@ -34,10 +35,31 @@ export function definePlugin(plugin: KernelPlugin): KernelPlugin {
   return plugin;
 }
 
+/** The names a plugin has put into the kernel, by kind. */
+export interface PluginContributed {
+  readonly tools: readonly string[];
+  readonly providers: readonly string[];
+  readonly promptSections: readonly string[];
+  readonly services: readonly string[];
+}
+
+/** One loaded plugin: its manifest and what it has actually contributed so far. */
+export interface PluginInfo {
+  readonly manifest: PluginManifest;
+  /**
+   * What the plugin added. Services are known once `setup` ran; the other kinds
+   * only once an owner has collected the extension point, so read this after
+   * the host has resolved the owner services.
+   */
+  readonly contributed: PluginContributed;
+}
+
 /** An immutable view of the active plugin set, resolving root-scoped services. */
 export interface Generation {
   readonly id: number;
   readonly pluginIds: readonly string[];
+  /** The loaded plugins with what they contributed; see {@link PluginInfo.contributed}. */
+  plugins(): readonly PluginInfo[];
   resolve<T>(ref: ServiceRef<T>): Promise<T>;
   resolveAll<T>(ref: ServiceRef<T>): Promise<readonly T[]>;
 }
@@ -48,6 +70,8 @@ export interface PluginKernel {
   register(plugin: KernelPlugin): Promise<void>;
   /** Validates the dependency graph and returns the sealed generation. */
   seal(): Promise<Generation>;
+  /** The loaded plugins in registration order, with what they contributed. */
+  plugins(): readonly PluginInfo[];
   readonly extensions: ExtensionRegistry;
   readonly hooks: HookRegistry;
   /** Unloads every plugin (reverse order) and disposes all services. */
@@ -56,6 +80,8 @@ export interface PluginKernel {
 
 interface LoadedPlugin {
   readonly plugin: KernelPlugin;
+  readonly manifest: PluginManifest;
+  readonly usage: ServiceUsage;
   readonly disposers: (() => void)[];
   readonly abort: AbortController;
 }
@@ -111,8 +137,8 @@ export function createPluginKernel(options: PluginKernelOptions = {}): PluginKer
 
     const abort = new AbortController();
     const disposers: (() => void)[] = [];
-    const entry: LoadedPlugin = { plugin, disposers, abort };
     const usage = createServiceUsage();
+    const entry: LoadedPlugin = { plugin, manifest, usage, disposers, abort };
     const env = createPluginEnv({
       manifest,
       signal: abort.signal,
@@ -144,6 +170,23 @@ export function createPluginKernel(options: PluginKernelOptions = {}): PluginKer
     order.push(entry);
   }
 
+  function plugins(): readonly PluginInfo[] {
+    return Object.freeze(
+      order.map((entry): PluginInfo => {
+        const collected = extensions.collected(entry.manifest.id);
+        return Object.freeze({
+          manifest: entry.manifest,
+          contributed: Object.freeze({
+            tools: Object.freeze(collected.tools),
+            providers: Object.freeze(collected.providers),
+            promptSections: Object.freeze(collected.promptSections),
+            services: Object.freeze([...entry.usage.provided]),
+          }),
+        });
+      }),
+    );
+  }
+
   async function seal(): Promise<Generation> {
     if (!sealed) {
       container.validate();
@@ -155,6 +198,7 @@ export function createPluginKernel(options: PluginKernelOptions = {}): PluginKer
     return {
       id: generationId,
       pluginIds,
+      plugins,
       resolve: (ref) => root.resolve(ref),
       resolveAll: (ref) => root.resolveAll(ref),
     };
@@ -199,5 +243,5 @@ export function createPluginKernel(options: PluginKernelOptions = {}): PluginKer
     }
   }
 
-  return { register, seal, extensions, hooks, dispose };
+  return { register, seal, plugins, extensions, hooks, dispose };
 }

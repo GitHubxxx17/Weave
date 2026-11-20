@@ -10,6 +10,7 @@ import {
 } from '@weave/plugin';
 import { type SessionEventStore } from '@weave/session';
 import { type Runtime, type RuntimeService, type ToolRegistry } from '@weave/runtime';
+import { type PluginListItem } from './plugin-catalog.js';
 
 /**
  * What the Server keeps for one Runtime between `createServerRuntime` and the
@@ -34,6 +35,10 @@ export interface ServerHost {
   lockPlugins(): void;
   /** Keeps an Agent Runner's kernel so it is disposed with the host. */
   trackKernel(kernel: PluginKernel): void;
+  /** The plugins loaded for the most recently created Agent Runner. */
+  plugins(): readonly PluginListItem[];
+  /** Records the plugins an Agent Runner was assembled with. */
+  setPlugins(plugins: readonly PluginListItem[]): void;
   /** Disposes the kernels and every registered plugin, last registered first. */
   dispose(): Promise<void>;
 }
@@ -62,6 +67,7 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
   const registered: AdaptedLegacyPlugin[] = [];
   const kernels: PluginKernel[] = [];
   let locked = false;
+  let loadedPlugins: readonly PluginListItem[] = [];
   let pending: Promise<unknown> = Promise.resolve();
 
   // Registrations are checked against each other, so they run one at a time.
@@ -128,6 +134,12 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
       kernels.push(kernel);
     },
 
+    plugins: () => loadedPlugins,
+
+    setPlugins(plugins) {
+      loadedPlugins = plugins;
+    },
+
     async dispose() {
       await pending;
       const errors: unknown[] = [];
@@ -166,6 +178,7 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
       }
       kernels.length = 0;
       registered.length = 0;
+      loadedPlugins = [];
 
       if (errors.length === 1) {
         throw errors[0];
