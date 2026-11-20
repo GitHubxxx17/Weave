@@ -854,3 +854,14 @@ close. The wire/config/persistence contracts are in local-plugin design §10.5.
 Embedded configured kernel plugins use factories to create independent instances
 for every candidate generation; a retiring generation never disposes an instance
 borrowed by its replacement. Legacy registered plugins retain ServerHost ownership.
+
+## Studio local-plugin management (Stage 4.5)
+
+Studio consumes the cached plugin HTTP projection through one App-lifetime browser
+store. Startup and restored tabs only read; explicit plugin-entry activation
+rediscoveries through the guarded management endpoint. Review dialogs capture
+the displayed digest, and every rejected decision reconciles cached durable
+state before reporting its error. Desired disk state and current generation
+membership remain separate. Global Studio session streaming state controls the
+optional immediate cancellation choice. See local-plugin design §11.4 for the
+shared cache, exact-digest and keyboard/focus contracts.
