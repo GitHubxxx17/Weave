@@ -40,3 +40,29 @@ export { createPluginEnv } from './plugin-env.js';
 export type { PluginEnv, PluginEnvDeps, ServiceHandle } from './plugin-env.js';
 export { createPluginKernel, definePlugin } from './kernel.js';
 export type { Generation, KernelPlugin, PluginKernel, PluginKernelOptions } from './kernel.js';
+
+// Weave seams (Stage 2): typed service refs, extension points and hooks for
+// Weave's own subsystems, typed against the real library contracts.
+export {
+  agentRunnerRef,
+  approvalBrokerRef,
+  llmProviderRegistryRef,
+  llmProvidersExtensionPoint,
+  promptSectionsExtensionPoint,
+  sessionStoreRef,
+  toolAroundHook,
+  toolPipelineRef,
+  toolPolicyHook,
+  toolRegistryRef,
+  toolResultHook,
+  toolsExtensionPoint,
+  turnEndHook,
+  turnStartHook,
+} from './seams.js';
+export type {
+  LlmProvidersExtensionApi,
+  PromptSection,
+  PromptSectionsExtensionApi,
+  ToolsExtensionApi,
+  TurnInfo,
+} from './seams.js';

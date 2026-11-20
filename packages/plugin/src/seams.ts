@@ -1,0 +1,131 @@
+import type { LlmProviderRegistration, LlmProviderRegistry } from '@weave/llm';
+import type {
+  AgentRunner,
+  ApprovalBroker,
+  RegisteredToolDefinition,
+  SessionEventStore,
+  ToolExecutionRequest,
+  ToolExecutionResult,
+  ToolPipeline,
+  ToolRegistry,
+} from '@weave/runtime';
+
+import { defineExtensionPoint, type ExtensionPoint } from './extension-point.js';
+import { defineHook, type Hook, type PolicyVote } from './hook.js';
+import { defineServiceRef, type ServiceRef } from './service.js';
+
+/**
+ * The concrete seams that Weave's own subsystems are exposed through, typed
+ * against the real library contracts. Builtin plugins (Stage 2) provide these
+ * services and contribute into these extension points; the host resolves the
+ * agent runner and tool pipeline from a sealed generation instead of the
+ * hand-assembled `WeakMap` wiring in `apps/server/src/runtime.ts`.
+ *
+ * This module only declares the vocabulary. It pulls in no library
+ * implementation — just their types — so `@weave/plugin` stays a kernel, not a
+ * product.
+ */
+
+// --- Service seams (root-scoped singletons for the first slice) ---
+
+/** The approval broker the Tool Pipeline consults for protected tools. */
+export const approvalBrokerRef: ServiceRef<ApprovalBroker> = defineServiceRef({
+  id: 'weave.approval.broker',
+});
+
+/** The LLM provider registry the router and agent loop read from. */
+export const llmProviderRegistryRef: ServiceRef<LlmProviderRegistry> = defineServiceRef({
+  id: 'weave.llm.registry',
+});
+
+/** The durable Session event store. */
+export const sessionStoreRef: ServiceRef<SessionEventStore> = defineServiceRef({
+  id: 'weave.session.store',
+});
+
+/** The Tool Registry that holds every contributed tool definition. */
+export const toolRegistryRef: ServiceRef<ToolRegistry> = defineServiceRef({
+  id: 'weave.tools.registry',
+});
+
+/** The shared Tool Pipeline — the only path a tool's `execute` runs through. */
+export const toolPipelineRef: ServiceRef<ToolPipeline> = defineServiceRef({
+  id: 'weave.tools.pipeline',
+});
+
+/** The agent loop; replaceable, but it must call the pipeline above. */
+export const agentRunnerRef: ServiceRef<AgentRunner> = defineServiceRef({
+  id: 'weave.agent.runner',
+});
+
+// --- Extension points ---
+
+/** Contributor API for the `weave.tools` extension point. */
+export interface ToolsExtensionApi {
+  addTool(tool: RegisteredToolDefinition): void;
+}
+
+/** Tools are contributed here; the Tool Registry owner collects them. */
+export const toolsExtensionPoint: ExtensionPoint<ToolsExtensionApi> = defineExtensionPoint({
+  id: 'weave.tools',
+});
+
+/** Contributor API for the `weave.llm.providers` extension point. */
+export interface LlmProvidersExtensionApi {
+  addProvider(registration: LlmProviderRegistration): void;
+}
+
+/** LLM providers are contributed here; the provider registry owner collects them. */
+export const llmProvidersExtensionPoint: ExtensionPoint<LlmProvidersExtensionApi> =
+  defineExtensionPoint({ id: 'weave.llm.providers' });
+
+/** One addressable piece of the system prompt. Lower `order` renders earlier. */
+export interface PromptSection {
+  readonly id: string;
+  readonly order: number;
+  readonly text: string;
+}
+
+/** Contributor API for the `weave.prompt.sections` extension point. */
+export interface PromptSectionsExtensionApi {
+  addSection(section: PromptSection): void;
+}
+
+/** System-prompt sections are contributed here; `prompt-core` owns assembly. */
+export const promptSectionsExtensionPoint: ExtensionPoint<PromptSectionsExtensionApi> =
+  defineExtensionPoint({ id: 'weave.prompt.sections' });
+
+// --- Hooks ---
+
+/** Security vote before a tool runs; votes merge strictly tighter. */
+export const toolPolicyHook: Hook<ToolExecutionRequest, PolicyVote> = defineHook({
+  id: 'weave.tools.policy',
+  mode: 'decide',
+});
+
+/** Middleware around a single tool execution (retry, timing, result shaping). */
+export const toolAroundHook: Hook<ToolExecutionRequest, ToolExecutionResult> = defineHook({
+  id: 'weave.tools.around',
+  mode: 'wrap',
+});
+
+/** Read-only observation of a completed tool execution. */
+export const toolResultHook: Hook<ToolExecutionResult> = defineHook({
+  id: 'weave.tools.result',
+  mode: 'observe',
+});
+
+/** Identifies a turn to lifecycle observers. */
+export interface TurnInfo {
+  readonly sessionId: string;
+  readonly turnId: string;
+}
+
+/** Observed when a turn starts. */
+export const turnStartHook: Hook<TurnInfo> = defineHook({
+  id: 'weave.turn.start',
+  mode: 'observe',
+});
+
+/** Observed when a turn ends. */
+export const turnEndHook: Hook<TurnInfo> = defineHook({ id: 'weave.turn.end', mode: 'observe' });
