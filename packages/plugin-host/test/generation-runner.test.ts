@@ -239,6 +239,154 @@ function cancellableSource(
 }
 
 describe('generation cancellation and lifetime', () => {
+  it('aborts active runs in current and retired generations with the first exact reason only', async () => {
+    const started = new Map([
+      [1, gate()],
+      [2, gate()],
+      [3, gate()],
+    ]);
+    const cleanup = gate();
+    const reasons: unknown[] = [];
+    const cleanups: number[] = [];
+    const disposed: number[] = [];
+
+    const makeGeneration = (id: number) =>
+      generation(
+        id,
+        (request) => ({
+          async *[Symbol.asyncIterator]() {
+            started.get(id)!.resolve();
+            try {
+              await new Promise<void>((resolve) => {
+                if (request.signal?.aborted) resolve();
+                else
+                  request.signal?.addEventListener(
+                    'abort',
+                    () => {
+                      reasons.push(request.signal?.reason);
+                      resolve();
+                    },
+                    { once: true },
+                  );
+              });
+              await cleanup.promise;
+              yield `cancelled:${id}`;
+            } finally {
+              cleanups.push(id);
+            }
+          },
+        }),
+        () => disposed.push(id),
+      );
+
+    const controller = createGenerationRunner(makeGeneration(1));
+    const first = collect(controller.runner.run({ sessionId: 'one', value: 'a' }));
+    await started.get(1)!.promise;
+    await controller.replace(makeGeneration(2));
+    const second = collect(controller.runner.run({ sessionId: 'two', value: 'b' }));
+    await started.get(2)!.promise;
+    await controller.replace(makeGeneration(3));
+    const third = collect(controller.runner.run({ sessionId: 'three', value: 'c' }));
+    await started.get(3)!.promise;
+
+    const firstReason = new Error('first cancellation reason');
+    controller.abortActiveRuns(firstReason);
+    controller.abortActiveRuns(new Error('ignored cancellation reason'));
+    expect(reasons).toHaveLength(3);
+    for (const reason of reasons) expect(reason).toBe(firstReason);
+    expect(cleanups).toEqual([]);
+    expect(controller.current().id).toBe(3);
+    cleanup.resolve();
+
+    expect(await first).toEqual(['cancelled:1']);
+    expect(await second).toEqual(['cancelled:2']);
+    expect(await third).toEqual(['cancelled:3']);
+    expect(cleanups).toEqual([1, 2, 3]);
+
+    await controller.dispose();
+    expect(disposed).toEqual([1, 2, 3]);
+  });
+
+  it('cancels only running turns, admits queued work, and keeps the current generation reusable', async () => {
+    const started = gate();
+    const cleanup = gate();
+    const starts: string[] = [];
+    const signals: AbortSignal[] = [];
+    const controller = createGenerationRunner(
+      generation(1, async function* (request) {
+        starts.push(request.value);
+        signals.push(request.signal!);
+        if (request.value === 'a') {
+          started.resolve();
+          await new Promise<void>((resolve) => {
+            if (request.signal?.aborted) resolve();
+            else request.signal?.addEventListener('abort', () => resolve(), { once: true });
+          });
+          await cleanup.promise;
+          return;
+        }
+        yield request.value;
+      }),
+    );
+
+    const first = collect(controller.runner.run({ sessionId: 'same', value: 'a' }));
+    await started.promise;
+    const queued = collect(controller.runner.run({ sessionId: 'same', value: 'b' }));
+    await tick();
+
+    controller.abortActiveRuns('cancel active turn');
+    expect(starts).toEqual(['a']);
+    expect(signals[0]?.reason).toBe('cancel active turn');
+    cleanup.resolve();
+
+    expect(await first).toEqual([]);
+    expect(await queued).toEqual(['b']);
+    expect(starts).toEqual(['a', 'b']);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+
+    expect(await collect(controller.runner.run({ sessionId: 'same', value: 'c' }))).toEqual(['c']);
+    expect(signals[2]?.aborted).toBe(false);
+    await controller.dispose();
+  });
+
+  it('keeps admission blocked after cancelling active runs until a successful replacement', async () => {
+    const started = gate();
+    const stopped = gate();
+    const controller = createGenerationRunner(
+      generation(1, (request) => {
+        started.resolve();
+        return cancellableSource(request, stopped);
+      }),
+    );
+    const active = collect(controller.runner.run({ sessionId: 'same', value: 'a' }));
+    await started.promise;
+    const blocked = new Error('plugin disabled');
+    controller.blockNewRuns(blocked);
+    controller.abortActiveRuns(blocked);
+
+    expect(await active).toEqual(['cancelled']);
+    await stopped.promise;
+    await expect(collect(controller.runner.run({ sessionId: 'same', value: 'b' }))).rejects.toBe(
+      blocked,
+    );
+    await expect(controller.replace(generation(1, () => source([])))).rejects.toThrow();
+    await expect(collect(controller.runner.run({ sessionId: 'same', value: 'c' }))).rejects.toBe(
+      blocked,
+    );
+
+    await controller.replace(
+      generation(2, async function* (request) {
+        expect(request.signal?.aborted).toBe(false);
+        yield 'recovered';
+      }),
+    );
+    expect(await collect(controller.runner.run({ sessionId: 'same', value: 'd' }))).toEqual([
+      'recovered',
+    ]);
+    await controller.dispose();
+  });
+
   it('return before the first next never enqueues or starts a turn', async () => {
     const starts: string[] = [];
     const controller = createGenerationRunner(
@@ -333,7 +481,7 @@ describe('generation cancellation and lifetime', () => {
     expect(returns).toBe(1);
   });
 
-  it.each(['shutdown', 'immediate', 'request'] as const)(
+  it.each(['shutdown', 'immediate', 'request', 'active'] as const)(
     '%s cancellation closes a return-only iterator exactly once',
     async (mode) => {
       const waiting = gate();
@@ -377,6 +525,9 @@ describe('generation cancellation and lifetime', () => {
           { immediate: true },
         );
         await disposed.promise;
+      } else if (mode === 'active') {
+        controller.abortActiveRuns(new Error('cancel active'));
+        controller.abortActiveRuns(new Error('already cancelled'));
       } else {
         abort.abort();
       }

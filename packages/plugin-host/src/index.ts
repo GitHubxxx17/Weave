@@ -50,3 +50,17 @@ export type {
   GenerationRunner,
   RunnerGeneration,
 } from './generation-runner.js';
+
+export { createPluginHost } from './host.js';
+export type {
+  ActiveLocalPlugin,
+  CreatePluginHostOptions,
+  HostedLocalPluginState,
+  LocalPluginIdentity,
+  LocalPluginRecord,
+  PluginGenerationPort,
+  PluginHost,
+  PluginHostSnapshot,
+  PluginReloadFailure,
+  ReloadResult,
+} from './host-types.js';

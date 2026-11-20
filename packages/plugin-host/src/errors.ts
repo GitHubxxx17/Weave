@@ -14,7 +14,15 @@ export type PluginHostErrorCode =
   | 'plugin-digest-mismatch'
   | 'plugin-load-failed'
   | 'plugin-invalid-module'
-  | 'plugin-manifest-mismatch';
+  | 'plugin-manifest-mismatch'
+  // Administrative decisions, reload and admission.
+  | 'plugin-not-found'
+  | 'plugin-not-trusted'
+  | 'plugin-not-loadable'
+  | 'plugin-setup-timeout'
+  | 'plugin-reload-failed'
+  | 'plugin-generation-blocked'
+  | 'plugin-host-disposed';
 
 /** Options of a {@link PluginHostError}. */
 export interface PluginHostErrorOptions extends ErrorOptions {

@@ -474,7 +474,8 @@ export function createPluginHost<R extends GenerationRequest, E, T>(
 目录顺序保留发现顺序，重复 id 使用 `(id,directory)` 区分。磁盘/信任状态与
 当前代的 active 摘要、清单分别报告，目录消失仍在 generation.plugins 保留当前代成员。
 发布前按候选 id 暂存 active 元数据；快照读取 port.current 的真实指针，不能因旧代
-销毁等待而回报过期代。publish 仅可在指针提交前拒绝，提交后的退休失败留到最终关闭。
+销毁等待而回报过期代。publish 必须在调用时同步完成验证和指针提交，异步返回只等待退休清理；不得在 await 后才提交。
+它仅可在指针提交前拒绝，提交后的退休失败留到最终关闭。
 未发布候选由宿主回收，发布后由 port 退休回收。宿主 dispose 不关闭 trustStore。
 
 **串行控制。** 所有重载和信任变更共享一个串行队列；尚未开始且相邻的 reload 合并。
@@ -484,7 +485,9 @@ trust/revoke/setEnabled 是不可合并、不可越过的队列屏障。关闭�
 
 **持久化优先。** 变更参数由 Zod 校验，不把字符串转换成布尔值。trust 重新发现整个根目录，
 要求唯一 ready id 和精确摘要，然后追加当前磁盘清单。启用要求已信任、唯一 ready 且摘要一致。
-停用或撤销已信任 id 不要求目录仍可读。已有未信任 id 的撤销是幂等重载，完全未知 id 返回
+停用或撤销已信任 id 不要求目录仍可读：先读取信任事实，追加决定并改变准入，
+再发现磁盘。后续发现失败仍按发现错误拒绝调用，已追加的事实、trustSequence、准入阻止和立即取消保留；
+调用方须读取缓存状态说明决定已经记录，目录恢复后重新加载。已有未信任 id 的撤销是幂等重载，完全未知 id 返回
 plugin-not-found。append 失败不改变准入，也不取消运行。append 成功后、下一个 await 前，
 同步 blockNewRuns；immediate 同时 abortActiveRuns，即使重建失败也兑现取消。
 每次 reload 重新折叠外部信任事件，发现当前成员已撤销/停用也阻止新回合，合规发布后恢复。
@@ -501,7 +504,8 @@ plugin-not-found。append 失败不改变准入，也不取消运行。append �
 每次移除一个，N 个 eligible 最多 N+1 次装配。宿主 id 或无归属错误保留当前代并报告 host error。
 发现/存储/参数错误拒绝；候选装配或发布错误返回保留代的 ReloadResult，已经追加的事实不回滚。
 
-**磁盘竞态。** 加载摘要不符重新发现整个根目录，刷新 changed/invalid/missing 状态。
+**磁盘竞态。** 加载摘要不符，或重算摘要时目录消失、变得不可读/不支持或超限，
+重新发现整个根目录，刷新 changed/invalid/missing 状态。
 每个不符身份最多刷新一次，整个 pass 不超过初始 eligible 数量；持续变化返回有界竞态错误，
 保留当前代，下次显式重载重试。失败按 `(id,digest)` 记录，新版本不继承旧版本错误。
 
