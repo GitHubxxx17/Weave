@@ -168,7 +168,8 @@ Staged delivery, one branch and PR per stage, from latest `main` each time:
   LLM middleware, plugin events/projections, declarative UI; Studio gains a
   "Plugins" page.
 - **Stage 4 — local plugins** from `~/.weave/plugins/` with workspace trust;
-  reload from the next turn.
+  reload from the next turn. ADR 0003 refines this stage: the plugin directory is
+  `<data directory>/plugins/`, and trust is bound to the plugin's content.
 - **Stage 5 — MCP** as sandboxed plugins.
 - **Stage 6 (M5, later)** — plugin directory, installer, marketplace, subprocess
   hosting and permission proxy.
