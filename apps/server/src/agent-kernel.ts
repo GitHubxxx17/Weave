@@ -46,8 +46,11 @@ import {
 } from '@weave/runtime';
 import { describePlugin, type CommandListItem, type PluginListItem } from './plugin-catalog.js';
 import { appliedPromptSections, type AppliedPromptSection } from './prompt-audit.js';
+import { serverHostVersion } from './host-version.js';
 
 export interface AgentKernelAssembly {
+  /** Product version used consistently for manifest engine compatibility. */
+  readonly hostVersion?: string | undefined;
   readonly toolRegistry: ToolRegistry;
   readonly providerRegistry: LlmProviderRegistry;
   readonly approvalBroker: ApprovalBroker;
@@ -111,7 +114,7 @@ export async function assembleAgentKernel(
 ): Promise<AssembledAgentKernel> {
   const { toolRegistry, providerRegistry, approvalBroker, sessionStore } = assembly;
   const { timeoutMs, resolveWorkspaceRoot } = assembly;
-  const kernel = createPluginKernel();
+  const kernel = createPluginKernel({ hostVersion: assembly.hostVersion ?? serverHostVersion });
 
   // Plugins record their own events through a Session Store that accepts only
   // the events they registered: they cannot write the core events (turns,

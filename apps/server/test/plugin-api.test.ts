@@ -153,6 +153,7 @@ describe('GET /plugins', () => {
         version: '1.2.3',
         description: '回显文本',
         origin: 'registered',
+        state: 'loaded',
         host: 'in-process',
         capabilities: ['tool'],
         provides: {
@@ -170,6 +171,7 @@ describe('GET /plugins', () => {
         name: 'Note Kernel',
         version: '0.4.0',
         origin: 'kernel',
+        state: 'loaded',
         host: 'mcp',
         capabilities: ['tool', 'prompt', 'event', 'command'],
         contributes: {

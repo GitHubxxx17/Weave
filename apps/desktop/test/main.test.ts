@@ -83,7 +83,7 @@ describe('desktop main process', () => {
     mocks.FakeBrowserWindow.instances.length = 0;
   });
 
-  it('starts the Server with the desktop database and Studio origin', async () => {
+  it('starts the Server with the desktop data directory, database and Studio origin', async () => {
     const stop = vi.fn(async () => undefined);
     mocks.startServer.mockResolvedValueOnce({ port: 46321, stop });
 
@@ -91,6 +91,7 @@ describe('desktop main process', () => {
 
     expect(mocks.startServer).toHaveBeenCalledWith(0, {
       databaseFile: config.databaseFile,
+      dataDirectory: config.userDataDirectory,
       studioOrigin: config.studioOrigin,
       providerSecretCodec,
       fetch: expect.any(Function),
