@@ -27,6 +27,7 @@ export const pluginListItemSchema = z.object({
       promptSections: nameListSchema.optional(),
       events: nameListSchema.optional(),
       commands: nameListSchema.optional(),
+      hooks: nameListSchema.optional(),
       services: nameListSchema.optional(),
     })
     .optional(),
@@ -37,6 +38,7 @@ export const pluginListItemSchema = z.object({
     promptSections: nameListSchema,
     events: nameListSchema,
     commands: nameListSchema,
+    hooks: nameListSchema,
     services: nameListSchema,
   }),
 });
@@ -69,6 +71,7 @@ function declared(contributes: PluginContributes): NonNullable<PluginListItem['c
       : { promptSections: [...contributes.promptSections] }),
     ...(contributes.events === undefined ? {} : { events: [...contributes.events] }),
     ...(contributes.commands === undefined ? {} : { commands: [...contributes.commands] }),
+    ...(contributes.hooks === undefined ? {} : { hooks: [...contributes.hooks] }),
     ...(contributes.services === undefined ? {} : { services: [...contributes.services] }),
   };
 }
@@ -93,6 +96,7 @@ export function describePlugin(info: PluginInfo, origin: PluginOrigin): PluginLi
       promptSections: [...contributed.promptSections],
       events: [...contributed.events],
       commands: [...contributed.commands],
+      hooks: [...contributed.hooks],
       services: [...contributed.services],
     },
   });

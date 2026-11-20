@@ -9,7 +9,7 @@ import {
 import { ExtensionRegistry } from './extension-point.js';
 import { HookRegistry } from './hook.js';
 import { pluginManifestSchema, type PluginManifest } from './manifest.js';
-import { PluginError } from './plugin-errors.js';
+import { attributePluginError, PluginError } from './plugin-errors.js';
 import { createPluginEnv, type PluginEnv } from './plugin-env.js';
 import { ServiceContainer, type ServiceRef } from './service.js';
 
@@ -44,6 +44,8 @@ export interface PluginContributed {
   readonly events: readonly string[];
   /** Slash command names. */
   readonly commands: readonly string[];
+  /** Ids of the hooks the plugin subscribed to. */
+  readonly hooks: readonly string[];
   readonly services: readonly string[];
 }
 
@@ -132,11 +134,16 @@ export function createPluginKernel(options: PluginKernelOptions = {}): PluginKer
       throw new PluginError(
         'plugin-api-version-unsupported',
         `Plugin "${manifest.id}" requires API version "${manifest.apiVersion}", expected "${expectedApiVersion}"`,
+        { pluginId: manifest.id },
       );
     }
     assertEngineSupported(manifest, hostVersion);
     if (loaded.has(manifest.id)) {
-      throw new PluginError('plugin-duplicate-id', `Plugin "${manifest.id}" is already registered`);
+      throw new PluginError(
+        'plugin-duplicate-id',
+        `Plugin "${manifest.id}" is already registered`,
+        { pluginId: manifest.id },
+      );
     }
 
     const abort = new AbortController();
@@ -163,10 +170,13 @@ export function createPluginKernel(options: PluginKernelOptions = {}): PluginKer
       }
       abort.abort();
       if (error instanceof PluginError) {
-        throw error;
+        // A plugin error the plugin's own code raised, such as a bad event name,
+        // still belongs to this plugin.
+        throw attributePluginError(error, manifest.id, `Plugin "${manifest.id}" setup failed`);
       }
       throw new PluginError('plugin-setup-failed', `Plugin "${manifest.id}" setup failed`, {
         cause: error,
+        pluginId: manifest.id,
       });
     }
 
@@ -186,6 +196,7 @@ export function createPluginKernel(options: PluginKernelOptions = {}): PluginKer
             promptSections: Object.freeze(collected.promptSections),
             events: Object.freeze(collected.events),
             commands: Object.freeze(collected.commands),
+            hooks: Object.freeze([...entry.usage.hooks]),
             services: Object.freeze([...entry.usage.provided]),
           }),
         });
@@ -224,7 +235,7 @@ export function createPluginKernel(options: PluginKernelOptions = {}): PluginKer
           new PluginError(
             'plugin-dispose-failed',
             `Plugin "${entry.plugin.manifest.id}" dispose failed`,
-            { cause: error },
+            { cause: error, pluginId: entry.plugin.manifest.id },
           ),
         );
       }

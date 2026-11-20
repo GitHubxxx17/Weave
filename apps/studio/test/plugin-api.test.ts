@@ -17,6 +17,7 @@ const plugin = {
     promptSections: [],
     events: [],
     commands: [],
+    hooks: [],
     services: [],
   },
 };
@@ -49,7 +50,7 @@ describe('Plugin API client', () => {
       ...plugin,
       description: '回显文本',
       engines: { weave: '>=1.0.0' },
-      contributes: { tools: ['echo'] },
+      contributes: { tools: ['echo'], hooks: ['weave.tools.policy'] },
       permissions: ['workspace:read', 'service:weave.session.store'],
     };
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ plugins: [detailed] })));
@@ -64,7 +65,7 @@ describe('Plugin API client', () => {
     await expect(fetchPlugins()).resolves.toEqual([future]);
   });
 
-  it('reads a list from a Server that predates plugin events and commands', async () => {
+  it('reads a list from a Server that predates plugin events, commands and hooks', async () => {
     const older = {
       ...plugin,
       provides: { tools: ['echo'], providers: [], promptSections: [], services: [] },

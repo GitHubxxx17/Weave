@@ -169,13 +169,14 @@ interface PluginManifest {
     promptSections?: string[];                   // 提示词片段 id
     events?: string[];                           // 会话事件类型，形如 `<插件 id>/<名字>`
     commands?: string[];                         // 斜杠命令名
+    hooks?: string[];                            // 监听的钩子 id，例如 `weave.tools.policy`
     services?: string[];                         // 本插件 provide 的服务 id
   };
   permissions?: PluginPermission[];
 }
 ```
 
-`ui` 类贡献随它的扩展点落地时再加入 `contributes`（新增可选键，向后兼容）；`events` 随 Stage 3.7、`commands` 随 Stage 3.8 加入。`capabilities` 保留（旧插件不变）。`contributes` / `permissions` 是声明式面：Studio 不运行代码即可列出插件加了什么、要什么权限。
+`ui` 类贡献随它的扩展点落地时再加入 `contributes`（新增可选键，向后兼容）；`events` 随 Stage 3.7、`commands` 随 Stage 3.8、`hooks` 随 Stage 4.1 加入。`capabilities` 保留（旧插件不变）。`contributes` / `permissions` 是声明式面：Studio 不运行代码即可列出插件加了什么、要什么权限。
 
 **语义**
 
@@ -183,6 +184,7 @@ interface PluginManifest {
 - **跨字段一致性**（解析 manifest 时检查，违反为 `plugin-invalid-manifest`）：`contributes.tools` 非空要求 `capabilities` 含 `tool`，`providers` 要求 `llm-provider`，`promptSections` 要求 `prompt`，`events` 要求 `event`，`commands` 要求 `command`。每个列表内不得重复。`events` 里的每个类型还必须是 `<插件 id>/<名字>` 的形状，且以本插件自己的 id 开头：插件只能在自己的命名空间里写事件；`commands` 里的名字是小写字母数字加连字符。
 - **受治理的扩展点**：`weave.tools`、`weave.llm.providers`、`weave.prompt.sections`、`weave.session.events`、`weave.commands` 各绑定一个 capability 与一个 `contributes` 键。向这些点贡献前，插件必须声明对应 capability（`env.contribute` 时抛 `plugin-capability-not-declared`，与旧路径 `registerTool` 的规则一致）。插件声明了 `contributes` 时，owner 回放贡献的那一刻逐个核对名字，不在清单内则抛 `plugin-contributes-exceeds-manifest`，该名字不会进入 owner。
 - **服务**：声明了 `contributes` 的插件，`env.provide(ref)` 的 `ref.id` 必须在 `contributes.services` 内。
+- **钩子**：声明了 `contributes` 的插件，`env.onHook(hook, …)` 的 `hook.id` 必须在 `contributes.hooks` 内，否则当场抛 `plugin-contributes-exceeds-manifest`，这个插件的 `setup` 失败并整体回滚。钩子不是扩展点，所以不要求某个 capability。同一个钩子上挂多个处理函数只记一次。
 - **`permissions`**：内核只强制 `service:<id>`。声明了 `permissions` 的插件，经 `env.use` 或 `provide` 的 `deps` 使用的服务必须在列表内，本插件自己提供的服务除外；在 `setup` 结束后统一检查，违反为 `plugin-permission-denied`；`setup` 结束之后才调用的 `env.use` 即时检查。`workspace:*`、`process:spawn`、`network:request` 只是声明，供信任确认界面展示，内核不强制（进程内不是安全边界，见第 3 节；进程外宿主再由代理强制）。
 - **`engines.weave`**：使用 semver 范围的子集，版本一律写完整的 `x.y.z`。支持 `*`、`1.x`、`1.2.x`，以及带可选前缀 `>=` `>` `<=` `<` `=` `^` `~` 的 `x.y.z`；多个条件用空格连接，表示"且"。不支持预发布标签、`||`、连字符范围和省略补零的简写（如 `>=1.2`），写法不受支持时 manifest 无效。内核与旧注册表通过选项 `hostVersion`（完整的 `x.y.z`）得知宿主的 Weave 版本；插件声明了 `engines` 而宿主没有提供 `hostVersion` 时一律拒载（不满足与无法判断都不放行），错误码 `plugin-engine-unsupported`。
 - **`host`**：内核不解释，只记录。宿主 / 加载器据此决定如何装载，Studio 据此展示运行方式。
@@ -195,19 +197,22 @@ interface PluginManifest {
 | `engines.weave` 与宿主版本 | `register()` | 注册 | `plugin-engine-unsupported` |
 | 对受治理扩展点声明了对应 capability | `env.contribute` | `setup` 内 | `plugin-capability-not-declared` |
 | `provide` 的服务在 `contributes.services` 内 | `env.provide` | `setup` 内 | `plugin-contributes-exceeds-manifest` |
+| 监听的钩子在 `contributes.hooks` 内 | `env.onHook` | `setup` 内 | `plugin-contributes-exceeds-manifest` |
 | 使用的服务在 `permissions` 的 `service:<id>` 内 | `register()` 末尾 | 注册 | `plugin-permission-denied` |
 | 贡献的名字在 `contributes.<key>` 内 | owner 回放贡献（`collect`） | owner 服务初始化 | `plugin-contributes-exceeds-manifest` |
 
 最后一项发生在宿主 seal 之后首次解析 owner 服务时，宿主应在启动阶段立即解析（现有 server 装配已如此），使它等同于启动期错误。旧的 `createPluginRegistry` 路径同样遵守 `contributes` 与 `engines`：`registerTool` / `registerProvider` 的名字在 `setup` 内即时核对。
 
-**已知缺口**：钩子（`onHook`）目前不在 `contributes` 内声明。钩子可以观察工具结果，将来还可以对工具调用投 `deny` / `ask`。信任确认界面（Stage 4）展示"插件要什么"之前，需要给 `contributes` 增补 `hooks` 键。设计见《本地插件加载与信任确认设计》第 9.1 节，随 Stage 4.1 落地。
+**钩子的声明**：钩子（`onHook`）原先不在 `contributes` 内声明，信任确认界面无从说明"这个插件监听了什么"。Stage 4.1 补上 `contributes.hooks`，规则见上。`PluginInfo.contributed.hooks` 记录插件在 `setup` 内实际监听的钩子 id，`GET /plugins` 的 `contributes` 与 `provides` 都带 `hooks`。
+
+**错误归属**：失败属于哪个插件，宿主要知道，才能只丢掉这一个而保留其余。`PluginError` 增可选字段 `pluginId`：`setup` 失败、版本不兼容、能力未声明、贡献超出清单、权限被拒、定义不合法、服务工厂失败、依赖缺失、服务重复、作用域违规、`dispose` 失败，凡是能确定是谁的错，都带上。`ExtensionRegistry.collect` 回放某个插件的贡献时，抛出的任何错误都归到这个插件：已带 `pluginId` 的 `PluginError` 原样抛出，没带的复制一份补上，其它错误包成 `plugin-contribution-failed`（原错误放 `cause`）。owner 一侧的失败，例如工具重名，因此也归到触发它的贡献者。环形依赖、manifest 本身无效这类没有单一责任人的失败不带 `pluginId`，宿主此时保留旧的 generation。服务工厂抛出的错误按注册该服务的插件归属，工厂里 `collect` 抛出的错误已经带着贡献者的 id，不会被改记到 owner 头上。
 
 ## 9. 内核接缝清单（现有库 → 服务 / 扩展点 / 钩子）
 
 | 现有 | 接缝 | 层级 |
 |---|---|---|
 | Tool Registry + Pipeline (`createToolPipeline`) | `tools.pipeline` 服务；`tools` 扩展点（累加）；`tools.policy`（decide）、`tools.around`（wrap）、`tools.result`（observe） | core |
-| Approval Broker (`createApprovalBroker`) | `approval.broker` 服务；`approval.channels` 扩展点（现 Studio 卡片） | core |
+| Approval Broker (`createApprovalBroker`) | `approval.broker` 服务（插件拿到的是受限视图，只有 `request` / `get` / `list` / `subscribe`，不能批准、拒绝、取消或使其过期；见下）；`approval.channels` 扩展点（现 Studio 卡片） | core |
 | Workspace policy / tools | `workspace` 服务（**session 作用域**，取代按 sessionId 反查）；`workspace-policy` core + `tools-fs` builtin | core / builtin |
 | `@weave/llm` providers (mock / openai-compatible) | `llm.providers` 扩展点；`llm.router` 服务；`llm.request`（wrap：重试 / 超时） | builtin |
 | `@weave/session` store (memory / sqlite) | `session.store` 服务；`session.events` 扩展点（类型 + 投影）；`session.plugin-events` 服务（插件事件注册表） | builtin |
@@ -217,6 +222,8 @@ interface PluginManifest {
 | recall / update_plan / command 工具 | 各自向 `tools` 扩展点贡献 | builtin |
 | 斜杠命令（Stage 3.8） | `weave.commands` 扩展点（声明式提示词模板）；server 直接收集并经 `GET /commands` 提供 | core |
 | 未来压缩 / UI 面板 | `context.compaction`（单槽）、`ui.contributions` | — |
+
+**审批视图（Stage 4.1）。** `weave.approval.broker` 的类型是 `PluginApprovalBroker = Pick<ApprovalBroker, 'request' | 'get' | 'list' | 'subscribe'>`。`hostServicesPlugin` 在内部用 `createRestrictedApprovalBroker` 包一层，所以宿主传进去的是真正的 broker，插件拿到的永远是视图，调用方没有机会忘记。HTTP 审批接口仍然通过 Runtime 里的 `approvalBrokerService` 拿到真正的 broker。`createToolPipeline` 的 `approvalBroker` 选项相应放宽为 `Pick<ApprovalBroker, 'request'>`，因为管线只调用 `request`；这是只放宽类型，行为不变。这是 API 形状，不是隔离边界：进程内的插件仍然能 `import` 别的东西，信任靠的是 Stage 4 的确认。
 
 ## 10. 事件模型改造（`packages/session/src/events.ts`）
 
@@ -242,7 +249,7 @@ export const newSessionEventSchema = z.union([coreEventSchema, pluginEventSchema
 
 ## 12. 校验与错误（新增错误码）
 
-`plugin-service-missing-dependency` / `-cycle` / `-duplicate` / `-scope-violation`、`plugin-extension-single-slot`、`plugin-contributes-exceeds-manifest`（提供的服务或贡献的名字不在 `contributes` 内）、`plugin-permission-denied`（使用了 `permissions` 未授权的 `service:<id>`）、`plugin-engine-unsupported`（`engines.weave` 不满足，或宿主没有声明 `hostVersion`）。`plugin-capability-not-declared` 原本只用于旧路径，Stage 3.1 起内核路径向受治理扩展点贡献时同样适用。`plugin-event-unknown`（追加了没有任何插件注册的事件类型，包括所有内核事件类型；或为没有投影的事件求投影）、`plugin-event-invalid`（事件的类型或名字形状不对、插件在别人的命名空间里定义事件、payload 不符合注册的 schema 或存不成 JSON 对象）。除了追加与投影事件时的检查发生在运行时，其余都在**启动 / 注册时**抛出，不拖到运行时；贡献名字的核对发生在 owner 服务初始化时，时机见第 8 节的校验时机表。钩子的错误码（`plugin-hook-invalid-vote` 等）见第 17 节。
+`plugin-service-missing-dependency` / `-cycle` / `-duplicate` / `-scope-violation`、`plugin-extension-single-slot`、`plugin-contributes-exceeds-manifest`（提供的服务或贡献的名字不在 `contributes` 内）、`plugin-permission-denied`（使用了 `permissions` 未授权的 `service:<id>`）、`plugin-engine-unsupported`（`engines.weave` 不满足，或宿主没有声明 `hostVersion`）。`plugin-capability-not-declared` 原本只用于旧路径，Stage 3.1 起内核路径向受治理扩展点贡献时同样适用。`plugin-contribution-failed`（Stage 4.1：插件的贡献、或它提供的服务的工厂，在宿主使用时抛出了不是 `PluginError` 的错误，原错误放 `cause`，`pluginId` 指向责任插件；`ExtensionRegistry.collect` 与服务初始化是这类错误的出处）。所有归属明确的错误都带可选的 `pluginId`，规则见第 8 节"错误归属"。`plugin-event-unknown`（追加了没有任何插件注册的事件类型，包括所有内核事件类型；或为没有投影的事件求投影）、`plugin-event-invalid`（事件的类型或名字形状不对、插件在别人的命名空间里定义事件、payload 不符合注册的 schema 或存不成 JSON 对象）。除了追加与投影事件时的检查发生在运行时，其余都在**启动 / 注册时**抛出，不拖到运行时；贡献名字的核对发生在 owner 服务初始化时，时机见第 8 节的校验时机表。钩子的错误码（`plugin-hook-invalid-vote` 等）见第 17 节。
 
 ## 13. 测试策略
 

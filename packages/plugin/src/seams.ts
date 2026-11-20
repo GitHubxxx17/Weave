@@ -1,7 +1,6 @@
 import type { LlmProviderRegistration, LlmProviderRegistry, StreamEvent } from '@weave/llm';
 import type {
   AgentRunner,
-  ApprovalBroker,
   LlmCall,
   SessionEventStore,
   ToolDefinition,
@@ -11,6 +10,7 @@ import type {
   ToolRegistry,
 } from '@weave/runtime';
 
+import type { PluginApprovalBroker } from './approval-view.js';
 import { pluginCommandSchema, type PluginCommand } from './commands.js';
 import { defineExtensionPoint, type ExtensionPoint } from './extension-point.js';
 import { defineHook, type Hook, type PolicyVote } from './hook.js';
@@ -32,8 +32,12 @@ import { defineServiceRef, type ServiceRef } from './service.js';
 
 // --- Service seams (root-scoped singletons for the first slice) ---
 
-/** The approval broker the Tool Pipeline consults for protected tools. */
-export const approvalBrokerRef: ServiceRef<ApprovalBroker> = defineServiceRef({
+/**
+ * The approval broker a plugin sees: it can raise and observe requests, but not
+ * decide them. The Tool Pipeline consults it for protected tools. The host
+ * keeps the full broker for its own approval API.
+ */
+export const approvalBrokerRef: ServiceRef<PluginApprovalBroker> = defineServiceRef({
   id: 'weave.approval.broker',
 });
 
@@ -169,6 +173,7 @@ export const eventsExtensionPoint: ExtensionPoint<SessionEventsExtensionApi> = d
             throw new PluginError(
               'plugin-event-invalid',
               `Plugin "${pluginId}" cannot define event "${definition.type}": its events must start with "${pluginId}/"`,
+              { pluginId },
             );
           }
           check(definition.type);
@@ -204,7 +209,7 @@ export const commandsExtensionPoint: ExtensionPoint<CommandsExtensionApi> = defi
             `Plugin "${pluginId}" contributed an invalid command: ${parsed.error.issues
               .map((issue) => `${issue.path.join('.') || '(command)'}: ${issue.message}`)
               .join('; ')}`,
-            { cause: parsed.error },
+            { cause: parsed.error, pluginId },
           );
         }
         check(parsed.data.name);

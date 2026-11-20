@@ -191,16 +191,44 @@ describe('host-owned registries', () => {
 });
 
 describe('host services', () => {
-  it('hands out the instances the host owns, not copies', async () => {
-    const approvalBroker = createApprovalBroker();
+  it('hands out the session store the host owns, not a copy', async () => {
     const sessionStore = {} as SessionEventStore;
     const kernel = createPluginKernel();
-    await kernel.register(hostServicesPlugin({ approvalBroker, sessionStore }));
+    await kernel.register(hostServicesPlugin({ sessionStore }));
 
     const generation = await kernel.seal();
 
-    expect(await generation.resolve(approvalBrokerRef)).toBe(approvalBroker);
     expect(await generation.resolve(sessionStoreRef)).toBe(sessionStore);
+    await kernel.dispose();
+  });
+
+  it('hands out a view of the approval broker that cannot decide requests', async () => {
+    const approvalBroker = createApprovalBroker();
+    const kernel = createPluginKernel();
+    await kernel.register(hostServicesPlugin({ approvalBroker }));
+
+    const generation = await kernel.seal();
+    const view = await generation.resolve(approvalBrokerRef);
+
+    expect(view).not.toBe(approvalBroker);
+    expect(Object.keys(view).sort()).toEqual(['get', 'list', 'request', 'subscribe']);
+    expect(Object.isFrozen(view)).toBe(true);
+
+    // A request raised through the view is the host's request: the real broker
+    // lists it, and only the real broker can decide it.
+    const decision = view.request({
+      toolCallId: 'call-1',
+      toolName: 'run_command',
+      operation: 'run',
+      summary: 'Run a command',
+      risk: 'high',
+      inputSummary: {},
+    });
+    const [created] = approvalBroker.list();
+    expect(created?.status).toBe('pending');
+    expect(view.get(created?.approvalId ?? '')).toEqual(created);
+    approvalBroker.approve(created?.approvalId ?? '', 'ok');
+    await expect(decision).resolves.toMatchObject({ status: 'approved' });
     await kernel.dispose();
   });
 

@@ -4,6 +4,7 @@ import { createMockLlmClient } from '@weave/llm';
 import { type ToolDefinition } from '@weave/runtime';
 
 import { type ExtensionPoint } from '../src/extension-point.js';
+import { defineHook } from '../src/hook.js';
 import { createPluginKernel, definePlugin } from '../src/kernel.js';
 import { type PluginCapability, type PluginManifest } from '../src/manifest.js';
 import { type PluginEnv } from '../src/plugin-env.js';
@@ -49,6 +50,7 @@ describe('engines', () => {
 
     await expect(kernel.register(engineBound('>=2.0.0'))).rejects.toMatchObject({
       code: 'plugin-engine-unsupported',
+      pluginId: 'bound',
       message: expect.stringContaining('requires Weave ">=2.0.0", host is "1.4.2"'),
     });
     expect((await kernel.seal()).pluginIds).toEqual([]);
@@ -59,6 +61,7 @@ describe('engines', () => {
 
     await expect(kernel.register(engineBound('*'))).rejects.toMatchObject({
       code: 'plugin-engine-unsupported',
+      pluginId: 'bound',
       message: expect.stringContaining('did not declare its Weave version'),
     });
   });
@@ -105,7 +108,10 @@ describe('contributes.services', () => {
           },
         }),
       ),
-    ).rejects.toMatchObject({ code: 'plugin-contributes-exceeds-manifest' });
+    ).rejects.toMatchObject({
+      code: 'plugin-contributes-exceeds-manifest',
+      pluginId: 'owner',
+    });
 
     await expect((await kernel.seal()).resolve(ref)).rejects.toBeInstanceOf(PluginError);
   });
@@ -156,6 +162,7 @@ describe('permissions', () => {
 
     await expect(kernel.register(reader(['service:example.data']))).rejects.toMatchObject({
       code: 'plugin-permission-denied',
+      pluginId: 'reader',
       message: expect.stringContaining('"service:example.other"'),
     });
 
@@ -270,7 +277,7 @@ describe('governed seams', () => {
 
     await expect(
       kernel.register(contributesTo('a', 'prompt', toolsExtensionPoint)),
-    ).rejects.toMatchObject({ code: 'plugin-capability-not-declared' });
+    ).rejects.toMatchObject({ code: 'plugin-capability-not-declared', pluginId: 'a' });
     await expect(
       kernel.register(contributesTo('b', 'tool', promptSectionsExtensionPoint)),
     ).rejects.toMatchObject({ code: 'plugin-capability-not-declared' });
@@ -392,6 +399,102 @@ describe('governed seams', () => {
   });
 });
 
+describe('contributes.hooks', () => {
+  const observed = defineHook<number>({ id: 'example.observed', mode: 'observe' });
+  const checked = defineHook<number>({ id: 'example.checked', mode: 'observe' });
+
+  it('lets a plugin listen to the hooks its manifest lists', async () => {
+    const kernel = createPluginKernel();
+    await kernel.register(
+      definePlugin({
+        manifest: manifest('listener', {
+          contributes: { hooks: ['example.observed', 'example.checked'] },
+        }),
+        setup(env) {
+          env.onHook(observed, () => undefined);
+          env.onHook(checked, () => undefined);
+        },
+      }),
+    );
+
+    expect(kernel.hooks.count(observed)).toBe(1);
+    expect(kernel.hooks.count(checked)).toBe(1);
+  });
+
+  it('rejects a hook the manifest does not list, names the plugin and leaves nothing behind', async () => {
+    const kernel = createPluginKernel();
+
+    await expect(
+      kernel.register(
+        definePlugin({
+          manifest: manifest('listener', { contributes: { hooks: ['example.observed'] } }),
+          setup(env) {
+            env.onHook(observed, () => undefined);
+            env.onHook(checked, () => undefined);
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({
+      code: 'plugin-contributes-exceeds-manifest',
+      pluginId: 'listener',
+      message: expect.stringContaining(
+        'contributed hook "example.checked" but its manifest contributes.hooks does not list it',
+      ),
+    });
+
+    expect(kernel.hooks.count(observed)).toBe(0);
+    expect(kernel.hooks.count(checked)).toBe(0);
+  });
+
+  it('closes the list once contributes is declared: an omitted hooks key means no hooks', async () => {
+    const kernel = createPluginKernel();
+
+    await expect(
+      kernel.register(
+        definePlugin({
+          manifest: manifest('listener', { contributes: { tools: [] } }),
+          setup(env) {
+            env.onHook(observed, () => undefined);
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({ code: 'plugin-contributes-exceeds-manifest', pluginId: 'listener' });
+  });
+
+  it('does not check a plugin that declared no contributes', async () => {
+    const kernel = createPluginKernel();
+
+    await kernel.register(
+      definePlugin({
+        manifest: manifest('open'),
+        setup(env) {
+          env.onHook(observed, () => undefined);
+        },
+      }),
+    );
+
+    expect(kernel.hooks.count(observed)).toBe(1);
+  });
+
+  it('needs no capability, because a hook is not an extension point', async () => {
+    const kernel = createPluginKernel();
+
+    await kernel.register(
+      definePlugin({
+        manifest: manifest('listener', {
+          capabilities: ['command'],
+          contributes: { hooks: ['example.observed'] },
+        }),
+        setup(env) {
+          env.onHook(observed, () => undefined);
+        },
+      }),
+    );
+
+    expect(kernel.hooks.count(observed)).toBe(1);
+  });
+});
+
 describe('plugin info', () => {
   const serviceRef = defineServiceRef<number>({ id: 'example.counter' });
 
@@ -434,6 +537,29 @@ describe('plugin info', () => {
     );
 
     expect(kernel.plugins()[0]?.contributed.services).toEqual(['example.counter']);
+  });
+
+  it('lists the hooks a plugin listens to as soon as its setup has run', async () => {
+    const kernel = createPluginKernel();
+    const hookA = defineHook<number>({ id: 'example.a', mode: 'observe' });
+    const hookB = defineHook<number>({ id: 'example.b', mode: 'observe' });
+    await kernel.register(
+      definePlugin({
+        manifest: manifest('listener'),
+        setup(env) {
+          env.onHook(hookA, () => undefined);
+          env.onHook(hookB, () => undefined);
+          // A second handler on the same hook is listed once.
+          env.onHook(hookA, () => undefined);
+        },
+      }),
+    );
+    await kernel.register(definePlugin({ manifest: manifest('quiet'), setup: () => undefined }));
+
+    const [listener, quiet] = kernel.plugins();
+    expect(listener?.contributed.hooks).toEqual(['example.a', 'example.b']);
+    expect(Object.isFrozen(listener?.contributed.hooks)).toBe(true);
+    expect(quiet?.contributed.hooks).toEqual([]);
   });
 
   it('lists tools and prompt sections only after an owner collected them', async () => {

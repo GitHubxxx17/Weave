@@ -8,6 +8,7 @@ import {
   sessionStoreRef,
   toolsExtensionPoint,
   type KernelPlugin,
+  type PluginApprovalBroker,
   type PluginManifest,
   type ProjectedPluginEventHandle,
   type ServiceHandle,
@@ -198,7 +199,7 @@ describe('Server host', () => {
     }
   });
 
-  it('lets kernel plugins use the Approval Broker the Server owns and read its Session Store', async () => {
+  it('lets kernel plugins use a view of the Approval Broker the Server owns and read its Session Store', async () => {
     const runtime = await startRuntime();
     const seen: Promise<unknown>[] = [];
     const probe: KernelPlugin = definePlugin({
@@ -222,7 +223,12 @@ describe('Server host', () => {
       expect(await (store as SessionEventStore).read('session-1')).toEqual(
         await serverStore.read('session-1'),
       );
-      expect(broker).toBe(runtime.get(approvalBrokerService));
+      // A plugin sees the Server's requests but gets no way to decide them.
+      const view = broker as PluginApprovalBroker;
+      const serverBroker = runtime.get(approvalBrokerService);
+      expect(view).not.toBe(serverBroker);
+      expect(Object.keys(view).sort()).toEqual(['get', 'list', 'request', 'subscribe']);
+      expect(view.list()).toEqual(serverBroker.list());
     } finally {
       await disposeServerPlugins(runtime);
       await runtime.stop();

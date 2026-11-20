@@ -15,8 +15,8 @@ export type {
   PluginManifest,
   PluginPermission,
 } from './manifest.js';
-export { PluginError } from './plugin-errors.js';
-export type { PluginErrorCode } from './plugin-errors.js';
+export { attributePluginError, PluginError } from './plugin-errors.js';
+export type { PluginErrorCode, PluginErrorOptions } from './plugin-errors.js';
 export type {
   PluginContext,
   PluginSnapshot,
@@ -83,6 +83,8 @@ export type {
 
 // Weave seams (Stage 2): typed service refs, extension points and hooks for
 // Weave's own subsystems, typed against the real library contracts.
+export { createRestrictedApprovalBroker } from './approval-view.js';
+export type { PluginApprovalBroker } from './approval-view.js';
 export {
   agentRunnerRef,
   approvalBrokerRef,
@@ -113,3 +115,7 @@ export type {
   TurnEndInfo,
   TurnInfo,
 } from './seams.js';
+
+// The SDK the host passes to a plugin it loads from disk (Stage 4).
+export { createPluginSdk } from './sdk.js';
+export type { PluginFactory, PluginModule, PluginSdk } from './sdk.js';

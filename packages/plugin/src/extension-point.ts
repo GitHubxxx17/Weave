@@ -1,6 +1,6 @@
 import { assertNameDeclared } from './declaration.js';
 import { type ContributedNameKey, type PluginCapability, type PluginManifest } from './manifest.js';
-import { PluginError } from './plugin-errors.js';
+import { attributePluginError, PluginError } from './plugin-errors.js';
 import { type Disposer } from './service.js';
 
 /** Throws when a contributed name is not declared in the contributor's manifest. */
@@ -102,6 +102,7 @@ export class ExtensionRegistry {
       throw new PluginError(
         'plugin-capability-not-declared',
         `Plugin "${pluginId}" contributes to "${point.id}" but did not declare the "${governed.capability}" capability`,
+        { pluginId },
       );
     }
     this.#singleSlot.set(point.id, point.singleSlot);
@@ -133,6 +134,9 @@ export class ExtensionRegistry {
    * Runs every contribution to `point` against `api` in registration order and
    * returns `api`. Throws when a single-slot point has more than one
    * contribution, or when a contributor adds a name its manifest does not list.
+   * Whatever a contribution throws, including a failure inside the owner's own
+   * API such as a name that is already taken, leaves as a {@link PluginError}
+   * that names the contributing plugin, so a host can drop that one plugin.
    */
   collect<T>(point: ExtensionPoint<T>, api: T): T {
     const list = this.#contributions.get(point.id) ?? [];
@@ -144,7 +148,15 @@ export class ExtensionRegistry {
       );
     }
     for (const entry of list) {
-      (entry.fn as Contributor<T>)(this.#guarded(point, api, entry));
+      try {
+        (entry.fn as Contributor<T>)(this.#guarded(point, api, entry));
+      } catch (error: unknown) {
+        throw attributePluginError(
+          error,
+          entry.pluginId,
+          `Plugin "${entry.pluginId}" failed while contributing to "${point.id}"`,
+        );
+      }
     }
     return api;
   }

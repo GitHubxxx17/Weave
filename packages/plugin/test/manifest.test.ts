@@ -61,6 +61,7 @@ describe('Plugin Manifest declarations', () => {
       promptSections: ['style'],
       events: ['example-tools/note-added'],
       commands: ['review'],
+      hooks: ['weave.tools.policy'],
       services: ['example.cache'],
     },
     permissions: [
@@ -99,6 +100,8 @@ describe('Plugin Manifest declarations', () => {
     ['an unknown contributes kind', { contributes: { widgets: ['panel'] } }],
     ['an empty contributed name', { contributes: { tools: [''] } }],
     ['a duplicate contributed tool', { contributes: { tools: ['echo', 'echo'] } }],
+    ['an empty hook id', { contributes: { hooks: [''] } }],
+    ['a duplicate contributed hook', { contributes: { hooks: ['a.b', 'a.b'] } }],
     ['a malformed service id', { contributes: { services: ['Not A Service'] } }],
     ['an unknown permission', { permissions: ['workspace:delete'] }],
     ['a malformed service permission', { permissions: ['service:Not A Service'] }],
@@ -239,6 +242,28 @@ describe('Plugin Manifest declarations', () => {
           withEvents(['example-tools/note-added', 'example-tools/note-added']),
         ).success,
       ).toBe(false);
+    });
+  });
+
+  describe('contributes.hooks', () => {
+    const withHooks = (hooks: string[], capabilities: string[] = ['tool']) => ({
+      ...validManifest,
+      capabilities,
+      contributes: { hooks },
+    });
+
+    it('accepts hook ids without any capability: a hook is not an extension point', () => {
+      expect(
+        pluginManifestSchema.safeParse(
+          withHooks(['weave.tools.policy', 'weave.turn.end'], ['command']),
+        ).success,
+      ).toBe(true);
+    });
+
+    it('keeps the hook ids as written', () => {
+      expect(
+        pluginManifestSchema.parse(withHooks(['weave.tools.policy'])).contributes?.hooks,
+      ).toEqual(['weave.tools.policy']);
     });
   });
 

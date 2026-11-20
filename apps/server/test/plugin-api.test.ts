@@ -4,6 +4,7 @@ import {
   commandsExtensionPoint,
   definePlugin,
   promptSectionsExtensionPoint,
+  toolResultHook,
   toolsExtensionPoint,
   type KernelPlugin,
   type WeavePlugin,
@@ -52,11 +53,13 @@ const noteKernelPlugin: KernelPlugin = definePlugin({
       promptSections: ['note-style'],
       events: ['note-kernel/note-added'],
       commands: ['summarize'],
+      hooks: ['weave.tools.result'],
     },
     permissions: ['workspace:read'],
   },
   setup(env) {
     env.defineEvent('note-added', { schema: z.object({ text: z.string() }) });
+    env.onHook(toolResultHook, () => undefined);
     env.contribute(commandsExtensionPoint, (api) =>
       api.addCommand({
         name: 'summarize',
@@ -158,6 +161,7 @@ describe('GET /plugins', () => {
           promptSections: [],
           events: [],
           commands: [],
+          hooks: [],
           services: [],
         },
       });
@@ -173,6 +177,7 @@ describe('GET /plugins', () => {
           promptSections: ['note-style'],
           events: ['note-kernel/note-added'],
           commands: ['summarize'],
+          hooks: ['weave.tools.result'],
         },
         permissions: ['workspace:read'],
         provides: {
@@ -181,6 +186,7 @@ describe('GET /plugins', () => {
           promptSections: ['note-style'],
           events: ['note-kernel/note-added'],
           commands: ['summarize'],
+          hooks: ['weave.tools.result'],
           services: [],
         },
       });

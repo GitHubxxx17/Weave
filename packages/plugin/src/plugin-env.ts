@@ -147,6 +147,8 @@ export function createPluginEnv(deps: PluginEnvDeps): PluginEnv {
     },
     defineEvent,
     onHook(hook, handler) {
+      assertNameDeclared(pluginId, manifest.contributes, 'hooks', hook.id);
+      usage?.hooks.add(hook.id);
       return tracked(hooks.on(hook, handler, pluginId));
     },
   };

@@ -35,6 +35,8 @@ export interface PluginContributes {
   readonly events?: readonly string[] | undefined;
   /** Slash command names added through `weave.commands`. */
   readonly commands?: readonly string[] | undefined;
+  /** Ids of the hooks the plugin listens to through `env.onHook`. */
+  readonly hooks?: readonly string[] | undefined;
   /** Ids of the services the plugin provides. */
   readonly services?: readonly string[] | undefined;
 }
@@ -152,6 +154,7 @@ export const pluginManifestSchema: z.ZodType<PluginManifest> = z
         promptSections: nameListSchema.optional(),
         events: eventTypeListSchema.optional(),
         commands: commandNameListSchema.optional(),
+        hooks: nameListSchema.optional(),
         services: z
           .array(serviceIdSchema)
           .refine(hasUniqueEntries, { message: 'Contributed names must be unique' })
