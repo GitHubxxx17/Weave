@@ -823,3 +823,20 @@ That makes the Runtime reusable from a CLI or desktop surface, keeps provider
 churn inside `llm`, and gives the Server a thin control-plane role. The
 direction is enforced both by package manifests and by ESLint so an accidental
 import fails near the source of the mistake.
+
+## Local Plugin Host orchestration (Stage 4.4a)
+
+`@weave/plugin-host` owns disk discovery, the folded append-only trust decisions,
+setup deadlines and deterministic local-plugin reload attempts. Server injects
+an already-published host-only baseline and a publication port backed by its
+existing generation controller. There is one stable Runner and Session queue.
+The host does not import Runtime, transport types or SQLite.
+
+All administrative operations share a serial queue. Durable disable/revoke
+blocks admission immediately after append, and its optional immediate mode
+cancels active turns independently of a successful replacement. Rebuild failure
+retains the current resources while keeping admission blocked. Disk/trust state
+and current generation membership are reported separately. Setup wrappers own
+partial cleanup and deadlines; every discarded assembly uses fresh factory
+instances on retry. Full contracts and cooperative cancellation limits are in
+the local-plugin design section 8.6. Server persistence/routes remain Stage 4.4b.

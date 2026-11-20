@@ -357,6 +357,168 @@ interface PluginHost<Runner> {
 - 关闭时先禁止新回合并中止所有排队和运行请求，等待终态持久化、回收 generation，再关闭共享存储；HTTP 停止接受连接与取消并行启动，不能先等待长 SSE 连接关闭再触发取消。
 - Generation 退休释放错误不撤销已发布的新代；保留错误并在宿主关闭时汇总报告。销毁必须幂等。
 
+### 8.6 Stage 4.4a 宿主编排契约（实现基线）
+
+4.3 已通过 PR #73 合入 `main@a40f89d`。4.4 拆成 4.4a 通用宿主编排和
+4.4b Server 持久化、路由与启动集成。通用宿主不导入 Runtime、Agent、HTTP，
+也不建立第二份会话队列。Server 注入已发布的纯宿主基线 generation 和唯一门面的
+publication port；初始本地加载失败时保留这份可用基线。
+
+下面是跨包公共契约，泛型使用已有 `GenerationRequest`、`GenerationRunner` 和
+`RunnerGeneration`；清单、SDK、KernelPlugin 来自 `@weave/plugin`。
+
+```ts
+export interface LocalPluginIdentity {
+  readonly id: string;
+  readonly digest: string;
+}
+
+export interface ActiveLocalPlugin extends LocalPluginIdentity {
+  readonly manifest: PluginManifest;
+}
+
+export type HostedLocalPluginState =
+  | Exclude<LocalPluginState, 'eligible'>
+  | 'loaded'
+  | 'failed';
+
+export interface LocalPluginRecord {
+  readonly id: string;
+  readonly state: HostedLocalPluginState;
+  readonly candidate: LocalPluginCandidate;
+  readonly trusted: PluginTrustRecord | undefined;
+  readonly error?: LocalPluginIssue | undefined;
+  // Membership in the currently published generation, even when trust/disk
+  // state now says changed, disabled, pending-trust or failed.
+  readonly active?: {
+    readonly generation: number;
+    readonly digest: string;
+    readonly manifest: PluginManifest;
+  } | undefined;
+}
+
+export interface PluginHostSnapshot {
+  readonly directory: string;
+  readonly exists: boolean;
+  readonly truncated: boolean;
+  readonly trustSequence: number;
+  readonly plugins: readonly LocalPluginRecord[];
+  readonly generation: {
+    readonly id: number;
+    readonly plugins: readonly ActiveLocalPlugin[];
+    readonly acceptingRuns: boolean;
+    readonly blocked?: LocalPluginIssue | undefined;
+  };
+  readonly error?: LocalPluginIssue | undefined;
+}
+
+export interface PluginReloadFailure {
+  readonly id: string;
+  readonly error: LocalPluginIssue;
+}
+
+export interface ReloadResult {
+  readonly generation: number;
+  readonly unchanged: boolean;
+  readonly failed: readonly PluginReloadFailure[];
+  readonly error?: LocalPluginIssue | undefined;
+  readonly snapshot: PluginHostSnapshot;
+}
+
+export interface PluginGenerationPort<R extends GenerationRequest, E, T> {
+  // Exactly the existing controller.runner; never construct another queue.
+  readonly runner: GenerationRunner<R, E>;
+  current(): RunnerGeneration<R, E, T>;
+  publish(
+    candidate: RunnerGeneration<R, E, T>,
+    options?: { readonly immediate?: boolean },
+  ): Promise<void>;
+  blockNewRuns(error: Error): void;
+  abortActiveRuns(reason?: unknown): void;
+  dispose(): Promise<void>;
+}
+
+export interface CreatePluginHostOptions<R extends GenerationRequest, E, T> {
+  readonly discovery: DiscoverOptions;
+  readonly trustStore: PluginTrustStore;
+  readonly generations: PluginGenerationPort<R, E, T>;
+  readonly assemble: (
+    localPlugins: readonly KernelPlugin[],
+  ) => Promise<RunnerGeneration<R, E, T>>;
+  readonly sdk?: PluginSdk | undefined;
+  readonly setupTimeoutMs?: number | undefined; // positive finite; default 10_000
+  readonly importModule?: ((specifier: string) => Promise<unknown>) | undefined;
+}
+
+export interface PluginHost<R extends GenerationRequest, E, T> {
+  readonly runner: GenerationRunner<R, E>;
+  list(): readonly LocalPluginRecord[];
+  snapshot(): PluginHostSnapshot;
+  reload(): Promise<ReloadResult>;
+  trust(id: string, digest: string): Promise<ReloadResult>;
+  revoke(id: string, options?: { readonly immediate?: boolean }): Promise<ReloadResult>;
+  setEnabled(
+    id: string,
+    enabled: boolean,
+    options?: { readonly immediate?: boolean },
+  ): Promise<ReloadResult>;
+  dispose(): Promise<void>;
+}
+
+export function createPluginHost<R extends GenerationRequest, E, T>(
+  options: CreatePluginHostOptions<R, E, T>,
+): Promise<PluginHost<R, E, T>>;
+```
+
+**状态与发布。** `list` 和 `snapshot` 只读缓存，返回深层冻结的独立快照。
+目录顺序保留发现顺序，重复 id 使用 `(id,directory)` 区分。磁盘/信任状态与
+当前代的 active 摘要、清单分别报告，目录消失仍在 generation.plugins 保留当前代成员。
+发布前按候选 id 暂存 active 元数据；快照读取 port.current 的真实指针，不能因旧代
+销毁等待而回报过期代。publish 仅可在指针提交前拒绝，提交后的退休失败留到最终关闭。
+未发布候选由宿主回收，发布后由 port 退休回收。宿主 dispose 不关闭 trustStore。
+
+**串行控制。** 所有重载和信任变更共享一个串行队列；尚未开始且相邻的 reload 合并。
+执行中的 reload 之后到达的请求形成一个 trailing pass，不能直接复用已经扫描过的结果。
+trust/revoke/setEnabled 是不可合并、不可越过的队列屏障。关闭同步标记 closed 并阻止
+新回合；排队调用拒绝，进行中的装配结束后回收，不能在关闭后发布。
+
+**持久化优先。** 变更参数由 Zod 校验，不把字符串转换成布尔值。trust 重新发现整个根目录，
+要求唯一 ready id 和精确摘要，然后追加当前磁盘清单。启用要求已信任、唯一 ready 且摘要一致。
+停用或撤销已信任 id 不要求目录仍可读。已有未信任 id 的撤销是幂等重载，完全未知 id 返回
+plugin-not-found。append 失败不改变准入，也不取消运行。append 成功后、下一个 await 前，
+同步 blockNewRuns；immediate 同时 abortActiveRuns，即使重建失败也兑现取消。
+每次 reload 重新折叠外部信任事件，发现当前成员已撤销/停用也阻止新回合，合规发布后恢复。
+
+**独立取消。** GenerationController 增加 `abortActiveRuns(reason?: unknown): void`，
+仅取消当前及退休代中已经运行的 Run，不永久 abort 当前代控制器，不取消排队项，也不发布。
+后续成功发布恢复准入时，当前代/门面仍可继续使用。现有 pump、终态持久化、会话顺序不变。
+
+**重试与 unchanged。** 全部 eligible 的 `(id,digest)` 按 UTF-8 id 字节序作为 attempted key。
+仅上次无失败、无宿主错误且未阻止准入时可 unchanged；失败插件每次显式 reload 都重试。
+加载与装配按确定顺序执行；每次装配尝试都重新调用所有存活插件的工厂，不复用已 setup/dispose
+的模块。相同摘要仍共享 ESM namespace/top-level 状态，不引入随机 URL。
+仅真实 PluginError/PluginHostError 且 pluginId 属于本次 local survivor 才能归因隔离；
+每次移除一个，N 个 eligible 最多 N+1 次装配。宿主 id 或无归属错误保留当前代并报告 host error。
+发现/存储/参数错误拒绝；候选装配或发布错误返回保留代的 ReloadResult，已经追加的事实不回滚。
+
+**磁盘竞态。** 加载摘要不符重新发现整个根目录，刷新 changed/invalid/missing 状态。
+每个不符身份最多刷新一次，整个 pass 不超过初始 eligible 数量；持续变化返回有界竞态错误，
+保留当前代，下次显式重载重试。失败按 `(id,digest)` 记录，新版本不继承旧版本错误。
+
+**setup 生命周期。** 包内私有 wrapper 在 setup 内部限时，默认 10,000ms，必须为正有限数。
+超时先 abort 转发信号并使 env 注册方法失效，再拒绝，让 kernel register 执行回滚。
+只识别宿主自身超时标记的 cause 链来归一化 plugin-setup-timeout。
+每个模块 disposeOnce；setup 失败、未执行 setup 的模块和废弃候选都回收，正常代回收也复用同一承诺。
+超时后不等待原始 setup，监听晚到 reject 防止未处理拒绝；晚到注册被 guard 拒绝。
+清理异常单独保留，在 host.dispose 的 AggregateError 中报告，不覆盖归因的原始失败。
+任意 JS 无法强行终止：同步死循环、忽略信号的外部副作用，以及永不结束的 import/factory/dispose
+不受 setup deadline 保证；沿用协作式清理，不虚构卸载或资源隔离。
+
+新增域错误：plugin-not-found、plugin-not-trusted、plugin-not-loadable、plugin-setup-timeout、
+plugin-reload-failed、plugin-generation-blocked、plugin-host-disposed；公开 issue 仅 code/message，
+cause 留内部。4.4b 的 409 映射增加 plugin-not-loadable，响应还包含 snapshot 的目录、
+trustSequence、当前代状态和 active 元数据，不序列化 runner、kernel 或内部 cause。
+
 ## 9. 对内核的增补（4.1）
 
 ### 9.1 `contributes.hooks`
@@ -490,7 +652,7 @@ Vite 开发代理现在只转发 `/agent`、`/approvals`、`/projects`、`/sessi
 
 | 模块 | 导出 | 作用 |
 |---|---|---|
-| 错误 | `PluginHostError`（`code`、`pluginId?`、`cause`） | 本包的错误。错误码：`plugin-invalid-descriptor`、`plugin-entry-invalid`、`plugin-unsupported-file`、`plugin-too-large`、`plugin-unreadable`、`plugin-duplicate-id`、`plugin-id-reserved`、`plugin-host-unsupported`、`plugin-digest-mismatch`、`plugin-load-failed`、`plugin-invalid-module`、`plugin-manifest-mismatch`。不兼容候选的错误码还会是内核的 `plugin-api-version-unsupported` 和 `plugin-engine-unsupported`，与内核一致。`plugin-setup-timeout` 属于 4.4 的重载，不在本包 |
+| 错误 | `PluginHostError`（`code`、`pluginId?`、`cause`） | 本包的错误。错误码：`plugin-invalid-descriptor`、`plugin-entry-invalid`、`plugin-unsupported-file`、`plugin-too-large`、`plugin-unreadable`、`plugin-duplicate-id`、`plugin-id-reserved`、`plugin-host-unsupported`、`plugin-digest-mismatch`、`plugin-load-failed`、`plugin-invalid-module`、`plugin-manifest-mismatch`。不兼容候选的错误码还会是内核的 `plugin-api-version-unsupported` 和 `plugin-engine-unsupported`，与内核一致。上述为 4.2 错误；4.4a 在本包增加管理、准入、重载与 setup 超时错误，见 §8.6 |
 | 清单文件 | `descriptorFileName`、`parseDescriptor(text)`、`PluginDescriptor` | 解析 `weave-plugin.json`，含第 4.1 节的本地插件规则 |
 | 摘要 | `computeDirectoryDigest(directory, options?)`、`defaultDigestLimits` | 第 5.3 节 |
 | 发现 | `discoverLocalPlugins(options)`、`LocalPluginCandidate`（`ready`、`incompatible`、`invalid`）、`DiscoveryResult` | 第 5.1 节。只读磁盘，不执行任何插件代码 |
@@ -521,7 +683,8 @@ Vite 开发代理现在只转发 `/agent`、`/approvals`、`/projects`、`/sessi
 | 4.1 | 内核为第三方插件补齐 | 第 9 节：`contributes.hooks`、可归因的错误、`PluginSdk`、受限审批视图；`GET /plugins` 与 Studio 显示 hooks | 既有行为不变 |
 | 4.2 | `@weave/plugin-host` | 包脚手架与边界；清单文件、发现、摘要、信任折叠与差异、加载器 | 临时目录夹具、真实动态 `import` |
 | 4.3 | Generation 切换，行为不变 | 每代一个 Tool 和 Provider 注册表；Runner 门面（pin、会话串行、销毁）；`serverHost` 读当前 generation | 没有本地插件时全部既有测试通过 |
-| 4.4 | 本地插件接入 Server | `PluginHost` 编排；SQLite 信任库；路由与加固；`startServer` 配置；`GET /plugins` 新字段；在真实 Electron 构建里验证动态 `import` | 端到端：夹具插件信任后下一回合生效 |
+| 4.4a | 通用本地插件宿主 | PluginHost 编排、信任变更、独立取消、setup 限时与错误隔离 | 通用 Runner 与真实 kernel/临时目录行为测试 |
+| 4.4b | 本地插件接入 Server | SQLite 信任库；路由与加固；`startServer` 配置；`GET /plugins` 新字段；验证真实 Electron 外部 ESM 动态 `import` | 端到端：夹具插件信任后下一回合生效 |
 | 4.5 | Studio | 状态分组、信任对话框与差异、重新加载、立即生效、徽标；开发代理补 `/plugins`、`/commands` | jsdom 测试；浏览器里的外观没有验证，需要你看一眼 |
 
 4.3 是风险最高的一步，它不改行为，只改装配的归属，所以单独成 PR。
