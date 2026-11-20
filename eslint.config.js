@@ -12,6 +12,7 @@ const workspacePackageNames = new Set([
   '@weave/runtime',
   '@weave/plugin',
   '@weave/plugin-builtins',
+  '@weave/plugin-host',
   '@weave/server',
   '@weave/desktop',
   '@weave/studio',
@@ -77,6 +78,16 @@ const packageLayers = new Map([
     },
   ],
   [
+    '@weave/plugin-host',
+    {
+      // The host discovers, trusts and loads plugins from disk. It builds on
+      // the plugin kernel only, so it stays independent of the Runtime and the
+      // Server that embeds it.
+      allowedDependencies: ['@weave/plugin'],
+      layer: 'plugin-host',
+    },
+  ],
+  [
     '@weave/server',
     {
       allowedDependencies: [
@@ -87,6 +98,7 @@ const packageLayers = new Map([
         '@weave/workspace',
         '@weave/plugin',
         '@weave/plugin-builtins',
+        '@weave/plugin-host',
       ],
       layer: 'server',
     },

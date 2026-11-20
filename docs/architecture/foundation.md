@@ -482,6 +482,8 @@ cancellation state machine.
  stable contracts         └ @weave/session┘      lifecycle        trusted ext.     HTTP adapter     Electron host
                             durable facts
 @weave/workspace (Project metadata, no internal deps) ───────────────────────────> @weave/server
+@weave/plugin ── @weave/plugin-builtins (wraps the libraries as kernel plugins) ──> @weave/server
+@weave/plugin ── @weave/plugin-host (finds, trusts and loads local plugins) ──────> @weave/server
 @weave/studio (browser, no @weave/* imports) ── HTTP/SSE ──> @weave/server
 ```
 
