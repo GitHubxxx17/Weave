@@ -11,6 +11,7 @@ const workspacePackageNames = new Set([
   '@weave/workspace',
   '@weave/runtime',
   '@weave/plugin',
+  '@weave/plugin-builtins',
   '@weave/server',
   '@weave/desktop',
   '@weave/studio',
@@ -60,6 +61,22 @@ const packageLayers = new Map([
     },
   ],
   [
+    '@weave/plugin-builtins',
+    {
+      // Builtin plugins wrap the libraries into the kernel; they sit between
+      // the plugin kernel and the server.
+      allowedDependencies: [
+        '@weave/protocol',
+        '@weave/llm',
+        '@weave/session',
+        '@weave/workspace',
+        '@weave/runtime',
+        '@weave/plugin',
+      ],
+      layer: 'plugin-builtins',
+    },
+  ],
+  [
     '@weave/server',
     {
       allowedDependencies: [
@@ -69,6 +86,7 @@ const packageLayers = new Map([
         '@weave/runtime',
         '@weave/workspace',
         '@weave/plugin',
+        '@weave/plugin-builtins',
       ],
       layer: 'server',
     },
