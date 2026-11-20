@@ -8,6 +8,7 @@ import {
   promptSectionsExtensionPoint,
   toolAroundHook,
   toolPipelineRef,
+  toolPolicyHook,
   toolRegistryRef,
   toolResultHook,
   toolsExtensionPoint,
@@ -82,9 +83,10 @@ export interface AssembledAgentKernel {
  * After sealing, the host collects `weave.prompt.sections` so plugins can add
  * system-prompt sections, and wraps the pipeline to fan completed results out
  * to `weave.tools.result` observers. Plugins can also wrap every execution
- * through `weave.tools.around`; the pipeline applies it outside its own
- * validation and approval. A failure while assembling disposes the kernel
- * before it propagates.
+ * through `weave.tools.around`, and vote on every call through
+ * `weave.tools.policy`, which can only make the outcome stricter; the pipeline
+ * applies both itself, around outermost. A failure while assembling disposes
+ * the kernel before it propagates.
  */
 export async function assembleAgentKernel(
   assembly: AgentKernelAssembly,
@@ -121,6 +123,9 @@ export async function assembleAgentKernel(
               : {
                   around: (request, next) => kernel.hooks.runWrap(toolAroundHook, request, next),
                 }),
+            ...(kernel.hooks.count(toolPolicyHook) === 0
+              ? {}
+              : { policy: (request) => kernel.hooks.runDecide(toolPolicyHook, request) }),
           }),
       });
       env.contribute(toolsExtensionPoint, (api) => {

@@ -672,6 +672,56 @@ describe('Agent Runner contracts', () => {
     await store.close();
   });
 
+  it('returns a policy denial to the model as a recoverable failure', async () => {
+    const store = createInMemorySessionEventStore();
+    const registry = createToolRegistry();
+    const execute = vi.fn(() => 'done');
+    registry.register({
+      name: 'echo',
+      description: 'Echoes',
+      parameters: { type: 'object', properties: {} },
+      inputSchema: z.object({}),
+      execute,
+    });
+    const requests: LlmRequest[] = [];
+    const llm = sequenceClient(
+      [
+        [
+          { type: 'tool-call-start', id: 'call-1', name: 'echo' },
+          { type: 'tool-call-delta', id: 'call-1', argumentsDelta: '{}' },
+          { type: 'finish', reason: 'tool-call' },
+        ],
+        [
+          { type: 'text-delta', text: '这个工具被禁止了' },
+          { type: 'finish', reason: 'stop' },
+        ],
+      ],
+      requests,
+    );
+    const runner = createAgentRunner({
+      llm,
+      sessionStore: store,
+      toolRegistry: registry,
+      toolPipeline: createToolPipeline({ registry, policy: () => 'deny' }),
+    });
+
+    const events = await collect(runner.run(validRequest));
+
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: 'tool-result', status: 'failed', errorCode: 'tool-denied' }),
+    );
+    expect(events.at(-1)).toMatchObject({ type: 'completed' });
+    expect(execute).not.toHaveBeenCalled();
+    const projection = projectSession(await store.read(validRequest.sessionId));
+    const toolMessage = projection.messages.find(({ message }) => message.role === 'tool');
+    expect(toolMessage?.message.content[0]).toMatchObject({
+      type: 'text',
+      text: 'Tool "echo" failed (tool-denied). Tool "echo" was denied by a policy',
+    });
+
+    await store.close();
+  });
+
   it('still ends the turn when the tool pipeline is misconfigured', async () => {
     const store = createInMemorySessionEventStore();
     const registry = createToolRegistry();

@@ -142,6 +142,7 @@ export type ToolExecutionErrorCode =
   | 'tool-invalid-input'
   | 'tool-not-found'
   | 'tool-not-permitted'
+  | 'tool-denied'
   | 'tool-invalid-json'
   | 'tool-invalid-arguments'
   | 'tool-cancelled'

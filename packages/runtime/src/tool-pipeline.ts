@@ -30,6 +30,24 @@ export type ToolAround = (
   next: (request: ToolExecutionRequest) => Promise<ToolExecutionResult>,
 ) => Promise<ToolExecutionResult>;
 
+/**
+ * A policy's vote on one tool call: stop it (`deny`), require Approval
+ * (`ask`), or leave the usual flow alone (`abstain`).
+ */
+export type ToolPolicyVote = 'deny' | 'ask' | 'abstain';
+
+/**
+ * A security policy, consulted for every call once its arguments are valid and
+ * before Approval. A policy can only make the outcome stricter: `deny` ends the
+ * call, `ask` requires Approval even where the tool, its permission mode or its
+ * own metadata would not, and `abstain` changes nothing. No vote skips
+ * Approval. A policy that throws or returns anything else is treated as `deny`,
+ * so a broken policy never lets a call through.
+ */
+export type ToolPolicy = (
+  request: ToolExecutionRequest,
+) => ToolPolicyVote | PromiseLike<ToolPolicyVote>;
+
 /** Configuration used to create a shared Tool Pipeline. */
 export interface ToolPipelineOptions {
   /** Registry containing executable tool definitions. */
@@ -42,6 +60,8 @@ export interface ToolPipelineOptions {
   readonly maxResultBytes?: number | undefined;
   /** Middleware around each execution; see {@link ToolAround}. */
   readonly around?: ToolAround | undefined;
+  /** Security policy for each call, inside `around`; see {@link ToolPolicy}. */
+  readonly policy?: ToolPolicy | undefined;
 }
 
 /** Public execution boundary for all registered tools. */
@@ -236,6 +256,62 @@ function withAround(
   };
 }
 
+/** Asks `policy` for its vote; a policy that throws or answers wrongly denies. */
+async function consultPolicy(
+  policy: ToolPolicy,
+  request: ToolExecutionRequest,
+  signal: AbortSignal,
+): Promise<{ readonly vote: ToolPolicyVote; readonly cause?: unknown; readonly aborted?: true }> {
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<'aborted'>((resolve) => {
+    onAbort = () => resolve('aborted');
+    if (signal.aborted) {
+      onAbort();
+    } else {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+  });
+  try {
+    // A policy that never answers must not outlive the call's deadline or cancellation.
+    const vote = await Promise.race([Promise.resolve().then(() => policy(request)), aborted]);
+    if (vote === 'aborted') {
+      return { vote: 'deny', aborted: true };
+    }
+    if (vote === 'deny' || vote === 'ask' || vote === 'abstain') {
+      return { vote };
+    }
+    return { vote: 'deny', cause: new TypeError('A tool policy returned an invalid vote') };
+  } catch (error: unknown) {
+    return { vote: 'deny', cause: error };
+  } finally {
+    if (onAbort !== undefined) {
+      signal.removeEventListener('abort', onAbort);
+    }
+  }
+}
+
+const policyApprovalArgumentChars = 1_000;
+
+/** The Approval shown when a policy asks about a tool that has none of its own. */
+function policyApproval(
+  request: ToolExecutionRequest,
+): NonNullable<ToolDefinition<unknown, unknown>['approval']> {
+  return {
+    operation: 'plugin.policy',
+    risk: 'medium',
+    summarize: () => ({
+      summary: `插件策略要求确认工具 ${request.name} 的调用`,
+      inputSummary: {
+        tool: request.name,
+        arguments:
+          request.arguments.length > policyApprovalArgumentChars
+            ? `${request.arguments.slice(0, policyApprovalArgumentChars)}…`
+            : request.arguments,
+      },
+    }),
+  };
+}
+
 /** Creates a Tool Pipeline that owns validation and execution lifecycle. */
 export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
   const timeoutMs = options.timeoutMs;
@@ -302,14 +378,40 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
         }
 
         const toolWithApproval = tool as unknown as ToolDefinition<unknown, unknown>;
-        const approval = toolWithApproval.approval;
+        let forceApproval = false;
+        if (options.policy !== undefined) {
+          const { vote, cause, aborted } = await consultPolicy(options.policy, request, signal);
+          if (aborted === true) {
+            if (timedOut) {
+              throw new ToolExecutionError('tool-timeout', `Tool "${request.name}" timed out`);
+            }
+            throw new ToolExecutionError('tool-cancelled', 'Tool execution was cancelled', {
+              cause: createAbortError(),
+            });
+          }
+          if (vote === 'deny') {
+            throw new ToolExecutionError(
+              'tool-denied',
+              cause === undefined
+                ? `Tool "${request.name}" was denied by a policy`
+                : `Tool "${request.name}" was denied because a policy could not decide`,
+              cause === undefined ? undefined : { cause },
+            );
+          }
+          forceApproval = vote === 'ask';
+        }
+        // A policy that asks makes Approval mandatory: for a tool without its own
+        // Approval metadata, and in any permission mode.
+        const approval =
+          toolWithApproval.approval ?? (forceApproval ? policyApproval(request) : undefined);
         if (
           approval !== undefined &&
-          approvalRequiredForMode(
-            request.permissionMode ?? 'ask',
-            approval.operation,
-            inputResult.data,
-          )
+          (forceApproval ||
+            approvalRequiredForMode(
+              request.permissionMode ?? 'ask',
+              approval.operation,
+              inputResult.data,
+            ))
         ) {
           const approvalBroker = options.approvalBroker;
           if (approvalBroker === undefined) {

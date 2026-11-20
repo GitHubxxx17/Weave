@@ -185,6 +185,7 @@ function createToolMessage(result: ToolExecutionResult): Message {
 const recoverableToolErrorCodes: ReadonlySet<string> = new Set([
   'tool-not-found',
   'tool-not-permitted',
+  'tool-denied',
   'tool-invalid-json',
   'tool-invalid-arguments',
   'tool-execution-failed',

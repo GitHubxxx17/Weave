@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createLlmProviderRegistry, type LlmProviderRegistry } from '@weave/llm';
 import type { LlmRequest, StreamEvent } from '@weave/protocol';
@@ -6,11 +6,13 @@ import {
   definePlugin,
   promptSectionsExtensionPoint,
   toolAroundHook,
+  toolPolicyHook,
   toolResultHook,
   toolsExtensionPoint,
   turnEndHook,
   turnStartHook,
   type KernelPlugin,
+  type PolicyVote,
   type TurnEndInfo,
   type TurnInfo,
   type WeavePlugin,
@@ -20,6 +22,7 @@ import { createInMemoryProjectStore } from '@weave/workspace';
 import { createApp } from '../src/app.js';
 import { createSessionService } from '../src/session-service.js';
 import {
+  approvalBrokerService,
   createServerAgentRunner,
   createServerRuntime,
   getServerSessionStore,
@@ -534,6 +537,152 @@ describe('Server Plugin integration', () => {
       expect(turns).toHaveLength(2);
       expect(turns[0]).toMatch(/^start /);
       expect(turns[1]).toMatch(/ failed$/);
+    });
+  });
+
+  describe('tool policy', () => {
+    type Vote = (request: ToolExecutionRequest) => PolicyVote;
+
+    async function runPing(votes: readonly Vote[], answer?: 'approve' | 'reject') {
+      const execute = vi.fn(() => 'pong');
+      const policyPlugin: KernelPlugin = definePlugin({
+        manifest: {
+          id: 'policy-tool',
+          name: 'Policy Tool',
+          version: '1.0.0',
+          apiVersion: '1.0.0',
+          capabilities: ['tool'],
+        },
+        setup(env) {
+          env.contribute(toolsExtensionPoint, (api) => {
+            api.addTool({
+              name: 'ping',
+              description: '回 pong',
+              parameters: { type: 'object', properties: {} },
+              inputSchema: z.object({}),
+              execute,
+            });
+          });
+          for (const vote of votes) {
+            env.onHook(toolPolicyHook, vote);
+          }
+        },
+      });
+      const providerRegistry = createLlmProviderRegistry([
+        {
+          id: 'mock',
+          label: '本地演示',
+          type: 'mock',
+          client: createSequenceClient([
+            [
+              { type: 'tool-call-start', id: 'call-1', name: 'ping' },
+              { type: 'tool-call-delta', id: 'call-1', argumentsDelta: '{}' },
+              { type: 'finish', reason: 'tool-call' },
+            ],
+            [
+              { type: 'text-delta', text: '完成' },
+              { type: 'finish', reason: 'stop' },
+            ],
+          ]),
+          defaultModel: 'test-model',
+        },
+      ]);
+      const runtime = createServerRuntime({
+        providerSettings: createProviderSettings(providerRegistry),
+      });
+      await runtime.start();
+      try {
+        const sessionService = await createSessionServiceForRuntime(runtime);
+        const response = await createApp(runtime, {
+          agentRunner: await createServerAgentRunner(runtime, { kernelPlugins: [policyPlugin] }),
+          sessionService,
+        }).request('/agent/runs/stream', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            sessionId,
+            userMessage: { role: 'user', content: [{ type: 'text', text: '调用 ping' }] },
+            provider: 'mock',
+            model: 'test-model',
+          }),
+        });
+        const bodyPromise = response.text();
+        const broker = runtime.get(approvalBrokerService);
+        const pending = () => broker.list().filter((approval) => approval.status === 'pending');
+        const asked: { operation: string; toolName: string }[] = [];
+        if (answer !== undefined) {
+          await vi.waitFor(() => expect(pending()).toHaveLength(1));
+          const approval = pending()[0]!;
+          asked.push({ operation: approval.operation, toolName: approval.toolName });
+          if (answer === 'approve') {
+            broker.approve(approval.approvalId);
+          } else {
+            broker.reject(approval.approvalId);
+          }
+        }
+        return { body: await bodyPromise, execute, asked, approvals: broker.list().length };
+      } finally {
+        await runtime.stop();
+      }
+    }
+
+    it('runs the tool when every policy abstains', async () => {
+      const { body, execute, approvals } = await runPing([() => 'abstain']);
+
+      expect(body).toContain('"name":"ping","content":"pong"');
+      expect(execute).toHaveBeenCalledOnce();
+      expect(approvals).toBe(0);
+    });
+
+    it('stops a denied call and tells the model why it failed', async () => {
+      const { body, execute } = await runPing([() => 'deny']);
+
+      expect(body).toContain('"errorCode":"tool-denied"');
+      expect(body).toContain('event: completed');
+      expect(execute).not.toHaveBeenCalled();
+    });
+
+    it('asks the user before running a call a policy asked about', async () => {
+      const { body, execute, asked } = await runPing([() => 'ask'], 'approve');
+
+      expect(asked).toEqual([{ operation: 'plugin.policy', toolName: 'ping' }]);
+      expect(body).toContain('"name":"ping","content":"pong"');
+      expect(execute).toHaveBeenCalledOnce();
+    });
+
+    it('does not run a call the user rejected after a policy asked', async () => {
+      const { body, execute } = await runPing([() => 'ask'], 'reject');
+
+      expect(body).toContain('"errorCode":"tool-approval-rejected"');
+      expect(execute).not.toHaveBeenCalled();
+    });
+
+    it('takes the strictest vote across policies', async () => {
+      const denied = await runPing([() => 'ask', () => 'deny', () => 'abstain']);
+      const asked = await runPing([() => 'abstain', () => 'ask'], 'approve');
+
+      expect(denied.body).toContain('"errorCode":"tool-denied"');
+      expect(denied.execute).not.toHaveBeenCalled();
+      expect(asked.asked).toHaveLength(1);
+      expect(asked.execute).toHaveBeenCalledOnce();
+    });
+
+    it('denies the call when a policy throws', async () => {
+      const { body, execute } = await runPing([
+        () => {
+          throw new Error('policy bug');
+        },
+      ]);
+
+      expect(body).toContain('"errorCode":"tool-denied"');
+      expect(execute).not.toHaveBeenCalled();
+    });
+
+    it('denies the call when a policy votes allow, which no policy can', async () => {
+      const { body, execute } = await runPing([(() => 'allow') as unknown as Vote]);
+
+      expect(body).toContain('"errorCode":"tool-denied"');
+      expect(execute).not.toHaveBeenCalled();
     });
   });
 });
