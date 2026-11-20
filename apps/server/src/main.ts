@@ -23,8 +23,8 @@ import {
   approvalBrokerService,
   createServerAgentRunner,
   createServerRuntime,
+  disposeServerPlugins,
   getServerSessionStore,
-  getServerPluginRegistry,
   registerServerPlugins,
 } from './runtime.js';
 
@@ -245,9 +245,7 @@ export async function startServer(
         };
 
         await cleanup(() => closeServer(createdServer));
-        await cleanup(async () => {
-          await getServerPluginRegistry(runtime).dispose();
-        });
+        await cleanup(() => disposeServerPlugins(runtime));
         await cleanup(() => runtime.stop());
         await cleanup(() => closeProjectStore(projectStore));
         await cleanup(() => closeProviderSettingsStore(providerSettingsStore));
@@ -267,9 +265,7 @@ export async function startServer(
     if (server !== undefined) {
       await closeServer(server).catch(() => undefined);
     }
-    await getServerPluginRegistry(runtime)
-      .dispose()
-      .catch(() => undefined);
+    await disposeServerPlugins(runtime).catch(() => undefined);
     await runtime.stop().catch(() => undefined);
     await closeProjectStore(projectStore).catch(() => undefined);
     await closeProviderSettingsStore(providerSettingsStore).catch(() => undefined);

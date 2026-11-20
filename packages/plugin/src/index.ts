@@ -19,6 +19,8 @@ export type {
 } from './plugin-types.js';
 export { createPluginRegistry } from './plugin-registry.js';
 export type { PluginRegistry, PluginRegistryOptions } from './plugin-registry.js';
+export { adaptLegacyPlugin } from './legacy-plugin.js';
+export type { AdaptedLegacyPlugin, AdaptLegacyPluginOptions } from './legacy-plugin.js';
 
 // Typed plugin kernel (Stage 1).
 export { defineServiceRef, ServiceContainer, rootScopeKey } from './service.js';

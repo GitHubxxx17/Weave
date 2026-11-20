@@ -63,6 +63,9 @@ importers:
       '@weave/plugin':
         specifier: workspace:*
         version: link:../../packages/plugin
+      '@weave/plugin-builtins':
+        specifier: workspace:*
+        version: link:../../packages/plugin-builtins
       '@weave/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

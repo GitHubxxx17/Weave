@@ -249,3 +249,13 @@ export const newSessionEventSchema = z.union([coreEventSchema, pluginEventSchema
 ## 14. 非目标（本轮不做）
 
 进程外实际运行（MCP 之外的子进程 / WASM）、权限成为进程内安全边界、市场 / 安装器（M5 / Stage 6）。Studio 复杂面板沙箱 iframe 也留后。
+
+## 15. Server 宿主（Stage 2 收尾）
+
+`apps/server` 的手工装配收口为一个 `ServerHost`，由 `createServerRuntime` 创建并挂在返回的 Runtime 上（`runtime.serverHost`），取代原先的 4 个 `WeakMap` 与对 `createPluginRegistry` 的使用。
+
+- **根服务仍由 Runtime 持有。** 审批 broker 与 Session Store 的创建和关闭属于宿主 Runtime 的生命周期（`runtime.get(approvalBrokerService)` 不变）。内置插件 `host-services` 把这两个实例作为 `weave.approval.broker`、`weave.session.store` 提供给内核插件，只借出，不销毁。工具与 provider 注册表同样由宿主持有，内置的 `tool-registry`、`provider-registry` 通过 `registry` 与 `existing: 'skip'` 选项把贡献收进宿主的注册表，重复回放是无害的。
+- **旧插件路径是扩展点贡献。** `registerServerPlugins` 不再把工具与 provider 直接提交到注册表，而是用 `adaptLegacyPlugin` 把旧的 `registerTool` / `registerProvider` 插件改写成内核插件：旧 `setup` 只执行一次并在注册时校验（错误码与旧注册表一致），之后只重放暂存的工具与 provider。`createPluginRegistry` 仍然导出，供嵌入式宿主使用，server 不再使用它。
+- **注册时机。** 旧插件必须在创建 Agent Runner 之前注册，之后注册会被拒绝。旧路径曾允许晚注册，但没有调用方依赖它，晚注册何时生效统一留给 Stage 4 的"下一轮生效"重载。
+- **每个 runner 一个 kernel，装配顺序即工具顺序。** 顺序是：注册表与宿主服务、已注册的旧插件、`server-tool-host`（Tool Pipeline 与 server 自带工具）、`kernelPlugins`。模型看到的工具顺序因此仍是：旧插件工具、server 工具、内核插件工具，与重构前一致。装配失败时先销毁这个 kernel 再抛出。
+- **销毁。** `disposeServerPlugins(runtime)` 先销毁各 runner 的 kernel，再销毁没有进过 kernel 的已注册插件，后注册的先销毁，每个插件的 `dispose` 至多执行一次。

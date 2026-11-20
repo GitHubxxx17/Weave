@@ -1,9 +1,8 @@
 import { type LlmProviderRegistry, type LlmProviderRegistration } from '@weave/llm';
 import { type RegisteredToolDefinition, type ToolRegistry } from '@weave/runtime';
-import { z } from 'zod';
 import { pluginApiVersion } from './constants.js';
 import { assertEngineSupported, assertHostVersion } from './declaration.js';
-import { pluginManifestSchema, type PluginManifest } from './manifest.js';
+import { createApiVersionError, parseLegacyPlugin } from './legacy-plugin.js';
 import { PluginError } from './plugin-errors.js';
 import {
   createPluginContext,
@@ -12,16 +11,6 @@ import {
   type StagedPluginContext,
   type WeavePlugin,
 } from './plugin-types.js';
-
-const pluginDefinitionSchema = z
-  .object({
-    manifest: z.unknown(),
-    setup: z.custom<(...args: never[]) => unknown>((value) => typeof value === 'function'),
-    dispose: z
-      .custom<(...args: never[]) => unknown>((value) => typeof value === 'function')
-      .optional(),
-  })
-  .strict();
 
 export interface PluginRegistryOptions {
   readonly toolRegistry: ToolRegistry;
@@ -44,34 +33,6 @@ export interface PluginRegistry {
 interface RegisteredPlugin {
   readonly plugin: WeavePlugin;
   readonly snapshot: PluginSnapshot;
-}
-
-function parsePlugin(pluginInput: WeavePlugin): WeavePlugin {
-  const parsedDefinition = pluginDefinitionSchema.safeParse(pluginInput);
-  if (!parsedDefinition.success) {
-    throw new PluginError('plugin-invalid-definition', 'Plugin definition is invalid', {
-      cause: parsedDefinition.error,
-    });
-  }
-
-  const parsedManifest = pluginManifestSchema.safeParse(pluginInput.manifest);
-  if (!parsedManifest.success) {
-    throw new PluginError('plugin-invalid-manifest', 'Plugin Manifest is invalid', {
-      cause: parsedManifest.error,
-    });
-  }
-
-  return {
-    ...pluginInput,
-    manifest: parsedManifest.data,
-  };
-}
-
-function createApiVersionError(manifest: PluginManifest, expected: string): PluginError {
-  return new PluginError(
-    'plugin-api-version-unsupported',
-    `Plugin "${manifest.id}" requires API version "${manifest.apiVersion}", expected "${expected}"`,
-  );
 }
 
 function createConflictError(
@@ -162,7 +123,7 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
   return {
     register(pluginInput): Promise<PluginSnapshot> {
       return registrationQueue.enqueue(async () => {
-        const plugin = parsePlugin(pluginInput);
+        const plugin = parseLegacyPlugin(pluginInput);
         const { manifest } = plugin;
 
         if (manifest.apiVersion !== expectedApiVersion) {
