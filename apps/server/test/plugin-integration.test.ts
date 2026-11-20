@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createLlmProviderRegistry, type LlmProviderRegistry } from '@weave/llm';
-import type { StreamEvent } from '@weave/protocol';
+import type { LlmRequest, StreamEvent } from '@weave/protocol';
 import {
   definePlugin,
+  promptSectionsExtensionPoint,
   toolResultHook,
   toolsExtensionPoint,
   type KernelPlugin,
@@ -47,6 +48,24 @@ function createSequenceClient(scripts: readonly (readonly StreamEvent[])[]) {
       yield* script;
     },
   };
+}
+
+/** A mock client that records each request and replies with one text turn. */
+function createCapturingClient(onRequest: (request: LlmRequest) => void) {
+  return {
+    async *stream(request: LlmRequest): AsyncIterable<StreamEvent> {
+      onRequest(request);
+      yield { type: 'text-delta', text: '完成' };
+      yield { type: 'finish', reason: 'stop' };
+    },
+  };
+}
+
+function systemInstructionText(request: LlmRequest): string {
+  const system = request.messages.find((message) => message.role === 'system');
+  return system === undefined
+    ? ''
+    : system.content.map((part) => (part.type === 'text' ? part.text : '')).join('');
 }
 
 async function createSessionServiceForRuntime(
@@ -239,6 +258,72 @@ describe('Server Plugin integration', () => {
       expect(response.status).toBe(200);
       expect(body).toContain('"name":"ping","content":"pong"');
       expect(observed).toEqual(['ping']);
+    } finally {
+      await runtime.stop();
+    }
+  });
+
+  it('appends plugin-contributed prompt sections to the system instructions in order', async () => {
+    let systemText = '';
+    const providerRegistry = createLlmProviderRegistry([
+      {
+        id: 'mock',
+        label: '本地演示',
+        type: 'mock',
+        client: createCapturingClient((request) => {
+          systemText = systemInstructionText(request);
+        }),
+        defaultModel: 'test-model',
+      },
+    ]);
+    const runtime = createServerRuntime({
+      providerSettings: createProviderSettings(providerRegistry),
+    });
+    await runtime.start();
+
+    // The manifest requires at least one capability and has no prompt-only
+    // value yet, so a prompt contributor still declares `tool`.
+    const promptPlugin: KernelPlugin = definePlugin({
+      manifest: {
+        id: 'prompt-contributor',
+        name: 'Prompt Contributor',
+        version: '1.0.0',
+        apiVersion: '1.0.0',
+        capabilities: ['tool'],
+      },
+      setup(env) {
+        env.contribute(promptSectionsExtensionPoint, (api) => {
+          // Contributed out of order to prove the host sorts by `order`.
+          api.addSection({ id: 'later', order: 20, text: '[[SECTION_LATER]]' });
+          api.addSection({ id: 'earlier', order: 10, text: '[[SECTION_EARLIER]]' });
+        });
+      },
+    });
+
+    try {
+      const sessionService = await createSessionServiceForRuntime(runtime);
+      const response = await createApp(runtime, {
+        agentRunner: await createServerAgentRunner(runtime, { kernelPlugins: [promptPlugin] }),
+        sessionService,
+      }).request('/agent/runs/stream', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          userMessage: { role: 'user', content: [{ type: 'text', text: '你好' }] },
+          provider: 'mock',
+          model: 'test-model',
+        }),
+      });
+
+      const body = await response.text();
+      expect(response.status).toBe(200);
+      expect(body).toContain('完成');
+      expect(systemText).toContain('[[SECTION_EARLIER]]');
+      expect(systemText).toContain('[[SECTION_LATER]]');
+      expect(systemText.indexOf('[[SECTION_EARLIER]]')).toBeLessThan(
+        systemText.indexOf('[[SECTION_LATER]]'),
+      );
     } finally {
       await runtime.stop();
     }
