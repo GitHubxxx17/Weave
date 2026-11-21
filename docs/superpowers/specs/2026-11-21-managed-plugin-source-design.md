@@ -491,41 +491,81 @@ function applyManagedSelection(request: ManagedSelectionRequest): Promise<Manage
 ```
 
 Normalize the request with the authority parser and exclude import before
-file work. Extend queued mutation callbacks with `{ assertOpenSync, signal }`.
-The private managed mutation returns a per-call `'skip-rebuild'` disposition
-for replay. Legacy callbacks retain the usual refresh and rebuild. A replay lookup runs
-first and returns the original operation and current authority even after
+file work. Use the existing admin queue and `{ assertOpenSync, signal }`
+callback context for a typed `mutateManaged` ticket. Legacy callbacks keep
+their existing refresh, rebuild and result behavior. The managed callback
+returns a per-ticket disposition to skip rebuild, run the ordered rebuild,
+or report a failure after commit. Reject true precommit failures normally.
+
+Within the ticket, look up the request ID before any managed work. An early
+replay returns the original operation and current authority even after
 prior application failure or ownership loss. It performs no lease checks,
-payload reads, adoption, refresh, assembly or cancellation. A replay detected
-by `commitSync` after provisional evidence performs no runtime work or additional
-reads. Both skip before the queue refreshes sources and leave cached admission
-as it was.
+payload reads, adoption, refresh, assembly or cancellation. A request ID
+conflict surfaces from the authority lookup. After provisional evidence,
+`commitSync` can also return a replay. Both replay branches skip rebuild
+and leave cached authority and admission untouched. The transactional replay
+discards provisional evidence and performs no further lease checks or runtime
+work. Replay reports the durable decision and current authority only.
 
-Fresh activate/rollback and enable pass exact owned evidence for the requested
-candidate to the existing authority transaction. Disable, revoke and uninstall
-need no bytes. After any await, check openness and the lease synchronously
-before the write. Capture the returned fresh `operation` and `afterSnapshot`
-immediately. Adopt the new authority, sticky and selected projection and
-publish both effective sources in the same stack before the first await.
-Reuse prechecked evidence only when the exact candidate and current policy
-still agree. After adoption, the same queue ticket refreshes MCP authority
-before runtime readback of the mutated local source. If adoption fails, immediately
-invalidate affected eligibility and block any now-unauthorized current
-membership, including a formerly manual same-ID member. Recover through a
-fresh authoritative refresh. Return the saved durable decision with a failed
-application when adoption, later checks or publication fail.
+Fresh activate and rollback use the requested digest's durable candidate.
+Enable requires the exact current selection link to the candidate's import
+sequence and digest. Reuse the bounded owned read and artifact identity
+comparison for command evidence. The command may review an unselected
+candidate or a disabled selection under the held lease. This read does no
+import, factory or setup work and leaves cached runtime readiness untouched.
+The authority transaction validates the exact CAS and reviewed evidence.
+Pass only plugin ID, digest, manifest, file count and byte count in the
+preparation artifact. Retain any checked ready evidence separately. For
+disable, revoke and uninstall, prepare only the command kind. Check the queue
+context and the ownership-loss latch and held lease before evidence work,
+after evidence awaits and immediately before `commitSync`.
 
-Capture the exact Generation, membership and private, discriminated failure
-cause inside the queue ticket, preserving even a thrown `undefined`. An
-enabled selected target is applied only when that exact managed
-identity, including activation sequence, is published. A requested
-disable/revoke/uninstall is applied when the compliant Generation excludes
-the target managed member. A fresh no-op may reuse a compliant current
-Generation. Run a fresh destructive immediate request once through
-`retryImmediateRevocation` after adoption or fail-closed invalidation. Match
-managed-origin members in current and retained Generations, including a
-durable no-op and committed adoption failure. Replay leaves running turns
-alone. Normal publication preserves pinned turns and their payloads.
+On a fresh commit, capture the returned `operation` and `afterSnapshot`
+immediately. In the same stack adopt that authority through the paired
+sticky and selected projection and publish both effective snapshots. If
+adoption throws, use the paired withdrawal path to invalidate affected
+eligibility and block any now-unauthorized current membership, including a
+formerly manual same-ID member. Keep admission blocked for affected current
+membership even if withdrawal throws, record both failures privately and
+recover through fresh authoritative refresh and compliant publication. The
+Task 4 ownership-loss latch and its persistent block remain authoritative
+when the failure is ownership loss.
+
+Run a fresh destructive request with `immediate: true` once through
+`retryImmediateRevocation` after adoption or the fail-closed invalidation
+attempt, including when invalidation throws or the durable decision is a
+no-op. The retained-membership check uses source, plugin ID and managed
+origin across current and retired Generations. Managed adoption publishes
+with immediate cancellation disabled so the retry owns cancellation for
+this request. Both replay paths leave running turns alone. Normal
+publication preserves pinned turns and their payloads.
+
+When adoption succeeds, the ordered rebuild disposition uses the same queue
+ticket to refresh and adopt MCP authority before managed runtime readback.
+Include the mutated local source. Runtime readback applies the selected,
+enabled and namespace policy. Any reused command evidence must agree with
+the exact saved candidate and activation, current trust, binding and the
+refreshed namespace. Detach evidence for any newly denied target and skip
+runtime payload reads for that target.
+
+Capture the committed ticket's Generation snapshot, membership and private
+attempt outcome before the next ticket can run, including on failure. The
+result uses this capture and the saved durable decision. An adoption or
+refresh failure, or a terminal rebuild or publication failure, yields failed
+application with its original private cause. A discriminated private failed
+outcome distinguishes a thrown `undefined` from a missing cause. Retain raw
+attributed preparation or assembly failures for the attempt, keyed by
+source, plugin ID, origin and exact identity, independently of rendered
+issues. Use a target's original attributed cause when that target fails to
+apply and the cause is available. When only an issue or missing membership
+is available, leave the optional cause absent.
+
+A completed attempt applies an enabled selection only when a compliant
+Generation contains its exact saved managed identity, including activation
+sequence. A completed destructive attempt applies when the compliant
+Generation excludes the target managed member. An unrelated plugin exclusion
+can coexist with a compliant Generation that applies the requested target.
+A fresh no-op may reuse a compliant current Generation.
 
 Legacy manual trust, enable, disable and revoke read current sticky authority
 before mutation, before immediate retry, and again before any awaited branch
