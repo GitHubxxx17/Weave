@@ -1,0 +1,79 @@
+import type { KernelPlugin, PluginManifest } from '@weave/plugin';
+import type { LocalPluginIssue } from '@weave/plugin-host';
+
+export interface ExtensionSourceStamp {
+  readonly revision: number;
+  readonly trustSequence: number;
+}
+
+export interface ExtensionIdentity {
+  readonly pluginId: string;
+  /** Unique within the source. */
+  readonly identity: string;
+}
+
+export interface ExtensionSourceSnapshot {
+  readonly stamp: ExtensionSourceStamp;
+  readonly eligible: readonly ExtensionIdentity[];
+}
+
+export interface ExtensionAuthorityChange {
+  readonly snapshot: ExtensionSourceSnapshot;
+  readonly affectedIds: readonly string[];
+  readonly immediate: boolean;
+}
+
+export type ExtensionAuthorityObserver = (
+  sourceId: string,
+  change: ExtensionAuthorityChange,
+) => void;
+
+export interface PreparedExtensionItem extends ExtensionIdentity {
+  readonly plugin: KernelPlugin;
+  normalizeError?(error: unknown): unknown;
+  dispose(): Promise<void>;
+}
+
+export interface ExtensionPreparationFailure extends ExtensionIdentity {
+  readonly kind: 'load' | 'identity';
+  readonly error: unknown;
+}
+
+export interface PreparedExtensionSource {
+  readonly stamp: ExtensionSourceStamp;
+  readonly items: readonly PreparedExtensionItem[];
+  readonly failures: readonly ExtensionPreparationFailure[];
+  /** Rechecks the authority and identity associated with these exact resources. */
+  recheck(signal: AbortSignal): Promise<boolean>;
+  dispose(): Promise<void>;
+}
+
+/** The Server-only contract for sources of generation-owned kernel plugins. */
+export interface ExtensionSource {
+  readonly id: string;
+  snapshot(): ExtensionSourceSnapshot;
+  refresh(): Promise<void>;
+  prepare(
+    stamp: ExtensionSourceStamp,
+    options: { readonly signal: AbortSignal; readonly excluded: ReadonlySet<string> },
+  ): Promise<PreparedExtensionSource>;
+  close(): Promise<void>;
+}
+
+export type ExtensionSourceFactory = (observe: ExtensionAuthorityObserver) => ExtensionSource;
+
+export interface ExtensionMember extends ExtensionIdentity {
+  readonly sourceId: string;
+  readonly manifest: PluginManifest;
+}
+
+export interface ExtensionFailure extends ExtensionIdentity {
+  readonly sourceId: string;
+  readonly error: LocalPluginIssue;
+}
+
+export interface ExtensionGenerationSnapshot {
+  readonly id: number;
+  readonly acceptingRuns: boolean;
+  readonly blocked?: LocalPluginIssue;
+}

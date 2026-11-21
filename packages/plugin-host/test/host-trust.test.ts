@@ -227,6 +227,72 @@ describe('PluginHost durable trust changes', () => {
     },
   );
 
+  it.each(['disable', 'revoke', 'revoke after removal'] as const)(
+    'cancels a pinned retiring generation on an immediate %s retry',
+    async (operation) => {
+      const h = await harness(['a'], true);
+      const entered = gate<AbortSignal>();
+      const release = gate();
+      const assemble = h.options.assemble;
+      const host = await createPluginHost({
+        ...h.options,
+        assemble: async (plugins) => {
+          const generation = await assemble(plugins);
+          if (plugins.length === 0) return generation;
+          return {
+            ...generation,
+            runner: {
+              async *run({ signal }) {
+                if (signal === undefined) throw new Error('Expected a forwarded turn signal');
+                signal.addEventListener('abort', () => release.resolve(), { once: true });
+                entered.resolve(signal);
+                await release.promise;
+                if (!signal.aborted) yield 'completed';
+              },
+            },
+          };
+        },
+      });
+      const iterator = host.runner.run({ sessionId: 'pinned' })[Symbol.asyncIterator]();
+      const pinned = iterator.next();
+      const signal = await entered.promise;
+      const change = (immediate = false) =>
+        operation === 'disable'
+          ? host.setEnabled('a', false, { immediate })
+          : host.revoke('a', { immediate });
+
+      try {
+        const first = await change();
+        expect(first.snapshot.generation).toMatchObject({ plugins: [], acceptingRuns: true });
+        expect(signal.aborted).toBe(false);
+        expect(h.calls.disposed).toEqual([]);
+        if (operation === 'revoke after removal') {
+          await rm(path.join(h.directory, 'a'), { recursive: true });
+          await expect(host.revoke('unknown', { immediate: true })).rejects.toMatchObject({
+            code: 'plugin-not-found',
+          });
+          expect(signal.aborted).toBe(false);
+        }
+
+        const retry = await change(true);
+        expect(retry.snapshot.generation).toEqual(first.snapshot.generation);
+        expect(signal.aborted).toBe(true);
+        expect(await pinned).toMatchObject({ done: true });
+        expect(await h.trustStore.events()).toHaveLength(2);
+        await until(() => h.calls.disposed.length === 1);
+
+        if (operation === 'revoke after removal') {
+          await expect(change(true)).rejects.toMatchObject({ code: 'plugin-not-found' });
+        }
+        expect(h.calls.aborts).toHaveLength(1);
+      } finally {
+        release.resolve();
+        await pinned;
+        await host.dispose();
+      }
+    },
+  );
+
   it('folds external revocation before an unreadable-root reload can fail', async () => {
     const h = await harness(['a'], true);
     const host = await createPluginHost(h.options);

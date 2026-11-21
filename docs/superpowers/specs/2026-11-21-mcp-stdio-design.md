@@ -331,6 +331,9 @@ commit 在返回前完成全部验证和 current 指针切换，验证失败同�
 async。原 replace/publish 的 Promise API 保留兼容并包装 commit 后等待 retirement。
 Server 协调器只调用同步 commit，成功返回后立即提交 membership/latch，再 await
 retirement；不能把现有 async publish 的调用返回视为提交成功。
+retirement 保持既有 replace/publish 的等待语义：仅等待提交时可立即开始的退役清理；
+旧代仍有 pin 时可以立即完成，该代最后一个回合结束后再自行清理。它不表示全部旧回合
+已经 drain，不能让管理响应等待用户尚需操作才能结束的回合。
 不能因一个旧 publish 的 retirement 完成而清掉关闭/新撤销设下的阻断。
 GenerationRunner.replace 会清除 blocked，因此“先发布，再检查或补 block”不可行。
 
@@ -467,6 +470,18 @@ MCP 状态从 `/mcp` 获取，当前内核插件仍来自 `/plugins`；面板将
 行为 PR 运行目标包测试及 `pnpm check`，修复后重新验证受影响部分。最后一步用
 真实 Electron 主进程验证 stdio 启动/关闭与重启配置恢复；仓库尚无分发打包器，
 该结果不等于安装包验证。5.0 仅文档变更执行 Prettier、链接/契约检查和 diff 检查。
+
+### 10.1 5.1a 实施边界
+
+`feat/extension-coordinator` 实施具体的本地 ESM source 和 Server 协调器，
+独立 `createPluginHost` 保留原公共接口。Server 内部 source port 只在 Server
+定义，未将 plugin-host 扩展为多协议平台。`GenerationController.commit` 与
+`ServerHost.commit` 提供同步所有权移交，完整候选提交前复验全部来源；
+来源聚合清理器随发布代保留，最后一个旧回合结束后再释放。
+
+本轮测试使用两个带真实工具贡献的可控来源验证交错变更，并使用真实 ESM
+目录和 Server 启停验证信任、HTTP 投影和持久库关闭顺序。它们未启动 MCP
+服务；协议客户端、连接状态、MCP 配置持久化及 Studio 表单仍按 5.1b–5.4 交付。
 
 ## 11. 已知边界与后续方向
 

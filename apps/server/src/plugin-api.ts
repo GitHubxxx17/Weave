@@ -17,6 +17,7 @@ import {
 import { pluginWriteGuard } from './plugin-write-guard.js';
 import { PluginHostError, type ReloadResult } from '@weave/plugin-host';
 import { PluginTrustStoreError } from './plugin-trust-store.js';
+import type { ExtensionGenerationSnapshot } from './extension-types.js';
 
 /** Dependencies of the plugin catalog and local plugin control plane. */
 export interface PluginAppOptions {
@@ -24,6 +25,7 @@ export interface PluginAppOptions {
   readonly commandCatalog?: (() => readonly CommandListItem[]) | undefined;
   readonly pluginManager?: ServerPluginManager | undefined;
   readonly studioOrigin?: string | undefined;
+  readonly generationSnapshot?: (() => ExtensionGenerationSnapshot) | undefined;
 }
 
 const idSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
@@ -96,14 +98,16 @@ function respondError(context: Context, error: unknown): Response {
 function listPlugins(options: PluginAppOptions) {
   const snapshot = options.pluginManager?.snapshot();
   const catalog = options.pluginCatalog?.() ?? [];
-  return pluginListResponseSchema.parse(
-    snapshot === undefined
+  const generation = options.generationSnapshot?.();
+  return pluginListResponseSchema.parse({
+    ...(generation === undefined ? {} : { generation }),
+    ...(snapshot === undefined
       ? { plugins: catalog }
       : {
           plugins: projectPluginCatalog(catalog, snapshot),
           local: describeLocalPluginHost(snapshot),
-        },
-  );
+        }),
+  });
 }
 
 /** Registers cached catalog reads and guarded management writes without invoking tools. */

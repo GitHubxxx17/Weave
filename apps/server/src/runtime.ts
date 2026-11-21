@@ -21,6 +21,7 @@ import {
   type SessionEventStoreFactory,
 } from '@weave/runtime';
 import { createInMemorySessionEventStore } from '@weave/session';
+import type { GenerationCommit } from '@weave/plugin-host';
 import { createServerLlmProviders, type ServerLlmProviderSettings } from './llm-providers.js';
 import { createAgentInstructions } from './agent-instructions.js';
 import { assembleAgentKernel } from './agent-kernel.js';
@@ -252,7 +253,16 @@ export async function assembleServerGeneration(
   }
 }
 
-/** Publishes one complete candidate; a rejected candidate remains caller-owned. */
+/** Publishes a complete candidate synchronously. A rejected candidate remains caller-owned. */
+export function commitServerGeneration(
+  runtime: Runtime,
+  candidate: ServerGeneration,
+  options?: { immediate?: boolean },
+): GenerationCommit {
+  return serverHostOf(runtime).commit(candidate, options);
+}
+
+/** Publishes a complete candidate and awaits its immediately available retirement. */
 export async function replaceServerGeneration(
   runtime: Runtime,
   candidate: ServerGeneration,

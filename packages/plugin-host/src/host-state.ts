@@ -1,6 +1,6 @@
 import { PluginError } from '@weave/plugin';
 
-import type { DiscoveryResult, LocalPluginIssue, ReadyLocalPlugin } from './discovery.js';
+import type { LocalPluginIssue, ReadyLocalPlugin } from './discovery.js';
 import { describeError, PluginHostError } from './errors.js';
 import type {
   ActiveLocalPlugin,
@@ -9,12 +9,10 @@ import type {
   PluginHostSnapshot,
   ReloadResult,
 } from './host-types.js';
-import {
-  foldTrust,
-  resolveLocalPlugins,
-  type PluginTrustRecord,
-  type RecordedPluginTrustEvent,
-} from './trust.js';
+import type {
+  LocalPluginSourceSnapshot,
+  LocalSourceProjectionOptions,
+} from './local-source-types.js';
 
 export function compareIds(left: { readonly id: string }, right: { readonly id: string }): number {
   return Buffer.compare(Buffer.from(left.id, 'utf8'), Buffer.from(right.id, 'utf8'));
@@ -53,11 +51,59 @@ export function ownerOf(error: unknown): string | undefined {
     : undefined;
 }
 
-/** Desired state and published membership have deliberately independent lifetimes. */
+export function eligibleLocalPlugins(snapshot: LocalPluginSourceSnapshot): ReadyLocalPlugin[] {
+  return snapshot.plugins
+    .flatMap((row) =>
+      row.state === 'eligible' && row.candidate.status === 'ready' ? [row.candidate] : [],
+    )
+    .sort(compareIds);
+}
+
+export function projectLocalPluginSnapshot(
+  snapshot: LocalPluginSourceSnapshot,
+  { generation, active, failures, blocked, closed, error }: LocalSourceProjectionOptions,
+): PluginHostSnapshot {
+  const plugins: LocalPluginRecord[] = snapshot.plugins.map((row) => {
+    const current = active.find((plugin) => plugin.id === row.id);
+    const failure =
+      row.candidate.status === 'ready'
+        ? failures?.get(identity(row.candidate))
+        : row.candidate.issue;
+    return {
+      ...row,
+      state:
+        row.state === 'eligible'
+          ? failure === undefined &&
+            row.candidate.status === 'ready' &&
+            current?.digest === row.candidate.digest
+            ? 'loaded'
+            : 'failed'
+          : row.state,
+      ...(failure === undefined ? {} : { error: failure }),
+      ...(current === undefined
+        ? {}
+        : { active: { generation, digest: current.digest, manifest: current.manifest } }),
+    };
+  });
+  return immutable({
+    directory: snapshot.discovery.directory,
+    exists: snapshot.discovery.exists,
+    truncated: snapshot.discovery.truncated,
+    trustSequence: snapshot.stamp.trustSequence,
+    plugins,
+    generation: {
+      id: generation,
+      plugins: active,
+      acceptingRuns: !closed && blocked === undefined,
+      ...(blocked === undefined ? {} : { blocked }),
+    },
+    ...(error === undefined ? {} : { error }),
+  });
+}
+
+/** Tracks only publication and the outcome of the latest assembly attempt. */
 export class HostState {
-  discovery: DiscoveryResult;
-  events: readonly RecordedPluginTrustEvent[] = [];
-  trust: ReadonlyMap<string, PluginTrustRecord> = new Map();
+  /** Includes retiring generations until their disposer settles. */
   readonly active = new Map<number, readonly ActiveLocalPlugin[]>();
   failures = new Map<string, LocalPluginIssue>();
   displayFailures = new Map<string, LocalPluginIssue>();
@@ -66,69 +112,35 @@ export class HostState {
   publishing: number | undefined;
   cleanKey: string | undefined = attemptedKey([]);
 
-  constructor(directory: string) {
-    this.discovery = { directory, exists: false, truncated: false, candidates: [] };
+  hasActive(id: string): boolean {
+    for (const plugins of this.active.values()) {
+      if (plugins.some((plugin) => plugin.id === id)) return true;
+    }
+    return false;
   }
 
-  setEvents(events: readonly RecordedPluginTrustEvent[]): void {
-    this.events = immutable(events);
-    this.trust = foldTrust(this.events);
-  }
-
-  eligible(): ReadyLocalPlugin[] {
-    return resolveLocalPlugins(this.discovery.candidates, this.trust)
-      .flatMap((row) =>
-        row.state === 'eligible' && row.candidate.status === 'ready' ? [row.candidate] : [],
-      )
-      .sort(compareIds);
-  }
-
-  snapshot(generation: number, closed: boolean): PluginHostSnapshot {
-    const active = this.active.get(generation) ?? [];
-    const blocked = !closed && this.publishing === generation ? undefined : this.blocked;
-    const plugins: LocalPluginRecord[] = resolveLocalPlugins(
-      this.discovery.candidates,
-      this.trust,
-    ).map((row) => {
-      const current = active.find((plugin) => plugin.id === row.id);
-      const failure =
-        row.candidate.status === 'ready'
-          ? this.displayFailures.get(identity(row.candidate))
-          : row.candidate.issue;
-      return {
-        ...row,
-        state:
-          row.state === 'eligible'
-            ? failure === undefined &&
-              row.candidate.status === 'ready' &&
-              current?.digest === row.candidate.digest
-              ? 'loaded'
-              : 'failed'
-            : row.state,
-        ...(failure === undefined ? {} : { error: failure }),
-        ...(current === undefined
-          ? {}
-          : { active: { generation, digest: current.digest, manifest: current.manifest } }),
-      };
-    });
-    return immutable({
-      directory: this.discovery.directory,
-      exists: this.discovery.exists,
-      truncated: this.discovery.truncated,
-      trustSequence: Math.max(0, ...this.events.map((event) => event.sequence)),
-      plugins,
-      generation: {
-        id: generation,
-        plugins: active,
-        acceptingRuns: !closed && blocked === undefined,
-        ...(blocked === undefined ? {} : { blocked }),
-      },
-      ...(this.error === undefined ? {} : { error: this.error }),
+  snapshot(
+    source: LocalPluginSourceSnapshot,
+    generation: number,
+    closed: boolean,
+  ): PluginHostSnapshot {
+    return projectLocalPluginSnapshot(source, {
+      generation,
+      active: this.active.get(generation) ?? [],
+      failures: this.displayFailures,
+      blocked: !closed && this.publishing === generation ? undefined : this.blocked,
+      closed,
+      error: this.error,
     });
   }
 
-  result(generation: number, closed: boolean, unchanged: boolean): ReloadResult {
-    const eligible = this.eligible();
+  result(
+    source: LocalPluginSourceSnapshot,
+    generation: number,
+    closed: boolean,
+    unchanged: boolean,
+  ): ReloadResult {
+    const eligible = eligibleLocalPlugins(source);
     const failed = eligible.flatMap((plugin) => {
       const error = this.failures.get(identity(plugin));
       return error === undefined ? [] : [{ id: plugin.id, error }];
@@ -138,7 +150,7 @@ export class HostState {
       unchanged,
       failed,
       ...(this.error === undefined ? {} : { error: this.error }),
-      snapshot: this.snapshot(generation, closed),
+      snapshot: this.snapshot(source, generation, closed),
     });
   }
 }

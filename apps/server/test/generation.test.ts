@@ -12,6 +12,7 @@ import {
 } from '@weave/plugin';
 import {
   assembleServerGeneration,
+  commitServerGeneration,
   createServerAgentRunner,
   createServerRuntime,
   disposeServerPlugins,
@@ -60,6 +61,48 @@ async function started() {
 }
 
 describe('Server generation assembly', () => {
+  it('commits Server catalogs before the previous generation finishes disposing', async () => {
+    const runtime = await started();
+    const finishDisposal = Promise.withResolvers<void>();
+    const disposalStarted = Promise.withResolvers<void>();
+    const previous = contribution(
+      'previous',
+      'previous',
+      vi.fn(() => {
+        disposalStarted.resolve();
+        return finishDisposal.promise;
+      }),
+    );
+
+    try {
+      await createServerAgentRunner(runtime, { kernelPlugins: [previous] });
+      const candidate = await assembleServerGeneration(runtime, {
+        kernelPlugins: [contribution('next')],
+      });
+      const committed = commitServerGeneration(runtime, candidate);
+
+      expect(getServerGeneration(runtime)).toBe(candidate);
+      expect(runtime.serverHost.toolRegistry.get('next')).toBeDefined();
+      expect(runtime.serverHost.providerRegistry.get('next')).toBeDefined();
+      expect(listServerCommands(runtime).map(({ name }) => name)).toEqual(['next']);
+      expect(listServerPlugins(runtime).some(({ id }) => id === 'next')).toBe(true);
+
+      let retired = false;
+      void committed.retirement.then(() => {
+        retired = true;
+      });
+      await disposalStarted.promise;
+      expect(retired).toBe(false);
+      finishDisposal.resolve();
+      await committed.retirement;
+      expect(retired).toBe(true);
+    } finally {
+      finishDisposal.resolve();
+      await disposeServerPlugins(runtime);
+      await runtime.stop();
+    }
+  });
+
   it('publishes all catalogs together and never mutates the shared provider source', async () => {
     const runtime = await started();
     try {
@@ -179,6 +222,75 @@ describe('Server generation assembly', () => {
       await runtime.stop();
     }
   });
+
+  it('throws synchronously for a provider conflict and leaves the candidate caller-owned', async () => {
+    const runtime = await started();
+    const disposeCandidate = vi.fn();
+    try {
+      await createServerAgentRunner(runtime);
+      const current = getServerGeneration(runtime);
+      const candidate = await assembleServerGeneration(runtime, {
+        kernelPlugins: [contribution('candidate', 'candidate', disposeCandidate)],
+      });
+      const releaseProvider = runtime.serverHost.reserveProvider('candidate');
+      try {
+        expect(() => commitServerGeneration(runtime, candidate)).toThrow(
+          expect.objectContaining({ code: 'plugin-registration-conflict', pluginId: 'candidate' }),
+        );
+        expect(getServerGeneration(runtime)).toBe(current);
+        expect(runtime.serverHost.providerRegistry.get('candidate')).toBeUndefined();
+        expect(disposeCandidate).not.toHaveBeenCalled();
+      } finally {
+        releaseProvider();
+        await candidate.dispose();
+      }
+      expect(disposeCandidate).toHaveBeenCalledOnce();
+    } finally {
+      await disposeServerPlugins(runtime);
+      await runtime.stop();
+    }
+  });
+
+  it('throws synchronously when committing a generation after the host begins closing', async () => {
+    const runtime = await started();
+    try {
+      await createServerAgentRunner(runtime);
+      const current = getServerGeneration(runtime);
+      const candidate = await assembleServerGeneration(runtime);
+      const closing = runtime.serverHost.dispose();
+      try {
+        expect(() => runtime.serverHost.commit(candidate)).toThrow('Server host is disposed');
+        expect(getServerGeneration(runtime)).toBe(current);
+      } finally {
+        await candidate.dispose();
+        await closing;
+      }
+    } finally {
+      await runtime.stop();
+    }
+  });
+
+  it('rejects an invalid initial generation id without publishing Server catalogs', async () => {
+    const runtime = await started();
+    try {
+      const candidate = await assembleServerGeneration(runtime, {
+        kernelPlugins: [contribution('candidate')],
+      });
+      try {
+        expect(() => runtime.serverHost.commit({ ...candidate, id: 0 })).toThrow(
+          'Generation ids must increase',
+        );
+        expect(getServerGeneration(runtime)).toBeUndefined();
+        expect(listServerCommands(runtime)).toEqual([]);
+      } finally {
+        await candidate.dispose();
+      }
+    } finally {
+      await disposeServerPlugins(runtime);
+      await runtime.stop();
+    }
+  });
+
   it('keeps the same provider id alive after retiring the previous generation', async () => {
     const runtime = await started();
     const oldDispose = vi.fn();

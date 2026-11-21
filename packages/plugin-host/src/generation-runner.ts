@@ -14,9 +14,19 @@ export interface RunnerGeneration<R extends GenerationRequest, E, T> {
   dispose(): void | Promise<void>;
 }
 
+export interface GenerationCommit {
+  /**
+   * Waits for disposal that can start at commit time. If a running turn still
+   * pins the previous generation, the last such turn starts its disposal.
+   */
+  readonly retirement: Promise<void>;
+}
+
 export interface GenerationController<R extends GenerationRequest, E, T> {
   readonly runner: GenerationRunner<R, E>;
   current(): RunnerGeneration<R, E, T>;
+  /** Switches the current generation synchronously and throws if validation fails. */
+  commit(next: RunnerGeneration<R, E, T>, options?: { immediate?: boolean }): GenerationCommit;
   replace(next: RunnerGeneration<R, E, T>, options?: { immediate?: boolean }): Promise<void>;
   blockNewRuns(error: Error): void;
   abortActiveRuns(reason?: unknown): void;
@@ -282,23 +292,30 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
     }
   }
 
+  const commit: GenerationController<R, E, T>['commit'] = (next, options) => {
+    // Read the option before validating state because an accessor can reenter the controller.
+    const immediate = options?.immediate;
+    if (closed) throw new Error('Generation runner is disposed');
+    if (!Number.isSafeInteger(next.id) || next.id <= current.generation.id) {
+      throw new Error('Generation ids must increase monotonically');
+    }
+    const previous = current;
+    current = stateFor(next);
+    blocked = undefined;
+    previous.retired = true;
+    if (immediate) {
+      for (const state of generations) if (state.retired) state.abort.abort();
+    }
+    return { retirement: retire(previous) ?? Promise.resolve() };
+  };
+
   const runner: GenerationRunner<R, E> = { run: (request) => new Run(request) };
   return {
     runner,
     current: () => current.generation,
+    commit,
     async replace(next, options) {
-      if (closed) throw new Error('Generation runner is disposed');
-      if (!Number.isSafeInteger(next.id) || next.id <= current.generation.id) {
-        throw new Error('Generation ids must increase monotonically');
-      }
-      const previous = current;
-      current = stateFor(next);
-      blocked = undefined;
-      previous.retired = true;
-      if (options?.immediate) {
-        for (const state of generations) if (state.retired) state.abort.abort();
-      }
-      await retire(previous);
+      await commit(next, options).retirement;
     },
     blockNewRuns(error) {
       blocked = error;

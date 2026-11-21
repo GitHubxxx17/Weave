@@ -24,6 +24,7 @@ import {
 } from '../src/runtime.js';
 import { createServerLocalPluginHost } from '../src/local-plugin-host.js';
 import { serverHostVersion } from '../src/host-version.js';
+import { pluginListResponseSchema } from '../src/plugin-catalog.js';
 
 interface Fixture {
   readonly root: string;
@@ -282,7 +283,11 @@ describe('local plugin startup integration', () => {
       });
       try {
         expect(server.pluginHost).toBeUndefined();
-        expect(await json(server, '/plugins')).not.toHaveProperty('local');
+        const catalog = await json(server, '/plugins');
+        expect(catalog).not.toHaveProperty('local');
+        expect(catalog).toMatchObject({
+          generation: { id: 1, acceptingRuns: true },
+        });
       } finally {
         await server.stop();
       }
@@ -323,12 +328,15 @@ describe('local plugin startup integration', () => {
       });
       try {
         expect(await json(server, '/plugins')).toMatchObject({
+          generation: { id: 1, acceptingRuns: true },
           local: {
             directory: f.pluginsDirectory,
             exists: false,
             generation: { acceptingRuns: true },
           },
         });
+        const catalog = pluginListResponseSchema.parse(await json(server, '/plugins'));
+        expect(catalog.local?.generation).toMatchObject(catalog.generation!);
         expect(server.pluginHost).toBeDefined();
       } finally {
         await server.stop();
@@ -823,6 +831,259 @@ describe('local plugin startup integration', () => {
     } finally {
       await disposeServerPlugins(runtime);
       await runtime.stop();
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('allows an embedded Server to retry initialization and rejects a second management owner', async () => {
+    const f = await fixture();
+    const runtime = createServerRuntime();
+    const trustStore = createMemoryTrustStore();
+    const readFailure = new Error('initial trust read failed');
+    let failRead = true;
+    await runtime.start();
+    try {
+      const runner = await createServerAgentRunner(runtime);
+      const options = {
+        directory: f.pluginsDirectory,
+        runnerOptions: { hostVersion: serverHostVersion },
+        trustStore: {
+          ...trustStore,
+          events: () => (failRead ? Promise.reject(readFailure) : trustStore.events()),
+        },
+      };
+      await expect(createServerLocalPluginHost(runtime, options)).rejects.toBe(readFailure);
+      failRead = false;
+      const host = await createServerLocalPluginHost(runtime, options);
+      try {
+        const local = await plugin(f);
+        expect(host.runner).toBe(runner);
+        await expect(host.trust('local-command', local.digest)).resolves.toMatchObject({
+          generation: 2,
+          failed: [],
+        });
+        expect(() => createServerLocalPluginHost(runtime, options)).toThrow(
+          'Server already has an extension coordinator',
+        );
+      } finally {
+        await host.dispose();
+      }
+    } finally {
+      await disposeServerPlugins(runtime);
+      await runtime.stop();
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('shares one shutdown when a tool cancellation synchronously reenters stop', async () => {
+    const f = await fixture();
+    const toolStarted = deferred();
+    const toolAborted = deferred();
+    const projectStore = createInMemoryProjectStore();
+    const closeProjects = vi.spyOn(projectStore, 'close');
+    const closeTrust = vi.fn(async () => {});
+    const sessions = createInMemorySessionEventStore();
+    const closeSessions = vi.spyOn(sessions, 'close');
+    let stoppingFromTool: Promise<void> | undefined;
+    const server = await startServer(0, {
+      dataDirectory: f.root,
+      environment: {},
+      projectStore,
+      sessionStoreFactory: () => sessions,
+      pluginTrustStore: { ...createMemoryTrustStore(), close: closeTrust },
+      plugins: [
+        {
+          manifest: manifest('reentrant-tool', {
+            capabilities: ['tool'],
+            contributes: { tools: ['stop_on_cancel'] },
+          }),
+          setup(context) {
+            context.registerTool({
+              name: 'stop_on_cancel',
+              description: 'Stop the Server when interrupted',
+              parameters: { type: 'object' },
+              inputSchema: z.object({}),
+              async execute(_input, { signal }) {
+                signal.addEventListener(
+                  'abort',
+                  () => {
+                    stoppingFromTool = server.stop();
+                    toolAborted.resolve();
+                  },
+                  { once: true },
+                );
+                toolStarted.resolve();
+                await toolAborted.promise;
+                return 'finished';
+              },
+            });
+          },
+        },
+      ],
+    });
+    try {
+      await sessions.append('local-session', [
+        { type: 'session.created', payload: { title: 'Reentrant shutdown' } },
+      ]);
+      const turn = runTurn(server, '/tool stop_on_cancel {}');
+      await toolStarted.promise;
+      const stopping = server.stop();
+      expect(stoppingFromTool).toBe(stopping);
+      await stopping;
+      await turn;
+      expect(closeTrust).toHaveBeenCalledOnce();
+      expect(closeProjects).toHaveBeenCalledOnce();
+      expect(closeSessions).toHaveBeenCalledOnce();
+    } finally {
+      toolAborted.resolve();
+      await server.stop();
+      await stoppingFromTool;
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { operation: 'disable', rebuildFails: true },
+    { operation: 'revoke', rebuildFails: true },
+    { operation: 'disable', rebuildFails: false },
+    { operation: 'revoke', rebuildFails: false },
+  ] as const)(
+    'honors an immediate $operation retry while a generation holds the plugin (rebuild failed: $rebuildFails)',
+    async ({ operation, rebuildFails }) => {
+      const f = await fixture();
+      const local = await plugin(f);
+      const trustStore = createMemoryTrustStore();
+      const runtime = createServerRuntime();
+      const toolStarted = deferred();
+      const toolAborted = deferred();
+      let failAssembly = false;
+      const configured = (): KernelPlugin => ({
+        manifest: manifest('configured-tool', {
+          capabilities: ['tool'],
+          contributes: { tools: ['wait_for_abort'] },
+        }),
+        setup(env) {
+          if (failAssembly) throw new Error('configured setup unavailable');
+          env.contribute(toolsExtensionPoint, (api) =>
+            api.addTool({
+              name: 'wait_for_abort',
+              description: 'Wait for interruption',
+              parameters: { type: 'object' },
+              inputSchema: z.object({}),
+              async execute(_input, { signal }) {
+                signal.addEventListener('abort', toolAborted.resolve, { once: true });
+                toolStarted.resolve();
+                await toolAborted.promise;
+                return 'finished';
+              },
+            }),
+          );
+        },
+      });
+      await runtime.start();
+      try {
+        await createServerAgentRunner(runtime, { kernelPlugins: [configured()] });
+        const host = await createServerLocalPluginHost(runtime, {
+          directory: f.pluginsDirectory,
+          trustStore,
+          runnerOptions: { hostVersion: serverHostVersion },
+          kernelPluginFactories: [configured],
+        });
+        await host.trust('local-command', local.digest);
+        await getServerSessionStore(runtime).append('local-session', [
+          { type: 'session.created', payload: { title: 'Immediate interruption' } },
+        ]);
+        const active = (async () => {
+          const observed = [];
+          for await (const event of host.runner.run({
+            sessionId: 'local-session',
+            provider: 'mock',
+            model: 'test',
+            userMessage: {
+              role: 'user',
+              content: [{ type: 'text', text: '/tool wait_for_abort {}' }],
+            },
+          }))
+            observed.push(event);
+          return observed;
+        })();
+        try {
+          await toolStarted.promise;
+          failAssembly = rebuildFails;
+          const decide = (immediate: boolean) =>
+            operation === 'disable'
+              ? host.setEnabled('local-command', false, { immediate })
+              : host.revoke('local-command', { immediate });
+          const before = host.snapshot().generation.id;
+          const first = await decide(false);
+          expect(first.snapshot.generation).toMatchObject({
+            id: rebuildFails ? before : before + 1,
+            acceptingRuns: !rebuildFails,
+          });
+          await rm(f.pluginsDirectory, { recursive: true });
+          if (operation === 'disable') {
+            await writeFile(f.pluginsDirectory, 'expected a directory');
+            await expect(decide(true)).rejects.toMatchObject({ code: 'plugin-unreadable' });
+          } else {
+            await expect(decide(true)).resolves.toMatchObject({ generation: first.generation });
+            await expect(host.revoke('unknown', { immediate: true })).rejects.toMatchObject({
+              code: 'plugin-not-found',
+            });
+          }
+          await toolAborted.promise;
+          await active;
+          expect(await trustStore.events()).toHaveLength(2);
+        } finally {
+          toolAborted.resolve();
+          await active;
+          await host.dispose();
+        }
+      } finally {
+        await disposeServerPlugins(runtime);
+        await runtime.stop();
+        await rm(f.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('reports a published local disposer failure once and still closes the trust store', async () => {
+    const f = await fixture();
+    const key = `__weaveLocalDispose_${randomUUID().replaceAll('-', '')}`;
+    const dispose = vi.fn(() => {
+      throw new Error('local cleanup failed');
+    });
+    (globalThis as Record<string, unknown>)[key] = dispose;
+    const local = await plugin(
+      f,
+      manifest(),
+      `export default () => ({
+      setup() {},
+      dispose: () => globalThis[${JSON.stringify(key)}]()
+    });`,
+    );
+    const trustStore = { ...createMemoryTrustStore(), close: vi.fn(async () => {}) };
+    const server = await startServer(0, {
+      dataDirectory: f.root,
+      environment: {},
+      pluginTrustStore: trustStore,
+    });
+    try {
+      await server.pluginHost!.trust('local-command', local.digest);
+      await server.pluginHost!.setEnabled('local-command', false);
+      expect(dispose).toHaveBeenCalledOnce();
+      const stopping = server.stop().catch((error: unknown) => error);
+      const stoppingAgain = server.stop().catch((error: unknown) => error);
+      const error = await stopping;
+      expect(error).toBeInstanceOf(AggregateError);
+      expect((error as Error).cause).toMatchObject({
+        cause: { message: 'local cleanup failed' },
+      });
+      expect(await stoppingAgain).toBe(error);
+      expect(trustStore.close).toHaveBeenCalledOnce();
+      expect(dispose).toHaveBeenCalledOnce();
+    } finally {
+      await server.stop().catch(() => {});
+      delete (globalThis as Record<string, unknown>)[key];
       await rm(f.root, { recursive: true, force: true });
     }
   });
