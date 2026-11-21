@@ -628,13 +628,18 @@ pnpm exec vitest run apps/server/test/plugin-catalog-projection.test.ts apps/ser
 pnpm --filter @weave/server typecheck
 ```
 
-**Files:** `apps/server/src/{main,local-plugin-host,plugin-catalog,local-extension-source,mcp-source,extension-coordinator}.ts` and `apps/server/test/{plugin-catalog-projection,plugin-management-api,mcp-api,managed-plugin-integration}.test.ts`.
+**Files:** `apps/server/src/{main,managed-plugin-startup,local-plugin-host,plugin-catalog,local-extension-source,mcp-source,extension-coordinator}.ts`, `apps/server/test/{plugin-catalog-projection,plugin-management-api,mcp-api,managed-plugin-integration}.test.ts`, and the existing managed composition support fixture.
 
 **Consumes:** composition snapshots and private managed state from Tasks 3–5.
 
 **Produces:** Existing `/plugins` and `/commands` projections that show effective managed/manual/MCP results without exposing managed desired/retired internals.
 
 - [ ] Project desired rows, active membership and reload failures from manual origin only. Use the existing path-free `kernel` base for published managed and MCP members. Suppress a conflicting manual overlay if the ID already belongs to a published base and is absent from active manual membership. Preserve the original display path within the private/manual projection. Deduplicate by plugin ID while preserving the existing order of surviving rows.
+      A manual sticky-ID conflict row must omit the unified managed trust
+      digest, reviewed manifest and enabled flag while preserving its own
+      discovery path, manifest and safe issue. Do not mutate persisted or
+      package-private trust. Private discovery may keep separate duplicate
+      diagnostics; the public catalog is unique by plugin ID.
 - [ ] Sanitize before both projection and reload return. Map attributed managed failures to `plugin-load-failed` and `Managed plugin preparation failed`. Map whole-candidate failures with managed/mixed/unknown attribution to `plugin-reload-failed` and `Extension generation could not be published`. Keep the original exception in a private attempt result used by the managed application facade. Preserve safe manual-origin messages. Catalog GETs continue reading cached `snapshot()` and base Generation catalogs only.
 - [ ] Check the MCP facade's mutation-result mapper, which currently copies failures across sources. Preserve its compatible DTO and cached allocation state while avoiding a managed desired ID/path disclosure through that secondary response. Apply the fixed safe whole-candidate issue at the projection boundary too.
 - [ ] Before manual trust/enable/disable/revoke, read current sticky authority synchronously. Repeat after the package mutation awaits and before it can return idempotently. Throw the existing safe `PluginTrustStoreError('plugin-trust-invalid', ...)` and preserve the write-facade transaction backstop. Package's cached sticky check protects internal awaited branches; ensure legacy immediate retry cannot fire on a newly sticky ID by checking authority on the callback path as well. Override composition keeps authoritative sticky checks even though the override owns its own trust prefix.

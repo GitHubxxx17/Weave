@@ -581,7 +581,11 @@ membership, desired rows and reload failures by source origin. Use the
 existing path-free base `kernel` item for a published managed member. When a
 failed or displaced manual row shares an ID with a published managed or MCP
 contribution, keep the published base entry and a single catalog ID. Keep
-managed desired and retired state private. Before projection, map attributed
+managed desired and retired state private. A visible manual collision row retains
+its discovery path, its own manifest and safe conflict issue. Omit the unified
+managed trust digest, reviewed manifest and enabled state from sticky-ID manual
+rows, including when no same-ID published base survives. Keep persisted trust
+and private manual diagnostic rows unchanged. Before projection, map attributed
 managed failures and mixed or unattributed whole-candidate failures to fixed
 safe codes and messages. Use the existing `plugin-load-failed` code with
 `Managed plugin preparation failed` for attributed managed failures, and
