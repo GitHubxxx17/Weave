@@ -132,11 +132,16 @@ interface ManagedMainPath {
 
 function inspectManagedMainPath(filename: string): ManagedMainPath {
   // Native lookup resolves ancestor symlinks before processing later `..` components.
-  const canonical = join(realpathSync.native(dirname(filename)), basename(filename));
-  const entry = lstatSync(canonical, { bigint: true, throwIfNoEntry: false });
-  if (entry === undefined) return { canonical, identity: undefined };
+  const candidate = join(realpathSync.native(dirname(filename)), basename(filename));
+  const entry = lstatSync(candidate, { bigint: true, throwIfNoEntry: false });
+  if (entry === undefined) return { canonical: candidate, identity: undefined };
   if (!entry.isFile() || entry.nlink !== 1n || entry.dev <= 0n || entry.ino <= 0n) {
     throw new Error('Managed authority requires a regular main file with one link');
+  }
+  const canonical = realpathSync.native(candidate);
+  const resolved = lstatSync(canonical, { bigint: true });
+  if (!resolved.isFile() || resolved.nlink !== 1n || !sameMainFile(entry, resolved)) {
+    throw new Error('Managed authority main file changed during path validation');
   }
   return { canonical, identity: { dev: entry.dev, ino: entry.ino } };
 }

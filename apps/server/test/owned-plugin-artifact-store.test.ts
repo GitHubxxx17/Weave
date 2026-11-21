@@ -1,4 +1,12 @@
-import { existsSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
@@ -44,10 +52,10 @@ afterEach(async () => {
 
 type StoreOptions = Parameters<typeof openOwnedPluginArtifactStore>[0];
 
-function fixture() {
+function fixture(databaseBasename = 'authority.sqlite') {
   const parent = realpathSync.native(mkdtempSync(join(tmpdir(), 'weave-owned-artifacts-')));
   cleanup.push(() => rmSync(parent, { recursive: true, force: true }));
-  const databaseFile = join(parent, 'authority.sqlite');
+  const databaseFile = join(parent, databaseBasename);
   const authority = createSqlitePluginAuthorityDatabase({ filename: databaseFile });
   cleanup.push(() => authority.close());
   const directory = join(parent, 'store');
@@ -66,8 +74,8 @@ function fixture() {
     return store;
   }
 
-  function contender(): PluginAuthorityDatabase {
-    const authority = createSqlitePluginAuthorityDatabase({ filename: databaseFile });
+  function contender(filename = databaseFile): PluginAuthorityDatabase {
+    const authority = createSqlitePluginAuthorityDatabase({ filename });
     cleanup.push(() => authority.close());
     return authority;
   }
@@ -259,6 +267,50 @@ it('commits the root binding before taking the lifetime lock and registers main 
   await store.close();
   expect(bindingOnDisk(ownerFile)).toEqual(store.binding);
   expect(authority.readManagedRootStateSync().registration?.binding).toEqual(store.binding);
+});
+
+it('binds an existing authority opened with a case-equivalent filename and reuses the binding', async ({
+  skip,
+}) => {
+  const fx = fixture('Authority.sqlite');
+  await fx.authority.close();
+  const alias = join(fx.parent, 'AUTHORITY.SQLITE');
+  const originalEntry = lstatSync(fx.databaseFile, { bigint: true });
+  const aliasEntry = lstatSync(alias, { bigint: true, throwIfNoEntry: false });
+  if (aliasEntry?.dev !== originalEntry.dev || aliasEntry.ino !== originalEntry.ino) {
+    skip('The temporary filesystem does not resolve the case alias to the same file');
+  }
+
+  const authority = fx.contender(alias);
+  const reader = new DatabaseSync(alias, { readOnly: true });
+  try {
+    expect(authority.readManagedRootStateSync().databaseFile).toBe(reader.location('main'));
+  } finally {
+    reader.close();
+  }
+  const store = await fx.open({ authority });
+  store.assertHeldSync();
+  const binding = store.binding;
+  const registration = authority.readManagedRootStateSync().registration;
+  expect(binding.databaseFile).toBe(fx.databaseFile);
+  expect(registration?.binding).toEqual(binding);
+  await store.close();
+  await authority.close();
+  expect(bindingOnDisk(fx.ownerFile)).toEqual(binding);
+
+  for (const filename of [fx.databaseFile, alias]) {
+    const reopenedAuthority = fx.contender(filename);
+    const reopened = await fx.open({
+      authority: reopenedAuthority,
+      initialBinding: 'require-bound',
+    });
+    reopened.assertHeldSync();
+    expect(reopened.binding).toEqual(binding);
+    expect(reopenedAuthority.readManagedRootStateSync().registration).toEqual(registration);
+    await reopened.close();
+    await reopenedAuthority.close();
+    expect(bindingOnDisk(fx.ownerFile)).toEqual(binding);
+  }
 });
 
 it('keeps the committed root binding and permits exact retry after main registration fails', async () => {
