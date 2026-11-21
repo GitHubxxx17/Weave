@@ -1,14 +1,19 @@
+import { createServer } from 'node:http';
 import { PluginError, toolsExtensionPoint, type KernelPlugin } from '@weave/plugin';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createApp } from '../src/app.js';
-import { createExtensionCoordinator } from '../src/extension-coordinator.js';
+import {
+  createExtensionCoordinator,
+  type ExtensionMutationContext,
+} from '../src/extension-coordinator.js';
 import type {
   ExtensionAuthorityObserver,
   ExtensionSource,
   ExtensionSourceSnapshot,
 } from '../src/extension-types.js';
 import { ExtensionPreparationError } from '../src/extension-types.js';
+import { createServerShutdown } from '../src/server-shutdown.js';
 import {
   assembleServerGeneration,
   createServerAgentRunner,
@@ -618,6 +623,242 @@ describe('Server extension coordination', () => {
     } finally {
       setupRelease.resolve();
       await f.close();
+    }
+  });
+
+  it('keeps consumers live through an incomplete owned barrier and drains before release on retry', async () => {
+    const a = new FixtureSource('source-a');
+    const b = new FixtureSource('source-b');
+    const turnStarted = deferred();
+    const turnAborted = deferred();
+    const operationStarted = deferred();
+    const operationRelease = deferred();
+    const firstQuiesce = deferred();
+    const secondQuiesce = deferred();
+    const terminalStarted = deferred();
+    const terminalRelease = deferred();
+    const calls: string[] = [];
+    const server = createServer();
+    vi.spyOn(server, 'closeAllConnections').mockImplementation(() => {
+      calls.push('idle-sse');
+    });
+    const quiescenceFailure = new Error('Could not confirm quiescence');
+    a.onTool = (signal) => {
+      signal.addEventListener('abort', turnAborted.resolve, { once: true });
+      turnStarted.resolve();
+      return turnAborted.promise;
+    };
+    a.onDispose = () => {
+      calls.push('generation');
+    };
+    a.close.mockImplementation(async () => {
+      calls.push('source-a');
+    });
+    b.close.mockImplementation(async () => {
+      calls.push('source-b');
+    });
+    const f = await fixture(a, b);
+    const store = getServerSessionStore(f.runtime);
+    const append = store.append.bind(store);
+    vi.spyOn(store, 'append').mockImplementation(async (id, events) => {
+      if (events.some((event) => event.type === 'turn.completed')) {
+        terminalStarted.resolve();
+        await terminalRelease.promise;
+        const result = await append(id, events);
+        calls.push('terminal');
+        return result;
+      }
+      return append(id, events);
+    });
+    let context: ExtensionMutationContext | undefined;
+    let reentered: Promise<void> | undefined;
+    let attempts = 0;
+    let stopped = false;
+    try {
+      const shutdown = createServerShutdown({
+        resources: () => ({
+          server,
+          coordinator: f.coordinator,
+          owned: {
+            async quiesce() {
+              calls.push('quiesce');
+              attempts += 1;
+              if (attempts === 1) {
+                await firstQuiesce.promise;
+                throw quiescenceFailure;
+              }
+              await secondQuiesce.promise;
+            },
+            async close() {
+              calls.push('release');
+            },
+          },
+          authority: {
+            async close() {
+              calls.push('authority');
+            },
+          },
+        }),
+        async disposeHost() {
+          calls.push('host');
+          await disposeServerPlugins(f.runtime);
+        },
+        async stopRuntime() {
+          calls.push('runtime');
+          await f.runtime.stop();
+        },
+        closeProjectStore() {
+          calls.push('project');
+        },
+        closeProviderSettingsStore() {
+          calls.push('provider');
+        },
+        closeManualTrustStore() {
+          calls.push('manual-trust');
+        },
+        closeMcpAuthorityStore() {
+          calls.push('mcp');
+        },
+      });
+      await f.coordinator.reload();
+      const turn = f.turn(a.id, 'old-turn');
+      await turnStarted.promise;
+      const running = f.coordinator
+        .mutate(a.id, async (mutationContext) => {
+          context = mutationContext;
+          context.assertOpenSync();
+          context.signal.addEventListener(
+            'abort',
+            () => {
+              reentered = shutdown.stop();
+            },
+            { once: true },
+          );
+          operationStarted.resolve();
+          await operationRelease.promise;
+          context.assertOpenSync();
+        })
+        .catch((cause: unknown) => cause);
+      await operationStarted.promise;
+      const queued = f.coordinator.reload().catch((cause: unknown) => cause);
+
+      const first = shutdown.stop();
+      const failedStop = first.catch((cause: unknown) => cause);
+      expect(shutdown.stop()).toBe(first);
+      expect(reentered).toBe(first);
+      expect(context?.signal.aborted).toBe(true);
+      expect(f.coordinator.generationSnapshot().acceptingRuns).toBe(false);
+      await expect(queued).resolves.toMatchObject({ code: 'plugin-host-disposed' });
+      await expect(f.turn(a.id)).rejects.toMatchObject({ code: 'plugin-host-disposed' });
+      expect(calls).toEqual(['quiesce']);
+      firstQuiesce.resolve();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(shutdown.stop()).toBe(first);
+      expect(calls).toEqual(['quiesce']);
+      expect(a.disposers[0]).not.toHaveBeenCalled();
+      operationRelease.resolve();
+      await expect(running).resolves.toMatchObject({ code: 'plugin-host-disposed' });
+      const failure = await failedStop;
+      expect(failure).toBe(quiescenceFailure);
+      expect(calls).toEqual(['quiesce']);
+      expect(f.runtime.status).toBe('running');
+
+      const second = shutdown.stop();
+      expect(second).not.toBe(first);
+      expect(calls).toEqual(['quiesce', 'quiesce']);
+      secondQuiesce.resolve();
+      await terminalStarted.promise;
+      expect(calls).toEqual(['quiesce', 'quiesce']);
+      expect(f.runtime.status).toBe('running');
+      terminalRelease.resolve();
+      await turn;
+      await second;
+      stopped = true;
+      expect(calls).toEqual([
+        'quiesce',
+        'quiesce',
+        'terminal',
+        'generation',
+        'source-b',
+        'source-a',
+        'host',
+        'idle-sse',
+        'runtime',
+        'project',
+        'provider',
+        'mcp',
+        'release',
+        'authority',
+      ]);
+    } finally {
+      operationRelease.resolve();
+      firstQuiesce.resolve();
+      secondQuiesce.resolve();
+      terminalRelease.resolve();
+      turnAborted.resolve();
+      if (!stopped) await f.close();
+    }
+  });
+
+  it('aborts pending setup immediately and awaits its settlement before draining active turns', async () => {
+    const a = new FixtureSource('source-a');
+    const turnStarted = deferred();
+    const turnAborted = deferred();
+    const setupStarted = deferred();
+    const setupRelease = deferred();
+    const generationDisposal = new Error('Generation disposition failed');
+    const onCandidateAbort = vi.fn();
+    const f = await fixture(a);
+    a.onTool = (signal) => {
+      signal.addEventListener('abort', turnAborted.resolve, { once: true });
+      turnStarted.resolve();
+      return turnAborted.promise;
+    };
+    try {
+      await expect(f.coordinator.drainOwnedConsumers(async () => {})).rejects.toThrow();
+      await f.coordinator.reload();
+      const turn = f.turn(a.id, 'old-turn');
+      await turnStarted.promise;
+      a.onPreparationAbort = onCandidateAbort;
+      a.onSetup = () => {
+        setupStarted.resolve();
+        return setupRelease.promise;
+      };
+      a.onDispose = () => {
+        throw generationDisposal;
+      };
+      const changing = f.coordinator
+        .mutate(a.id, () => a.decide('next'))
+        .catch((cause: unknown) => cause);
+      await setupStarted.promise;
+      f.coordinator.beginOwnedDrainSync();
+      f.coordinator.beginOwnedDrainSync();
+      expect(onCandidateAbort).toHaveBeenCalledOnce();
+
+      const preDrain = vi.fn(async () => {});
+      let reentered: Promise<unknown> | undefined;
+      const draining = f.coordinator.drainOwnedConsumers(async () => {
+        reentered = f.coordinator.drainOwnedConsumers(preDrain);
+      });
+      expect(reentered).toBe(draining);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(a.disposers[0]).not.toHaveBeenCalled();
+      expect(a.close).not.toHaveBeenCalled();
+      setupRelease.resolve();
+      await expect(changing).resolves.toMatchObject({ code: 'plugin-host-disposed' });
+      await turn;
+      const result = await draining;
+      expect(result).toMatchObject({
+        kind: 'drained',
+        cleanupCauses: expect.arrayContaining([generationDisposal]),
+      });
+      expect(f.coordinator.drainOwnedConsumers(preDrain)).toBe(draining);
+      expect(preDrain).not.toHaveBeenCalled();
+      expect(a.close).toHaveBeenCalledOnce();
+    } finally {
+      setupRelease.resolve();
+      turnAborted.resolve();
+      await f.runtime.stop();
     }
   });
 

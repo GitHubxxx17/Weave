@@ -598,4 +598,36 @@ describe('startServer', () => {
       await database.cleanup();
     }
   });
+
+  it('retains the bind error when startup cleanup also fails', async () => {
+    const occupiedServer = createServer().listen(0, '127.0.0.1');
+    await new Promise<void>((resolve) => occupiedServer.once('listening', resolve));
+    const address = occupiedServer.address();
+    if (address === null || typeof address === 'string') {
+      occupiedServer.close();
+      throw new Error('Expected an address for the occupied test server');
+    }
+    const database = createTemporaryDatabaseFile();
+    const projectCloseFailure = new Error('Project store failed to close');
+    try {
+      const outcome = await startServer(address.port, {
+        databaseFile: database.filename,
+        projectStore: {
+          ...createInMemoryProjectStore(),
+          close() {
+            throw projectCloseFailure;
+          },
+        },
+      }).catch((cause: unknown) => cause);
+      expect(outcome).toBeInstanceOf(AggregateError);
+      const failure = outcome as AggregateError;
+      expect(failure.cause).toMatchObject({ code: 'EADDRINUSE' });
+      expect(failure.errors).toEqual([failure.cause, projectCloseFailure]);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        occupiedServer.close((error) => (error === undefined ? resolve() : reject(error)));
+      });
+      await database.cleanup();
+    }
+  });
 });

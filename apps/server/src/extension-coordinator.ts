@@ -28,6 +28,15 @@ interface ExtensionReloadResult extends ExtensionState {
   readonly unchanged: boolean;
 }
 
+export interface ExtensionMutationContext {
+  readonly assertOpenSync: () => void;
+  readonly signal: AbortSignal;
+}
+
+export type OwnedDrainOutcome =
+  | { readonly kind: 'drained'; readonly cleanupCauses: readonly unknown[] }
+  | { readonly kind: 'incomplete'; readonly cause: unknown };
+
 export interface ExtensionCoordinator {
   readonly runner: ServerGenerationController['runner'];
   generationSnapshot(): ExtensionGenerationSnapshot;
@@ -36,11 +45,13 @@ export interface ExtensionCoordinator {
   reload(options?: { readonly force?: boolean }): Promise<ExtensionReloadResult>;
   mutate(
     sourceId: string,
-    operation: () => Promise<unknown>,
+    operation: (context: ExtensionMutationContext) => Promise<unknown>,
     options?: { readonly force?: boolean },
   ): Promise<ExtensionReloadResult>;
   hasActive(sourceId: string, pluginId: string): boolean;
   retryImmediateRevocation(sourceId: string, pluginId: string): void;
+  beginOwnedDrainSync(): void;
+  drainOwnedConsumers(preDrain: () => Promise<void>): Promise<OwnedDrainOutcome>;
   dispose(): Promise<void>;
 }
 
@@ -110,6 +121,7 @@ export function createExtensionCoordinator(
   const controller = requireController(options.host);
   const pending: PendingOperation[] = [];
   const cleanupErrors: unknown[] = [];
+  const lifetime = new AbortController();
   const authorityStamps = new Map<string, ExtensionSourceStamp>();
   const activeByGeneration = new Map<number, readonly ExtensionMember[]>();
   let desiredRevision = 0;
@@ -119,6 +131,8 @@ export function createExtensionCoordinator(
   let blocked: PluginHostError | undefined;
   let running: Promise<void> | undefined;
   let closing: Promise<void> | undefined;
+  let ownedDrain: Promise<OwnedDrainOutcome> | undefined;
+  let ownedDrainStarted = false;
   let closed = false;
   let preparing: AbortController | undefined;
 
@@ -248,6 +262,23 @@ export function createExtensionCoordinator(
       cleanupErrors.push(reason);
       return false;
     }
+  }
+
+  function closeAdmissionSync(cancelActiveRuns: boolean): void {
+    if (closed) return;
+    closed = true;
+    const reason = disposed();
+    blocked = reason;
+    controller.blockNewRuns(reason);
+    if (cancelActiveRuns) controller.abortActiveRuns(reason);
+    lifetime.abort(reason);
+    preparing?.abort(reason);
+    for (const operation of pending.splice(0)) operation.result.reject(reason);
+  }
+
+  async function disposeConsumers(): Promise<void> {
+    await cleanup(() => controller.dispose());
+    for (const source of [...sources].reverse()) await cleanup(() => source.close());
   }
 
   async function disposePreparations(
@@ -517,7 +548,7 @@ export function createExtensionCoordinator(
           if (!sources.some((source) => source.id === sourceId)) {
             throw new Error(`Unknown extension source "${sourceId}"`);
           }
-          await operation();
+          await operation({ assertOpenSync: ensureOpen, signal: lifetime.signal });
           await refresh(sourceId);
           return rebuild(force);
         },
@@ -529,20 +560,44 @@ export function createExtensionCoordinator(
         controller.abortActiveRuns(blocked ?? new Error('Extension admission changed'));
       }
     },
+    beginOwnedDrainSync() {
+      if (ownedDrainStarted) return;
+      ownedDrainStarted = true;
+      closeAdmissionSync(false);
+    },
+    drainOwnedConsumers(preDrain) {
+      if (!ownedDrainStarted) {
+        return Promise.reject(
+          new Error('Owned extension drain must begin before draining consumers'),
+        );
+      }
+      if (ownedDrain !== undefined) return ownedDrain;
+      const settled = deferred<OwnedDrainOutcome>();
+      ownedDrain = settled.promise;
+      const runningAtDrain = running;
+      void (async (): Promise<OwnedDrainOutcome> => {
+        try {
+          await preDrain();
+        } catch (cause: unknown) {
+          await runningAtDrain;
+          ownedDrain = undefined;
+          return { kind: 'incomplete', cause };
+        }
+        await runningAtDrain;
+        controller.abortActiveRuns(blocked);
+        await disposeConsumers();
+        return { kind: 'drained', cleanupCauses: [...cleanupErrors] };
+      })().then(settled.resolve, settled.reject);
+      return settled.promise;
+    },
     dispose() {
       if (closing !== undefined) return closing;
-      closed = true;
-      blocked = disposed();
       const settled = deferred<void>();
       closing = settled.promise;
-      controller.blockNewRuns(blocked);
-      controller.abortActiveRuns(blocked);
-      preparing?.abort(blocked);
-      for (const operation of pending.splice(0)) operation.result.reject(blocked);
+      closeAdmissionSync(true);
       void (async () => {
         await running;
-        await cleanup(() => controller.dispose());
-        for (const source of [...sources].reverse()) await cleanup(() => source.close());
+        await disposeConsumers();
         if (cleanupErrors.length > 0) {
           throw new AggregateError(cleanupErrors, 'Plugin host disposal failed', {
             cause: cleanupErrors[0],

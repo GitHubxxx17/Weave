@@ -19,6 +19,7 @@ import {
   type ServerLocalPluginHost,
 } from './local-plugin-host.js';
 import type { ExtensionCoordinator } from './extension-coordinator.js';
+import { createServerShutdown } from './server-shutdown.js';
 import { createSqliteMcpAuthorityStore, type McpAuthorityStore } from './mcp-authority-store.js';
 import type { connectMcp } from '@weave/mcp-client';
 import type { ServerMcpManager } from './mcp-management-types.js';
@@ -94,45 +95,6 @@ export interface StartServerOptions {
   readonly mcpConnect?: typeof connectMcp;
 }
 
-async function closeServer(server: ServerType): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    try {
-      server.close((error?: Error) => {
-        if (
-          error === undefined ||
-          (error as NodeJS.ErrnoException).code === 'ERR_SERVER_NOT_RUNNING'
-        ) {
-          resolve();
-          return;
-        }
-        reject(error);
-      });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ERR_SERVER_NOT_RUNNING') {
-        resolve();
-        return;
-      }
-      reject(error);
-    }
-  });
-}
-
-async function closeProjectStore(projectStore: ProjectStore | undefined): Promise<void> {
-  if (projectStore === undefined) {
-    return;
-  }
-  await projectStore.close();
-}
-
-async function closeProviderSettingsStore(
-  providerSettingsStore: ProviderSettingsStore | undefined,
-): Promise<void> {
-  if (providerSettingsStore === undefined) {
-    return;
-  }
-  await providerSettingsStore.close();
-}
-
 /**
  * Starts the local HTTP control plane and its Runtime.
  *
@@ -178,6 +140,23 @@ export async function startServer(
   let pluginHost: ServerLocalPluginHost | undefined;
   let coordinator: ExtensionCoordinator | undefined;
   let server: ServerType | undefined;
+  const shutdown = createServerShutdown({
+    resources: () => ({ server, coordinator }),
+    disposeHost: () => disposeServerPlugins(runtime),
+    stopRuntime: () => runtime.stop(),
+    closeProjectStore: () => projectStore?.close(),
+    closeProviderSettingsStore: () => providerSettingsStore?.close(),
+    closeManualTrustStore: () => pluginTrustStore?.close(),
+    closeMcpAuthorityStore: () => mcpAuthorityStore?.close(),
+  });
+  const onSignal = (): void => {
+    void stop().catch(() => undefined);
+  };
+  const stop = (): Promise<void> => {
+    process.removeListener('SIGINT', onSignal);
+    process.removeListener('SIGTERM', onSignal);
+    return shutdown.stop();
+  };
 
   try {
     mcpAuthorityStore =
@@ -279,89 +258,12 @@ export async function startServer(
       throw new Error('Expected the server to have a TCP address after listening');
     }
 
-    let stopPromise: Promise<void> | undefined;
-    const onSigint = (): void => {
-      void stop();
-    };
-    const onSigterm = (): void => {
-      void stop();
-    };
-    const stop = (): Promise<void> => {
-      if (stopPromise !== undefined) {
-        return stopPromise;
-      }
-
-      process.removeListener('SIGINT', onSigint);
-      process.removeListener('SIGTERM', onSigterm);
-
-      let resolveStop!: () => void;
-      let rejectStop!: (error: unknown) => void;
-      stopPromise = new Promise<void>((resolve, reject) => {
-        resolveStop = resolve;
-        rejectStop = reject;
-      });
-      void (async () => {
-        let firstError: unknown;
-        let hasError = false;
-        const cleanup = async (operation: () => Promise<void>): Promise<void> => {
-          try {
-            await operation();
-          } catch (error: unknown) {
-            if (!hasError) {
-              hasError = true;
-              firstError = error;
-            }
-          }
-        };
-
-        // Stop accepting connections now, then cancel/drain Agent streams while
-        // their durable Session store is still open. Awaiting HTTP first would
-        // deadlock on an SSE stream blocked in Approval.
-        const closed = closeServer(createdServer);
-        // Attach rejection handling immediately while generation cancellation runs.
-        const closeOutcome = closed.then(
-          () => undefined,
-          (error: unknown) => error,
-        );
-        await cleanup(async () => coordinator?.dispose());
-        await cleanup(() => disposeServerPlugins(runtime));
-        // Approval SSE and other idle streams do not belong to an Agent iterator.
-        // Their sockets can close once Agent terminal writes have settled.
-        if ('closeAllConnections' in createdServer) createdServer.closeAllConnections();
-        await cleanup(async () => {
-          const error = await closeOutcome;
-          if (error !== undefined) throw error;
-        });
-        await cleanup(() => runtime.stop());
-        await cleanup(() => closeProjectStore(projectStore));
-        await cleanup(() => closeProviderSettingsStore(providerSettingsStore));
-        await cleanup(async () => pluginTrustStore?.close());
-        await cleanup(async () => mcpAuthorityStore?.close());
-
-        if (hasError) {
-          throw firstError;
-        }
-      })().then(resolveStop, rejectStop);
-      return stopPromise;
-    };
-
-    process.on('SIGINT', onSigint);
-    process.on('SIGTERM', onSigterm);
+    process.on('SIGINT', onSignal);
+    process.on('SIGTERM', onSignal);
 
     return { port: address.port, runtime, pluginHost, mcpManager, server: createdServer, stop };
   } catch (error) {
-    // Begin closing HTTP, then cancel generations before awaiting SSE sockets.
-    const closed = server === undefined ? undefined : closeServer(server).catch(() => undefined);
-    await coordinator?.dispose().catch(() => undefined);
-    await disposeServerPlugins(runtime).catch(() => undefined);
-    if (server !== undefined && 'closeAllConnections' in server) server.closeAllConnections();
-    await closed;
-    await runtime.stop().catch(() => undefined);
-    await closeProjectStore(projectStore).catch(() => undefined);
-    await closeProviderSettingsStore(providerSettingsStore).catch(() => undefined);
-    await pluginTrustStore?.close().catch(() => undefined);
-    await mcpAuthorityStore?.close().catch(() => undefined);
-    throw error;
+    return shutdown.failStartup(error);
   }
 }
 
