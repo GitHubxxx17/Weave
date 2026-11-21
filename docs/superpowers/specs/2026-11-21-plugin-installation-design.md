@@ -176,6 +176,15 @@ contents to public messages. `read` never returns a partially validated artifact
 
 ## 5. Stage 6.2 authority and selection contracts
 
+The independently deliverable persistence contract is specified in the
+[Stage 6.2a authority design](2026-11-21-plugin-authority-design.md). It uses three
+append-only streams: installation, the unchanged trust log, and managed operation.
+Every successful new managed request, including a no-op, records one operation;
+request IDs are globally unique across commands and plugin IDs in that database.
+Identical replay returns the original durable decision with current authority,
+before any preview/artifact work, and repeats no authority or runtime effect.
+All fallible result construction completes inside the transaction before COMMIT.
+
 Installation records add local provenance (normalized source path, content digest,
 manifest/version, request ID and time) without granting execution authority.
 Installation and trust each have a contiguous append-only sequence. A combined

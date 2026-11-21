@@ -1,11 +1,24 @@
 # Weave Foundation Architecture
 
+Stage 6.2a adds Server-private plugin authority persistence on one SQLite
+connection. Installation, existing trust and managed operation logs are appended
+atomically; every successful fresh managed request, including no-op, has one
+durable operation. Replay returns that original decision with current validated
+authority, without applying it again. Managed results are fully constructed and
+frozen before COMMIT; the legacy trust facade keeps mutable detached copies and
+rejects writes for sticky managed IDs. See the
+[authority design](../superpowers/specs/2026-11-21-plugin-authority-design.md) and
+[usage and boundaries](../learning/2026-11-21-plugin-authority-database.md).
+Artifact-root ownership, selected-source/Generation integration, managed HTTP
+routes and Studio installation remain subsequent slices.
+
 Stage 6.1 provides a bounded filesystem artifact store in `@weave/plugin-host`.
 It copies already bundled directories without executing them, validates concrete
 payload bytes and publishes hidden content-addressed paths. It never overwrites
 or deletes published content, grants trust, changes selection or reloads a
-Generation. Server authority and Studio installation remain subsequent slices;
-they will add explicit durable selection and separate reviewed activation. See
+Generation. The Server authority database records durable selection and reviewed
+activation; connecting those decisions to artifact loading and Studio remains a
+subsequent slice. See
 [ADR 0005](../adr/0005-plugin-installation-and-distribution.md) and the
 [installation design](../superpowers/specs/2026-11-21-plugin-installation-design.md), plus
 [artifact-store usage](../learning/2026-11-21-plugin-artifact-store.md). This is a
