@@ -1,6 +1,7 @@
 # ADR 0004: MCP stdio Tools
 
 - Status: Proposed
+- Owner review: 2026-11-21 已确认推荐设计；首轮实现验证后更新为 Accepted。
 - Date: 2026-11-21
 - Refines: ADR 0002（Typed Plugin Kernel）和 ADR 0003（Local Plugin Loading and Trust）。
 - 详细设计：`docs/superpowers/specs/2026-11-21-mcp-stdio-design.md`。

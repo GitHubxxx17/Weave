@@ -1,8 +1,13 @@
 # Stage 5 — 本地 stdio MCP Tools 设计
 
-状态：待审阅。本文规定下一阶段的跨包契约；尚未实现其中的 MCP 功能。
+状态：用户已于 2026-11-21 确认推荐方案。本文规定下一阶段的跨包契约；尚未实现其中的 MCP 功能。
 基线：`origin/main` 的 `a0b38b4`（Stage 4.5，PR #76）。
 决策记录：[ADR 0004](../../adr/0004-mcp-stdio-tools.md)。
+实施计划：[5.1a 统一扩展协调器](../plans/2026-11-21-extension-coordinator.md)。
+
+产品对标 Codex、Kiro、DeepSeek Harness；参考来源和当前采用原则见
+[Foundation 的 Product references](../../architecture/foundation.md#product-references)。
+以下取舍保持 Weave 自身的回合边界、共享工具执行和显式信任规则。
 
 ## 1. 目标和首版范围
 
@@ -290,6 +295,8 @@ Server 的 ExtensionCoordinator 是完整候选唯一发布者。配置内置插
 
 LocalPluginSource 只公开 `snapshot()`、`refresh()`、`mutate(command)`、
 `prepare(stamp, { signal, excluded })`、`recheck(prepared, signal)`、`close()`。
+具体 controller 类型命名为 `LocalPluginSourceController`，保留 loader 已导出的
+`LocalPluginSource` 数据类型别名，避免破坏既有消费者。
 stamp 含单调 revision 和 trustSequence；仅 authority 或发现身份实际变化才增加
 revision，无变化 refresh/recheck 保持同一 stamp。prepare 返回全新 KernelPlugin 生命周期、
 identity、归因失败、幂等 dispose。source 不保存 active generation，不发布或
