@@ -266,59 +266,230 @@ redaction are verified.
 
 ## Task 3. Compose explicit managed evidence and the MCP namespace
 
-Write the task's behavior tests first and run the focused command below for RED.
-Observe failures for runtime-verifier read counts, paired snapshots, and MCP dispatch placement. After implementation run the same
-command for GREEN and run Server typecheck before independent review.
+Complete 3a, 3b and 3c in order. Each checkpoint has its own RED, GREEN and
+independent review. File ownership overlaps across checkpoints, so review
+and hand off the preceding checkpoint before editing the next. They form
+one Task 3 in the Server PR. Task 4 adds final publication and actual-start
+guards in the internal composition. Task 6 enables selected execution and
+publication in normal startup after public projection checks.
+
+### 3a. Publish paired authority changes and enforce MCP reservations
+
+**Owns** `apps/server/src/{extension-types,extension-coordinator,mcp-source,managed-plugin-composition}.ts`,
+`apps/server/test/{extension-coordinator,mcp-source}.test.ts`, and
+`apps/server/test/support/managed-plugin-composition-fixture.ts`.
+
+**Consumes** Task 1's `ExtensionMutationContext`, existing source observers,
+and MCP's authority log validation and mutation queue callback.
+
+**Hands off** the following Server-private contracts for 3b and 3c:
+
+```ts
+// ExtensionCoordinator method
+observeAuthorityBatchSync(changes: ReadonlyMap<string, ExtensionAuthorityChange>): void;
+
+// Added to the private MCP source handle
+declaredPluginIds(): readonly string[];
+setDeniedPluginIdsSync(ids: ReadonlySet<string>): void;
+refresh(): Promise<void>;
+
+// Optional private McpExtensionSourceOptions hooks
+readonly installAuthoritySync?: (applyValidatedLog: () => void) => void;
+readonly assertCreateAllowedSync?: (pluginId: string) => void;
+```
+
+- [ ] **RED.** In the coordinator tests, start a run whose synchronous abort
+      callback reads both effective source snapshots and coordinator
+      admission. Deliver a paired policy change and assert it sees both
+      final snapshots and the admission block, with one abort. Verify
+      same-stamp changes and a higher validated sequence with steady
+      eligibility. Cover consecutive notifications for the same source
+      where an earlier one carries immediate metadata.
+- [ ] **RED.** In the MCP source tests, deny an enabled trusted declaration
+      and assert both snapshot and preparation exclude it. Include
+      disabled, untrusted and broken non-removed declarations in the IDs
+      returned for namespace decisions. Verify durable removal releases the
+      future claim and leaves any existing allocation to its Generation.
+      Reject malformed or rewritten prefixes before invoking the install
+      hook. Suspend configuration before dispatch, add a sticky ID, then
+      assert `mcp-conflict` and zero create writes. Verify closed admin also
+      prevents dispatch after this await.
+- [ ] Run the focused Vitest command below. Confirm RED on missing paired
+      observation and MCP reservation before implementation.
+- [ ] Route single-source notifications through the batch method. Apply all
+      changed stamps and update `desiredRevision`, compute admission against
+      final eligible identities, then dispatch immediate cancellation at
+      most once. In `managed-plugin-composition.ts` put the synchronous
+      composition-local observer buffer used by the private fixture and
+      3b. Keep the last snapshot per source, union affected IDs and preserve
+      immediate metadata from changed stamps. Clear the buffer before
+      delivering the batch, so synchronous reentry sees completed state.
+- [ ] MCP validates `knownPrefix` before invoking the optional install hook.
+      The hook calls `applyValidatedLog` exactly once in the paired scope,
+      including when the validated log is equal. After the apply call it can
+      read the current declared IDs. Use a single denied-aware predicate in
+      MCP snapshot and prepare. `setDeniedPluginIdsSync` emits a bufferable
+      change without reentering the install hook. A deny-only change advances
+      revision when effective eligibility changes. Preserve the validated log
+      sequence even when effective eligibility is steady.
+- [ ] Keep awaited normalization and the existing baseline, retained and
+      manual declaration check. At create dispatch after `await command()`,
+      call `assertCreateAllowedSync` with `mcp-${config.id}`, then check
+      `assertOpenSync` immediately before `store.mutate`. The composition
+      hook checks sticky state and throws the existing `mcp-conflict`.
+      Keep existing immediate retained-membership retry for no-op cases
+      and one cancellation for a changed installation. The private harness
+      exercises both adapter snapshots with test-supplied authority, using
+      the production observer buffer and real coordinator and MCP source.
+- [ ] **GREEN.** Rerun the focused command, then typecheck and request
+      independent review of stamp ordering, prefix validation and reentry.
 
 ```sh
-pnpm exec vitest run apps/server/test/managed-plugin-startup.test.ts apps/server/test/managed-plugin-composition.test.ts apps/server/test/mcp-source.test.ts apps/server/test/mcp-integration.test.ts apps/server/test/managed-plugin-integration.test.ts
+pnpm exec vitest run apps/server/test/extension-coordinator.test.ts apps/server/test/mcp-source.test.ts
 pnpm --filter @weave/server typecheck
 ```
 
-**Files:** `apps/server/src/{main,local-extension-source,local-plugin-host,mcp-source,extension-types,extension-coordinator,managed-plugin-composition}.ts` and `apps/server/test/{managed-plugin-startup,managed-plugin-composition,managed-plugin-integration,mcp-source,mcp-integration}.test.ts`. Task 3 uses an internal composition harness for selected ESM and the joint Generation while production activation awaits Task 6.
+### 3b. Read selected evidence and verify a joint Generation
 
-**Consumes:** explicit selection adoption, `managedEligible`, candidate identity helpers, origin-aware prepared items/failures, `ExplicitLocalAuthorityError`, and bounded `explicitChecks` from package 6.2c.1. Consumes `PluginAuthoritySnapshot.installations`, selection/trust records, canonical manifest comparison, and owned artifact `read`.
+**Owns** `apps/server/src/{managed-plugin-composition,local-plugin-host,local-extension-source,extension-types,extension-coordinator}.ts`,
+`apps/server/test/{managed-plugin-composition,managed-plugin-integration,extension-coordinator}.test.ts`,
+and `apps/server/test/support/managed-plugin-composition-fixture.ts`.
 
-**Produces:** A local source that receives `ExplicitLocalSelectionInput`, an MCP source with private `declaredPluginIds(): readonly string[]` and `setDeniedPluginIdsSync(ids: ReadonlySet<string>): void`, and a composition cache with synchronous adoption/invalidation and signal-bound reads.
+**Consumes** the 3a batch, observer buffer and MCP install/denial hooks,
+Task 2's authority and optional owned store, and the package explicit selection,
+candidate identity, origin and verification contracts.
 
-- [ ] Take one validated `snapshotSync()` per adoption. Derive sticky IDs from all `installations`; match a selection to the same ID, digest and `candidateImportSequence`; fold its trust with exported `foldTrust` and compare declarations using `canonicalJson` from `plugin-authority-data.ts`. Reconcile before an awaited read so a new revoke, sticky claim or selection immediately drops old eligibility. Retain cached readiness only for the same immutable candidate, activation sequence, exact enabled trust, binding and namespace. Keep the selected manifest/digest/sequence as declaration even with no ready evidence. On read failure, retain the last validated trust prefix and sticky IDs, remove managed readiness, and fail the attempt. A saved decision whose adoption throws must also block any current manual member with a newly sticky ID.
-- [ ] Provide one `read(digest, { signal })` helper checking the owned artifact's `digest`, `id`, `files`, `bytes` and manifest against the candidate. Use `artifact.directory` and `artifact.entry` directly. Runtime reads are for authorized selected targets after MCP authority validation. Explicit decision evidence is Task 5's separate precommit path. Before each digest dispatch, check the latest validated authority and namespace and skip a target that is now denied, disabled, revoked or unselected. After every await, check cancellation and revalidate exact authority and namespace before adopting evidence or returning verified entry/digest. Missing, incompatible or corrupt objects receive safe issues and remain declarations. Authority read or ownership failure withdraws managed eligibility and surfaces the authority marker. Ordinary artifact failures stay attributable.
-- [ ] Map durable MCP config `id` to `mcp-${id}` for every non-removed record, regardless of trust, health or enablement. After `knownPrefix` validation, stage that log with the current sticky set and calculate the intersection once. Publish both effective snapshots in the same stack before delivering either source's authority notification. Buffer adapter notifications during package `adoptExplicitSelectionSync` and the MCP denied update, then flush final snapshots through one coordinator batch that updates stamps/blocks before dispatching immediate cancellation. Preserve immediate/id metadata once. The denied-aware predicate serves both `snapshot().eligible` and `prepare()` and advances MCP revision when eligibility changes. Sequence advances propagate even with steady eligibility. Notifications neither reenter reconciliation nor trigger payload reads.
-- [ ] Make the coordinator's runtime evidence phases MCP-first: initial reload, explicit reload, retry after failed preparation, loader verification preparation, postcommit same-ticket refresh and final recheck. Keep the ordinary preparation order if it already follows MCP authority refresh. Before any phase dispatches managed reads, validate MCP's current prefix and reconcile. In `rebuild()` recheck MCP before the bounded local managed recheck even when local preparation ran first. Recheck the exact policy before dispatching every later digest in a phase. A validated removal releases the namespace claim for future Generations while the old MCP allocation stays pinned.
-- [ ] For MCP create, finish awaited configuration normalization and manual discovery/baseline/current/retired checks. At the `requested.kind === 'create'` dispatch in `mutation()`, after `await command()`, synchronously read and adopt current sticky authority and check queue openness immediately before invoking `store.mutate`. Return the existing `mcp-conflict` for any sticky ID. Preserve manual-only discovery and activate the check with disabled ESM, unowned compositions, and a clean custom trust override. Use the override's own trust prefix for its manual source.
-- [ ] Map combined source snapshots with `eligibleLocalSourceCandidates` and `localSourceCandidateIdentity`. Use `adoptExplicitSelectionSync` for the managed projection. Bind `explicitChecks.verify(candidate, signal)` to bounded artifact verification plus exact current authority, and `assertReadySync(candidate): undefined` to held lease, exact selection/enabled matching trust and known namespace. At guard failure under intact ownership, also reconcile the latest validated state or withdraw affected evidence, so failure cannot leave an unauthorized current member admissible. Let package policy handle completed manual scans, baseline reservations, manual collision details and per-attempt candidate equality.
-- [ ] In composition unit tests use a gated owned read and a deterministic authority snapshot to count digest requests, change selection or revoke mid-read, tamper digest/ID/files/bytes/manifest, and verify safe issue versus `ExplicitLocalAuthorityError`. Verify canonical manifest comparison with reordered properties and the first-import link as well as digest. In real integration test seed valid authority and files before startup, use a real MCP fixture from `apps/server/test/fixtures/mcp-server.mjs`, and assert both collision orders: new MCP config against an existing sticky ID, and an existing non-removed MCP claim followed by externally committed managed history (6.2d import collision prevention is out of scope). Cover disabled/broken claims, removal while pinned, a manual same-ID conflict, and MCP prefix changes during recheck.
-- [ ] Gate a new MCP claim during assembly and assert the final MCP recheck denies the target with zero subsequent managed artifact reads for it. During a multi-target read phase deny a later digest and confirm it never dispatches. Append fresh sticky history during MCP configuration's async handoff and assert zero create dispatches. Repeat the reservation case with disabled local ESM and with a clean custom override. In a reentrant immediate observer assert both effective snapshots already reflect the same quarantine.
-- [ ] Wire Task 2's private acquisition module into `startServer()` with the
-      combined namespace policy. Register authority and wrapper with the
-      shutdown tracker immediately, before source preparation and HTTP
-      listen. Verify live imported-only startup creates no artifact root,
-      sticky override rejection prevents listening, and disabled ESM still
-      reserves sticky IDs for MCP. Use real lease contention during normal
-      shutdown and failed-listen cleanup. Runtime selected preparation in
-      this task runs through the internal composition harness.
-- [ ] For custom overrides, forward and retain the raw trust event prefix
-      through a Server-owned adapter. Supply only those events to package
-      adoption, including synchronous namespace updates. Test with unrelated
-      main and override trust histories. The main database supplies
-      sticky IDs separately. Task 6 adds the authoritative sticky guard at
-      the override append dispatch.
-- [ ] When a wrapper is owned, pass the same `stop` callback exposed by
-      `startServer` down to the local facade for `pluginHost.dispose()`.
-      Manual startup and embedded composition use `coordinator.dispose`.
-      Start shutdown through `started.pluginHost.dispose()` with gated
-      quiescence and an in-flight admin operation. Assert an active turn pin
-      survives until both settle. Call `started.stop()` during or after
-      disposal and assert release happens once.
-- [ ] Add one joint composition fixture. Publish and select an artifact via
-      the 6.2b owner and 6.2a authority, stop those handles, trust an unrelated
-      manual ESM, and seed trusted stdio MCP. Require all three contributions
-      to execute through the same stable runner and current Generation. Seed
-      a second imported but unselected digest with an import marker, then
-      verify the managed verifier never reads it and the module never runs.
-      Task 6 runs this fixture through real `startServer()` and a restart.
+**Hands off** one Server-private composition that can adopt a validated
+`PluginAuthoritySnapshot` synchronously and refresh exact selected evidence
+with an `AbortSignal`. The local adapter exposes cached
+`snapshot(): ExtensionSourceSnapshot` and
+`adoptExplicitSelectionSync(input: ExplicitLocalSelectionInput): void`
+to that composition. It binds
+`explicitChecks.verify(candidate, signal)` and
+`assertReadySync(candidate): undefined` to the same authority. The
+coordinator opts the combined composition into MCP-first authority phases
+through a private `mcpFirstAuthority?: boolean` option.
 
-**Risk:** The existing MCP source owns refresh and `knownPrefix`; do not make it read managed payloads or recursively enqueue coordinator work. The shared namespace must be derived from cached validated declarations before managed preparation.
+- [ ] **RED.** In the composition tests gate owned reads and refreshes.
+      Assert the verifier checks digest, descriptor manifest ID, files,
+      bytes, canonical manifest and the durable first-import link. Cover
+      reordered manifest properties, stale selection and revocation
+      during a read, missing or corrupt bytes, and authority read or
+      adoption failure. Record effective snapshots and admission after
+      withdrawal, including a formerly manual same-ID member.
+- [ ] **RED.** Gate a new MCP claim during assembly and another before a
+      later digest in a multi-target read phase. Assert no subsequent
+      managed read is dispatched for the newly denied target. Test both
+      collision orders, manual same-ID conflicts, disabled/broken claims
+      and a durable removal while an MCP allocation is pinned. Exercise
+      cached batch observation inside an immediate reentrant callback.
+- [ ] **RED.** Extend the private fixture to seed real SQLite authority,
+      an owned artifact, an unrelated trusted manual ESM plugin and a
+      trusted stdio MCP using `fixtures/mcp-server.mjs`. Exercise all three
+      contributions through one stable runner and Generation. Assert an
+      imported unselected digest receives zero managed reads and its module
+      never executes. Task 6 reuses the fixture for real startup and restart.
+- [ ] Run the focused Vitest command below. Confirm RED on missing verified
+      selection, MCP-first ordering or joint membership before implementation.
+- [ ] Take one validated snapshot per adoption. Derive all sticky installation
+      IDs. Link each selection by ID, digest and
+      `firstImportSequence === candidateImportSequence`, and retain its
+      manifest and activation sequence even without readiness. Use
+      `foldTrust` and `canonicalJson` to confirm enabled matching trust.
+      In the shared observer buffer apply the intersection of sticky IDs
+      and cached MCP declared IDs to both sources. Update local eligibility
+      and MCP denial before flushing. Retain ready data only for the exact
+      candidate, activation, trust, binding and namespace. After authority
+      failure, publish the last validated prefix and sticky IDs without
+      readiness and propagate the authority marker. If local adoption
+      throws after a new sticky claim, publish a fail-closed effective local
+      snapshot with a changed stamp and affected identities filtered out,
+      including displaced manual members. Use that same snapshot for future
+      reads. Apply MCP denial in the same batch and preserve private causes.
+- [ ] Reuse one bounded `owned.read(digest, { signal })` verifier for runtime
+      evidence. Compare the returned digest, descriptor manifest ID, files,
+      bytes and canonical manifest to the durable candidate and build
+      readiness from the checked entry and directory. Check cancellation
+      and exact policy before dispatch and after every awaited read.
+      Ordinary artifact failures become safe selection issues or identity
+      failures. Authority failure withdraws eligibility and surfaces
+      `ExplicitLocalAuthorityError`. The synchronous guard checks lease,
+      selection, trust and known namespace, reconciles or withdraws stale
+      evidence and returns `undefined` on success.
+- [ ] Keep the existing registration and preparation order. In combined
+      mode refresh MCP authority before local runtime reads during initial
+      load, reload, preparation and retries, including retries that skip
+      normal refresh after attribution. Recheck prepared MCP before the
+      final bounded local recheck even when local prepared first. Validate
+      MCP authority again before a local read when intervening async work
+      could reveal a new claim. Use the current effective policy to skip
+      later denied targets. Task 5 uses the same ordered phase after
+      adoption and includes the mutated local source. Keep legacy
+      mutation skip behavior elsewhere.
+- [ ] Keep package trust and manual discovery refresh and recheck. Bound the
+      final managed comparisons to prepared items still eligible after those
+      checks and current namespace reconciliation. Use
+      `eligibleLocalSourceCandidates` and `localSourceCandidateIdentity` in
+      the adapter. Preserve candidate identity and origin when mapping
+      preparations and failures for Task 4.
+- [ ] **GREEN.** Rerun the focused command, then typecheck and request
+      independent review of evidence, phase ordering and joint membership.
+
+```sh
+pnpm exec vitest run apps/server/test/managed-plugin-composition.test.ts apps/server/test/managed-plugin-integration.test.ts apps/server/test/extension-coordinator.test.ts
+pnpm --filter @weave/server typecheck
+```
+
+### 3c. Wire startup authority, ownership and facade shutdown
+
+**Owns** `apps/server/src/{main,local-plugin-host,local-extension-source,managed-plugin-startup}.ts`
+and `apps/server/test/{managed-plugin-startup,mcp-integration,health}.test.ts`.
+
+**Consumes** Task 1's memoized shutdown, Task 2's acquisition module and
+raw override trust prefix, and 3a/3b's paired namespace composition.
+
+**Hands off** live `startServer()` acquisition and sticky reservation,
+including disabled ESM, unowned and custom override modes. The local facade
+accepts a private optional `dispose?: () => Promise<void>` callback and
+delegates to `coordinator.dispose` when omitted. An owned startup supplies
+the same `stop` closure exposed in the existing Server return.
+
+- [ ] **RED.** Test live imported-only startup with no artifact root and
+      sticky MCP reservation. Repeat the namespace case with ESM disabled
+      and a clean override. Use unrelated main and override trust histories.
+      Verify a sticky override rejection prevents listening and real
+      lease contention resolves after normal stop and failed-listen cleanup.
+- [ ] **RED.** Start an active turn and a gated admin operation. Invoke
+      `started.pluginHost.dispose()` with gated owned quiescence and assert
+      the turn remains pinned until both gates settle. Call
+      `started.stop()` during or after facade disposal and verify one
+      consumer drain and one lease release. Cover existing manual and
+      embedded facade disposal behavior.
+- [ ] Run the focused Vitest command below. Confirm RED on the missing
+      live startup namespace or owned facade drain behavior.
+- [ ] Wire acquisition and sticky adoption before coordinator reload and
+      listen. Use Task 2's synchronous hooks to register authority and
+      wrapper with the shutdown tracker as soon as acquired. Track
+      independently owned override trust cleanup separately from the main
+      database. Pass the exact Server `stop` function to the owned facade.
+      Normal startup applies sticky and MCP namespace policy without
+      supplying managed ready evidence or dispatching selected reads.
+- [ ] Forward and retain the override's raw event prefix through the
+      Server-owned adapter. Use only those events for package adoption,
+      including paired namespace updates. Use the validated main snapshot
+      for sticky IDs. If a gapped append temporarily leaves no complete
+      override prefix, let the package read it back. Block any matching
+      newly sticky manual identity immediately through the effective
+      snapshot. Task 6 adds the authoritative override append dispatch
+      check.
+- [ ] **GREEN.** Rerun the focused command, then typecheck and request
+      independent review of binding, prefix ownership and both stop
+      entry points.
+
+```sh
+pnpm exec vitest run apps/server/test/managed-plugin-startup.test.ts apps/server/test/mcp-integration.test.ts apps/server/test/health.test.ts
+pnpm --filter @weave/server typecheck
+```
 
 ## Task 4. Guard Generation publication and admission
 
