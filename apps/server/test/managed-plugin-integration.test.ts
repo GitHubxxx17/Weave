@@ -133,57 +133,74 @@ describe('joint managed, manual and MCP Generation', () => {
     }
   });
 
-  it('signals a gated selected artifact verification even if readiness adoption and withdrawal both throw', async () => {
-    const f = await createRealManagedCompositionFixture();
-    const entered = Promise.withResolvers<AbortSignal>();
-    const release = Promise.withResolvers<void>();
-    let reload: Promise<unknown> | undefined;
-    try {
-      await f.seedManaged('notes', 'pending');
-      const host = f.compose();
-      const before = f.runtime.serverHost.controller()!.current();
-      let reads = 0;
-      f.readOwned.mockImplementation(async (digest, options) => {
-        if (++reads !== 2) return f.owned.read(digest, options);
-        entered.resolve(options!.signal!);
-        await release.promise;
-        throw new Error('Incidental verification cancellation');
-      });
-      reload = host.coordinator.reload();
-      const signal = await Promise.race([
-        entered.promise,
-        reload.then(() => {
-          throw new Error('Expected gated verification');
-        }),
-      ]);
-      const loss = ownershipLoss();
-      const adoption = new Error('Private projection failure');
-      const withdrawal = new Error('Private fallback withdrawal failure');
-      vi.spyOn(host.localSource!, 'adoptExplicitSelectionSync').mockImplementationOnce(() => {
-        throw adoption;
-      });
-      vi.spyOn(host.localSource!, 'withdrawExplicitSelectionSync').mockImplementationOnce(() => {
-        throw withdrawal;
-      });
-      f.loseOwnership(loss);
-      expect(signal.aborted).toBe(true);
-      release.resolve();
-      const failure = await reload.catch((cause: unknown) => cause);
-      expect(failure).toBeInstanceOf(pluginHost.ExplicitLocalAuthorityError);
-      const aggregate = (failure as Error).cause as AggregateError;
-      expect(aggregate.errors).toEqual([
-        loss,
-        expect.objectContaining({ errors: [adoption, withdrawal] }),
-      ]);
-      expect(host.coordinator.snapshot().failed).toEqual([]);
-      expect(f.runtime.serverHost.controller()!.current()).toBe(before);
-      expect(host.coordinator.generationSnapshot().acceptingRuns).toBe(true);
-    } finally {
-      release.resolve();
-      await Promise.allSettled([reload]);
-      await f.close();
-    }
-  });
+  it.each(['adoption', 'override trust read'] as const)(
+    'signals a gated selected artifact verification even if the %s and fallback withdrawal both throw',
+    async (phase) => {
+      const f = await createRealManagedCompositionFixture();
+      const entered = Promise.withResolvers<AbortSignal>();
+      const release = Promise.withResolvers<void>();
+      let reload: Promise<unknown> | undefined;
+      try {
+        await f.seedManaged('notes', 'pending');
+        let failTrustRead = false;
+        const primaryFailure = new Error(`Private ${phase} failure`);
+        const host = f.compose(
+          phase === 'adoption'
+            ? {}
+            : {
+                readLocalTrustEventsSync() {
+                  if (failTrustRead) throw primaryFailure;
+                  return f.authority.snapshotSync().trustEvents;
+                },
+              },
+        );
+        const before = f.runtime.serverHost.controller()!.current();
+        let reads = 0;
+        f.readOwned.mockImplementation(async (digest, options) => {
+          if (++reads !== 2) return f.owned.read(digest, options);
+          entered.resolve(options!.signal!);
+          await release.promise;
+          throw new Error('Incidental verification cancellation');
+        });
+        reload = host.coordinator.reload();
+        const signal = await Promise.race([
+          entered.promise,
+          reload.then(() => {
+            throw new Error('Expected gated verification');
+          }),
+        ]);
+        const loss = ownershipLoss();
+        const withdrawal = new Error('Private fallback withdrawal failure');
+        if (phase === 'adoption') {
+          vi.spyOn(host.localSource!, 'adoptExplicitSelectionSync').mockImplementationOnce(() => {
+            throw primaryFailure;
+          });
+        } else {
+          failTrustRead = true;
+        }
+        vi.spyOn(host.localSource!, 'withdrawExplicitSelectionSync').mockImplementationOnce(() => {
+          throw withdrawal;
+        });
+        f.loseOwnership(loss);
+        expect(signal.aborted).toBe(true);
+        release.resolve();
+        const failure = await reload.catch((cause: unknown) => cause);
+        expect(failure).toBeInstanceOf(pluginHost.ExplicitLocalAuthorityError);
+        const aggregate = (failure as Error).cause as AggregateError;
+        expect(aggregate.errors).toEqual([
+          loss,
+          expect.objectContaining({ errors: [primaryFailure, withdrawal] }),
+        ]);
+        expect(host.coordinator.snapshot().failed).toEqual([]);
+        expect(f.runtime.serverHost.controller()!.current()).toBe(before);
+        expect(host.coordinator.generationSnapshot().acceptingRuns).toBe(true);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([reload]);
+        await f.close();
+      }
+    },
+  );
 
   it.each(['import', 'factory', 'setup'] as const)(
     'rejects gated managed %s through the ownership marker without per-plugin exclusion',

@@ -273,10 +273,19 @@ export function createManagedPluginComposition(
             },
           );
         } catch (cause: unknown) {
-          failure ??=
-            cause instanceof ExplicitLocalAuthorityError
-              ? cause
-              : new ExplicitLocalAuthorityError(cause);
+          if (failure === undefined) {
+            failure =
+              cause instanceof ExplicitLocalAuthorityError
+                ? cause
+                : new ExplicitLocalAuthorityError(cause);
+          } else if (lossMarker !== undefined && cause !== failure) {
+            const withdrawal = cause instanceof ExplicitLocalAuthorityError ? cause.cause : cause;
+            failure = new ExplicitLocalAuthorityError(
+              new AggregateError([failure.cause, withdrawal], 'Local readiness withdrawal failed', {
+                cause: failure.cause,
+              }),
+            );
+          }
         }
       });
     } finally {

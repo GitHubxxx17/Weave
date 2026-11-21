@@ -398,6 +398,59 @@ describe('Server extension coordination', () => {
     }
   });
 
+  it.each(['direct', 'setup-wrapped', 'ordinary'] as const)(
+    'handles %s failure when owned drain closes admission during rollback',
+    async (kind) => {
+      const local = new FixtureSource('local-esm');
+      local.origin = 'managed';
+      const marker = new ExplicitLocalAuthorityError(new Error('Private authority failure'));
+      const failure =
+        kind === 'direct'
+          ? marker
+          : kind === 'setup-wrapped'
+            ? new PluginError('plugin-setup-failed', 'Setup failed', { cause: marker })
+            : new Error('Ordinary recheck failure');
+      local.recheckFailure = failure;
+      const disposing = deferred();
+      const release = deferred();
+      local.onPreparedDispose = () => {
+        disposing.resolve();
+        return release.promise;
+      };
+      const f = await fixtureWithAuthorityOrder(
+        managedAuthority(() => undefined),
+        local,
+      );
+      const before = f.runtime.serverHost.controller()!.current();
+      const reload = f.coordinator.reload();
+      const rejection = reload.catch((cause: unknown) => cause);
+      try {
+        await Promise.race([
+          disposing.promise,
+          rejection.then(() => {
+            throw new Error('Expected pending rollback');
+          }),
+        ]);
+        f.coordinator.beginOwnedDrainSync();
+        release.resolve();
+        if (kind === 'ordinary') {
+          await expect(reload).rejects.toMatchObject({ code: 'plugin-host-disposed' });
+        } else {
+          await expect(reload).rejects.toBe(failure);
+        }
+        expect(f.runtime.serverHost.controller()!.current()).toBe(before);
+        expect(f.coordinator.generationSnapshot()).toMatchObject({
+          acceptingRuns: false,
+          blocked: { code: 'plugin-host-disposed' },
+        });
+      } finally {
+        release.resolve();
+        await rejection;
+        await f.close();
+      }
+    },
+  );
+
   it('attributes a non-setup PluginError even when its cause is an authority marker', async () => {
     const other = new FixtureSource('other');
     const local = new FixtureSource('local-esm');

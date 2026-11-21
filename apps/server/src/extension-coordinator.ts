@@ -691,9 +691,10 @@ export function createExtensionCoordinator(
         }
       }
     } catch (reason: unknown) {
+      const marker = authorityMarker(reason);
+      if (closed && marker !== undefined) throw reason;
       ensureOpen();
       if (reason instanceof ExtensionPreparationError) readingAuthority = false;
-      const marker = authorityMarker(reason);
       failed = [...failures];
       error = { code: 'plugin-reload-failed', message: issueOf(marker ?? reason).message };
       if (marker !== undefined || readingAuthority) throw reason;
