@@ -1,5 +1,17 @@
 # Weave Foundation Architecture
 
+Stage 6.2b adds a Server-private owned artifact-store factory. It binds an exact
+authority UUID/path and artifact root through append-once metadata, then retains
+an exclusive transaction on a separate rollback-journal SQLite connection. Main
+authority transactions remain short. Guarded artifact calls share one existing
+store queue, synchronously abort on observed ownership loss, and drain while the
+lease remains held during normal quiescence. See the
+[ownership design](../superpowers/specs/2026-11-21-plugin-store-ownership-design.md)
+and [protocol and limits](../learning/2026-11-21-plugin-store-ownership.md).
+This utility does not enable managed startup or expose an installer route.
+Selected-source/Generation integration, managed HTTP routes and Studio remain
+subsequent slices.
+
 Stage 6.2a adds Server-private plugin authority persistence on one SQLite
 connection. Installation, existing trust and managed operation logs are appended
 atomically; every successful fresh managed request, including no-op, has one
@@ -9,8 +21,8 @@ frozen before COMMIT; the legacy trust facade keeps mutable detached copies and
 rejects writes for sticky managed IDs. See the
 [authority design](../superpowers/specs/2026-11-21-plugin-authority-design.md) and
 [usage and boundaries](../learning/2026-11-21-plugin-authority-database.md).
-Artifact-root ownership, selected-source/Generation integration, managed HTTP
-routes and Studio installation remain subsequent slices.
+Selected-source/Generation integration, managed HTTP routes and Studio
+installation remain subsequent slices.
 
 Stage 6.1 provides a bounded filesystem artifact store in `@weave/plugin-host`.
 It copies already bundled directories without executing them, validates concrete

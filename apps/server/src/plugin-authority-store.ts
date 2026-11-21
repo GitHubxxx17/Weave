@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { lstatSync, realpathSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { PluginTrustStore } from '@weave/plugin-host';
 import { z } from 'zod';
@@ -16,16 +18,24 @@ import {
 } from './plugin-authority-log.js';
 import {
   managedPreparationSchema,
+  managedRootRegistrationSchema,
+  managedStoreBindingSchema,
   pluginAuthorityOptionsSchema,
   PluginAuthorityError,
   type ManagedCommit,
   type ManagedCommitInput,
   type ManagedLookup,
+  type ManagedStoreBinding,
   type PluginAuthorityDatabase,
   type PluginAuthorityOptions,
   type PluginAuthoritySnapshot,
   type RecordedManagedOperation,
 } from './plugin-authority-types.js';
+import {
+  appendManagedRootRegistrationTx,
+  initializeManagedRootSchemaTx,
+  readManagedRootRegistrationTx,
+} from './plugin-store-registration.js';
 import {
   appendRecordedTrustEventTx,
   createRecordedTrustEvent,
@@ -110,18 +120,81 @@ function lookupOperation(
   return operation;
 }
 
+interface MainFileIdentity {
+  readonly dev: bigint;
+  readonly ino: bigint;
+}
+
+interface ManagedMainPath {
+  readonly canonical: string;
+  readonly identity: MainFileIdentity | undefined;
+}
+
+function inspectManagedMainPath(filename: string): ManagedMainPath {
+  // Native lookup resolves ancestor symlinks before processing later `..` components.
+  const candidate = join(realpathSync.native(dirname(filename)), basename(filename));
+  const entry = lstatSync(candidate, { bigint: true, throwIfNoEntry: false });
+  if (entry === undefined) return { canonical: candidate, identity: undefined };
+  if (!entry.isFile() || entry.nlink !== 1n || entry.dev <= 0n || entry.ino <= 0n) {
+    throw new Error('Managed authority requires a regular main file with one link');
+  }
+  const canonical = realpathSync.native(candidate);
+  const resolved = lstatSync(canonical, { bigint: true });
+  if (!resolved.isFile() || resolved.nlink !== 1n || !sameMainFile(entry, resolved)) {
+    throw new Error('Managed authority main file changed during path validation');
+  }
+  return { canonical, identity: { dev: entry.dev, ino: entry.ino } };
+}
+
+function sameMainFile(left: MainFileIdentity, right: MainFileIdentity | undefined): boolean {
+  return right !== undefined && left.dev === right.dev && left.ino === right.ino;
+}
+
+function verifyManagedMainPath(
+  location: string,
+  openingPath: string,
+  reference: ManagedMainPath,
+): ManagedMainPath & { readonly identity: MainFileIdentity } {
+  try {
+    const opening = inspectManagedMainPath(openingPath);
+    const actual = inspectManagedMainPath(location);
+    if (
+      actual.canonical !== reference.canonical ||
+      actual.canonical !== opening.canonical ||
+      actual.identity === undefined ||
+      !sameMainFile(actual.identity, opening.identity) ||
+      (reference.identity !== undefined && !sameMainFile(actual.identity, reference.identity))
+    ) {
+      throw new Error('Managed authority main file differs from its opened file');
+    }
+    return { canonical: actual.canonical, identity: actual.identity };
+  } catch (error: unknown) {
+    return invalid(error);
+  }
+}
+
 /** One private connection owns every authority transaction and its borrowed manual facade. */
 export function createSqlitePluginAuthorityDatabase(
   options: PluginAuthorityOptions,
 ): PluginAuthorityDatabase {
   const parsed = pluginAuthorityOptionsSchema.safeParse(options);
   if (!parsed.success) invalid(parsed.error);
+  const { filename } = parsed.data;
+  let beforeOpen: { path: string; file: ManagedMainPath } | { error: unknown };
+  try {
+    const path = isAbsolute(filename) ? filename : `${process.cwd()}${sep}${filename}`;
+    beforeOpen = { path, file: inspectManagedMainPath(path) };
+  } catch (error: unknown) {
+    // Defer managed-path eligibility failures so manual callers can still open their database.
+    beforeOpen = { error };
+  }
   let database: DatabaseSync;
   try {
-    database = new DatabaseSync(parsed.data.filename);
+    database = new DatabaseSync(filename);
   } catch (error: unknown) {
     throw authorityError(error);
   }
+  const managedOpening = captureManagedOpening();
   const now = parsed.data.now ?? (() => new Date());
   const newDatabaseId = parsed.data.newDatabaseId ?? randomUUID;
   let unavailable = false;
@@ -189,11 +262,47 @@ export function createSqlitePluginAuthorityDatabase(
     }
   }
 
+  function readMainLocation(): string | null {
+    try {
+      return database.location('main');
+    } catch (error: unknown) {
+      throw authorityError(error);
+    }
+  }
+
+  function captureManagedOpening() {
+    try {
+      const location = readMainLocation();
+      if (location === null) return null;
+      if ('error' in beforeOpen) return invalid(beforeOpen.error);
+      return {
+        path: beforeOpen.path,
+        file: verifyManagedMainPath(location, beforeOpen.path, beforeOpen.file),
+      };
+    } catch (error: unknown) {
+      return { error: authorityError(error) };
+    }
+  }
+
+  function managedMainLocation(): { location: string; canonical: string } | null {
+    requireOpen();
+    const location = readMainLocation();
+    if (managedOpening !== null && 'error' in managedOpening) throw managedOpening.error;
+    if (location === null && managedOpening === null) return null;
+    if (location === null || managedOpening === null) {
+      return invalid(new Error('Managed authority main location changed after open'));
+    }
+    const { canonical } = verifyManagedMainPath(location, managedOpening.path, managedOpening.file);
+    return { location, canonical };
+  }
+
   let identity: PluginAuthorityDatabase['identity'];
   try {
-    identity = transaction('BEGIN IMMEDIATE', () =>
-      detachAndFreeze(initializeAuthoritySchemaTx(database, newDatabaseId)),
-    );
+    identity = transaction('BEGIN IMMEDIATE', () => {
+      const coreIdentity = initializeAuthoritySchemaTx(database, newDatabaseId);
+      initializeManagedRootSchemaTx(database, coreIdentity);
+      return detachAndFreeze(coreIdentity);
+    });
   } catch (error: unknown) {
     try {
       if (database.isOpen) database.close();
@@ -320,6 +429,57 @@ export function createSqlitePluginAuthorityDatabase(
           operation: transition.operation,
           afterSnapshot,
         });
+      });
+    },
+    readManagedRootStateSync() {
+      const main = managedMainLocation();
+      return transaction('BEGIN', () =>
+        detachAndFreeze({
+          databaseId: identity.databaseId,
+          databaseFile: main?.location ?? null,
+          registration: readManagedRootRegistrationTx(database, identity),
+        }),
+      );
+    },
+    registerManagedRootSync(input) {
+      const main = managedMainLocation();
+      if (main === null)
+        return invalid(new Error('Managed authority requires a persistent main file'));
+      let binding: ManagedStoreBinding;
+      try {
+        canonicalJson(input);
+        binding = managedStoreBindingSchema.parse(input);
+      } catch (error: unknown) {
+        return invalid(error);
+      }
+      if (binding.databaseId !== identity.databaseId || binding.databaseFile !== main.canonical) {
+        throw new PluginAuthorityError(
+          'plugin-authority-conflict',
+          'Managed root binding differs from the owned authority identity or path',
+        );
+      }
+      return transaction('BEGIN IMMEDIATE', () => {
+        const existing = readManagedRootRegistrationTx(database, identity);
+        if (existing !== null) {
+          if (canonicalJson(existing.binding) !== canonicalJson(binding)) {
+            throw new PluginAuthorityError(
+              'plugin-authority-conflict',
+              'Authority already has a different managed root binding',
+            );
+          }
+          return detachAndFreeze(existing);
+        }
+        const registration = detachAndFreeze(
+          managedRootRegistrationSchema.parse({
+            version: 1,
+            sequence: 1,
+            kind: 'managed-root-registered',
+            occurredAt: timestamp(),
+            binding,
+          }),
+        );
+        appendManagedRootRegistrationTx(database, identity, registration);
+        return registration;
       });
     },
     async close() {

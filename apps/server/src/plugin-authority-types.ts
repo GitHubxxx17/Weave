@@ -1,4 +1,4 @@
-import { isAbsolute } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { pluginManifestSchema, type PluginManifest } from '@weave/plugin';
 import type { PluginTrustStore, RecordedPluginTrustEvent } from '@weave/plugin-host';
 import { z } from 'zod';
@@ -9,6 +9,29 @@ export type Sequence = number;
 export interface PluginDatabaseIdentity {
   readonly version: 1;
   readonly databaseId: string;
+}
+
+export interface ManagedStoreBinding {
+  readonly version: 1;
+  readonly databaseId: string;
+  readonly databaseFile: string;
+  readonly storeId: string;
+  readonly storeDirectory: string;
+  readonly ownerDatabaseFile: string;
+}
+
+export interface ManagedRootRegistration {
+  readonly version: 1;
+  readonly sequence: 1;
+  readonly kind: 'managed-root-registered';
+  readonly occurredAt: string;
+  readonly binding: ManagedStoreBinding;
+}
+
+export interface ManagedRootState {
+  readonly databaseId: string;
+  readonly databaseFile: string | null;
+  readonly registration: ManagedRootRegistration | null;
 }
 
 export interface PluginAuthorityExpectation {
@@ -207,6 +230,8 @@ export interface PluginAuthorityDatabase {
   snapshotSync(): PluginAuthoritySnapshot;
   lookupSync(request: ManagedRequest): ManagedLookup;
   commitSync(input: ManagedCommitInput): ManagedCommit;
+  readManagedRootStateSync(): ManagedRootState;
+  registerManagedRootSync(binding: ManagedStoreBinding): ManagedRootRegistration;
   close(): Promise<void>;
 }
 
@@ -472,6 +497,37 @@ export const pluginDatabaseIdentitySchema: z.ZodType<PluginDatabaseIdentity> = z
     databaseId: z.string().uuid(),
   })
   .strict();
+
+const managedBindingPathSchema = z
+  .string()
+  .refine((path) => isAbsolute(path) && !path.includes('\0'), {
+    message: 'Managed binding paths must be absolute and contain no NUL',
+  });
+
+export const managedStoreBindingSchema: z.ZodType<ManagedStoreBinding> = z
+  .strictObject({
+    version: z.literal(1),
+    databaseId: z.string().uuid(),
+    databaseFile: managedBindingPathSchema,
+    storeId: z.string().uuid(),
+    storeDirectory: managedBindingPathSchema,
+    ownerDatabaseFile: managedBindingPathSchema,
+  })
+  .refine(
+    (binding) => binding.ownerDatabaseFile === join(binding.storeDirectory, 'ownership.sqlite'),
+    {
+      message: 'The owner database must be ownership.sqlite inside the managed store',
+      path: ['ownerDatabaseFile'],
+    },
+  );
+
+export const managedRootRegistrationSchema: z.ZodType<ManagedRootRegistration> = z.strictObject({
+  version: z.literal(1),
+  sequence: z.literal(1),
+  kind: z.literal('managed-root-registered'),
+  occurredAt: z.iso.datetime(),
+  binding: managedStoreBindingSchema,
+});
 
 export const pluginAuthorityOptionsSchema: z.ZodType<PluginAuthorityOptions> = z
   .object({
