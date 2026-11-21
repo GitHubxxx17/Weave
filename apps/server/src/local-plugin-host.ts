@@ -31,7 +31,11 @@ export type ServerLocalPluginHost = PluginHost<
 >;
 
 interface ServerExtensionOptions {
-  readonly local?: { readonly directory: string; readonly trustStore: PluginTrustStore };
+  readonly local?: {
+    readonly directory: string;
+    readonly trustStore: PluginTrustStore;
+    readonly dispose?: () => Promise<void>;
+  };
   readonly mcp?: {
     readonly store: McpAuthorityStore;
     readonly readHostVariable?: (name: string) => string | undefined;
@@ -179,7 +183,7 @@ export function createServerExtensionCoordinator(
     managed,
     localSource: local,
     adoptInitialAuthoritySync: managed?.adoptInitialAuthoritySync,
-    pluginHost: local?.facade(coordinator),
+    pluginHost: local?.facade(coordinator, options.local?.dispose),
     mcpManager: mcp?.facade(coordinator),
     async closeUnpublished() {
       try {

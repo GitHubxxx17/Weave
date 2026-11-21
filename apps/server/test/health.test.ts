@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createServer } from 'node:http';
 import { access, mkdtemp, rm } from 'node:fs/promises';
@@ -17,8 +17,16 @@ import {
   sessionEventStoreService,
 } from '../src/runtime.js';
 import { startServer } from '../src/main.js';
+import { createSqliteMcpAuthorityStore } from '../src/mcp-authority-store.js';
+import { openOwnedPluginArtifactStore } from '../src/owned-plugin-artifact-store.js';
+import { createSqlitePluginAuthorityDatabase } from '../src/plugin-authority-store.js';
 import type { ProviderSecretCodec } from '../src/provider-secret-codec.js';
 import type { ProviderSettingsStore } from '../src/provider-settings-store.js';
+
+vi.mock(import('../src/owned-plugin-artifact-store.js'), async (original) => {
+  const actual = await original();
+  return { ...actual, openOwnedPluginArtifactStore: vi.fn(actual.openOwnedPluginArtifactStore) };
+});
 
 describe('GET /health', () => {
   it('returns running runtime health', async () => {
@@ -125,6 +133,215 @@ describe('GET /health', () => {
 });
 
 describe('startServer', () => {
+  it('drains an owned facade through quiescence and the running admin operation before cancelling the turn', async () => {
+    const dataDirectory = await mkdtemp(join(tmpdir(), 'weave-owned-drain-'));
+    const options = { dataDirectory, environment: {} };
+    const mcpStore = createSqliteMcpAuthorityStore({
+      filename: join(dataDirectory, 'weave.sqlite'),
+    });
+    const quiescing = Promise.withResolvers<void>();
+    const quiesceGate = Promise.withResolvers<void>();
+    const adminReading = Promise.withResolvers<void>();
+    const adminGate = Promise.withResolvers<void>();
+    const actual = await vi.importActual<typeof import('../src/owned-plugin-artifact-store.js')>(
+      '../src/owned-plugin-artifact-store.js',
+    );
+    const quiesce = vi.fn();
+    const close = vi.fn();
+    const dispose = vi.fn();
+    vi.mocked(openOwnedPluginArtifactStore).mockImplementationOnce(async (input) => {
+      const owned = await actual.openOwnedPluginArtifactStore(input);
+      return {
+        ...owned,
+        close: close.mockImplementation(owned.close),
+        quiesce: quiesce.mockImplementation(async () => {
+          await owned.quiesce();
+          quiescing.resolve();
+          await quiesceGate.promise;
+        }),
+      };
+    });
+    const baseStore = createInMemorySessionEventStore();
+    const statuses: string[] = [];
+    let statusesAtClose: readonly string[] | undefined;
+    const sessionStore: SessionEventStore = {
+      ...baseStore,
+      async append(id, events) {
+        for (const event of events) {
+          if (event.type === 'turn.completed') statuses.push(event.payload.status);
+        }
+        return baseStore.append(id, events);
+      },
+      async close() {
+        statusesAtClose = [...statuses];
+        await baseStore.close();
+      },
+    };
+    let started: Awaited<ReturnType<typeof startServer>> | undefined;
+    let active: Promise<unknown> | undefined;
+    let admin: Promise<unknown> | undefined;
+    let unsubscribe: (() => void) | undefined;
+    try {
+      started = await startServer(0, {
+        ...options,
+        managedPluginStore: { initialBinding: 'allow-unbound' },
+        mcpAuthorityStore: mcpStore,
+        sessionStoreFactory: () => sessionStore,
+        plugins: [
+          {
+            manifest: {
+              id: 'owned-drain-fixture',
+              name: 'Owned drain fixture',
+              version: '1.0.0',
+              apiVersion: '1.0.0',
+              capabilities: ['tool'],
+            },
+            setup(context) {
+              context.registerTool({
+                name: 'owned_protected',
+                description: 'Wait for approval',
+                parameters: { type: 'object' },
+                inputSchema: z.object({}),
+                approval: {
+                  operation: 'test.protected',
+                  risk: 'high',
+                  summarize: () => ({ summary: 'Protected', inputSummary: {} }),
+                },
+                execute: () => 'approved',
+              });
+            },
+            dispose,
+          },
+        ],
+      });
+      const { pluginHost, mcpManager, runtime, stop } = started;
+      const broker = runtime.get(approvalBrokerService);
+      const pendingApproval = Promise.withResolvers<void>();
+      unsubscribe = broker.subscribe((event) => {
+        if (event.request.status === 'pending') pendingApproval.resolve();
+      });
+      const runner = runtime.serverHost.controller()!.runner;
+      const sessionId = 'owned-drain';
+      await sessionStore.append(sessionId, [
+        { type: 'session.created', payload: { title: 'Owned drain' } },
+      ]);
+      const run = async (id: string) => {
+        for await (const event of runner.run({
+          sessionId: id,
+          provider: 'mock',
+          model: 'test',
+          userMessage: {
+            role: 'user',
+            content: [{ type: 'text', text: '/tool owned_protected {}' }],
+          },
+        }))
+          void event;
+      };
+      active = run(sessionId).catch((error: unknown) => error);
+      await pendingApproval.promise;
+      const originalRead = mcpStore.read;
+      vi.spyOn(mcpStore, 'read').mockImplementationOnce(async (input) => {
+        adminReading.resolve();
+        await adminGate.promise;
+        return originalRead(input);
+      });
+      admin = mcpManager!.reload(0).catch((error: unknown) => error);
+      await adminReading.promise;
+
+      expect(pluginHost?.dispose).toBe(stop);
+      const stopping = pluginHost!.dispose();
+      expect(stop()).toBe(stopping);
+      await quiescing.promise;
+      await expect(mcpManager!.reload(0)).rejects.toMatchObject({ code: 'plugin-host-disposed' });
+      await expect(run('other-session')).rejects.toMatchObject({ code: 'plugin-host-disposed' });
+      expect(broker.list()[0]?.status).toBe('pending');
+      expect(statusesAtClose).toBeUndefined();
+      expect(close).not.toHaveBeenCalled();
+
+      quiesceGate.resolve();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(broker.list()[0]?.status).toBe('pending');
+      expect(dispose).not.toHaveBeenCalled();
+      expect(close).not.toHaveBeenCalled();
+
+      adminGate.resolve();
+      await expect(admin).resolves.toMatchObject({ code: 'plugin-host-disposed' });
+      await active;
+      await stopping;
+      expect(stop()).toBe(stopping);
+      expect(broker.list()[0]?.status).toBe('cancelled');
+      expect(statusesAtClose).toEqual(['cancelled']);
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(quiesce).toHaveBeenCalledOnce();
+      expect(close).toHaveBeenCalledOnce();
+      const restarted = await startServer(0, options);
+      await restarted.stop();
+    } finally {
+      quiesceGate.resolve();
+      adminGate.resolve();
+      unsubscribe?.();
+      await started?.stop();
+      await admin;
+      await active;
+      await mcpStore.close();
+      await rm(dataDirectory, { recursive: true, force: true });
+      vi.mocked(openOwnedPluginArtifactStore).mockReset();
+    }
+  });
+
+  it('keeps HTTP listening when an unowned local facade is disposed', async () => {
+    const dataDirectory = await mkdtemp(join(tmpdir(), 'weave-manual-dispose-'));
+    const started = await startServer(0, { dataDirectory, environment: {} });
+    try {
+      expect(started.pluginHost?.dispose).not.toBe(started.stop);
+      await started.pluginHost!.dispose();
+      await expect(started.pluginHost!.reload()).rejects.toMatchObject({
+        code: 'plugin-host-disposed',
+      });
+      expect((await fetch(`http://127.0.0.1:${started.port}/health`)).status).toBe(200);
+    } finally {
+      await started.stop();
+      await rm(dataDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('releases the real lease after an occupied port rejects startup', async () => {
+    const dataDirectory = await mkdtemp(join(tmpdir(), 'weave-owned-bind-failure-'));
+    const options = { dataDirectory, environment: {} };
+    const occupied = createServer().listen(0, '127.0.0.1');
+    await new Promise<void>((resolve) => occupied.once('listening', resolve));
+    try {
+      const address = occupied.address();
+      if (address === null || typeof address === 'string')
+        throw new Error('Expected a TCP address');
+      await expect(
+        startServer(address.port, {
+          ...options,
+          managedPluginStore: { initialBinding: 'allow-unbound' },
+        }),
+      ).rejects.toMatchObject({ code: 'EADDRINUSE' });
+      const authority = createSqlitePluginAuthorityDatabase({
+        filename: join(dataDirectory, 'weave.sqlite'),
+      });
+      try {
+        expect(authority.readStartupAuthoritySync().registration).not.toBeNull();
+      } finally {
+        await authority.close();
+      }
+      const restarted = await startServer(0, options);
+      try {
+        expect(restarted.pluginHost?.dispose).toBe(restarted.stop);
+      } finally {
+        await restarted.stop();
+      }
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        occupied.close((error) => (error === undefined ? resolve() : reject(error))),
+      );
+      await rm(dataDirectory, { recursive: true, force: true });
+    }
+  });
+
   it('restores saved Provider configuration after Server restart', async () => {
     const database = createTemporaryDatabaseFile();
     const secretCodec: ProviderSecretCodec = {

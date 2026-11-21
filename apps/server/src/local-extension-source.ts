@@ -296,7 +296,10 @@ export function createLocalExtensionSource(
         ),
       ]);
     },
-    facade(coordinator: ExtensionCoordinator): ServerLocalPluginHost {
+    facade(
+      coordinator: ExtensionCoordinator,
+      dispose?: () => Promise<void>,
+    ): ServerLocalPluginHost {
       function project(state: ReturnType<ExtensionCoordinator['snapshot']>) {
         const current = source.snapshot();
         const failures = new Map(
@@ -364,7 +367,7 @@ export function createLocalExtensionSource(
           mutate(() => ({ kind: 'revoke', id, ...mutationOptions.parse(options) })),
         setEnabled: (id, enabled, options) =>
           mutate(() => ({ kind: 'setEnabled', id, enabled, ...mutationOptions.parse(options) })),
-        dispose: coordinator.dispose,
+        dispose: dispose ?? coordinator.dispose,
       };
     },
   };

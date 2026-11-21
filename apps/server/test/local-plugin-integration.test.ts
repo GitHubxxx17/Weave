@@ -274,12 +274,21 @@ describe('local plugin startup integration', () => {
         environment: { WEAVE_PLUGINS_DIR: f.pluginsDirectory },
       }),
     },
-  ])('keeps local trust persistence off for $label', async ({ options }) => {
+  ])('keeps local discovery and trust writes disabled for $label', async ({ options }) => {
     const f = await fixture();
+    const defaultDirectory = join(f.root, 'default-data');
+    const memory = createMemoryTrustStore();
+    const override = {
+      events: vi.fn(memory.events),
+      append: vi.fn(memory.append),
+      close: vi.fn(async () => {}),
+    };
     try {
+      const configured = options(f);
       const server = await startServer(0, {
-        ...options(f),
-        environment: { ...options(f).environment },
+        ...configured,
+        environment: { WEAVE_DATA_DIR: defaultDirectory, ...configured.environment },
+        pluginTrustStore: override,
       });
       try {
         expect(server.pluginHost).toBeUndefined();
@@ -291,14 +300,14 @@ describe('local plugin startup integration', () => {
       } finally {
         await server.stop();
       }
+      expect(override.events).not.toHaveBeenCalled();
+      expect(override.append).not.toHaveBeenCalled();
+      expect(override.close).not.toHaveBeenCalled();
       await expect(access(f.pluginsDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
-      const database = new DatabaseSync(f.databaseFile);
+      await expect(access(defaultDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+      const database = new DatabaseSync(f.databaseFile, { readOnly: true });
       try {
-        expect(
-          database
-            .prepare("SELECT name FROM sqlite_master WHERE name = 'plugin_trust_events'")
-            .all(),
-        ).toEqual([]);
+        expect(database.prepare('SELECT * FROM plugin_trust_events').all()).toEqual([]);
       } finally {
         database.close();
       }

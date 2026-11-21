@@ -3,17 +3,23 @@ import { mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { serve } from '@hono/node-server';
 import type { ClosablePluginTrustStore } from '../src/local-plugin-host.js';
 import {
   acquireManagedPluginStartup,
   resolvePluginStartupOptions,
 } from '../src/managed-plugin-startup.js';
-import type { OwnedPluginArtifactStore } from '../src/owned-plugin-artifact-store.js';
+import {
+  openOwnedPluginArtifactStore,
+  type OwnedPluginArtifactStore,
+} from '../src/owned-plugin-artifact-store.js';
 import { createSqlitePluginAuthorityDatabase } from '../src/plugin-authority-store.js';
 import type { PluginAuthorityDatabase } from '../src/plugin-authority-types.js';
-import type { PluginStoreOwnershipError } from '../src/plugin-store-ownership-types.js';
+import { PluginStoreOwnershipError } from '../src/plugin-store-ownership-types.js';
 import { createSqlitePluginTrustStore } from '../src/plugin-trust-store.js';
 import { createServerShutdown } from '../src/server-shutdown.js';
+import { startServer } from '../src/main.js';
+import { createSqliteMcpAuthorityStore } from '../src/mcp-authority-store.js';
 import {
   activateInput,
   artifact,
@@ -25,8 +31,19 @@ const allowUnbound = { initialBinding: 'allow-unbound' } as const;
 const requireBound = { initialBinding: 'require-bound' } as const;
 const cleanup: Array<() => Promise<void>> = [];
 
+vi.mock(import('@hono/node-server'), async (original) => {
+  const actual = await original();
+  return { ...actual, serve: vi.fn(actual.serve) };
+});
+vi.mock(import('../src/owned-plugin-artifact-store.js'), async (original) => {
+  const actual = await original();
+  return { ...actual, openOwnedPluginArtifactStore: vi.fn(actual.openOwnedPluginArtifactStore) };
+});
+
 afterEach(async () => {
   for (const dispose of cleanup.splice(0).reverse()) await dispose();
+  vi.mocked(serve).mockClear();
+  vi.mocked(openOwnedPluginArtifactStore).mockReset();
 });
 
 function fixture() {
@@ -106,7 +123,130 @@ async function seedSticky(databaseFile: string, mode: 'imported' | 'selected' | 
   }
 }
 
+async function startLive(options: NonNullable<Parameters<typeof startServer>[1]>) {
+  const started = await startServer(0, options);
+  cleanup.push(started.stop);
+  return started;
+}
+
 describe('managed plugin startup', () => {
+  it('rejects live malformed managed options before creating the data directory', async () => {
+    const { dataDirectory } = fixture();
+    const nested = join(dataDirectory, 'missing');
+    await expect(
+      startLive({
+        dataDirectory: nested,
+        environment: {},
+        managedPluginStore: { ...allowUnbound, directory: 'elsewhere' } as typeof allowUnbound,
+      }),
+    ).rejects.toThrow();
+    expect(existsSync(nested)).toBe(false);
+    expect(serve).not.toHaveBeenCalled();
+  });
+
+  it('holds the real lease while listening and resumes after stop', async () => {
+    const { dataDirectory, root, environment } = fixture();
+    const options = { dataDirectory, environment };
+    const first = await startLive({ ...options, managedPluginStore: allowUnbound });
+    expect(first.port).toBeGreaterThan(0);
+    expect(existsSync(root)).toBe(true);
+    await expect(startLive(options)).rejects.toMatchObject({ code: 'plugin-store-busy' });
+    await first.stop();
+    const restarted = await startLive(options);
+    expect(restarted.pluginHost?.dispose).toBe(restarted.stop);
+  });
+
+  it('rejects a preexisting sticky override before listen and leaves it caller-owned', async () => {
+    const { dataDirectory, databaseFile, environment, root } = fixture();
+    await seedSticky(databaseFile, 'imported');
+    const override = overrideStore(dataDirectory);
+    const events = vi.spyOn(override, 'events');
+    const close = vi.spyOn(override, 'close');
+    await expect(
+      startLive({ dataDirectory, environment, pluginTrustStore: override }),
+    ).rejects.toThrow(/pluginTrustStore/);
+    expect(serve).not.toHaveBeenCalled();
+    expect(events).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+    expect(existsSync(root)).toBe(false);
+  });
+
+  it('opens the registered store without dispatching a selected artifact read', async () => {
+    const { dataDirectory, databaseFile, environment } = fixture();
+    const options = { dataDirectory, environment };
+    const first = acquire({ ...options, managedPluginStore: allowUnbound });
+    await first.startup;
+    await first.shutdown.stop();
+    await seedSticky(databaseFile, 'selected');
+    const open = vi.mocked(openOwnedPluginArtifactStore);
+    const actual = await vi.importActual<typeof import('../src/owned-plugin-artifact-store.js')>(
+      '../src/owned-plugin-artifact-store.js',
+    );
+    const reads = vi.fn();
+    open.mockImplementationOnce(async (input) => {
+      const owned = await actual.openOwnedPluginArtifactStore(input);
+      return { ...owned, read: reads.mockImplementation(owned.read) };
+    });
+    const server = await startLive(options);
+    expect(server.pluginHost?.dispose).toBe(server.stop);
+    expect(reads).not.toHaveBeenCalled();
+    expect(server.runtime.serverHost.controller()?.current().resources.plugins).not.toContainEqual(
+      expect.objectContaining({ id: 'notes' }),
+    );
+  });
+
+  it('reports the first ownership error observed before composition attaches', async () => {
+    const { dataDirectory, environment } = fixture();
+    const options = { dataDirectory, environment };
+    const loss = new PluginStoreOwnershipError(
+      'plugin-store-ownership-lost',
+      'lease lost during boot',
+    );
+    const actual = await vi.importActual<typeof import('../src/owned-plugin-artifact-store.js')>(
+      '../src/owned-plugin-artifact-store.js',
+    );
+    vi.mocked(openOwnedPluginArtifactStore).mockImplementationOnce(async (input) => {
+      const owned = await actual.openOwnedPluginArtifactStore(input);
+      expect(input.onOwnershipLost(loss)).toBeUndefined();
+      input.onOwnershipLost(
+        new PluginStoreOwnershipError('plugin-store-ownership-lost', 'second observation'),
+      );
+      return owned;
+    });
+    await expect(startLive({ ...options, managedPluginStore: allowUnbound })).rejects.toBe(loss);
+    expect(serve).not.toHaveBeenCalled();
+    const restarted = await startLive(options);
+    expect(restarted.pluginHost?.dispose).toBe(restarted.stop);
+  });
+
+  it('reports ownership loss even if the initial MCP read subsequently rejects', async () => {
+    const { dataDirectory, databaseFile, environment } = fixture();
+    const options = { dataDirectory, environment };
+    const loss = new PluginStoreOwnershipError(
+      'plugin-store-ownership-lost',
+      'lease lost during initial MCP refresh',
+    );
+    const store = createSqliteMcpAuthorityStore({ filename: databaseFile });
+    cleanup.push(store.close);
+    const actual = await vi.importActual<typeof import('../src/owned-plugin-artifact-store.js')>(
+      '../src/owned-plugin-artifact-store.js',
+    );
+    vi.mocked(openOwnedPluginArtifactStore).mockImplementationOnce(async (input) => {
+      const owned = await actual.openOwnedPluginArtifactStore(input);
+      vi.spyOn(store, 'read').mockImplementationOnce(async () => {
+        input.onOwnershipLost(loss);
+        throw new Error('MCP read failed after lease loss');
+      });
+      return owned;
+    });
+    await expect(
+      startLive({ ...options, managedPluginStore: allowUnbound, mcpAuthorityStore: store }),
+    ).rejects.toBe(loss);
+    expect(serve).not.toHaveBeenCalled();
+    const restarted = await startLive(options);
+    expect(restarted.pluginHost?.dispose).toBe(restarted.stop);
+  });
+
   it.each([null, {}, { initialBinding: 'auto' }, { ...allowUnbound, directory: 'elsewhere' }])(
     'rejects malformed managed options before opening persistence (%j)',
     (managedPluginStore) => {
