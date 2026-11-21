@@ -257,16 +257,10 @@ export async function startServer(
     coordinator = extensions.coordinator;
     const managed = extensions.managed!;
     receiveOwnershipLoss = (error) => {
-      try {
-        managed.invalidateAuthoritySync(error);
-      } catch (cause: unknown) {
-        if (!(cause instanceof ExplicitLocalAuthorityError && cause.cause === error)) {
-          ownershipReceiverFailure = new AggregateError(
-            [error, cause],
-            'Managed plugin ownership loss could not be applied',
-            { cause: error },
-          );
-        }
+      managed.onOwnershipLostSync(error);
+      const marker: unknown = managed.managedAuthority.ownershipLossSignal.reason;
+      if (marker instanceof ExplicitLocalAuthorityError && marker.cause instanceof AggregateError) {
+        ownershipReceiverFailure = marker.cause;
       }
     };
     if (ownershipLoss !== undefined) receiveOwnershipLoss(ownershipLoss);

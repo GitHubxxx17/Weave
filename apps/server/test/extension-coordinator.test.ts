@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import { PluginError, toolsExtensionPoint, type KernelPlugin } from '@weave/plugin';
+import { ExplicitLocalAuthorityError } from '@weave/plugin-host';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createApp } from '../src/app.js';
@@ -10,9 +11,11 @@ import {
 import type {
   ExtensionAuthorityChange,
   ExtensionAuthorityObserver,
+  ExtensionIdentity,
   ExtensionSource,
   ExtensionSourceFactory,
   ExtensionSourceSnapshot,
+  ManagedGenerationAuthority,
 } from '../src/extension-types.js';
 import { ExtensionPreparationError } from '../src/extension-types.js';
 import { createManagedAuthorityObserverBuffer } from '../src/managed-plugin-composition.js';
@@ -56,6 +59,7 @@ class FixtureSource {
   recheckValid = true;
   ready = true;
   includeInstanceId = false;
+  origin: ExtensionIdentity['origin'];
 
   constructor(readonly id: string) {}
 
@@ -63,7 +67,15 @@ class FixtureSource {
     this.onSnapshot?.();
     return {
       stamp: { revision: this.revision, trustSequence: this.trustSequence },
-      eligible: this.identity === undefined ? [] : [{ pluginId: this.id, identity: this.identity }],
+      eligible: this.identity === undefined ? [] : [this.itemIdentity(this.identity)],
+    };
+  }
+
+  private itemIdentity(identity: string): ExtensionIdentity {
+    return {
+      pluginId: this.id,
+      identity,
+      ...(this.origin === undefined ? {} : { origin: this.origin }),
     };
   }
 
@@ -141,8 +153,7 @@ class FixtureSource {
           stamp,
           items: [
             {
-              pluginId: this.id,
-              identity,
+              ...this.itemIdentity(identity),
               plugin,
               dispose,
               isReady: () => this.ready,
@@ -193,7 +204,7 @@ async function fixture(...sources: Array<{ readonly register: ExtensionSourceFac
 }
 
 async function fixtureWithAuthorityOrder(
-  mcpFirstAuthority: boolean,
+  mode: boolean | ManagedGenerationAuthority,
   ...sources: Array<{ readonly register: ExtensionSourceFactory }>
 ) {
   const runtime = createServerRuntime();
@@ -208,7 +219,8 @@ async function fixtureWithAuthorityOrder(
   const coordinator = createExtensionCoordinator({
     host: runtime.serverHost,
     sources: sources.map((source) => source.register),
-    mcpFirstAuthority,
+    mcpFirstAuthority: mode === true,
+    ...(typeof mode === 'boolean' ? {} : { managedAuthority: mode }),
     assemble: async (kernelPlugins) => {
       if (failAssembly) throw new Error('Shared assembly failed');
       return assembleServerGeneration(runtime, { kernelPlugins });
@@ -255,6 +267,17 @@ async function fixtureWithAuthorityOrder(
   };
 }
 
+function managedAuthority(
+  assertManagedPublicationSync: ManagedGenerationAuthority['assertManagedPublicationSync'],
+): ManagedGenerationAuthority {
+  return {
+    ownershipLossSignal: new AbortController().signal,
+    assertNotLostSync: () => undefined,
+    assertManagedPublicationSync,
+    assertManagedStartSync: () => undefined,
+  };
+}
+
 function toolContent(content: string) {
   return expect.objectContaining({
     type: 'tool-result',
@@ -263,6 +286,199 @@ function toolContent(content: string) {
 }
 
 describe('Server extension coordination', () => {
+  it('rebuilds for the same plugin and digest when local origin changes', async () => {
+    const local = new FixtureSource('local-esm');
+    local.origin = 'manual';
+    const f = await fixtureWithAuthorityOrder(
+      managedAuthority(() => undefined),
+      local,
+    );
+    try {
+      const first = await f.coordinator.reload();
+      local.origin = 'managed';
+      await local.decide('first');
+      expect(f.coordinator.generationSnapshot().acceptingRuns).toBe(false);
+      const second = await f.coordinator.reload();
+      expect(second.generation.id).toBeGreaterThan(first.generation.id);
+      expect(second.members).toMatchObject([{ identity: 'first', origin: 'managed' }]);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it.each(['candidate', 'unchanged'] as const)(
+    'recaptures changed authority after the managed %s guard',
+    async (path) => {
+      const local = new FixtureSource('local-esm');
+      local.origin = 'managed';
+      let changeOnGuard = path === 'candidate';
+      const guard = vi.fn<ManagedGenerationAuthority['assertManagedPublicationSync']>(() => {
+        if (changeOnGuard) {
+          changeOnGuard = false;
+          local.publish(local.stageDecision('replacement'));
+        }
+        return undefined;
+      });
+      const f = await fixtureWithAuthorityOrder(managedAuthority(guard), local);
+      const commit = vi.spyOn(f.runtime.serverHost, 'commit');
+      try {
+        if (path === 'unchanged') {
+          await f.coordinator.reload();
+          guard.mockClear();
+          commit.mockClear();
+          changeOnGuard = true;
+        }
+        const result = await f.coordinator.reload();
+        expect(result.unchanged).toBe(false);
+        expect(result.members).toMatchObject([{ identity: 'replacement', origin: 'managed' }]);
+        expect(guard.mock.calls).toEqual([
+          [[{ pluginId: 'local-esm', identity: 'first', origin: 'managed' }]],
+          [[{ pluginId: 'local-esm', identity: 'replacement', origin: 'managed' }]],
+        ]);
+        expect(commit).toHaveBeenCalledOnce();
+        expect(await f.turn(local.id)).toContainEqual(toolContent('replacement'));
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  it.each(['candidate', 'unchanged'] as const)(
+    'keeps the current pointer when the managed %s guard closes admission',
+    async (path) => {
+      const local = new FixtureSource('local-esm');
+      local.origin = 'managed';
+      let closeOnGuard = path === 'candidate';
+      const f = await fixtureWithAuthorityOrder(
+        managedAuthority(() => {
+          if (closeOnGuard) f.coordinator.beginOwnedDrainSync();
+          return undefined;
+        }),
+        local,
+      );
+      try {
+        if (path === 'unchanged') {
+          await f.coordinator.reload();
+          closeOnGuard = true;
+        }
+        const before = f.runtime.serverHost.controller()!.current();
+        await expect(f.coordinator.reload()).rejects.toMatchObject({
+          code: 'plugin-host-disposed',
+        });
+        expect(f.runtime.serverHost.controller()!.current()).toBe(before);
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  it('retains the original kernel setup error carrying a direct authority failure', async () => {
+    const local = new FixtureSource('local-esm');
+    local.origin = 'managed';
+    const marker = new ExplicitLocalAuthorityError(new Error('Private authority failure'));
+    local.onSetup = () => {
+      throw marker;
+    };
+    const f = await fixtureWithAuthorityOrder(
+      managedAuthority(() => undefined),
+      local,
+    );
+    try {
+      const before = f.runtime.serverHost.controller()!.current();
+      await expect(f.coordinator.reload()).rejects.toMatchObject({
+        code: 'plugin-setup-failed',
+        pluginId: 'local-esm',
+        cause: marker,
+      });
+      expect(local.attempts).toEqual([[]]);
+      expect(f.coordinator.snapshot().failed).toEqual([]);
+      expect(f.runtime.serverHost.controller()!.current()).toBe(before);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it('attributes a non-setup PluginError even when its cause is an authority marker', async () => {
+    const other = new FixtureSource('other');
+    const local = new FixtureSource('local-esm');
+    local.origin = 'managed';
+    const original = new PluginError('plugin-registration-conflict', 'Provider conflict', {
+      pluginId: local.id,
+      cause: new ExplicitLocalAuthorityError(),
+    });
+    const f = await fixtureWithAuthorityOrder(
+      managedAuthority(() => undefined),
+      local,
+      other,
+    );
+    const serverHost = f.runtime.serverHost;
+    vi.spyOn(serverHost, 'commit').mockImplementationOnce(() => {
+      throw original;
+    });
+    try {
+      const result = await f.coordinator.reload();
+      expect(result.members.map(({ pluginId }) => pluginId)).toEqual(['other']);
+      expect(result.failed).toEqual([
+        expect.objectContaining({
+          pluginId: 'local-esm',
+          origin: 'managed',
+          error: { code: 'plugin-registration-conflict', message: 'Provider conflict' },
+        }),
+      ]);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it('bridges ownership loss before MCP prepares first in a mixed iteration', async () => {
+    const local = new FixtureSource('local-esm');
+    local.origin = 'managed';
+    const mcp = new FixtureSource('mcp');
+    const entered = Promise.withResolvers<AbortSignal>();
+    const release = deferred();
+    const aborted = deferred();
+    const loss = new ExplicitLocalAuthorityError(new Error('Lost ownership'));
+    const lossController = new AbortController();
+    const f = await fixtureWithAuthorityOrder(
+      {
+        ...managedAuthority(() => undefined),
+        assertNotLostSync: () => lossController.signal.throwIfAborted(),
+        ownershipLossSignal: lossController.signal,
+      },
+      {
+        register(observe) {
+          const source = mcp.register(observe);
+          return {
+            ...source,
+            async prepare(_stamp, { signal }) {
+              signal.addEventListener('abort', aborted.resolve, { once: true });
+              entered.resolve(signal);
+              await release.promise;
+              throw new Error('MCP preparation interrupted');
+            },
+          };
+        },
+      },
+      local,
+    );
+    const reload = f.coordinator.reload();
+    const rejection = reload.catch((cause: unknown) => cause);
+    try {
+      const signal = await entered.promise;
+      lossController.abort(loss);
+      expect(signal.aborted).toBe(true);
+      await aborted.promise;
+      release.resolve();
+      expect(await rejection).toBe(loss);
+      expect(local.attempts).toEqual([]);
+      expect(f.coordinator.snapshot().failed).toEqual([]);
+    } finally {
+      release.resolve();
+      await rejection;
+      await f.close();
+    }
+  });
+
   it('discards pending changes and stamps after a paired callback throws', async () => {
     const local = new FixtureSource('local-esm');
     const mcp = new FixtureSource('mcp');
@@ -304,6 +520,7 @@ describe('Server extension coordination', () => {
       const local = new FixtureSource('local-esm');
       const mcp = new FixtureSource('mcp');
       const calls: string[] = [];
+      const preparationSignals: AbortSignal[] = [];
       local.onRefresh = () => {
         calls.push('local refresh');
       };
@@ -325,6 +542,7 @@ describe('Server extension coordination', () => {
               ...source,
               prepare(stamp, options) {
                 calls.push('local prepare');
+                preparationSignals.push(options.signal);
                 return source.prepare(stamp, options);
               },
             };
@@ -347,6 +565,8 @@ describe('Server extension coordination', () => {
         const firstPrepare = calls.indexOf('local prepare');
         const lastPrepare = calls.lastIndexOf('local prepare');
         expect(calls.slice(firstPrepare + 1, lastPrepare)).toContain('mcp refresh');
+        expect(preparationSignals).toHaveLength(2);
+        expect(preparationSignals[0]).not.toBe(preparationSignals[1]);
         expect(calls.slice(-2)).toEqual(['mcp recheck', 'local recheck']);
       } finally {
         await f.close();

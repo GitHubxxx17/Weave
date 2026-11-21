@@ -28,6 +28,7 @@ import { normalizeMcpServerConfig } from '../../src/mcp-environment.js';
 import { openOwnedPluginArtifactStore } from '../../src/owned-plugin-artifact-store.js';
 import { createSqlitePluginAuthorityDatabase } from '../../src/plugin-authority-store.js';
 import type { ValidatedArtifactIdentity } from '../../src/plugin-authority-types.js';
+import type { PluginStoreOwnershipError } from '../../src/plugin-store-ownership-types.js';
 import {
   createServerAgentRunner,
   createServerRuntime,
@@ -145,7 +146,7 @@ export async function createRealManagedCompositionFixture(
     directory: join(pluginsDirectory, '.weave-store'),
     initialBinding: 'allow-unbound',
     hostVersion: runnerOptions.hostVersion,
-    onOwnershipLost: () => undefined,
+    onOwnershipLost: (error) => extensions?.managed?.onOwnershipLostSync?.(error),
   });
   const readOwned = vi.fn(owned.read);
   const readAuthoritySync = vi.fn(authority.snapshotSync);
@@ -153,7 +154,13 @@ export async function createRealManagedCompositionFixture(
   const assertHeldSync = vi.fn(owned.assertHeldSync);
   let sequence = 0;
 
-  async function writePlugin(directory: string, id: string, text: string, marker?: string) {
+  async function writePlugin(
+    directory: string,
+    id: string,
+    text: string,
+    marker?: string,
+    relativePayload = false,
+  ) {
     const tool = id.replaceAll('-', '_');
     const manifest: PluginManifest = {
       id,
@@ -169,14 +176,16 @@ export async function createRealManagedCompositionFixture(
       join(directory, 'weave-plugin.json'),
       JSON.stringify({ schemaVersion: 1, entry: 'index.mjs', manifest }),
     );
+    if (relativePayload) await writeFile(join(directory, 'payload.txt'), text);
     await writeFile(
       join(directory, 'index.mjs'),
       `${marker === undefined ? '' : `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'imported');`}
+      ${relativePayload ? `import { readFile } from 'node:fs/promises';` : ''}
       export default (sdk) => ({ setup(env) {
         env.contribute(sdk.toolsExtensionPoint, (tools) => tools.addTool({
           name: ${JSON.stringify(tool)}, description: 'Read the fixture value',
           parameters: { type: 'object' }, inputSchema: sdk.z.object({}),
-          execute: async () => ${JSON.stringify(text)}
+          execute: async () => ${relativePayload ? `readFile(new URL('./payload.txt', import.meta.url), 'utf8')` : JSON.stringify(text)}
         }));
       } });`,
     );
@@ -216,6 +225,9 @@ export async function createRealManagedCompositionFixture(
     readAuthoritySync,
     readMcp,
     assertHeldSync,
+    loseOwnership(error: PluginStoreOwnershipError) {
+      return extensions?.managed?.onOwnershipLostSync?.(error);
+    },
     mutateMcp,
     createMcpConfig,
     async seedMcp(id: string, trusted = true) {
@@ -238,9 +250,15 @@ export async function createRealManagedCompositionFixture(
         await authority.trust.append({ kind: 'trusted', pluginId: id, digest, manifest });
       return { directory, manifest, digest };
     },
-    async seedManaged(id: string, text: string, selected = true, marker?: string) {
+    async seedManaged(
+      id: string,
+      text: string,
+      selected = true,
+      marker?: string,
+      relativePayload = false,
+    ) {
       const sourceDirectory = join(root, `import-${++sequence}`);
-      await writePlugin(sourceDirectory, id, text, marker);
+      await writePlugin(sourceDirectory, id, text, marker, relativePayload);
       const staged = await owned.stage({ sourceDirectory });
       const identity: ValidatedArtifactIdentity = {
         pluginId: staged.descriptor.manifest.id,
@@ -315,8 +333,7 @@ export async function createRealManagedCompositionFixture(
       extensions.adoptInitialAuthoritySync?.();
       return extensions;
     },
-    async runTool(tool: string) {
-      const sessionId = 'managed-composition';
+    async runTool(tool: string | readonly string[], sessionId = 'managed-composition') {
       const store = getServerSessionStore(runtime);
       if (!(await store.read(sessionId)).length) {
         await store.append(sessionId, [{ type: 'session.created', payload: { title: sessionId } }]);
@@ -327,7 +344,17 @@ export async function createRealManagedCompositionFixture(
         provider: 'mock',
         model: 'test',
         permissionMode: 'yolo',
-        userMessage: { role: 'user', content: [{ type: 'text', text: `/tool ${tool} {}` }] },
+        userMessage: {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: (typeof tool === 'string' ? [tool] : tool)
+                .map((name) => `/tool ${name} {}`)
+                .join('\n'),
+            },
+          ],
+        },
       }))
         events.push(event);
       return events;

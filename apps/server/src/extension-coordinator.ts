@@ -16,6 +16,8 @@ import type {
   ExtensionSourceFactory,
   ExtensionSourceSnapshot,
   ExtensionSourceStamp,
+  ManagedGenerationAuthority,
+  PreparedExtensionItem,
   PreparedExtensionSource,
   RetainedExtensionGeneration,
 } from './extension-types.js';
@@ -49,6 +51,7 @@ export interface ExtensionCoordinator {
   readonly runner: ServerGenerationController['runner'];
   generationSnapshot(): ExtensionGenerationSnapshot;
   observeAuthorityBatchSync(changes: ReadonlyMap<string, ExtensionAuthorityChange>): void;
+  blockManagedOwnershipLossSync(): void;
   snapshot(): ExtensionState;
   retainedGenerations(): readonly RetainedExtensionGeneration[];
   reload(options?: { readonly force?: boolean }): Promise<ExtensionReloadResult>;
@@ -69,6 +72,7 @@ interface ExtensionCoordinatorOptions {
   readonly sources: readonly ExtensionSourceFactory[];
   readonly assemble: (plugins: readonly KernelPlugin[]) => Promise<ServerGeneration>;
   readonly mcpFirstAuthority?: boolean;
+  readonly managedAuthority?: ManagedGenerationAuthority;
 }
 
 interface PendingOperation {
@@ -96,11 +100,29 @@ function requireController(host: ServerHost): ServerGenerationController {
 }
 
 function matches(left: ExtensionIdentity, right: ExtensionIdentity) {
-  return left.pluginId === right.pluginId && left.identity === right.identity;
+  return (
+    left.pluginId === right.pluginId &&
+    left.identity === right.identity &&
+    left.origin === right.origin
+  );
 }
 
 function originOf({ origin }: ExtensionIdentity) {
   return origin === undefined ? {} : { origin };
+}
+
+function managedIdentities(items: readonly ExtensionIdentity[]): ExtensionIdentity[] {
+  return items.flatMap(({ pluginId, identity, origin }) =>
+    origin === 'managed' ? [{ pluginId, identity, origin }] : [],
+  );
+}
+
+function authorityMarker(error: unknown): ExplicitLocalAuthorityError | undefined {
+  if (error instanceof ExplicitLocalAuthorityError) return error;
+  if (error instanceof PluginError && error.code === 'plugin-setup-failed') {
+    return error.cause instanceof ExplicitLocalAuthorityError ? error.cause : undefined;
+  }
+  return undefined;
 }
 
 function issueOf(error: unknown): LocalPluginIssue {
@@ -129,6 +151,7 @@ export function createExtensionCoordinator(
   options: ExtensionCoordinatorOptions,
 ): ExtensionCoordinator {
   const controller = requireController(options.host);
+  const { managedAuthority } = options;
   const pending: PendingOperation[] = [];
   const cleanupErrors: unknown[] = [];
   const lifetime = new AbortController();
@@ -139,12 +162,22 @@ export function createExtensionCoordinator(
   let failed: readonly ExtensionFailure[] = [];
   let error: LocalPluginIssue | undefined;
   let blocked: PluginHostError | undefined;
+  let ownershipBlock: PluginHostError | undefined;
   let running: Promise<void> | undefined;
   let closing: Promise<void> | undefined;
   let ownedDrain: Promise<OwnedDrainOutcome> | undefined;
   let ownedDrainStarted = false;
   let closed = false;
   let preparing: AbortController | undefined;
+
+  function blockManagedOwnershipLossSync(): void {
+    if (ownershipBlock !== undefined || !members.some(({ origin }) => origin === 'managed')) return;
+    ownershipBlock = new PluginHostError(
+      'plugin-generation-blocked',
+      'Managed plugin store ownership was lost',
+    );
+    if (!closed) controller.blockNewRuns(ownershipBlock);
+  }
 
   function observeAuthorityBatchSync(changes: ReadonlyMap<string, ExtensionAuthorityChange>): void {
     if (closed) return;
@@ -169,10 +202,12 @@ export function createExtensionCoordinator(
         'plugin-generation-blocked',
         'Extension trust changed; new runs wait for a compliant generation',
       );
-      controller.blockNewRuns(blocked);
+      controller.blockNewRuns(ownershipBlock ?? blocked);
     }
     if (immediate) {
-      controller.abortActiveRuns(blocked ?? new Error('Extension admission changed'));
+      controller.abortActiveRuns(
+        ownershipBlock ?? blocked ?? new Error('Extension admission changed'),
+      );
     }
   }
   const observe: ExtensionAuthorityObserver = (sourceId, change) => {
@@ -198,10 +233,11 @@ export function createExtensionCoordinator(
   }
 
   function generationSnapshot(): ExtensionGenerationSnapshot {
+    const admissionBlock = closed ? blocked : (ownershipBlock ?? blocked);
     return {
       id: controller.current().id,
-      acceptingRuns: blocked === undefined,
-      ...(blocked === undefined ? {} : { blocked: issueOf(blocked) }),
+      acceptingRuns: admissionBlock === undefined,
+      ...(admissionBlock === undefined ? {} : { blocked: issueOf(admissionBlock) }),
     };
   }
 
@@ -322,10 +358,14 @@ export function createExtensionCoordinator(
   function ownPreparations(
     generation: ServerGeneration,
     preparations: readonly PreparedExtensionSource[],
+    hasManagedMembers: boolean,
   ): ServerGeneration {
     let disposal: Promise<void> | undefined;
     return {
       ...generation,
+      ...(hasManagedMembers && managedAuthority !== undefined
+        ? { assertCanStartSync: () => managedAuthority.assertManagedStartSync() }
+        : {}),
       dispose() {
         disposal ??= (async () => {
           await cleanup(() => generation.dispose());
@@ -336,33 +376,52 @@ export function createExtensionCoordinator(
     };
   }
 
-  async function rebuild(force: boolean): Promise<ExtensionReloadResult> {
-    const initialAuthority = captureAuthority();
-    ensureOpen();
-    const eligibleCount = [...initialAuthority.values()].reduce(
-      (count, source) => count + source.eligible.length,
-      0,
-    );
-    const alreadyCurrent =
-      eligibleCount === members.length &&
-      members.every((member) =>
-        sources.some(
-          (source) =>
-            source.id === member.sourceId &&
-            initialAuthority.get(source)?.eligible.some((item) => matches(item, member)),
+  function membershipMatches(
+    authority: ReadonlyMap<ExtensionSource, ExtensionSourceSnapshot>,
+    current: readonly ExtensionMember[],
+  ): boolean {
+    return (
+      [...authority.values()].reduce((count, state) => count + state.eligible.length, 0) ===
+        current.length &&
+      current.every((member) =>
+        [...authority].some(
+          ([source, state]) =>
+            source.id === member.sourceId && state.eligible.some((item) => matches(item, member)),
         ),
+      )
+    );
+  }
+
+  function preparationMatches(
+    authority: ReadonlyMap<ExtensionSource, ExtensionSourceSnapshot>,
+    preparations: ReadonlyMap<ExtensionSource, PreparedExtensionSource>,
+    excluded: ReadonlyMap<string, ReadonlySet<string>>,
+  ): boolean {
+    return [...authority].every(([source, state]) => {
+      const preparation = preparations.get(source)!;
+      const survivors = state.eligible.filter(
+        (item) => !excluded.get(source.id)!.has(item.identity),
       );
-    if (
-      !force &&
-      alreadyCurrent &&
-      blocked === undefined &&
-      error === undefined &&
-      failed.length === 0
-    ) {
-      return result(true);
-    }
-    const abort = new AbortController();
-    preparing = abort;
+      return (
+        sameStamp(preparation.stamp, state.stamp) &&
+        preparation.items.length === survivors.length &&
+        survivors.every((member) =>
+          preparation.items.some(
+            (item) => matches(item, member) && item.plugin.manifest.id === member.pluginId,
+          ),
+        )
+      );
+    });
+  }
+
+  function sameAuthorityStamps(
+    before: ReadonlyMap<ExtensionSource, ExtensionSourceSnapshot>,
+    after: ReadonlyMap<ExtensionSource, ExtensionSourceSnapshot>,
+  ): boolean {
+    return [...before].every(([source, state]) => sameStamp(state.stamp, after.get(source)!.stamp));
+  }
+
+  async function rebuild(force: boolean): Promise<ExtensionReloadResult> {
     const excluded = new Map(sources.map((source) => [source.id, new Set<string>()]));
     const failures: ExtensionFailure[] = [];
     const changed = new Set<string>();
@@ -373,25 +432,115 @@ export function createExtensionCoordinator(
       const keys = excluded.get(sourceId)!;
       if (keys.has(item.identity)) throw new Error('Extension exclusions must increase on retry');
       keys.add(item.identity);
-      failures.push({ sourceId, ...item, error: issueOf(reason) });
+      const { pluginId, identity } = item;
+      failures.push({ sourceId, pluginId, identity, ...originOf(item), error: issueOf(reason) });
+    }
+
+    type OwnedItem = { sourceId: string; item: PreparedExtensionItem };
+
+    function attribute(items: readonly OwnedItem[], original: unknown): void {
+      if (authorityMarker(original) !== undefined) throw original;
+      const reason = items.reduce(
+        (current, { item }) => item.normalizeError?.(current) ?? current,
+        original,
+      );
+      const owner =
+        reason instanceof PluginError || reason instanceof PluginHostError
+          ? reason.pluginId
+          : undefined;
+      const blamed = items.filter(({ item }) => item.pluginId === owner);
+      if (blamed.length !== 1) throw reason;
+      const { sourceId, item } = blamed[0]!;
+      exclude(sourceId, item, reason);
+    }
+
+    function excludeUnready(items: readonly OwnedItem[]): boolean {
+      const unready = items.find(({ item }) => item.isReady?.() === false);
+      if (unready === undefined) return false;
+      exclude(
+        unready.sourceId,
+        unready.item,
+        new PluginHostError(
+          'plugin-load-failed',
+          'Extension resource became unavailable before publication',
+          { pluginId: unready.item.pluginId },
+        ),
+      );
+      return true;
     }
 
     try {
+      const initialRevision = desiredRevision;
+      const initialAuthority = captureAuthority();
+      ensureOpen();
+      const eligibleCount = [...initialAuthority.values()].reduce(
+        (count, state) => count + state.eligible.length,
+        0,
+      );
+      if (
+        !force &&
+        blocked === undefined &&
+        ownershipBlock === undefined &&
+        error === undefined &&
+        failed.length === 0 &&
+        membershipMatches(initialAuthority, members)
+      ) {
+        const managed = managedIdentities(members);
+        if (managed.length === 0 || managedAuthority === undefined) return result(true);
+
+        readingAuthority = true;
+        managedAuthority.assertManagedPublicationSync(managed);
+        const currentAuthority = captureAuthority();
+        ensureOpen();
+        managedAuthority.assertNotLostSync();
+        readingAuthority = false;
+        if (
+          blocked === undefined &&
+          ownershipBlock === undefined &&
+          initialRevision === desiredRevision &&
+          sameAuthorityStamps(initialAuthority, currentAuthority) &&
+          membershipMatches(currentAuthority, members)
+        ) {
+          return result(true);
+        }
+      }
+
       while (true) {
         ensureOpen();
         if (mcpAuthoritySource !== undefined) {
           readingAuthority = true;
-          await mcpAuthoritySource.refresh(abort.signal);
+          await mcpAuthoritySource.refresh(lifetime.signal);
           readingAuthority = false;
           ensureOpen();
         }
         const revision = desiredRevision;
         const authority = captureAuthority();
+        const abort = new AbortController();
+        preparing = abort;
+        const iterationAuthority = [...authority].some(([source, state]) =>
+          state.eligible.some(
+            ({ origin, identity }) =>
+              origin === 'managed' && !excluded.get(source.id)!.has(identity),
+          ),
+        )
+          ? managedAuthority
+          : undefined;
+        const lossSignal = iterationAuthority?.ownershipLossSignal;
+        const abortOnLoss = () => abort.abort(lossSignal?.reason);
         const preparations = new Map<ExtensionSource, PreparedExtensionSource>();
         let candidate: ServerGeneration | undefined;
         let identityFailure: (ExtensionPreparationFailure & { sourceId: string }) | undefined;
         let retirement: Promise<void> | undefined;
+
+        function checkIteration(): void {
+          ensureOpen();
+          iterationAuthority?.assertNotLostSync();
+          abort.signal.throwIfAborted();
+        }
+
+        lossSignal?.addEventListener('abort', abortOnLoss, { once: true });
         try {
+          checkIteration();
           for (const [source, state] of authority) {
             readingAuthority = true;
             const preparation = await source.prepare(state.stamp, {
@@ -400,17 +549,14 @@ export function createExtensionCoordinator(
             });
             readingAuthority = false;
             preparations.set(source, preparation);
-            ensureOpen();
+            checkIteration();
             for (const failure of preparation.failures) {
+              if (authorityMarker(failure.error) !== undefined) throw failure.error;
               if (failure.kind === 'identity') {
                 identityFailure = { ...failure, sourceId: source.id };
                 break;
               }
-              exclude(
-                source.id,
-                { pluginId: failure.pluginId, identity: failure.identity, ...originOf(failure) },
-                failure.error,
-              );
+              exclude(source.id, failure, failure.error);
             }
             if (identityFailure !== undefined) break;
           }
@@ -418,109 +564,87 @@ export function createExtensionCoordinator(
             const items = [...preparations].flatMap(([source, preparation]) =>
               preparation.items.map((item) => ({ sourceId: source.id, item })),
             );
-            let valid = true;
             try {
               candidate = await options.assemble(items.map(({ item }) => item.plugin));
-              ensureOpen();
-              for (const source of authorityOrder) {
-                const preparation = preparations.get(source)!;
-                readingAuthority = true;
-                if (!(await preparation.recheck(abort.signal))) valid = false;
-                readingAuthority = false;
-                ensureOpen();
-              }
-              // Every await is complete. Validate the exact current authority, commit
-              // the pointer, and update membership/admission in one synchronous turn.
-              const currentAuthority = captureAuthority();
-              valid &&= revision === desiredRevision;
-              for (const [source, preparation] of preparations) {
-                const state = currentAuthority.get(source)!;
-                const survivors = state.eligible.filter(
-                  (item) => !excluded.get(source.id)!.has(item.identity),
-                );
-                valid &&=
-                  sameStamp(preparation.stamp, state.stamp) &&
-                  preparation.items.length === survivors.length &&
-                  survivors.every((member) =>
-                    preparation.items.some(
-                      (item) =>
-                        matches(item, member) && item.plugin.manifest.id === member.pluginId,
-                    ),
-                  );
-              }
-              if (valid) {
-                if (
-                  !Number.isSafeInteger(candidate.id) ||
-                  candidate.id <= controller.current().id
-                ) {
-                  throw new Error('Candidate generation must advance the current generation');
-                }
-                const nextMembers = structuredClone(
-                  items.map(({ sourceId, item }) => ({
-                    sourceId,
-                    pluginId: item.pluginId,
-                    identity: item.identity,
-                    ...originOf(item),
-                    ...(item.instanceId === undefined ? {} : { instanceId: item.instanceId }),
-                    manifest: item.plugin.manifest,
-                  })),
-                );
-                const next = ownPreparations(candidate, [...preparations.values()]);
-                const unready = items.find(({ item }) => item.isReady?.() === false);
-                ensureOpen();
-                if (unready !== undefined) {
-                  exclude(
-                    unready.sourceId,
-                    {
-                      pluginId: unready.item.pluginId,
-                      identity: unready.item.identity,
-                      ...originOf(unready.item),
-                    },
-                    new PluginHostError(
-                      'plugin-load-failed',
-                      'Extension resource became unavailable before publication',
-                      { pluginId: unready.item.pluginId },
-                    ),
-                  );
-                  continue;
-                }
-                if (revision === desiredRevision) {
-                  retirement = options.host.commit(next).retirement;
-                  activeByGeneration.set(next.id, nextMembers);
-                  candidate = undefined;
-                  preparing = undefined;
-                  members = nextMembers;
-                  failed = [...failures];
-                  error = undefined;
-                  blocked = undefined;
-                }
-              }
             } catch (original: unknown) {
-              if (readingAuthority) throw original;
-              const authorityFailure = original instanceof PluginError ? original.cause : original;
-              if (authorityFailure instanceof ExplicitLocalAuthorityError) {
-                readingAuthority = true;
-                throw authorityFailure;
-              }
-              const reason = items.reduce(
-                (current, { item }) => item.normalizeError?.(current) ?? current,
-                original,
-              );
-              const owner =
-                reason instanceof PluginError || reason instanceof PluginHostError
-                  ? reason.pluginId
-                  : undefined;
-              const blamed = items.filter(({ item }) => item.pluginId === owner);
-              if (blamed.length !== 1) throw reason;
-              const { sourceId, item } = blamed[0]!;
-              exclude(
-                sourceId,
-                { pluginId: item.pluginId, identity: item.identity, ...originOf(item) },
-                reason,
-              );
+              if (authorityMarker(original) !== undefined) throw original;
+              checkIteration();
+              attribute(items, original);
               continue;
             }
+            checkIteration();
+
+            let valid = true;
+            for (const source of authorityOrder) {
+              readingAuthority = true;
+              if (!(await preparations.get(source)!.recheck(abort.signal))) valid = false;
+              readingAuthority = false;
+              checkIteration();
+            }
+            const recheckedAuthority = captureAuthority();
+            valid &&=
+              revision === desiredRevision &&
+              preparationMatches(recheckedAuthority, preparations, excluded);
+            checkIteration();
+            if (valid) {
+              if (!Number.isSafeInteger(candidate.id) || candidate.id <= controller.current().id) {
+                throw new Error('Candidate generation must advance the current generation');
+              }
+              const nextMembers = structuredClone(
+                items.map(({ sourceId, item }) => ({
+                  sourceId,
+                  pluginId: item.pluginId,
+                  identity: item.identity,
+                  ...originOf(item),
+                  ...(item.instanceId === undefined ? {} : { instanceId: item.instanceId }),
+                  manifest: item.plugin.manifest,
+                })),
+              );
+              const managed = managedIdentities(nextMembers);
+              const next = ownPreparations(
+                candidate,
+                [...preparations.values()],
+                managed.length > 0,
+              );
+              if (excludeUnready(items)) continue;
+
+              if (managed.length > 0 && managedAuthority !== undefined) {
+                readingAuthority = true;
+                managedAuthority.assertManagedPublicationSync(managed);
+                const currentAuthority = captureAuthority();
+                checkIteration();
+                readingAuthority = false;
+                valid =
+                  revision === desiredRevision &&
+                  preparationMatches(currentAuthority, preparations, excluded);
+                if (valid && excludeUnready(items)) continue;
+              }
+
+              if (valid) {
+                try {
+                  retirement = options.host.commit(next).retirement;
+                } catch (original: unknown) {
+                  if (authorityMarker(original) !== undefined) throw original;
+                  checkIteration();
+                  attribute(items, original);
+                  continue;
+                }
+                activeByGeneration.set(next.id, nextMembers);
+                candidate = undefined;
+                members = nextMembers;
+                failed = [...failures];
+                error = undefined;
+                blocked = undefined;
+                if (ownershipBlock !== undefined) controller.blockNewRuns(ownershipBlock);
+              }
+            }
           }
+        } catch (original: unknown) {
+          // Direct and kernel-wrapped authority failures keep the original throw.
+          if (authorityMarker(original) !== undefined) throw original;
+          // An interrupted mixed iteration can return an incidental plugin or abort error.
+          iterationAuthority?.assertNotLostSync();
+          throw original;
         } finally {
           if (retirement === undefined) {
             if (candidate !== undefined) {
@@ -529,21 +653,27 @@ export function createExtensionCoordinator(
             }
             await disposePreparations(preparations.values());
           }
+          lossSignal?.removeEventListener('abort', abortOnLoss);
+          preparing = undefined;
         }
         if (retirement !== undefined) {
           await cleanup(() => retirement);
           return result(false);
         }
-        ensureOpen();
+        checkIteration();
         if (refreshes >= Math.max(1, eligibleCount)) throw sourceStateChanged();
         refreshes += 1;
         if (identityFailure !== undefined) {
-          const key = JSON.stringify([identityFailure.sourceId, identityFailure.identity]);
+          const key = JSON.stringify([
+            identityFailure.sourceId,
+            identityFailure.identity,
+            identityFailure.origin,
+          ]);
           if (changed.has(key)) throw sourceStateChanged();
           changed.add(key);
         }
         readingAuthority = true;
-        await refresh(undefined, abort.signal);
+        await refresh();
         readingAuthority = false;
         const refreshedAuthority = captureAuthority();
         if (identityFailure !== undefined) {
@@ -556,23 +686,18 @@ export function createExtensionCoordinator(
             )
           )
             throw sourceStateChanged();
-        } else if (
-          [...authority].every(([source, state]) =>
-            sameStamp(state.stamp, refreshedAuthority.get(source)!.stamp),
-          )
-        ) {
+        } else if (sameAuthorityStamps(authority, refreshedAuthority)) {
           throw sourceStateChanged();
         }
       }
     } catch (reason: unknown) {
       ensureOpen();
       if (reason instanceof ExtensionPreparationError) readingAuthority = false;
+      const marker = authorityMarker(reason);
       failed = [...failures];
-      error = { code: 'plugin-reload-failed', message: issueOf(reason).message };
-      if (readingAuthority) throw reason;
+      error = { code: 'plugin-reload-failed', message: issueOf(marker ?? reason).message };
+      if (marker !== undefined || readingAuthority) throw reason;
       return result(false);
-    } finally {
-      preparing = undefined;
     }
   }
 
@@ -580,6 +705,7 @@ export function createExtensionCoordinator(
     runner: controller.runner,
     generationSnapshot,
     observeAuthorityBatchSync,
+    blockManagedOwnershipLossSync,
     snapshot,
     retainedGenerations,
     reload: (reloadOptions) =>
@@ -607,7 +733,9 @@ export function createExtensionCoordinator(
     hasActive,
     retryImmediateRevocation(sourceId, pluginId) {
       if (!closed && hasActive(sourceId, pluginId)) {
-        controller.abortActiveRuns(blocked ?? new Error('Extension admission changed'));
+        controller.abortActiveRuns(
+          ownershipBlock ?? blocked ?? new Error('Extension admission changed'),
+        );
       }
     },
     beginOwnedDrainSync() {

@@ -115,7 +115,12 @@ export function createServerExtensionCoordinator(
   const managed =
     options.managed === undefined
       ? undefined
-      : createManagedPluginComposition(options.managed, buffer, () => ({ local, mcp }));
+      : createManagedPluginComposition(
+          options.managed,
+          buffer,
+          () => ({ local, mcp }),
+          () => coordinator.blockManagedOwnershipLossSync(),
+        );
   const local: ReturnType<typeof createLocalExtensionSource> | undefined =
     options.local === undefined
       ? undefined
@@ -176,6 +181,9 @@ export function createServerExtensionCoordinator(
     ],
     assemble,
     mcpFirstAuthority: managed !== undefined,
+    ...(options.managed?.executionStore === undefined
+      ? {}
+      : { managedAuthority: managed!.managedAuthority }),
   });
   coordinatedHosts.add(runtime.serverHost);
   return {

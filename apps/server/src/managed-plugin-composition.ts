@@ -2,6 +2,7 @@ import {
   ExplicitLocalAuthorityError,
   PluginHostError,
   foldTrust,
+  localSourceCandidateIdentity,
   type ExplicitLocalCandidateChecks,
   type ExplicitLocalSelection,
   type LocalPluginIssue,
@@ -24,8 +25,10 @@ import { PluginStoreOwnershipError } from './plugin-store-ownership-types.js';
 import {
   sameExtensionSourceStamp,
   type ExtensionAuthorityChange,
+  type ExtensionIdentity,
   type ExtensionSourceFactory,
   type ExtensionSourceStamp,
+  type ManagedGenerationAuthority,
 } from './extension-types.js';
 
 /** Holds local and MCP observations until both adapters have applied a paired update. */
@@ -128,8 +131,11 @@ export function createManagedPluginComposition(
     readonly local: ReturnType<typeof createLocalExtensionSource> | undefined;
     readonly mcp: ReturnType<typeof createMcpExtensionSource> | undefined;
   },
+  blockManagedOwnershipLossSync: () => void,
 ) {
   const owned = options.executionStore;
+  const ownershipLoss = new AbortController();
+  let lossMarker: ExplicitLocalAuthorityError | undefined;
   let authority = options.initialAuthority;
   let targets = new Map<string, SelectedTarget>();
 
@@ -165,6 +171,7 @@ export function createManagedPluginComposition(
       const record = trust.get(pluginId);
       if (
         allowEvidence &&
+        lossMarker === undefined &&
         local !== undefined &&
         owned !== undefined &&
         authority.identity.databaseId === owned.binding.databaseId &&
@@ -218,8 +225,14 @@ export function createManagedPluginComposition(
             onWithdrawal(
               local.withdrawExplicitSelectionSync(sticky, prefix.at(-1)?.sequence, error),
             );
-          } catch {
-            // Preserve the original adoption failure.
+          } catch (withdrawal: unknown) {
+            if (lossMarker !== undefined) {
+              throw new ExplicitLocalAuthorityError(
+                new AggregateError([cause, withdrawal], 'Local readiness withdrawal failed', {
+                  cause,
+                }),
+              );
+            }
           }
           throw error;
         }
@@ -290,12 +303,61 @@ export function createManagedPluginComposition(
     throw failure;
   }
 
+  function assertNotLostSync(): undefined {
+    if (lossMarker !== undefined) throw lossMarker;
+    return undefined;
+  }
+
+  function onOwnershipLostSync(error: PluginStoreOwnershipError): undefined {
+    if (lossMarker !== undefined) return undefined;
+    lossMarker = new ExplicitLocalAuthorityError(error);
+    try {
+      blockManagedOwnershipLossSync();
+      adoptAuthoritySync(authority);
+    } catch (withdrawal: unknown) {
+      const cause =
+        withdrawal instanceof ExplicitLocalAuthorityError ? withdrawal.cause : withdrawal;
+      lossMarker = new ExplicitLocalAuthorityError(
+        new AggregateError([error, cause], 'Could not withdraw managed plugin readiness', {
+          cause: error,
+        }),
+      );
+    } finally {
+      ownershipLoss.abort(lossMarker);
+    }
+    return undefined;
+  }
+
+  function rejectOwnershipFailure(cause: unknown): void {
+    if (
+      cause instanceof PluginStoreOwnershipError &&
+      cause.code === 'plugin-store-ownership-lost'
+    ) {
+      onOwnershipLostSync(cause);
+    }
+    assertNotLostSync();
+  }
+
   function assertHeldSync(): void {
+    assertNotLostSync();
     try {
       owned!.assertHeldSync();
     } catch (cause: unknown) {
+      rejectOwnershipFailure(cause);
       invalidateAuthoritySync(cause);
     }
+    assertNotLostSync();
+  }
+
+  function assertManagedStartSync(): undefined {
+    assertNotLostSync();
+    try {
+      owned!.assertHeldSync();
+    } catch (cause: unknown) {
+      rejectOwnershipFailure(cause);
+      throw new ExplicitLocalAuthorityError(cause);
+    }
+    return assertNotLostSync();
   }
 
   async function refreshNamespace(signal: AbortSignal): Promise<void> {
@@ -321,7 +383,9 @@ export function createManagedPluginComposition(
     signal: AbortSignal,
     expected?: ManagedLocalCandidate,
   ): Promise<ReadyLocalPlugin | undefined> {
+    assertNotLostSync();
     await refreshNamespace(signal);
+    assertNotLostSync();
     signal.throwIfAborted();
     adoptLatestAuthoritySync();
     const target = targets.get(id);
@@ -330,18 +394,19 @@ export function createManagedPluginComposition(
     }
     assertHeldSync();
     signal.throwIfAborted();
+    const readSignal = AbortSignal.any([signal, ownershipLoss.signal]);
     let artifact: PluginArtifact | undefined;
-    let ownershipFailure: PluginStoreOwnershipError | undefined;
     try {
-      artifact = await owned!.read(target.candidate.digest, { signal });
+      artifact = await owned!.read(target.candidate.digest, { signal: readSignal });
     } catch (cause: unknown) {
-      // A rejected read must still pass cancellation, current authority and lease checks.
-      if (cause instanceof PluginStoreOwnershipError) ownershipFailure = cause;
+      rejectOwnershipFailure(cause);
+      if (cause instanceof PluginStoreOwnershipError) invalidateAuthoritySync(cause);
     }
+    assertNotLostSync();
     await refreshNamespace(signal);
+    assertNotLostSync();
     signal.throwIfAborted();
     adoptLatestAuthoritySync();
-    if (ownershipFailure !== undefined) invalidateAuthoritySync(ownershipFailure);
     if (targets.get(id) !== target) return undefined;
     assertHeldSync();
     let ready =
@@ -364,8 +429,39 @@ export function createManagedPluginComposition(
     target.ready = ready;
     target.issue = ready === undefined ? artifactUnavailable : undefined;
     adoptAuthoritySync(authority);
+    assertNotLostSync();
     return ready;
   }
+
+  function assertReadyEvidenceSync(matchesReady: () => boolean): undefined {
+    assertHeldSync();
+    adoptLatestAuthoritySync();
+    assertNotLostSync();
+    if (!matchesReady()) throw new ExplicitLocalAuthorityError(identityChanged());
+    return undefined;
+  }
+
+  function matchesReadyIdentity({ pluginId, identity, origin }: ExtensionIdentity): boolean {
+    const target = targets.get(pluginId);
+    return (
+      origin === 'managed' &&
+      target?.ready !== undefined &&
+      localSourceCandidateIdentity({
+        ...target.ready,
+        origin,
+        activationSequence: target.activationSequence,
+      }) === identity
+    );
+  }
+
+  const managedAuthority: ManagedGenerationAuthority = {
+    ownershipLossSignal: ownershipLoss.signal,
+    assertNotLostSync,
+    assertManagedPublicationSync(identities) {
+      return assertReadyEvidenceSync(() => identities.every(matchesReadyIdentity));
+    },
+    assertManagedStartSync,
+  };
 
   const explicitChecks: ExplicitLocalCandidateChecks = {
     async verify(candidate, signal) {
@@ -374,13 +470,10 @@ export function createManagedPluginComposition(
       return { entry: ready.entry, digest: ready.digest };
     },
     assertReadySync(candidate) {
-      adoptLatestAuthoritySync();
-      const target = targets.get(candidate.id);
-      if (target === undefined || !sameReady(target, candidate)) {
-        throw new ExplicitLocalAuthorityError(identityChanged());
-      }
-      assertHeldSync();
-      return undefined;
+      return assertReadyEvidenceSync(() => {
+        const target = targets.get(candidate.id);
+        return target !== undefined && sameReady(target, candidate);
+      });
     },
   };
 
@@ -389,6 +482,8 @@ export function createManagedPluginComposition(
     adoptLatestAuthoritySync,
     adoptInitialAuthoritySync: () => adoptAuthoritySync(options.initialAuthority),
     invalidateAuthoritySync,
+    managedAuthority,
+    onOwnershipLostSync,
     explicitChecks,
     async refreshSelectedEvidence(signal: AbortSignal): Promise<void> {
       signal.throwIfAborted();

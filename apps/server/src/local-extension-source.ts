@@ -217,11 +217,19 @@ export function createLocalExtensionSource(
         const invalidation = new AbortController();
         const signal = AbortSignal.any([preparationOptions.signal, invalidation.signal]);
         pendingRawPreparations.add(invalidation);
+        function throwIfInvalidated(): void {
+          // The mixed iteration can carry a completed ownership-loss failure
+          // after the raw fallback has already captured its own reason.
+          if (preparationOptions.signal.reason instanceof ExplicitLocalAuthorityError) {
+            preparationOptions.signal.throwIfAborted();
+          }
+          invalidation.signal.throwIfAborted();
+        }
         let prepared: Awaited<ReturnType<typeof source.prepare>>;
         try {
           prepared = await source.prepare(raw.stamp, { ...preparationOptions, signal });
         } catch (cause: unknown) {
-          invalidation.signal.throwIfAborted();
+          throwIfInvalidated();
           throw cause;
         } finally {
           pendingRawPreparations.delete(invalidation);
@@ -239,7 +247,7 @@ export function createLocalExtensionSource(
           } catch (cause: unknown) {
             cleanupErrors.push(cause);
           }
-          invalidation.signal.throwIfAborted();
+          throwIfInvalidated();
         }
         return {
           stamp,

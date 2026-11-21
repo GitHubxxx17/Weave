@@ -27,6 +27,13 @@ export interface ExtensionIdentity {
   readonly origin?: LocalSourceCandidate['origin'];
 }
 
+export interface ManagedGenerationAuthority {
+  readonly ownershipLossSignal: AbortSignal;
+  assertNotLostSync(): undefined;
+  assertManagedPublicationSync(identities: readonly ExtensionIdentity[]): undefined;
+  assertManagedStartSync(): undefined;
+}
+
 export interface ExtensionSourceSnapshot {
   readonly stamp: ExtensionSourceStamp;
   readonly eligible: readonly ExtensionIdentity[];
