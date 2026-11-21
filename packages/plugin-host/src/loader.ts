@@ -174,16 +174,25 @@ export async function loadLocalPlugin(
     throw fail('plugin-invalid-module', `Plugin "${id}" must export a function as its default`);
   }
 
-  let produced: unknown;
-  assertExplicitReady();
-  try {
-    produced = await (factory as PluginFactory)(options.sdk ?? createPluginSdk());
-  } catch (error: unknown) {
-    throw fail(
+  const failFactory = (error: unknown): PluginHostError =>
+    fail(
       'plugin-load-failed',
       `Plugin "${id}" failed in its factory: ${describeError(error)}`,
       error,
     );
+  let sdk: PluginSdk;
+  try {
+    sdk = options.sdk ?? createPluginSdk();
+  } catch (error: unknown) {
+    throw failFactory(error);
+  }
+
+  let produced: unknown;
+  assertExplicitReady();
+  try {
+    produced = await (factory as PluginFactory)(sdk);
+  } catch (error: unknown) {
+    throw failFactory(error);
   }
 
   const parsed = pluginModuleSchema.safeParse(produced);

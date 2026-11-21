@@ -5,6 +5,7 @@ import path from 'node:path';
 import {
   commandsExtensionPoint,
   createPluginKernel,
+  createPluginSdk,
   PluginError,
   type PluginCommand,
 } from '@weave/plugin';
@@ -217,6 +218,43 @@ it('rechecks authority after deferred import and before invoking the factory', a
   ready = false;
   release.resolve();
   await expect(load).rejects.toMatchObject(authorityFailure);
+  expect(await phases()).toEqual(['evaluate']);
+});
+
+it('blocks the factory if resolving the supplied SDK cancels the attempt', async () => {
+  const { candidate, options, attempt, verifiedSignals, marker, phases } = await fixture();
+  const sdk = createPluginSdk();
+  const cancelled = new Error('SDK resolution cancelled the attempt');
+  const outcome: unknown = await loadLocalPlugin(candidate, {
+    ...options,
+    get sdk() {
+      appendFileSync(marker, 'sdk\n');
+      attempt.abort(cancelled);
+      return sdk;
+    },
+  }).catch((error: unknown) => error);
+
+  expect(verifiedSignals).toEqual([options.signal]);
+  expect(await phases()).toEqual(['evaluate', 'sdk']);
+  expect(outcome).toBe(cancelled);
+});
+
+it('attributes a supplied SDK getter failure to the plugin factory stage', async () => {
+  const { candidate, options, phases } = await fixture();
+  const cause = new Error('SDK resolution failed');
+  await expect(
+    loadLocalPlugin(candidate, {
+      ...options,
+      get sdk() {
+        throw cause;
+      },
+    }),
+  ).rejects.toMatchObject({
+    code: 'plugin-load-failed',
+    pluginId: 'explicit',
+    message: 'Plugin "explicit" failed in its factory: SDK resolution failed',
+    cause,
+  });
   expect(await phases()).toEqual(['evaluate']);
 });
 
