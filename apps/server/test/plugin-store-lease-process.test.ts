@@ -36,6 +36,11 @@ const compileTimeout = 60_000;
 const eventTimeout = 8_000;
 const testTimeout = 90_000;
 const ownerFilename = 'ownership.sqlite';
+const ownerTableSql = `CREATE TABLE managed_store_binding_events (
+  sequence INTEGER NOT NULL PRIMARY KEY CHECK (sequence = 1),
+  occurred_at TEXT NOT NULL,
+  event_json TEXT NOT NULL
+)`;
 const bindingSchema = z.strictObject({
   version: z.literal(1),
   databaseId: z.uuid(),
@@ -649,9 +654,9 @@ describe('plugin store ownership across Node processes', () => {
   );
 
   it(
-    'allows exactly one simultaneous virgin root contender to hold the store',
+    'allows at most one virgin root contender and checks the durable state after contention',
     { timeout: testTimeout },
-    ownerTest(async ({ base, databaseFile, directory, prepare }) => {
+    ownerTest(async ({ base, databaseFile, directory, prepare, hold, reject }) => {
       const otherDatabaseFile = join(base, 'other.sqlite');
       await mkdir(directory);
       const first = await prepare();
@@ -664,15 +669,80 @@ describe('plugin store ownership across Node processes', () => {
         first.child.waitFor('held', 'error'),
         second.child.waitFor('held', 'error'),
       ]);
-      const winner = results.find((result) => result.kind === 'held');
-      if (!winner)
-        throw new Error(`Neither virgin contender acquired the store: ${JSON.stringify(results)}`);
-      const firstWon = winner === results[0];
-      expect(results[firstWon ? 1 : 0]).toMatchObject({
+      const ownerFile = join(directory, ownerFilename);
+      const acquisitionFailure = {
         kind: 'error',
         phase: 'acquire',
         code: expect.stringMatching(/^plugin-store-(busy|recovery-required|owner-mismatch)$/),
-      });
+      };
+      const winner = results.find((result) => result.kind === 'held');
+      if (!winner) {
+        for (const result of results) expect(result).toMatchObject(acquisitionFailure);
+        for (const { child } of [first, second]) {
+          expect(await child.waitForExit()).toEqual({ code: 0, signal: null });
+        }
+        expect(mainRows(databaseFile)).toEqual([]);
+        expect(mainRows(otherDatabaseFile)).toEqual([]);
+        assertOwnerAvailable(ownerFile);
+        const schema = withDatabase(
+          ownerFile,
+          (database) => database.prepare('SELECT name, type, sql FROM sqlite_schema').all(),
+          { readOnly: true },
+        );
+        if (schema.length === 0) {
+          for (const result of results) {
+            expect(result).toMatchObject({
+              code: expect.stringMatching(/^plugin-store-(busy|recovery-required)$/),
+            });
+          }
+          expect(results).toContainEqual(expect.objectContaining({ code: 'plugin-store-busy' }));
+          const before = await readFile(ownerFile);
+          for (const file of [databaseFile, otherDatabaseFile]) {
+            await reject('plugin-store-recovery-required', {
+              databaseFile: file,
+              initialBinding: 'require-bound',
+            });
+            expect(mainRows(file)).toEqual([]);
+          }
+          expect(await readFile(ownerFile)).toEqual(before);
+          return;
+        }
+
+        const normalizeSql = (sql: string) => sql.replace(/\s+/g, ' ').trim();
+        expect(schema).toHaveLength(1);
+        const table = z
+          .object({
+            name: z.literal('managed_store_binding_events'),
+            type: z.literal('table'),
+            sql: z.string(),
+          })
+          .parse(schema[0]);
+        expect(normalizeSql(table.sql)).toBe(normalizeSql(ownerTableSql));
+        const binding = recordedOwnerBinding(ownerFile);
+        const recordedFirst = binding.databaseFile === databaseFile;
+        const recordedFile = recordedFirst ? databaseFile : otherDatabaseFile;
+        const foreignFile = recordedFirst ? otherDatabaseFile : databaseFile;
+        expect(binding).toMatchObject({
+          databaseId: recordedFirst ? first.databaseId : second.databaseId,
+          databaseFile: recordedFile,
+          storeDirectory: directory,
+          ownerDatabaseFile: ownerFile,
+        });
+        const before = ownerRows(ownerFile);
+        const retried = await hold({ databaseFile: recordedFile, initialBinding: 'require-bound' });
+        expect(retried.binding).toEqual(binding);
+        await closeChild(retried.child);
+        await reject('plugin-store-owner-mismatch', {
+          databaseFile: foreignFile,
+          initialBinding: 'require-bound',
+        });
+        expect(registeredBinding(recordedFile)).toEqual(binding);
+        expect(mainRows(foreignFile)).toEqual([]);
+        expect(ownerRows(ownerFile)).toEqual(before);
+        return;
+      }
+      const firstWon = winner === results[0];
+      expect(results[firstWon ? 1 : 0]).toMatchObject(acquisitionFailure);
       const winningFile = firstWon ? databaseFile : otherDatabaseFile;
       const losingFile = firstWon ? otherDatabaseFile : databaseFile;
       const winningChild = firstWon ? first : second;
@@ -680,7 +750,6 @@ describe('plugin store ownership across Node processes', () => {
         code: 0,
         signal: null,
       });
-      const ownerFile = join(directory, ownerFilename);
       expect(winner.binding).toMatchObject({
         databaseFile: winningFile,
         databaseId: winningChild.databaseId,
@@ -950,11 +1019,7 @@ function seedHalfBinding(
     database.exec(`
       PRAGMA journal_mode=DELETE;
       BEGIN EXCLUSIVE;
-      CREATE TABLE managed_store_binding_events (
-        sequence INTEGER NOT NULL PRIMARY KEY CHECK (sequence = 1),
-        occurred_at TEXT NOT NULL,
-        event_json TEXT NOT NULL
-      );
+      ${ownerTableSql};
     `);
     const event = { version: 1, sequence: 1, kind: 'managed-store-bound', occurredAt, binding };
     database
