@@ -36,6 +36,11 @@ See [local MCP setup and lifecycle](docs/learning/2026-11-21-local-mcp.md)
 for the Studio workflow, launch configuration format, trust boundaries, and
 troubleshooting.
 
+The Stage 6.1 [local plugin artifact store](docs/learning/2026-11-21-plugin-artifact-store.md)
+provides bounded, non-executing directory copies at fixed content-addressed paths.
+Server installation records, reviewed version activation and Studio installation
+controls remain subsequent slices; publishing files alone does not load a plugin.
+
 ## Planned stack
 
 - TypeScript and Node.js

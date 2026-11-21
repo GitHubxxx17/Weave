@@ -35,15 +35,33 @@ export interface DigestOptions {
 }
 
 /** Version control and file-manager droppings that are not part of the plugin. */
-const ignoredNames: ReadonlySet<string> = new Set(['.git', '.DS_Store', 'Thumbs.db']);
+export const ignoredNames: ReadonlySet<string> = new Set(['.git', '.DS_Store', 'Thumbs.db']);
 
 interface FileEntry {
   readonly relativePath: string;
   readonly absolutePath: string;
 }
 
-function compareBytes(left: string, right: string): number {
-  return Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8'));
+export function compareDigestPaths(left: FileEntry, right: FileEntry): number {
+  return Buffer.compare(
+    Buffer.from(left.relativePath, 'utf8'),
+    Buffer.from(right.relativePath, 'utf8'),
+  );
+}
+
+/** Appends one file in the directory digest's format. Call in byte-sorted path order. */
+export function appendDigestFile(
+  outer: ReturnType<typeof createHash>,
+  relativePath: string,
+  bytes: number,
+  fileHash: string,
+): void {
+  outer.update(Buffer.from(relativePath, 'utf8'));
+  outer.update(Buffer.from([0]));
+  outer.update(String(bytes));
+  outer.update(Buffer.from([0]));
+  outer.update(fileHash);
+  outer.update('\n');
 }
 
 /**
@@ -120,7 +138,7 @@ export async function computeDirectoryDigest(
     };
     await walk('');
 
-    files.sort((left, right) => compareBytes(left.relativePath, right.relativePath));
+    files.sort(compareDigestPaths);
 
     const outer = createHash('sha256');
     let bytes = 0;
@@ -132,12 +150,12 @@ export async function computeDirectoryDigest(
       if (bytes > limits.maxBytes) {
         throw tooLarge(`more than ${String(limits.maxBytes)} bytes of files`);
       }
-      outer.update(Buffer.from(file.relativePath, 'utf8'));
-      outer.update(Buffer.from([0]));
-      outer.update(String(content.length));
-      outer.update(Buffer.from([0]));
-      outer.update(createHash('sha256').update(content).digest('hex'));
-      outer.update('\n');
+      appendDigestFile(
+        outer,
+        file.relativePath,
+        content.length,
+        createHash('sha256').update(content).digest('hex'),
+      );
     }
     return { digest: outer.digest('hex'), files: files.length, bytes };
   } catch (error: unknown) {
