@@ -461,10 +461,16 @@ pnpm --filter @weave/server typecheck
 ### 3c. Wire startup authority, ownership and facade shutdown
 
 **Owns** `apps/server/src/{main,local-plugin-host,local-extension-source,managed-plugin-startup}.ts`
-and `apps/server/test/{managed-plugin-startup,mcp-integration,health}.test.ts`.
+and `apps/server/test/{managed-plugin-startup,mcp-integration,health,local-plugin-integration}.test.ts`.
 
 **Consumes** Task 1's memoized shutdown, Task 2's acquisition module and
 raw override trust prefix, and 3a/3b's paired namespace composition.
+
+Update the legacy disabled-ESM assertions to the new authority contract:
+its configured isolated database may initialize authority tables while no local
+trust facts are written, no manual discovery runs and no plugin parent or
+artifact root is created. A caller-supplied override unused by disabled ESM
+remains caller-owned. Preserve the public absence of the local facade.
 
 **Hands off** live `startServer()` acquisition and sticky reservation,
 including disabled ESM, unowned and custom override modes. The local facade
