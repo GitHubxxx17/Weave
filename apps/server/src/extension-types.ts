@@ -16,6 +16,10 @@ export interface ExtensionSourceStamp {
   readonly trustSequence: number;
 }
 
+export function sameExtensionSourceStamp(left: ExtensionSourceStamp, right: ExtensionSourceStamp) {
+  return left.revision === right.revision && left.trustSequence === right.trustSequence;
+}
+
 export interface ExtensionIdentity {
   readonly pluginId: string;
   /** Unique within the source. */

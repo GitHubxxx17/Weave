@@ -8,11 +8,14 @@ import {
   type ExtensionMutationContext,
 } from '../src/extension-coordinator.js';
 import type {
+  ExtensionAuthorityChange,
   ExtensionAuthorityObserver,
   ExtensionSource,
+  ExtensionSourceFactory,
   ExtensionSourceSnapshot,
 } from '../src/extension-types.js';
 import { ExtensionPreparationError } from '../src/extension-types.js';
+import { createManagedAuthorityObserverBuffer } from '../src/managed-plugin-composition.js';
 import { createServerShutdown } from '../src/server-shutdown.js';
 import {
   assembleServerGeneration,
@@ -33,6 +36,7 @@ function deferred() {
 
 class FixtureSource {
   private revision = 0;
+  private trustSequence = 0;
   private identity: string | undefined = 'first';
   private observer: ExtensionAuthorityObserver | undefined;
   readonly close = vi.fn(async () => {});
@@ -55,10 +59,10 @@ class FixtureSource {
 
   constructor(readonly id: string) {}
 
-  private snapshot(): ExtensionSourceSnapshot {
+  snapshot(): ExtensionSourceSnapshot {
     this.onSnapshot?.();
     return {
-      stamp: { revision: this.revision, trustSequence: this.revision },
+      stamp: { revision: this.revision, trustSequence: this.trustSequence },
       eligible: this.identity === undefined ? [] : [{ pluginId: this.id, identity: this.identity }],
     };
   }
@@ -161,16 +165,30 @@ class FixtureSource {
 
   async decide(identity: string | undefined, immediate = false): Promise<void> {
     if (this.appendFailure) throw this.appendFailure;
+    this.publish(this.stageDecision(identity, immediate));
+    await this.afterDecision?.();
+  }
+
+  stageDecision(identity: string | undefined, immediate = false): ExtensionAuthorityChange {
     this.identity = identity;
     this.revision += 1;
-    this.observer?.(this.id, { snapshot: this.snapshot(), affectedIds: [this.id], immediate });
-    await this.afterDecision?.();
+    this.trustSequence += 1;
+    return { snapshot: this.snapshot(), affectedIds: [this.id], immediate };
+  }
+
+  stageValidatedSequence(): ExtensionAuthorityChange {
+    this.trustSequence += 1;
+    return { snapshot: this.snapshot(), affectedIds: [], immediate: false };
+  }
+
+  publish(change: ExtensionAuthorityChange): void {
+    this.observer?.(this.id, change);
   }
 
   onRecheck: (() => void | Promise<void>) | undefined;
 }
 
-async function fixture(...sources: FixtureSource[]) {
+async function fixture(...sources: Array<{ readonly register: ExtensionSourceFactory }>) {
   const runtime = createServerRuntime();
   await runtime.start();
   const runner = await createServerAgentRunner(runtime);
@@ -237,6 +255,140 @@ function toolContent(content: string) {
 }
 
 describe('Server extension coordination', () => {
+  it('discards unchanged-stamp metadata and retains a change from an earlier stamp in a pair', async () => {
+    const local = new FixtureSource('local-esm');
+    const mcp = new FixtureSource('mcp');
+    const batches: Array<ReadonlyMap<string, ExtensionAuthorityChange>> = [];
+    const buffer = createManagedAuthorityObserverBuffer((changes) => {
+      batches.push(changes);
+      f.coordinator.observeAuthorityBatchSync(changes);
+    });
+    const f = await fixture(
+      { register: buffer.wrapSource(local.register) },
+      { register: buffer.wrapSource(mcp.register) },
+    );
+    const abort = vi.spyOn(f.runtime.serverHost.controller()!, 'abortActiveRuns');
+    const started = deferred();
+    const released = deferred();
+    const observed: unknown[] = [];
+    local.onTool = (signal) => {
+      signal.addEventListener(
+        'abort',
+        () => {
+          observed.push({
+            local: local.snapshot().eligible,
+            mcp: mcp.snapshot().eligible,
+            acceptingRuns: f.coordinator.generationSnapshot().acceptingRuns,
+          });
+          buffer.runSync(() => local.publish(local.stageValidatedSequence()));
+          released.resolve();
+        },
+        { once: true },
+      );
+      started.resolve();
+      return released.promise;
+    };
+    try {
+      await f.coordinator.reload();
+      local.publish({ snapshot: local.snapshot(), affectedIds: [local.id], immediate: true });
+      buffer.runSync(() => {
+        local.publish({ snapshot: local.snapshot(), affectedIds: [local.id], immediate: true });
+        local.publish(local.stageValidatedSequence());
+      });
+      expect(abort).not.toHaveBeenCalled();
+      expect(f.coordinator.generationSnapshot().acceptingRuns).toBe(true);
+      expect(batches[0]?.get(local.id)).toEqual({
+        snapshot: local.snapshot(),
+        affectedIds: [],
+        immediate: false,
+      });
+      const turn = f.turn(local.id);
+      await started.promise;
+      buffer.runSync(() => {
+        local.publish(local.stageDecision('first', true));
+        local.publish(local.stageValidatedSequence());
+        mcp.publish(mcp.stageDecision(undefined));
+      });
+      expect(observed).toEqual([
+        {
+          local: [{ pluginId: 'local-esm', identity: 'first' }],
+          mcp: [],
+          acceptingRuns: false,
+        },
+      ]);
+      expect(abort).toHaveBeenCalledOnce();
+      expect(batches[1]?.get(local.id)).toEqual({
+        snapshot: {
+          stamp: { revision: 1, trustSequence: 3 },
+          eligible: [{ pluginId: 'local-esm', identity: 'first' }],
+        },
+        affectedIds: [local.id],
+        immediate: true,
+      });
+      expect(batches[2]?.get(local.id)?.snapshot.stamp).toEqual({
+        revision: 1,
+        trustSequence: 4,
+      });
+      await turn;
+    } finally {
+      released.resolve();
+      abort.mockRestore();
+      await f.close();
+    }
+  });
+
+  it('blocks admission for the entire authority batch before synchronously aborting runs', async () => {
+    const local = new FixtureSource('local-esm');
+    const mcp = new FixtureSource('mcp');
+    const started = deferred();
+    const released = deferred();
+    const observed: unknown[] = [];
+    const f = await fixture(local, mcp);
+    const abort = vi.spyOn(f.runtime.serverHost.controller()!, 'abortActiveRuns');
+    local.onTool = (signal) => {
+      signal.addEventListener(
+        'abort',
+        () => {
+          observed.push({
+            local: local.snapshot().eligible,
+            mcp: mcp.snapshot().eligible,
+            acceptingRuns: f.coordinator.generationSnapshot().acceptingRuns,
+          });
+          released.resolve();
+        },
+        { once: true },
+      );
+      started.resolve();
+      return released.promise;
+    };
+    try {
+      await f.coordinator.reload();
+      const turn = f.turn(local.id);
+      await started.promise;
+      const localChange = local.stageDecision('first', true);
+      const mcpChange = mcp.stageDecision(undefined, true);
+      f.coordinator.observeAuthorityBatchSync(
+        new Map([
+          [local.id, localChange],
+          [mcp.id, mcpChange],
+        ]),
+      );
+      expect(observed).toEqual([
+        {
+          local: [{ pluginId: 'local-esm', identity: 'first' }],
+          mcp: [],
+          acceptingRuns: false,
+        },
+      ]);
+      expect(abort).toHaveBeenCalledOnce();
+      await turn;
+    } finally {
+      released.resolve();
+      abort.mockRestore();
+      await f.close();
+    }
+  });
+
   it('rebuilds identical membership only when reload or mutation explicitly forces it', async () => {
     const a = new FixtureSource('source-a');
     const f = await fixture(a);

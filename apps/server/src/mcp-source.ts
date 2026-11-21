@@ -20,6 +20,7 @@ import type { ExtensionCoordinator } from './extension-coordinator.js';
 import { ExtensionPreparationError } from './extension-types.js';
 import type {
   ExtensionAuthorityObserver,
+  ExtensionIdentity,
   ExtensionSourceFactory,
   ExtensionSourceSnapshot,
   PreparedExtensionItem,
@@ -64,13 +65,17 @@ export interface McpExtensionSourceOptions {
   readonly readHostVariable?: (name: string) => string | undefined;
   readonly connect?: typeof connectMcp;
   readonly reservedPluginIds?: () => Promise<readonly string[]>;
+  /** Applies the validated log exactly once inside the paired authority update. */
+  readonly installAuthoritySync?: (applyValidatedLog: () => void) => void;
+  readonly assertCreateAllowedSync?: (pluginId: string) => void;
+}
+
+function pluginId(id: string): string {
+  return `mcp-${id}`;
 }
 
 function identity(record: McpAuthorityRecord): string {
   return JSON.stringify([record.config.id, record.configDigest]);
-}
-function eligible(record: McpAuthorityRecord): boolean {
-  return !record.removed && record.enabled && record.trustedDigest === record.configDigest;
 }
 function mappedName(id: string, name: string): string {
   const slug =
@@ -145,10 +150,14 @@ function invalid(): McpAuthorityError {
 export function createMcpExtensionSource(options: McpExtensionSourceOptions): {
   register: ExtensionSourceFactory;
   facade(coordinator: ExtensionCoordinator): ServerMcpManager;
+  declaredPluginIds(): readonly string[];
+  setDeniedPluginIdsSync(ids: ReadonlySet<string>): void;
+  refresh(): Promise<void>;
   close(): Promise<void>;
 } {
   let log = emptyLog;
   let revision = 0;
+  let deniedIds: ReadonlySet<string> = new Set();
   let observer: ExtensionAuthorityObserver | undefined;
   let registered = false;
   let closed = false;
@@ -163,30 +172,70 @@ export function createMcpExtensionSource(options: McpExtensionSourceOptions): {
   function ensureOpen(): void {
     if (closed) throw new McpAuthorityError('mcp-closed');
   }
+  function eligible(record: McpAuthorityRecord): boolean {
+    return (
+      !record.removed &&
+      record.enabled &&
+      record.trustedDigest === record.configDigest &&
+      !deniedIds.has(pluginId(record.config.id))
+    );
+  }
+  function eligibleIdentities(): ExtensionIdentity[] {
+    return log.records
+      .filter(eligible)
+      .map((record) => ({ pluginId: pluginId(record.config.id), identity: identity(record) }));
+  }
   function snapshot(): ExtensionSourceSnapshot {
     return {
       stamp: { revision, trustSequence: log.sequence },
-      eligible: log.records
-        .filter(eligible)
-        .map((record) => ({ pluginId: `mcp-${record.config.id}`, identity: identity(record) })),
+      eligible: eligibleIdentities(),
     };
   }
-  function install(input: unknown, immediate = false, affectedId?: string): void {
-    const next = validateMcpAuthorityLog(input, log.events);
-    if (isDeepStrictEqual(log, next)) return;
-    const before = log;
-    log = next;
-    if (!isDeepStrictEqual(before.records, next.records)) revision++;
-    const affectedIds = new Set<string>(affectedId === undefined ? [] : [`mcp-${affectedId}`]);
-    for (const previous of before.records) {
-      const current = log.records.find((record) => record.config.id === previous.config.id);
-      if (
-        eligible(previous) &&
-        (current === undefined || !eligible(current) || identity(previous) !== identity(current))
-      )
-        affectedIds.add(`mcp-${previous.config.id}`);
+  function observeChange(
+    before: readonly ExtensionIdentity[],
+    current: ExtensionSourceSnapshot,
+    immediate = false,
+    affectedId?: string,
+  ): void {
+    const affectedIds = new Set<string>(affectedId === undefined ? [] : [pluginId(affectedId)]);
+    for (const previous of before) {
+      if (!current.eligible.some((item) => item.identity === previous.identity)) {
+        affectedIds.add(previous.pluginId);
+      }
     }
-    observer?.(sourceId, { snapshot: snapshot(), affectedIds: [...affectedIds], immediate });
+    observer?.(sourceId, { snapshot: current, affectedIds: [...affectedIds], immediate });
+  }
+  function declaredPluginIds(): readonly string[] {
+    return log.records
+      .filter((record) => !record.removed)
+      .map((record) => pluginId(record.config.id));
+  }
+  function setDeniedPluginIdsSync(ids: ReadonlySet<string>): void {
+    const before = eligibleIdentities();
+    deniedIds = new Set(ids);
+    const current = eligibleIdentities();
+    if (!isDeepStrictEqual(before, current)) {
+      revision++;
+      observeChange(before, {
+        stamp: { revision, trustSequence: log.sequence },
+        eligible: current,
+      });
+    }
+  }
+  function install(input: unknown, immediate = false, affectedId?: string): boolean {
+    const next = validateMcpAuthorityLog(input, log.events);
+    let changed = false;
+    function applyValidatedLog(): void {
+      if (isDeepStrictEqual(log, next)) return;
+      const before = eligibleIdentities();
+      if (!isDeepStrictEqual(log.records, next.records)) revision++;
+      log = next;
+      changed = true;
+      observeChange(before, snapshot(), immediate, affectedId);
+    }
+    if (options.installAuthoritySync === undefined) applyValidatedLog();
+    else options.installAuthoritySync(applyValidatedLog);
+    return changed;
   }
   async function refresh(): Promise<void> {
     ensureOpen();
@@ -347,7 +396,7 @@ export function createMcpExtensionSource(options: McpExtensionSourceOptions): {
                 cleanupErrors.push(cleanupIssue);
               }
               failures.push({
-                pluginId: `mcp-${record.config.id}`,
+                pluginId: pluginId(record.config.id),
                 identity: identity(record),
                 kind: 'load',
                 error: new McpClientError(issue.code as McpClientError['code']),
@@ -391,6 +440,9 @@ export function createMcpExtensionSource(options: McpExtensionSourceOptions): {
 
   return {
     register,
+    declaredPluginIds,
+    setDeniedPluginIdsSync,
+    refresh,
     close,
     facade(coordinator): ServerMcpManager {
       function project(): McpManagementSnapshot {
@@ -502,21 +554,26 @@ export function createMcpExtensionSource(options: McpExtensionSourceOptions): {
         let decisionSequence = expected;
         const result = await coordinator.mutate(
           sourceId,
-          async () => {
+          async ({ assertOpenSync }) => {
             await refresh();
             requireSequence(expected);
             const requested = await command();
+            let installed = false;
             if (requested !== undefined) {
+              if (requested.kind === 'create') {
+                options.assertCreateAllowedSync?.(pluginId(requested.config.id));
+              }
+              assertOpenSync();
               const next = await options.store.mutate(requested, {
                 expectedSequence: expected,
                 knownPrefix: log.events,
               });
               ensureOpen();
-              install(next, immediate, targetId);
+              installed = install(next, immediate, targetId);
             }
             decisionSequence = log.sequence;
-            if (immediate && targetId !== undefined)
-              coordinator.retryImmediateRevocation(sourceId, `mcp-${targetId}`);
+            if (!installed && immediate && targetId !== undefined)
+              coordinator.retryImmediateRevocation(sourceId, pluginId(targetId));
           },
           { force: true },
         );
@@ -556,7 +613,7 @@ export function createMcpExtensionSource(options: McpExtensionSourceOptions): {
           if (id !== undefined && config.id !== id) throw invalid();
           if (
             id === undefined &&
-            ((await options.reservedPluginIds?.()) ?? []).includes(`mcp-${config.id}`)
+            ((await options.reservedPluginIds?.()) ?? []).includes(pluginId(config.id))
           )
             throw conflict();
           return { kind: id === undefined ? 'create' : 'update', config };

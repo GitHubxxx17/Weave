@@ -1,6 +1,7 @@
 import { PluginError, type KernelPlugin } from '@weave/plugin';
 import { PluginHostError, type LocalPluginIssue } from '@weave/plugin-host';
 import type {
+  ExtensionAuthorityChange,
   ExtensionAuthorityObserver,
   ExtensionFailure,
   ExtensionGenerationSnapshot,
@@ -15,7 +16,10 @@ import type {
   RetainedExtensionGeneration,
 } from './extension-types.js';
 import type { ServerGeneration, ServerGenerationController, ServerHost } from './server-host.js';
-import { ExtensionPreparationError } from './extension-types.js';
+import {
+  ExtensionPreparationError,
+  sameExtensionSourceStamp as sameStamp,
+} from './extension-types.js';
 
 interface ExtensionState {
   readonly generation: ExtensionGenerationSnapshot;
@@ -40,6 +44,7 @@ export type OwnedDrainOutcome =
 export interface ExtensionCoordinator {
   readonly runner: ServerGenerationController['runner'];
   generationSnapshot(): ExtensionGenerationSnapshot;
+  observeAuthorityBatchSync(changes: ReadonlyMap<string, ExtensionAuthorityChange>): void;
   snapshot(): ExtensionState;
   retainedGenerations(): readonly RetainedExtensionGeneration[];
   reload(options?: { readonly force?: boolean }): Promise<ExtensionReloadResult>;
@@ -83,10 +88,6 @@ function requireController(host: ServerHost): ServerGenerationController {
   if (controller === undefined)
     throw new Error('Extensions require an initialized Server generation');
   return controller;
-}
-
-function sameStamp(left: ExtensionSourceStamp, right: ExtensionSourceStamp) {
-  return left.revision === right.revision && left.trustSequence === right.trustSequence;
 }
 
 function matches(left: ExtensionIdentity, right: ExtensionIdentity) {
@@ -136,15 +137,23 @@ export function createExtensionCoordinator(
   let closed = false;
   let preparing: AbortController | undefined;
 
-  const observe: ExtensionAuthorityObserver = (sourceId, change) => {
+  function observeAuthorityBatchSync(changes: ReadonlyMap<string, ExtensionAuthorityChange>): void {
     if (closed) return;
-    const { stamp, eligible } = change.snapshot;
-    const previous = authorityStamps.get(sourceId);
-    if (previous !== undefined && sameStamp(previous, stamp)) return;
-    authorityStamps.set(sourceId, stamp);
-    desiredRevision += 1;
+    const changed = new Map<string, ExtensionSourceSnapshot>();
+    let immediate = false;
+    for (const [sourceId, change] of changes) {
+      const stamp = change.snapshot.stamp;
+      const previous = authorityStamps.get(sourceId);
+      if (previous !== undefined && sameStamp(previous, stamp)) continue;
+      authorityStamps.set(sourceId, stamp);
+      desiredRevision += 1;
+      changed.set(sourceId, change.snapshot);
+      immediate ||= change.immediate && change.affectedIds.length > 0;
+    }
+    if (changed.size === 0) return;
     const unauthorized = members.some(
-      (member) => member.sourceId === sourceId && !eligible.some((item) => matches(item, member)),
+      (member) =>
+        changed.get(member.sourceId)?.eligible.some((item) => matches(item, member)) === false,
     );
     if (unauthorized) {
       blocked = new PluginHostError(
@@ -153,9 +162,12 @@ export function createExtensionCoordinator(
       );
       controller.blockNewRuns(blocked);
     }
-    if (change.immediate && change.affectedIds.length > 0) {
+    if (immediate) {
       controller.abortActiveRuns(blocked ?? new Error('Extension admission changed'));
     }
+  }
+  const observe: ExtensionAuthorityObserver = (sourceId, change) => {
+    observeAuthorityBatchSync(new Map([[sourceId, change]]));
   };
   const sources = options.sources.map((create) => create(observe));
   if (new Set(sources.map((source) => source.id)).size !== sources.length) {
@@ -530,6 +542,7 @@ export function createExtensionCoordinator(
   return {
     runner: controller.runner,
     generationSnapshot,
+    observeAuthorityBatchSync,
     snapshot,
     retainedGenerations,
     reload: (reloadOptions) =>
