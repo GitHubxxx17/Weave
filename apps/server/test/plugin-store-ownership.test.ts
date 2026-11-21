@@ -270,6 +270,34 @@ describe('managed store filesystem policy', () => {
     },
   );
 
+  it.each(['-JOURNAL', '-WAL', '-SHM'])(
+    'reserves the main SQLite %s sidecar spelling before creating a root',
+    async (suffix) => {
+      const paths = fixture();
+      queryOwner(paths.databaseFile, (database) =>
+        database.exec('CREATE TABLE writes (value TEXT)'),
+      );
+      const directory = `${paths.databaseFile}${suffix}`;
+      await expect(acquire({ ...paths, directory })).rejects.toMatchObject(invalid);
+      expect(existsSync(directory)).toBe(false);
+      queryOwner(paths.databaseFile, (database) =>
+        database.exec("INSERT INTO writes VALUES ('committed')"),
+      );
+    },
+  );
+
+  it('uses native file identity for a sidecar stem with alternate case', async () => {
+    const paths = fixture();
+    const stem = join(paths.parent, 'AUTHORITY.SQLITE');
+    const directory = `${stem}-JOURNAL`;
+    const validation = validateStorePaths({ ...pathOptions(paths), directory });
+    if (existsSync(stem)) {
+      await expect(validation).rejects.toMatchObject(invalid);
+    } else {
+      await expect(validation).resolves.toMatchObject({ storeDirectory: directory });
+    }
+  });
+
   it.each([
     ['artifact entries', (paths: Fixture) => paths.payload, populateDirectories, 2_000],
     [

@@ -337,6 +337,9 @@ safety.
 
 Compare canonical main file, root and owner paths to forbid the main SQLite file
 or its sidecars inside the managed root and forbid owner/main being the same file.
+Also reserve ASCII case variants of the `-journal`, `-wal` and `-shm` suffixes in
+the canonical main parent, even when a sidecar does not yet exist. Apply this
+reservation only when native lookup of the basename stem identifies the main file.
 The root's configured location is explicit; do not discover one by scanning manual
 plugins or claim that a `.weave-store` spelling proves ownership. No manual path
 is moved, adopted, overwritten or deleted. A caller's misconfiguration is rejected
@@ -382,8 +385,8 @@ identities, fixed root children and sidecars before opening owner SQLite.
 Defer traversal below `artifacts/` and `staging/` until holding the lifetime
 lease so a live owner's staging changes cannot interfere with contention
 detection. Recheck canonical leaf identities and the complete bounded layout
-under the lease, before main registration/return. A normal returned wrapper checks native lease state and
-cached main/root/owner canonical identities/nlink at each guarded boundary
+under the lease, before main registration/return. A normal returned wrapper
+checks native lease state and cached main/root/owner canonical identities/nlink at each guarded boundary
 using synchronous lstat; descriptor binding/content remains immutable under the
 held private lock. Transient replacement checks compare device/inode/type and the
 required regular-file nlink, not main DB size/mtime or directory link counts that

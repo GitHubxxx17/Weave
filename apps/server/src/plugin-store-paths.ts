@@ -123,6 +123,24 @@ function isInDirectory(directory: string, candidate: string): boolean {
   return child === '' || (!isAbsolute(child) && child !== '..' && !child.startsWith(`..${sep}`));
 }
 
+async function isMainSidecarRoot(
+  root: string,
+  databaseFile: string,
+  mainIdentity: Identity,
+): Promise<boolean> {
+  const parent = dirname(databaseFile);
+  if (dirname(root) !== parent) return false;
+  const name = basename(root);
+  const suffix = sqliteSidecarSuffixes.find(
+    (suffix) => name.slice(-suffix.length).toLowerCase() === suffix,
+  );
+  if (suffix === undefined) return false;
+  // A sidecar may be absent. Look up the existing stem using the filesystem's own
+  // name equivalence while conservatively reserving ASCII case variants of its suffix.
+  const stem = await readStorePathStat(join(parent, name.slice(0, -suffix.length)));
+  return stem !== undefined && stem.isFile() && sameIdentity(stem, mainIdentity);
+}
+
 async function scanPayload(payload: string, published: boolean): Promise<void> {
   let entries = 0;
   let files = 0;
@@ -231,11 +249,10 @@ export async function validateStorePaths(
     ]);
     if (main.identity === undefined)
       throw invalid('Managed authority requires its main database file');
-    const mainFiles = [
-      main.path,
-      ...sqliteSidecarSuffixes.map((suffix) => `${main.path}${suffix}`),
-    ];
-    if (mainFiles.some((path) => isInDirectory(root.path, path))) {
+    if (
+      isInDirectory(root.path, main.path) ||
+      (await isMainSidecarRoot(root.path, main.path, main.identity))
+    ) {
       throw invalid('Managed store cannot contain the main authority database or its sidecars');
     }
     const ownerDatabaseFile = join(root.path, ownerName);
