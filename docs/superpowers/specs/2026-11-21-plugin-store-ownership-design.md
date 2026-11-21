@@ -320,6 +320,10 @@ path chosen after a conflict.
 
 The main location must be a persistent regular local file. Canonicalize its
 ancestors with `realpath`; `lstat` the leaf and reject symlink/nonregular/`nlink != 1`.
+The authority owner captures managed eligibility before and immediately after the
+native SQLite open. Each managed read and registration compares the opening path
+and the SQLite main location to the captured canonical path and transient file
+identity. Filesystem resolution preserves ancestor symlink and `..` lookup order.
 The managed root may be absent (explicit first initialization creates it) or a
 real directory. Its leaf cannot be a symlink; linked ancestors are canonicalized.
 Owner file and every managed descendant may not be a symlink or special file;

@@ -1,6 +1,14 @@
-import { linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import {
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { initializeAuthoritySchemaTx } from '../src/plugin-authority-log.js';
@@ -223,6 +231,49 @@ describe('authority managed root registration', () => {
     expect(owner.registerManagedRootSync(bindingFor(canonicalFile)).binding.databaseFile).toBe(
       canonicalFile,
     );
+  });
+
+  it.each(['absolute', 'relative'])(
+    'resolves a linked ancestor before .. for a raw %s opening path',
+    (kind) => {
+      const file = filename();
+      const directory = join(file, '..', 'canonical');
+      const nested = join(directory, 'nested');
+      const alias = join(file, '..', 'ancestor-alias');
+      mkdirSync(nested, { recursive: true });
+      symlinkSync(nested, alias, 'dir');
+      const openingAlias = kind === 'relative' ? relative(process.cwd(), alias) : alias;
+      const openingPath = `${openingAlias}${sep}..${sep}main.sqlite`;
+      const canonicalFile = join(directory, 'main.sqlite');
+      const owner = openOwner(openingPath);
+      const binding = bindingFor(canonicalFile);
+      expect(owner.readManagedRootStateSync().databaseFile).toBe(canonicalFile);
+      expect(owner.registerManagedRootSync(binding).binding).toEqual(binding);
+    },
+  );
+
+  it('refuses managed reads and exact replay on an open authority whose main file was replaced', async () => {
+    const file = filename();
+    const original = openOwner(file);
+    const binding = bindingFor(file);
+    original.registerManagedRootSync(binding);
+    await original.close();
+
+    const stale = openOwner(file);
+    const replacement = filename();
+    const other = createSqlitePluginAuthorityDatabase({
+      filename: replacement,
+      newDatabaseId: () => otherId,
+    });
+    owners.push(other);
+    await other.close();
+    renameSync(file, join(file, '..', 'original.sqlite'));
+    renameSync(replacement, file);
+    expect(rows(file, rootTable)).toEqual([]);
+    expect(stale.snapshotSync().identity.databaseId).toBe(databaseId);
+    expect.soft(() => stale.readManagedRootStateSync()).toThrow(invalid);
+    expect.soft(() => stale.registerManagedRootSync(binding)).toThrow(invalid);
+    expect(rows(file, rootTable)).toEqual([]);
   });
 
   it('refuses a main database with multiple hardlinks', () => {
