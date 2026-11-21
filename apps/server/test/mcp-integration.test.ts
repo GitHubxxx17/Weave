@@ -7,6 +7,7 @@ import { createServer } from 'node:http';
 import { describe, expect, it, vi } from 'vitest';
 import { startServer } from '../src/main.js';
 import { createSqliteMcpAuthorityStore } from '../src/mcp-authority-store.js';
+import { McpAuthorityError } from '../src/mcp-errors.js';
 import { computeDirectoryDigest } from '@weave/plugin-host';
 import { getServerSessionStore } from '../src/runtime.js';
 import { createSqlitePluginAuthorityDatabase } from '../src/plugin-authority-store.js';
@@ -44,6 +45,55 @@ function importFixture(
 }
 
 describe('MCP Server composition', () => {
+  describe.each(['enabled', 'disabled'] as const)('authority errors with ESM %s', (esm) => {
+    const privateDetail = 'private-mcp-authority-detail';
+    it.each([
+      {
+        name: 'a rejected storage read',
+        failure: new McpAuthorityError('mcp-authority-storage', privateDetail),
+        code: 'mcp-authority-storage',
+        message: 'MCP authority persistence is unavailable.',
+      },
+      {
+        name: 'a fulfilled malformed log',
+        failure: { sequence: 1, events: [], records: [], diagnostic: privateDetail },
+        code: 'mcp-authority-protocol',
+        message: 'MCP authority contains invalid persisted data.',
+      },
+    ])('maps $name to its public MCP error', async ({ failure, code, message }) => {
+      const directory = await mkdtemp(join(tmpdir(), 'weave-mcp-authority-error-'));
+      const store = createSqliteMcpAuthorityStore({ filename: join(directory, 'weave.sqlite') });
+      const read = vi.spyOn(store, 'read');
+      let server: Awaited<ReturnType<typeof startServer>> | undefined;
+      try {
+        server = await startServer(0, {
+          dataDirectory: directory,
+          environment: {},
+          mcpAuthorityStore: store,
+          ...(esm === 'disabled' ? { pluginsDirectory: false } : {}),
+        });
+        expect(server.pluginHost !== undefined).toBe(esm === 'enabled');
+        if (failure instanceof McpAuthorityError) read.mockRejectedValueOnce(failure);
+        else read.mockResolvedValueOnce(failure);
+
+        const response = await fetch(`http://127.0.0.1:${server.port}/mcp/reload`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ expectedSequence: 0 }),
+        });
+
+        expect(response.status).toBe(500);
+        const body = await response.text();
+        expect(body).not.toContain(privateDetail);
+        expect(JSON.parse(body)).toEqual({ error: { code, message } });
+      } finally {
+        await server?.stop();
+        await store.close();
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+  });
+
   it.each(['enabled', 'disabled'] as const)(
     'reserves an imported-only managed ID without creating an artifact root with ESM %s',
     async (esm) => {
