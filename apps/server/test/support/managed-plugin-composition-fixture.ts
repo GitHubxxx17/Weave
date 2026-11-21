@@ -293,7 +293,11 @@ export async function createRealManagedCompositionFixture(
           ? {}
           : {
               mcp: {
-                store: { ...mcpStore, read: readMcp },
+                store: {
+                  ...mcpStore,
+                  read: readMcp,
+                  mutate: (command, options) => mcpStore.mutate(command, options),
+                },
                 ...(options.mcpConnect === undefined ? {} : { connect: options.mcpConnect }),
               },
             }),

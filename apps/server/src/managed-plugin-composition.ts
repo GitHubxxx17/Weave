@@ -136,7 +136,8 @@ export function createManagedPluginComposition(
   function applyProjectionSync(
     prefix: readonly RecordedPluginTrustEvent[] | undefined,
     allowEvidence: boolean,
-    failure?: ExplicitLocalAuthorityError,
+    failure: ExplicitLocalAuthorityError | undefined,
+    onWithdrawal: (cancelPreparation: () => void) => void,
   ): void {
     const { local, mcp } = getSources();
     const stickyIds = authority.installations.map(({ pluginId }) => pluginId);
@@ -199,11 +200,12 @@ export function createManagedPluginComposition(
     }
     targets = nextTargets;
     try {
+      if (local === undefined) return;
       if (prefix === undefined) {
-        local?.withdrawExplicitSelectionSync(sticky, undefined, failure);
+        onWithdrawal(local.withdrawExplicitSelectionSync(sticky, undefined, failure));
       } else {
         try {
-          local?.adoptExplicitSelectionSync({
+          local.adoptExplicitSelectionSync({
             stickyIds,
             deniedIds: [...denied],
             selections,
@@ -213,7 +215,9 @@ export function createManagedPluginComposition(
           targets.clear();
           const error = failure ?? new ExplicitLocalAuthorityError(cause);
           try {
-            local?.withdrawExplicitSelectionSync(sticky, prefix.at(-1)?.sequence, error);
+            onWithdrawal(
+              local.withdrawExplicitSelectionSync(sticky, prefix.at(-1)?.sequence, error),
+            );
           } catch {
             // Preserve the original adoption failure.
           }
@@ -231,28 +235,40 @@ export function createManagedPluginComposition(
     priorFailure?: ExplicitLocalAuthorityError,
   ): void {
     let failure = priorFailure;
-    buffer.runSync(() => {
-      applyMcp?.();
-      let prefix: readonly RecordedPluginTrustEvent[] | undefined;
-      try {
-        authority = snapshot();
-        prefix =
-          options.readLocalTrustEventsSync === undefined
-            ? authority.trustEvents
-            : options.readLocalTrustEventsSync();
-      } catch (cause: unknown) {
-        failure ??= new ExplicitLocalAuthorityError(cause);
-        if (options.readLocalTrustEventsSync === undefined) prefix = authority.trustEvents;
-      }
-      try {
-        applyProjectionSync(prefix, failure === undefined && prefix !== undefined, failure);
-      } catch (cause: unknown) {
-        failure ??=
-          cause instanceof ExplicitLocalAuthorityError
-            ? cause
-            : new ExplicitLocalAuthorityError(cause);
-      }
-    });
+    let cancelPreparation: (() => void) | undefined;
+    try {
+      buffer.runSync(() => {
+        applyMcp?.();
+        let prefix: readonly RecordedPluginTrustEvent[] | undefined;
+        try {
+          authority = snapshot();
+          prefix =
+            options.readLocalTrustEventsSync === undefined
+              ? authority.trustEvents
+              : options.readLocalTrustEventsSync();
+        } catch (cause: unknown) {
+          failure ??= new ExplicitLocalAuthorityError(cause);
+          if (options.readLocalTrustEventsSync === undefined) prefix = authority.trustEvents;
+        }
+        try {
+          applyProjectionSync(
+            prefix,
+            failure === undefined && prefix !== undefined,
+            failure,
+            (cancel) => {
+              cancelPreparation = cancel;
+            },
+          );
+        } catch (cause: unknown) {
+          failure ??=
+            cause instanceof ExplicitLocalAuthorityError
+              ? cause
+              : new ExplicitLocalAuthorityError(cause);
+        }
+      });
+    } finally {
+      cancelPreparation?.();
+    }
     if (failure !== undefined) throw failure;
   }
 
@@ -282,18 +298,10 @@ export function createManagedPluginComposition(
     }
   }
 
-  async function refreshMcpAuthority<T>(refresh: () => Promise<T>): Promise<T> {
-    try {
-      return await refresh();
-    } catch (cause: unknown) {
-      invalidateAuthoritySync(cause);
-    }
-  }
-
   async function refreshNamespace(signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
     const { mcp } = getSources();
-    if (mcp !== undefined) await refreshMcpAuthority(mcp.refresh);
+    if (mcp !== undefined) await mcp.refresh();
   }
 
   function sameReady(target: SelectedTarget, expected: ManagedLocalCandidate): boolean {
@@ -387,7 +395,6 @@ export function createManagedPluginComposition(
       adoptLatestAuthoritySync();
       for (const id of [...targets.keys()]) await readSelected(id, signal);
     },
-    refreshMcpAuthority,
     installAuthoritySync: (applyValidatedLog: () => void) =>
       reconcileSync(options.readAuthoritySync, applyValidatedLog),
     assertCreateAllowedSync(pluginId: string): void {

@@ -1,6 +1,7 @@
 import { rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import * as pluginHost from '@weave/plugin-host';
 import {
   createMemoryTrustStore,
   ExplicitLocalAuthorityError,
@@ -8,6 +9,8 @@ import {
   type RecordedPluginTrustEvent,
 } from '@weave/plugin-host';
 import { createLocalExtensionSource } from '../src/local-extension-source.js';
+import { McpAuthorityError } from '../src/mcp-authority-store.js';
+import type { ExtensionAuthorityChange } from '../src/extension-types.js';
 import { createRealManagedCompositionFixture } from './support/managed-plugin-composition-fixture.js';
 import { decisionInput } from './support/plugin-authority-fixtures.js';
 
@@ -373,6 +376,208 @@ describe('selected managed authority', () => {
       expect(importModule).not.toHaveBeenCalled();
     } finally {
       await local.close();
+      await f.close();
+    }
+  });
+
+  it('cancels an in-flight manual preparation after publishing the paired fallback', async () => {
+    const f = await createRealManagedCompositionFixture();
+    const entered = deferred();
+    const releaseImport = deferred();
+    const toolEntered = deferred();
+    const releaseTool = deferred();
+    let pending: Promise<unknown> | undefined;
+    let active: Promise<unknown> | undefined;
+    let gateImport = false;
+    let onPreparationAbort: (signal: AbortSignal) => void = () => {};
+    const imports = vi.fn(async (specifier: string) => {
+      if (gateImport && specifier.includes('/aaa-gate/')) {
+        entered.resolve();
+        await releaseImport.promise;
+      }
+      return import(specifier) as Promise<unknown>;
+    });
+    const createSource = pluginHost.createLocalPluginSource;
+    const sourceSpy = vi
+      .spyOn(pluginHost, 'createLocalPluginSource')
+      .mockImplementationOnce((options) => {
+        const source = createSource({ ...options, importModule: imports });
+        return {
+          ...source,
+          prepare(stamp, preparationOptions) {
+            const { signal } = preparationOptions;
+            if (gateImport) {
+              signal.addEventListener('abort', () => onPreparationAbort(signal), { once: true });
+            }
+            return source.prepare(stamp, preparationOptions);
+          },
+        };
+      });
+    try {
+      await f.seedManual('aaa-gate', 'first');
+      await f.seedManual('zzz-sticky', 'second');
+      await f.seedMcp('remote');
+      let rawPrefix = f.authority.snapshotSync().trustEvents;
+      const close = vi.fn(async () => {});
+      const host = f.compose({
+        execution: false,
+        readLocalTrustEventsSync: () => rawPrefix,
+        mcpConnect: async () => ({
+          tools: [{ name: 'echo', description: 'Echo', inputSchema: { type: 'object' } }],
+          stderrBytes: 0,
+          validateInput: () => ({ valid: true }),
+          async callTool() {
+            toolEntered.resolve();
+            await releaseTool.promise;
+            return { content: [{ type: 'text', text: 'pinned result' }] };
+          },
+          close,
+        }),
+      });
+      const initial = await host.coordinator.reload();
+      const mcpTool = initial.members.find(({ sourceId }) => sourceId === 'mcp')!.manifest
+        .contributes!.tools![0]!;
+      active = f.runTool(mcpTool);
+      await Promise.race([
+        toolEntered.promise,
+        active.then(() => {
+          throw new Error('No pinned tool');
+        }),
+      ]);
+      imports.mockClear();
+      const publish = host.coordinator.observeAuthorityBatchSync;
+      let observedPair: ReadonlyMap<string, ExtensionAuthorityChange> | undefined;
+      vi.spyOn(host.coordinator, 'observeAuthorityBatchSync').mockImplementation((changes) => {
+        publish(changes);
+        observedPair = changes;
+      });
+      const observedAborts: unknown[] = [];
+      onPreparationAbort = (signal) => {
+        observedAborts.push({
+          reason: signal.reason,
+          local: host.localSource!.snapshot(),
+          mcp: observedPair?.get('mcp')?.snapshot,
+          acceptingRuns: host.coordinator.generationSnapshot().acceptingRuns,
+        });
+      };
+      gateImport = true;
+      pending = host.coordinator.reload({ force: true });
+      await Promise.race([
+        entered.promise,
+        pending.then(() => {
+          throw new Error('No gated preparation');
+        }),
+      ]);
+      await f.seedManaged('zzz-sticky', 'import-only', false);
+      await f.seedManaged('mcp-remote', 'import-only', false);
+      rawPrefix = [];
+      let authorityError: unknown;
+      try {
+        host.managed!.adoptAuthoritySync(f.authority.snapshotSync());
+      } catch (cause: unknown) {
+        authorityError = cause;
+      }
+      expect(authorityError).toBeInstanceOf(ExplicitLocalAuthorityError);
+      releaseImport.resolve();
+      const failure = await pending.catch((cause: unknown) => cause);
+      expect(imports.mock.calls.some(([specifier]) => specifier.includes('/zzz-sticky/'))).toBe(
+        false,
+      );
+      expect(failure).toBe(authorityError);
+      expect(observedAborts).toEqual([
+        {
+          reason: authorityError,
+          local: host.localSource!.snapshot(),
+          mcp: expect.objectContaining({ eligible: [] }),
+          acceptingRuns: false,
+        },
+      ]);
+      expect(close).not.toHaveBeenCalled();
+      releaseTool.resolve();
+      expect(JSON.stringify(await active)).toContain('pinned result');
+      expect(host.coordinator.generationSnapshot().id).toBe(initial.generation.id);
+    } finally {
+      releaseImport.resolve();
+      releaseTool.resolve();
+      await Promise.allSettled([pending, active]);
+      sourceSpy.mockRestore();
+      await f.close();
+    }
+  });
+
+  it.each([
+    'malformed read',
+    'rewritten read',
+    'malformed mutation',
+    'protocol rejection',
+    'storage rejection',
+  ] as const)('withdraws a published managed member on MCP facade %s', async (damage) => {
+    const f = await createRealManagedCompositionFixture();
+    try {
+      await f.seedManaged('notes', 'ready');
+      await f.seedMcp('existing', false);
+      const host = f.compose();
+      const published = await host.coordinator.reload();
+      expect(published.members).toMatchObject([{ pluginId: 'notes', origin: 'managed' }]);
+      const original = await f.mcpStore.read();
+      const config = await f.createMcpConfig('new');
+      const rejected = new McpAuthorityError(
+        damage === 'storage rejection' ? 'mcp-authority-storage' : 'mcp-authority-protocol',
+      );
+      const mutate = vi.spyOn(f.mcpStore, 'mutate');
+      if (damage === 'malformed read') {
+        f.readMcp.mockResolvedValueOnce({ ...original, sequence: original.sequence + 1 });
+      } else if (damage === 'rewritten read') {
+        f.readMcp.mockResolvedValueOnce({
+          ...original,
+          events: original.events.map((event) => ({
+            ...event,
+            occurredAt: '2000-01-01T00:00:00.000Z',
+          })),
+        });
+      } else if (damage === 'malformed mutation') {
+        mutate.mockResolvedValueOnce({ ...original, appended: original.events[0]!, records: [] });
+      } else {
+        mutate.mockRejectedValueOnce(rejected);
+      }
+      const failure = await host
+        .mcpManager!.configure(original.sequence, config)
+        .catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(ExplicitLocalAuthorityError);
+      expect(failure).toMatchObject({ cause: { code: rejected.code } });
+      if (damage === 'protocol rejection' || damage === 'storage rejection') {
+        expect((failure as ExplicitLocalAuthorityError).cause).toBe(rejected);
+      }
+      expect(host.coordinator.generationSnapshot()).toMatchObject({
+        id: published.generation.id,
+        acceptingRuns: false,
+      });
+      expect(host.localSource!.snapshot().eligible).toEqual([]);
+      expect(host.mcpManager!.snapshot().authoritySequence).toBe(original.sequence);
+      await host.coordinator.reload();
+      expect(host.coordinator.generationSnapshot().acceptingRuns).toBe(true);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it('preserves MCP facade mutation conflicts with their original error and admission', async () => {
+    const f = await createRealManagedCompositionFixture();
+    try {
+      await f.seedManaged('notes', 'ready');
+      const host = f.compose();
+      const published = await host.coordinator.reload();
+      const conflict = new McpAuthorityError('mcp-conflict');
+      vi.spyOn(f.mcpStore, 'mutate').mockRejectedValueOnce(conflict);
+      await expect(host.mcpManager!.configure(0, await f.createMcpConfig('new'))).rejects.toBe(
+        conflict,
+      );
+      expect(host.coordinator.generationSnapshot()).toMatchObject({
+        id: published.generation.id,
+        acceptingRuns: true,
+      });
+      expect(host.localSource!.snapshot().eligible).toMatchObject([{ pluginId: 'notes' }]);
+    } finally {
       await f.close();
     }
   });

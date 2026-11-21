@@ -49,6 +49,7 @@ export function createLocalExtensionSource(
   let rawStamp: LocalSourceStamp | undefined;
   let withdrawn: WithdrawnSelection | undefined;
   let adopting = false;
+  const pendingRawPreparations = new Set<AbortController>();
   const reservedIds = new Set(options.discovery.reservedIds);
   // The ESM lifecycle captures cleanup errors so plugin code cannot interrupt
   // rollback. Collect them after draining both rejected and published attempts.
@@ -109,13 +110,15 @@ export function createLocalExtensionSource(
     stickyIds: ReadonlySet<string>,
     trustSequence?: number,
     failure?: ExplicitLocalAuthorityError,
-  ): void {
+  ): () => void {
     const before = effective;
     const policyChanged =
       withdrawn === undefined ||
       !isDeepStrictEqual(withdrawn.stickyIds, stickyIds) ||
       (withdrawn.failure === undefined) !== (failure === undefined);
     withdrawn = { stickyIds, trustSequence, failure };
+    const pending = [...pendingRawPreparations];
+    const reason = failure ?? new ExplicitLocalAuthorityError();
     const current = updateEffective(source.snapshot(), policyChanged);
     observe(sourceId, {
       snapshot: current,
@@ -127,6 +130,10 @@ export function createLocalExtensionSource(
           .map(({ pluginId }) => pluginId) ?? [],
       immediate: false,
     });
+    // The composition invokes this after both snapshots and admission are published.
+    return () => {
+      for (const preparation of pending) preparation.abort(reason);
+    };
   }
 
   function mayReadManagedSync(id: string): boolean {
@@ -207,8 +214,33 @@ export function createLocalExtensionSource(
           );
         }
         const candidates = options.explicitChecks === undefined ? [] : effectiveCandidates(raw);
-        const prepared = await source.prepare(raw.stamp, preparationOptions);
+        const invalidation = new AbortController();
+        const signal = AbortSignal.any([preparationOptions.signal, invalidation.signal]);
+        pendingRawPreparations.add(invalidation);
+        let prepared: Awaited<ReturnType<typeof source.prepare>>;
+        try {
+          prepared = await source.prepare(raw.stamp, { ...preparationOptions, signal });
+        } catch (cause: unknown) {
+          invalidation.signal.throwIfAborted();
+          throw cause;
+        } finally {
+          pendingRawPreparations.delete(invalidation);
+        }
         let disposal: Promise<void> | undefined;
+        function dispose() {
+          disposal ??= prepared.dispose().then(() => {
+            for (const item of prepared.items) cleanupErrors.push(...item.cleanupErrors);
+          });
+          return disposal;
+        }
+        if (invalidation.signal.aborted) {
+          try {
+            await dispose();
+          } catch (cause: unknown) {
+            cleanupErrors.push(cause);
+          }
+          invalidation.signal.throwIfAborted();
+        }
         return {
           stamp,
           items: prepared.items.map((item) => ({
@@ -238,12 +270,7 @@ export function createLocalExtensionSource(
               recheckManaged(prepared, candidates, signal, options.explicitChecks)
             );
           },
-          dispose() {
-            disposal ??= prepared.dispose().then(() => {
-              for (const item of prepared.items) cleanupErrors.push(...item.cleanupErrors);
-            });
-            return disposal;
-          },
+          dispose,
         };
       },
       close,

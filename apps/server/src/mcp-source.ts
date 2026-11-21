@@ -7,6 +7,7 @@ import {
   validateMcpAuthorityLog,
   type McpAuthorityCommand,
   type McpAuthorityLog,
+  type McpAuthorityMutation,
   type McpAuthorityRecord,
   type McpAuthorityStore,
 } from './mcp-authority-store.js';
@@ -68,6 +69,8 @@ export interface McpExtensionSourceOptions {
   /** Applies the validated log exactly once inside the paired authority update. */
   readonly installAuthoritySync?: (applyValidatedLog: () => void) => void;
   readonly assertCreateAllowedSync?: (pluginId: string) => void;
+  /** Routes validated-log and persisted protocol failures into combined authority fallback. */
+  readonly onAuthorityFailureSync?: (cause: unknown) => never;
 }
 
 function pluginId(id: string): string {
@@ -222,8 +225,17 @@ export function createMcpExtensionSource(options: McpExtensionSourceOptions): {
       });
     }
   }
+  function failAuthoritySync(cause: unknown): never {
+    if (options.onAuthorityFailureSync !== undefined) options.onAuthorityFailureSync(cause);
+    throw cause;
+  }
   function install(input: unknown, immediate = false, affectedId?: string): boolean {
-    const next = validateMcpAuthorityLog(input, log.events);
+    let next: McpAuthorityLog;
+    try {
+      next = validateMcpAuthorityLog(input, log.events);
+    } catch (cause: unknown) {
+      failAuthoritySync(cause);
+    }
     let changed = false;
     function applyValidatedLog(): void {
       if (isDeepStrictEqual(log, next)) return;
@@ -239,7 +251,12 @@ export function createMcpExtensionSource(options: McpExtensionSourceOptions): {
   }
   async function refresh(): Promise<void> {
     ensureOpen();
-    const next = await options.store.read({ knownPrefix: log.events });
+    let next: McpAuthorityLog;
+    try {
+      next = await options.store.read({ knownPrefix: log.events });
+    } catch (cause: unknown) {
+      failAuthoritySync(cause);
+    }
     ensureOpen();
     install(next);
   }
@@ -564,10 +581,21 @@ export function createMcpExtensionSource(options: McpExtensionSourceOptions): {
                 options.assertCreateAllowedSync?.(pluginId(requested.config.id));
               }
               assertOpenSync();
-              const next = await options.store.mutate(requested, {
-                expectedSequence: expected,
-                knownPrefix: log.events,
-              });
+              let next: McpAuthorityMutation;
+              try {
+                next = await options.store.mutate(requested, {
+                  expectedSequence: expected,
+                  knownPrefix: log.events,
+                });
+              } catch (cause: unknown) {
+                if (
+                  cause instanceof McpAuthorityError &&
+                  (cause.code === 'mcp-authority-protocol' ||
+                    cause.code === 'mcp-authority-storage')
+                )
+                  failAuthoritySync(cause);
+                throw cause;
+              }
               ensureOpen();
               installed = install(next, immediate, targetId);
             }

@@ -139,11 +139,7 @@ export function createServerExtensionCoordinator(
             : {
                 installAuthoritySync: managed.installAuthoritySync,
                 assertCreateAllowedSync: managed.assertCreateAllowedSync,
-                store: {
-                  ...options.mcp.store,
-                  read: (readOptions) =>
-                    managed.refreshMcpAuthority(() => options.mcp!.store.read(readOptions)),
-                },
+                onAuthorityFailureSync: managed.invalidateAuthoritySync,
               }),
           async reservedPluginIds() {
             const discovered = (await local?.discoveredPluginIds()) ?? [];
@@ -168,26 +164,11 @@ export function createServerExtensionCoordinator(
   function registerSource(register: ExtensionSourceFactory): ExtensionSourceFactory {
     return managed === undefined ? register : buffer.wrapSource(register);
   }
-  const registerMcp: ExtensionSourceFactory = (observe) => {
-    const source = mcp!.register(observe);
-    if (managed === undefined) return source;
-    return {
-      ...source,
-      refresh: () => managed.refreshMcpAuthority(source.refresh),
-      async prepare(stamp, preparationOptions) {
-        const prepared = await source.prepare(stamp, preparationOptions);
-        return {
-          ...prepared,
-          recheck: (signal) => managed.refreshMcpAuthority(() => prepared.recheck(signal)),
-        };
-      },
-    };
-  };
   const coordinator = createExtensionCoordinator({
     host: runtime.serverHost,
     sources: [
       ...(local === undefined ? [] : [registerSource(local.register)]),
-      ...(mcp === undefined ? [] : [registerSource(registerMcp)]),
+      ...(mcp === undefined ? [] : [registerSource(mcp.register)]),
     ],
     assemble,
     mcpFirstAuthority: managed !== undefined,
