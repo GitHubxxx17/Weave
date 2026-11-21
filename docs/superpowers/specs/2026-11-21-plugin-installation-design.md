@@ -22,10 +22,10 @@ while old-turn files remain available until a future lease-aware cleanup policy.
 
 ## 2. Design choice and package boundaries
 
-| Approach | Result |
-| --- | --- |
-| Replace `<plugins>/<id>` in place | Rejected: old turns can read new content, and copy/rename recovery is ambiguous. |
-| Revision directories with symlink selection | Rejected: current discovery refuses links; mutable aliases do not pin files. |
+| Approach                                          | Result                                                                                |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Replace `<plugins>/<id>` in place                 | Rejected: old turns can read new content, and copy/rename recovery is ambiguous.      |
+| Revision directories with symlink selection       | Rejected: current discovery refuses links; mutable aliases do not pin files.          |
 | Hidden immutable artifacts and explicit selection | Adopted: old paths remain stable; only complete, recorded candidates can be selected. |
 
 `plugin-host` owns descriptor validation, bounded copying, whole-directory digests
@@ -69,7 +69,7 @@ The public API is asynchronous and exported by `@weave/plugin-host`:
 ```ts
 interface PluginArtifact {
   readonly digest: string;
-  readonly directory: string;       // Concrete payload path.
+  readonly directory: string; // Concrete payload path.
   readonly descriptor: PluginDescriptor;
   readonly files: number;
   readonly bytes: number;
@@ -86,7 +86,7 @@ interface PluginArtifactStore {
 }
 
 function createPluginArtifactStore(options: {
-  readonly directory: string;       // `.weave-store`, an absolute path.
+  readonly directory: string; // `.weave-store`, an absolute path.
   readonly hostVersion?: string;
   readonly reservedIds?: readonly string[];
 }): PluginArtifactStore;
@@ -115,11 +115,18 @@ The Stage 6.2 Server ownership guard must be implemented before any HTTP exposur
 - At most one in-progress staging payload per instance. Abandoned staging is
   cleaned by the owning instance before its next stage operation. Published files
   are retained across failure, uninstall and restart in the first delivery.
+- Recovery inspects at most 64 abandoned operation directories with the same
+  depth/entry limits per operation. Unexpected names, linked/special operation
+  roots or an over-limit tree cause a visible failure and are retained rather than
+  triggering an unbounded recursive cleanup. Descendant links can be unlinked
+  during cleanup but are never followed.
 
 Depth and entry bounds apply to every source/staging/artifact traversal, including
-all pre-copy, post-copy and existing-artifact digest checks. Validate with the
-bounded walker before invoking the existing digest algorithm; its bytes and
-ordering remain unchanged. A tree mutation cannot exempt a later pass from bounds.
+all pre-copy, post-copy and existing-artifact digest checks. The bounded walker
+uses the existing digest framing, UTF-8 path ordering and per-file hashing
+algorithm; these pure helpers may be shared without invoking the legacy unbounded
+filesystem walk. Digest bytes remain unchanged. A tree mutation cannot exempt a
+later pass from bounds.
 
 The payload logical-byte bound is 1.25 GiB for 64 full artifacts, plus one bounded
 staging payload. This is not a total filesystem allocation limit. There is no
@@ -199,10 +206,14 @@ notification occurs after durable commit before another await. Publication uses
 the existing complete ESM/MCP candidate recheck and synchronous commit.
 
 Installing a candidate leaves healthy selection and admission unchanged. Activation
-changes desired authority; if assembly fails, report saved selection versus actual
-Generation separately and retain fail-closed admission. Do not silently re-trust
-or select the prior version. Old pinned turns continue by default; explicit
-immediate removal cancels all current and retired turns using existing semantics.
+changes desired authority. A plugin load/setup failure stays isolated: a complete
+Generation may be published without that plugin, but its activation result is
+unsuccessful and identifies the missing selected version. If whole-candidate
+assembly fails, report saved selection versus actual Generation separately and
+retain fail-closed admission. In either case old unauthorized members cannot
+accept new turns. Do not silently re-trust or select the prior version. Old pinned
+turns continue by default; explicit immediate removal cancels all current and
+retired turns using existing semantics.
 
 Guarded JSON POSTs for preview/import, activation and uninstall carry immutable
 review identities and expected sequences. Reads do not copy, discover or launch.

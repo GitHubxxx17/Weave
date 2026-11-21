@@ -157,7 +157,7 @@ async function readDescriptorText(directory: string): Promise<string | undefined
 }
 
 /** Why the plugin cannot run on this host, if it cannot. */
-function incompatibility(
+export function incompatibility(
   manifest: PluginManifest,
   hostVersion: string | undefined,
 ): LocalPluginIssue | undefined {
@@ -189,7 +189,7 @@ function incompatibility(
  * The real path of the entry module, which must be a regular file inside the
  * plugin's real directory.
  */
-async function resolveEntry(
+export async function resolveEntry(
   directory: string,
   descriptor: PluginDescriptor,
   pluginId: string,

@@ -1,6 +1,17 @@
 export { PluginHostError } from './errors.js';
 export type { PluginHostErrorCode, PluginHostErrorOptions } from './errors.js';
 
+export { createPluginArtifactStore } from './artifact-store.js';
+export { PluginArtifactError } from './artifact-types.js';
+export type {
+  PluginArtifact,
+  PluginArtifactErrorCode,
+  PluginArtifactStore,
+  PluginArtifactStoreOptions,
+  ReadPluginArtifactOptions,
+  StagePluginArtifactOptions,
+} from './artifact-types.js';
+
 export { descriptorFileName, maxDescriptorBytes, parseDescriptor } from './descriptor.js';
 export type { PluginDescriptor } from './descriptor.js';
 
