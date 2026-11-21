@@ -380,6 +380,63 @@ describe('createGenerationRunner', () => {
 });
 
 describe('generation start admission', () => {
+  it('drains a long queue of guard failures in order and starts the healthy tail', async () => {
+    const finishFirst = gate();
+    const denial = new Error('admission denied');
+    const deniedCount = 4_000;
+    const started: string[] = [];
+    const rejected: number[] = [];
+    let guardCalls = 0;
+    const controller = createGenerationRunner({
+      ...generation(1, (request) => {
+        started.push(request.value);
+        return source(
+          [request.value],
+          request.value === 'first' ? { wait: finishFirst.promise } : undefined,
+        );
+      }),
+      assertCanStartSync(): undefined {
+        guardCalls += 1;
+        if (guardCalls > 1 && guardCalls <= deniedCount + 1) throw denial;
+        return undefined;
+      },
+    });
+    const firstRun = controller.runner.run({ sessionId: 's', value: 'first' });
+    const first = firstRun[Symbol.asyncIterator]();
+    const firstNext = first.next();
+    const expected = Array.from({ length: deniedCount }, (_, index) => index);
+    const outcomes = expected.map((index) => {
+      const deniedRun = controller.runner.run({ sessionId: 's', value: String(index) });
+      return deniedRun[Symbol.asyncIterator]()
+        .next()
+        .then(
+          () => false,
+          (cause: unknown) => {
+            rejected.push(index);
+            return cause === denial;
+          },
+        );
+    });
+    const tail = collect(controller.runner.run({ sessionId: 's', value: 'tail' }));
+
+    try {
+      expect(started).toEqual(['first']);
+      expect(guardCalls).toBe(1);
+      // Await producer cleanup directly so a queue release failure surfaces in this test.
+      const released = first.return!();
+      finishFirst.resolve();
+      await expect(released).resolves.toEqual({ done: true, value: undefined });
+      await expect(firstNext).resolves.toEqual({ done: true, value: undefined });
+      expect(started).toEqual(['first', 'tail']);
+      expect(rejected).toEqual(expected);
+      expect((await Promise.all(outcomes)).every(Boolean)).toBe(true);
+      expect(await tail).toEqual(['tail']);
+    } finally {
+      finishFirst.resolve();
+      await controller.dispose();
+    }
+  });
+
   it('checks a queued turn at the Session head and releases it when the guard throws', async () => {
     const finishFirst = gate();
     const started: string[] = [];

@@ -53,6 +53,7 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
 ): GenerationController<R, E, T> {
   const generations = new Set<GenerationState<R, E, T>>();
   const sessions = new Map<string, Run[]>();
+  const advancingSessions = new Set<string>();
   const disposalErrors: unknown[] = [];
   let current = stateFor(initial);
   let blocked: Error | undefined;
@@ -80,6 +81,22 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
         });
     }
     return state.disposal;
+  }
+
+  function startSessionHead(sessionId: string): void {
+    // Synchronous rejection or cancellation can release a head while it is starting.
+    if (advancingSessions.has(sessionId)) return;
+    advancingSessions.add(sessionId);
+    try {
+      while (true) {
+        const head = sessions.get(sessionId)?.[0];
+        if (!head) return;
+        head.start();
+        if (sessions.get(sessionId)?.[0] === head) return;
+      }
+    } finally {
+      advancingSessions.delete(sessionId);
+    }
   }
 
   class Run implements AsyncIterableIterator<E> {
@@ -139,10 +156,11 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
         signal.addEventListener('abort', onAbort, { once: true });
         this.cleanupSignal = () => signal.removeEventListener('abort', onAbort);
       }
-      const queue = sessions.get(this.request.sessionId) ?? [];
+      const sessionId = this.request.sessionId;
+      const queue = sessions.get(sessionId) ?? [];
       queue.push(this);
-      sessions.set(this.request.sessionId, queue);
-      if (queue[0] === this) this.start();
+      sessions.set(sessionId, queue);
+      if (queue[0] === this) startSessionHead(sessionId);
     }
 
     start(): void {
@@ -305,13 +323,14 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
     }
 
     private release(): void {
-      const queue = sessions.get(this.request.sessionId);
+      const sessionId = this.request.sessionId;
+      const queue = sessions.get(sessionId);
       if (!queue) return;
       const index = queue.indexOf(this);
       if (index < 0) return;
       queue.splice(index, 1);
-      if (queue.length === 0) sessions.delete(this.request.sessionId);
-      else if (index === 0) queue[0]?.start();
+      if (queue.length === 0) sessions.delete(sessionId);
+      else if (index === 0) startSessionHead(sessionId);
     }
 
     private flush(): void {
