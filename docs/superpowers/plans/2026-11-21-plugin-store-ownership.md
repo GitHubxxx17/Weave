@@ -36,7 +36,8 @@
 | Create | `apps/server/src/plugin-store-lease.ts`                 | Owner DB schema/binding and exclusive lock acquisition/release; no artifact/runtime behavior.         |
 | Create | `apps/server/src/owned-plugin-artifact-store.ts`        | Exact acquisition orchestration, guarded single artifact instance, tracking/quiesce/close.            |
 | Create | `apps/server/test/plugin-store-registration.test.ts`    | Existing owner registration/lifecycle/main-head invariants.                                           |
-| Create | `apps/server/test/plugin-store-ownership.test.ts`       | Filesystem policy, half-binding/config errors, wrapper lifetime/faults.                               |
+| Create | `apps/server/test/plugin-store-ownership.test.ts`       | Filesystem policy, binding, lease integrity and cleanup faults.                                       |
+| Create | `apps/server/test/owned-plugin-artifact-store.test.ts`  | Wrapper initialization, queued signals, drain and cleanup using the real artifact factory.            |
 | Create | `apps/server/test/plugin-store-lease-process.test.ts`   | Real child exclusion, SIGKILL/recovery and races.                                                     |
 | Create | `apps/server/test/support/plugin-store-owner-child.mjs` | IPC fixture for actual built Server ownership helper.                                                 |
 | Update | `docs/architecture/foundation.md`                       | Verified ownership utility status, no managed runtime/API claim.                                      |
