@@ -182,9 +182,11 @@ function renderDetails(approval: ApprovalRequest): ReactElement | null {
 function ApprovalCard({
   approval,
   onDecide,
+  onInspectToolCall,
 }: {
   readonly approval: ApprovalRequest;
   readonly onDecide: (approvalId: string, decision: 'approve' | 'reject') => Promise<void>;
+  readonly onInspectToolCall?: (toolCallId: string) => void;
 }): ReactElement {
   const [state, setState] = useState<'idle' | 'submitting'>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -245,6 +247,15 @@ function ApprovalCard({
                 {expanded ? <ChevronUp aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
               </button>
             )}
+            {onInspectToolCall === undefined ? null : (
+              <button
+                className="approval-toggle"
+                type="button"
+                onClick={() => onInspectToolCall(approval.toolCallId)}
+              >
+                查看参数
+              </button>
+            )}
           </p>
           {error === null ? null : (
             <p className="approval-card-error" role="alert">
@@ -284,9 +295,11 @@ function ApprovalCard({
 export function ApprovalPanel({
   pending,
   onDecide,
+  onInspectToolCall,
 }: {
   readonly pending: readonly ApprovalRequest[];
   readonly onDecide: (approvalId: string, decision: 'approve' | 'reject') => Promise<void>;
+  readonly onInspectToolCall?: (toolCallId: string) => void;
 }): ReactElement | null {
   if (pending.length === 0) {
     return null;
@@ -294,7 +307,12 @@ export function ApprovalPanel({
   return (
     <section className="approval-panel" aria-label="待审批操作">
       {pending.map((approval) => (
-        <ApprovalCard key={approval.approvalId} approval={approval} onDecide={onDecide} />
+        <ApprovalCard
+          key={approval.approvalId}
+          approval={approval}
+          onDecide={onDecide}
+          {...(onInspectToolCall === undefined ? {} : { onInspectToolCall })}
+        />
       ))}
     </section>
   );

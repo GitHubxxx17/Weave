@@ -896,6 +896,30 @@ function StudioApp(): ReactElement {
       element.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
   }
+
+  function inspectToolCall(toolCallId: string): void {
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const message = messages[index]!;
+      if (!message.tools.some((tool) => tool.toolCallId === toolCallId)) continue;
+      const article = document.getElementById(`message-${message.id}`);
+      if (article === null || !conversationScroll.ref.current?.contains(article)) return;
+      const step = Array.from(
+        article.querySelectorAll<HTMLDetailsElement>('[data-tool-call-id]'),
+      ).find((element) => element.dataset.toolCallId === toolCallId);
+      const parameters = step?.querySelector<HTMLElement>('[data-tool-parameters]');
+      if (step === undefined || parameters === null || parameters === undefined) return;
+
+      const process = step.closest<HTMLDetailsElement>('details.message-process');
+      if (process !== null) process.open = true;
+      setExpandedMessageIds((current) =>
+        current.includes(message.id) ? current : [...current, message.id],
+      );
+      step.open = true;
+      parameters.focus({ preventScroll: true });
+      parameters.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+  }
   const normalizedSearchQuery = searchQuery.trim().toLocaleLowerCase();
   const visibleProjects = projects
     .map((project) => ({
@@ -2925,6 +2949,7 @@ function StudioApp(): ReactElement {
                   approval.sessionId === undefined || approval.sessionId === activeSessionId,
               )}
               onDecide={approvals.decide}
+              onInspectToolCall={inspectToolCall}
             />
             <div className="composer-box">
               {commandPicker.open ? (

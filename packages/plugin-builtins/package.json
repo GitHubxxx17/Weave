@@ -18,9 +18,13 @@
   "dependencies": {
     "@weave/llm": "workspace:*",
     "@weave/plugin": "workspace:*",
-    "@weave/runtime": "workspace:*"
+    "@weave/runtime": "workspace:*",
+    "@weave/mcp-client": "workspace:*",
+    "zod": "4.6.7"
   },
   "devDependencies": {
-    "@types/node": "24.10.1"
+    "@types/node": "24.10.1",
+    "@weave/session": "workspace:*",
+    "@weave/protocol": "workspace:*"
   }
 }
