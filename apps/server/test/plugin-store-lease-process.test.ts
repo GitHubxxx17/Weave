@@ -133,6 +133,7 @@ function startOwnerChild(config: OwnerConfig) {
   const child = fork(fixtureFile, { execArgv: [], stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
   const updates = new EventEmitter();
   const queue: ChildMessage[] = [];
+  const received = new Set<MessageKind>();
   let exit: ChildExit | undefined;
   let failure: unknown;
   let stderr = '';
@@ -170,6 +171,11 @@ function startOwnerChild(config: OwnerConfig) {
       childError(parsed.error);
       return;
     }
+    if (received.has(parsed.data.kind)) {
+      childError(new Error(`Duplicate child message ${parsed.data.kind}`));
+      return;
+    }
+    received.add(parsed.data.kind);
     queue.push(parsed.data);
     updates.emit('update');
   });
@@ -242,7 +248,16 @@ function startOwnerChild(config: OwnerConfig) {
       if (exit === undefined) child.kill(signal);
     },
     waitForExit(): Promise<ChildExit> {
-      return wait('process exit and pipe closure', completedExit);
+      return wait('process exit and pipe closure', () => {
+        if (failure !== undefined) throw diagnostic('IPC failure', failure);
+        const status = completedExit();
+        if (status && queue.length > 0) {
+          throw diagnostic(
+            `unexpected messages before exit: ${queue.map(({ kind }) => kind).join(', ')}`,
+          );
+        }
+        return status;
+      });
     },
     async terminate(): Promise<void> {
       // A graceful close lets the child release the store and authority in order.
@@ -280,20 +295,19 @@ async function closeChild(child: OwnerChild): Promise<void> {
   expect(await child.waitForExit()).toEqual({ code: 0, signal: null });
 }
 
+class SkipOwnerTest extends Error {}
+
 function ownerTest(
-  run: (
-    work: {
-      base: string;
-      databaseFile: string;
-      directory: string;
-      prepare: (
-        overrides?: Partial<OwnerConfig>,
-      ) => Promise<{ child: OwnerChild; databaseId: string }>;
-      hold: (overrides?: Partial<OwnerConfig>) => Promise<{ child: OwnerChild; binding: Binding }>;
-      reject: (code: string, overrides?: Partial<OwnerConfig>) => Promise<void>;
-    },
-    context: TestContext,
-  ) => Promise<void>,
+  run: (work: {
+    base: string;
+    databaseFile: string;
+    directory: string;
+    prepare: (
+      overrides?: Partial<OwnerConfig>,
+    ) => Promise<{ child: OwnerChild; databaseId: string }>;
+    hold: (overrides?: Partial<OwnerConfig>) => Promise<{ child: OwnerChild; binding: Binding }>;
+    reject: (code: string, overrides?: Partial<OwnerConfig>) => Promise<void>;
+  }) => Promise<void>,
 ) {
   return async (context: TestContext): Promise<void> => {
     const base = await mkdtemp(join(await realpath(tmpdir()), 'weave-owner-root-'));
@@ -326,10 +340,12 @@ function ownerTest(
     }
 
     const failures: unknown[] = [];
+    let skip: SkipOwnerTest | undefined;
     try {
-      await run({ base, databaseFile, directory, prepare, hold, reject }, context);
+      await run({ base, databaseFile, directory, prepare, hold, reject });
     } catch (error: unknown) {
-      failures.push(error);
+      if (error instanceof SkipOwnerTest) skip = error;
+      else failures.push(error);
     } finally {
       try {
         await terminateChildren(children);
@@ -344,6 +360,7 @@ function ownerTest(
         cause: failures[0],
       });
     if (failures.length === 1) throw failures[0];
+    if (skip) context.skip(skip.message);
   };
 }
 
@@ -397,8 +414,26 @@ function registeredBinding(file: string): Binding {
   return z.object({ binding: bindingSchema }).parse(JSON.parse(row.event_json)).binding;
 }
 
+function recordedOwnerBinding(file: string): Binding {
+  const { events, integrity } = ownerRows(file);
+  expect(integrity).toEqual({ integrity_check: 'ok' });
+  expect(events).toHaveLength(1);
+  const row = z
+    .object({ sequence: z.literal(1), occurred_at: z.string(), event_json: z.string() })
+    .parse(events[0]);
+  const event = z
+    .strictObject({
+      version: z.literal(1),
+      sequence: z.literal(1),
+      kind: z.literal('managed-store-bound'),
+      occurredAt: z.literal(row.occurred_at),
+      binding: bindingSchema,
+    })
+    .parse(JSON.parse(row.event_json));
+  return event.binding;
+}
+
 async function requireLinks(
-  context: TestContext,
   kind: 'hardlink' | 'symlink',
   create: () => Promise<void>,
 ): Promise<void> {
@@ -412,7 +447,9 @@ async function requireLinks(
       code === 'EOPNOTSUPP' ||
       (process.platform === 'win32' && kind === 'symlink' && code === 'EPERM')
     ) {
-      context.skip(`Local filesystem refused ${kind} creation with ${code}`);
+      throw new SkipOwnerTest(`Local filesystem refused ${kind} creation with ${code}`, {
+        cause: error,
+      });
     }
     throw error;
   }
@@ -422,8 +459,9 @@ describe('plugin store ownership across Node processes', () => {
   it(
     'excludes a live same-root contender and reuses the binding after POSIX SIGKILL',
     { timeout: testTimeout },
-    ownerTest(async ({ databaseFile, hold, reject }, context) => {
-      if (process.platform === 'win32') context.skip('This case requires POSIX SIGKILL semantics');
+    ownerTest(async ({ databaseFile, hold, reject }) => {
+      if (process.platform === 'win32')
+        throw new SkipOwnerTest('This case requires POSIX SIGKILL semantics');
       const seed = await hold();
       await closeChild(seed.child);
       const file = seed.binding.ownerDatabaseFile;
@@ -506,9 +544,9 @@ describe('plugin store ownership across Node processes', () => {
   );
 
   it(
-    'permits one of two roots to register without overwriting its binding',
+    'registers at most one of two racing roots and accepts an exact retry after a busy race',
     { timeout: testTimeout },
-    ownerTest(async ({ base, databaseFile, directory, prepare, reject }) => {
+    ownerTest(async ({ base, databaseFile, directory, prepare, hold, reject }) => {
       const otherDirectory = join(base, 'other-store');
       const { child: first } = await prepare({ keepAliveOnError: true });
       const { child: second } = await prepare({
@@ -523,23 +561,57 @@ describe('plugin store ownership across Node processes', () => {
         second.waitFor('held', 'error'),
       ]);
       const winner = results.find((result) => result.kind === 'held');
-      const loser = results.find((result) => result.kind === 'error');
-      expect(winner).toBeDefined();
+      if (winner === undefined) {
+        for (const result of results) {
+          expect(result).toMatchObject({
+            kind: 'error',
+            phase: 'acquire',
+            code: 'plugin-store-busy',
+          });
+        }
+        expect(mainRows(databaseFile)).toEqual([]);
+        const recorded = [directory, otherDirectory].flatMap((storeDirectory) => {
+          const file = join(storeDirectory, ownerFilename);
+          if (!lstatSync(file, { throwIfNoEntry: false })) return [];
+          assertOwnerAvailable(file);
+          const binding = recordedOwnerBinding(file);
+          expect(binding).toMatchObject({ databaseFile, storeDirectory, ownerDatabaseFile: file });
+          return [{ binding, rows: ownerRows(file) }];
+        });
+        const retry = recorded[0];
+        if (!retry) throw new Error('The busy race left no committed owner binding');
+
+        await Promise.all([closeChild(first), closeChild(second)]);
+        const retried = await hold({
+          directory: retry.binding.storeDirectory,
+          initialBinding: 'require-bound',
+        });
+        expect(retried.binding).toEqual(retry.binding);
+        expect(registeredBinding(databaseFile)).toEqual(retry.binding);
+        await closeChild(retried.child);
+        for (const record of recorded) {
+          expect(ownerRows(record.binding.ownerDatabaseFile)).toEqual(record.rows);
+        }
+        return;
+      }
+
+      const firstWon = winner === results[0];
+      const loser = results[firstWon ? 1 : 0];
       expect(loser).toMatchObject({
+        kind: 'error',
         phase: 'acquire',
         code: expect.stringMatching(/^plugin-store-(owner-mismatch|busy)$/),
       });
-      if (!winner) throw new Error('Both roots failed to acquire');
       expect(registeredBinding(databaseFile)).toEqual(winner.binding);
 
-      const losingDirectory = winner === results[0] ? otherDirectory : directory;
-      const losingChild = winner === results[0] ? second : first;
+      const losingDirectory = firstWon ? otherDirectory : directory;
+      const losingChild = firstWon ? second : first;
       const loserFile = join(losingDirectory, ownerFilename);
       if (lstatSync(loserFile, { throwIfNoEntry: false })) {
         assertOwnerAvailable(loserFile);
       }
       await closeChild(losingChild);
-      await closeChild(winner === results[0] ? first : second);
+      await closeChild(firstWon ? first : second);
       const before = mainRows(databaseFile);
       await reject('plugin-store-owner-mismatch', { directory: losingDirectory });
       expect(mainRows(databaseFile)).toEqual(before);
@@ -579,30 +651,48 @@ describe('plugin store ownership across Node processes', () => {
   it(
     'allows exactly one simultaneous virgin root contender to hold the store',
     { timeout: testTimeout },
-    ownerTest(async ({ databaseFile, directory, prepare }) => {
+    ownerTest(async ({ base, databaseFile, directory, prepare }) => {
+      const otherDatabaseFile = join(base, 'other.sqlite');
       await mkdir(directory);
-      const { child: first } = await prepare();
-      const { child: second } = await prepare();
-      first.send({ kind: 'start' });
-      second.send({ kind: 'start' });
+      const first = await prepare();
+      const second = await prepare({ databaseFile: otherDatabaseFile });
+      expect(first.databaseId).not.toBe(second.databaseId);
+      first.child.send({ kind: 'start' });
+      second.child.send({ kind: 'start' });
 
       const results = await Promise.all([
-        first.waitFor('held', 'error'),
-        second.waitFor('held', 'error'),
+        first.child.waitFor('held', 'error'),
+        second.child.waitFor('held', 'error'),
       ]);
       const winner = results.find((result) => result.kind === 'held');
-      const loser = results.find((result) => result.kind === 'error');
-      expect(winner).toBeDefined();
-      expect(loser).toMatchObject({
-        phase: 'acquire',
-        code: expect.stringMatching(/^plugin-store-(busy|recovery-required)$/),
-      });
-      if (!winner) throw new Error('Both contenders failed to acquire');
+      if (!winner)
+        throw new Error(`Neither virgin contender acquired the store: ${JSON.stringify(results)}`);
       const firstWon = winner === results[0];
-      expect(await (firstWon ? second : first).waitForExit()).toEqual({ code: 0, signal: null });
-      expect(registeredBinding(databaseFile)).toEqual(winner.binding);
-      await closeChild(firstWon ? first : second);
-      expect(ownerRows(winner.binding.ownerDatabaseFile).events).toHaveLength(1);
+      expect(results[firstWon ? 1 : 0]).toMatchObject({
+        kind: 'error',
+        phase: 'acquire',
+        code: expect.stringMatching(/^plugin-store-(busy|recovery-required|owner-mismatch)$/),
+      });
+      const winningFile = firstWon ? databaseFile : otherDatabaseFile;
+      const losingFile = firstWon ? otherDatabaseFile : databaseFile;
+      const winningChild = firstWon ? first : second;
+      expect(await (firstWon ? second : first).child.waitForExit()).toEqual({
+        code: 0,
+        signal: null,
+      });
+      const ownerFile = join(directory, ownerFilename);
+      expect(winner.binding).toMatchObject({
+        databaseFile: winningFile,
+        databaseId: winningChild.databaseId,
+        storeDirectory: directory,
+        ownerDatabaseFile: ownerFile,
+      });
+      expect(registeredBinding(winningFile)).toEqual(winner.binding);
+      expect(mainRows(losingFile)).toEqual([]);
+      await closeChild(winningChild.child);
+      expect(recordedOwnerBinding(ownerFile)).toEqual(winner.binding);
+      expect(registeredBinding(winningFile)).toEqual(winner.binding);
+      expect(mainRows(losingFile)).toEqual([]);
     }),
   );
 
@@ -696,12 +786,10 @@ describe('plugin store ownership across Node processes', () => {
   it(
     'rejects a main file with an extra hardlink',
     { timeout: testTimeout },
-    ownerTest(async ({ base, databaseFile, directory, prepare, reject }, context) => {
+    ownerTest(async ({ base, databaseFile, directory, prepare, reject }) => {
       const { child } = await prepare();
       await closeChild(child);
-      await requireLinks(context, 'hardlink', () =>
-        link(databaseFile, join(base, 'extra-main-link')),
-      );
+      await requireLinks('hardlink', () => link(databaseFile, join(base, 'extra-main-link')));
       await reject('plugin-store-invalid');
       await expect(access(join(directory, ownerFilename))).rejects.toMatchObject({
         code: 'ENOENT',
@@ -713,11 +801,11 @@ describe('plugin store ownership across Node processes', () => {
   it(
     'rejects a bound owner file with an extra hardlink',
     { timeout: testTimeout },
-    ownerTest(async ({ base, databaseFile, hold, reject }, context) => {
+    ownerTest(async ({ base, databaseFile, hold, reject }) => {
       const { child, binding } = await hold();
       await closeChild(child);
       const before = ownerRows(binding.ownerDatabaseFile);
-      await requireLinks(context, 'hardlink', () =>
+      await requireLinks('hardlink', () =>
         link(binding.ownerDatabaseFile, join(base, 'extra-owner-link')),
       );
       await reject('plugin-store-invalid');
@@ -729,13 +817,11 @@ describe('plugin store ownership across Node processes', () => {
   it(
     'rejects a symlink inside the managed root without following it',
     { timeout: testTimeout },
-    ownerTest(async ({ base, databaseFile, directory, reject }, context) => {
+    ownerTest(async ({ base, databaseFile, directory, reject }) => {
       const outside = join(base, 'outside');
       await mkdir(outside);
       await mkdir(directory);
-      await requireLinks(context, 'symlink', () =>
-        symlink(outside, join(directory, 'artifacts'), 'dir'),
-      );
+      await requireLinks('symlink', () => symlink(outside, join(directory, 'artifacts'), 'dir'));
       await reject('plugin-store-invalid');
       await expect(access(join(outside, ownerFilename))).rejects.toMatchObject({ code: 'ENOENT' });
       await expect(access(join(directory, ownerFilename))).rejects.toMatchObject({
@@ -748,11 +834,11 @@ describe('plugin store ownership across Node processes', () => {
   it(
     'canonicalizes ancestor aliases and excludes the alias while the canonical root is held',
     { timeout: testTimeout },
-    ownerTest(async ({ base, hold, reject }, context) => {
+    ownerTest(async ({ base, hold, reject }) => {
       const actual = join(base, 'actual');
       const alias = join(base, 'alias');
       await mkdir(actual);
-      await requireLinks(context, 'symlink', () => symlink(actual, alias, 'dir'));
+      await requireLinks('symlink', () => symlink(actual, alias, 'dir'));
       const canonical = {
         databaseFile: join(actual, 'main.sqlite'),
         directory: join(actual, 'root'),
