@@ -20,8 +20,8 @@ function parseOrigin(value: string): URL | undefined {
   }
 }
 
-/** Every plugin write route shares this guard, including later plugin routes. */
-export function pluginWriteGuard(studioOrigin?: string): MiddlewareHandler {
+/** Every local management write shares this guard, including future subpaths. */
+export function managementWriteGuard(studioOrigin?: string): MiddlewareHandler {
   return async (context, next) => {
     if (
       context.req.method === 'GET' ||
@@ -36,7 +36,7 @@ export function pluginWriteGuard(studioOrigin?: string): MiddlewareHandler {
         pluginErrorResponseSchema.parse({
           error: {
             code: 'unsupported-media-type',
-            message: 'Plugin management requires application/json',
+            message: 'Local management requires application/json',
           },
         }),
         415,
@@ -47,7 +47,7 @@ export function pluginWriteGuard(studioOrigin?: string): MiddlewareHandler {
         pluginErrorResponseSchema.parse({
           error: {
             code: 'forbidden-origin',
-            message: 'Plugin management requires a trusted local origin and Host',
+            message: 'Local management requires a trusted local origin and Host',
           },
         }),
         403,
@@ -67,3 +67,6 @@ export function pluginWriteGuard(studioOrigin?: string): MiddlewareHandler {
     await next();
   };
 }
+
+/** Existing plugin API callers retain the same shared security boundary. */
+export const pluginWriteGuard = managementWriteGuard;

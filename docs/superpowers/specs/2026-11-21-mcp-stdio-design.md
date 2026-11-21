@@ -1,6 +1,6 @@
 # Stage 5 — 本地 stdio MCP Tools 设计
 
-状态：用户已于 2026-11-21 确认推荐方案。5.1a/5.1b 已合入；5.2 工具适配正在实现，5.3–5.4 尚未接入。本文规定完整跨包契约。
+状态：用户已于 2026-11-21 确认推荐方案。5.1a–5.2 已合入；5.3 Server 管理正在实现，5.4 Studio 尚未接入。本文规定完整跨包契约。
 基线：`origin/main` 的 `a0b38b4`（Stage 4.5，PR #76）。
 决策记录：[ADR 0004](../../adr/0004-mcp-stdio-tools.md)。
 实施计划：[5.1a 统一扩展协调器](../plans/2026-11-21-extension-coordinator.md)、
@@ -533,3 +533,29 @@ Zod4.6.7 的 object passthrough 会省略自有 `__proto__` 字段。适配器�
 原对象引用，内部仍执行规定的 object passthrough 和 JSON Schema refinement，
 但 refinement 检查原始字段，成功后返回原始完整对象；不可把剥离后的副本发送给
 服务。快照同样只借 Zod 检查形状，最终冻结副本保留 schema 全部自有 JSON 字段。
+
+### 10.4 5.3 Server 实施契约
+
+MCP authority 使用独立 SQLite 追加表。store 的 read/mutate 返回完整冻结日志及
+折叠记录，mutate 在同一事务内验证历史前缀、连续 sequence、CAS 和合法状态转换。
+source 在收到成功日志的同一 continuation 内安装缓存并同步通知 observer，之后才
+允许下一个 await。reviewed 保存上次审阅配置，仅当前有效信任使用 trustedDigest。
+配置规范化、路径复验及环境引用解析均属于 Server；历史回放不检查当前文件存在。
+
+统一协调器增加显式 force 重建意图；相邻 pending reload 保留最强意图，带 CAS
+的 MCP reload 通过独立排队 mutation 检查，不追加伪事件。prepared item 可带
+Server-only instanceId 和纯同步 isReady，发布前最后无 await 临界段检查连接存活。
+retainedGenerations 返回当前及未完全释放来源的代与精确 instanceId 成员；MCP
+私有账本据此投影 active/draining，旧候选或退役通知不覆盖当前连接健康。
+
+Server 在首个 spawn 前为整组 MCP surviving set 预留共用32个 allocation 配额，
+资源不足保留旧指针；onClosed 仅表示停止接纳调用，配额只在 await close 成功后归还。
+清理失败保留配额和代元数据。McpClientError 增加只读 cleanupFailed 布尔值，
+初始化失败保留安全 code/message，同时标记内部关闭失败，不暴露原异常或环境。
+
+mcp-management-types 定义仅含安全配置、authoritySequence、generation/admission、
+服务状态、active/draining、工具快照与固定 issue 的 HTTP DTO。mutation 返回同一
+snapshot 及 result(decisionSequence/applied/unchanged/failed/error)。HTTP不读取
+持久库、环境或连接。所有写接口复用管理安全守卫，CORS 支持 PUT，开发代理增加 /mcp。
+main 即使关闭 ESM 也创建 MCP store/source/manager，先 drain 来源资源再关闭持久库。
+实施计划见[5.3 Server 管理](../plans/2026-11-21-mcp-server-management.md)。

@@ -955,3 +955,11 @@ plugin-builtins 接受 Server 授权后准备的 McpConnection，合成为 host:
 MCP 工具使用现有 Zod 输入校验、Approval Broker、策略 Hook 与 Tool Pipeline；
 错误通过带稳定 code 的直接 cause 被 Runner 写为 failed，模型能继续修正参数。
 Studio 审批卡按已有 toolCallId 定位现有参数详情，不形成第二套审批或结果流。
+
+### Stage 5.3 MCP 管理边界
+
+Server 的 MCP source 维护配置授权缓存及逐连接健康账本，和 ESM 来源共用唯一
+ExtensionCoordinator。配置与信任保存于独立 append-only MCP authority log；
+连接/stale/EOF 是瞬态状态，不进入 durable facts。同步发布前复验资源存活，
+旧代资源随最后回合释放，关闭失败保留 allocation 配额和归属。HTTP仅调用管理
+窄接口，Studio可从 /mcp 与 /plugins 的同一 generation 判断配置和实际运行状态。

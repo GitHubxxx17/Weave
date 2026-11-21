@@ -30,6 +30,7 @@ function sourceSnapshot(snapshot: LocalPluginSourceSnapshot): ExtensionSourceSna
 export function createLocalExtensionSource(options: LocalPluginSourceOptions): {
   register: ExtensionSourceFactory;
   facade(coordinator: ExtensionCoordinator): ServerLocalPluginHost;
+  discoveredPluginIds(): Promise<readonly string[]>;
   close(): Promise<void>;
 } {
   let source: LocalPluginSourceController;
@@ -97,6 +98,18 @@ export function createLocalExtensionSource(options: LocalPluginSourceOptions): {
   return {
     register,
     close,
+    async discoveredPluginIds() {
+      await source.refresh();
+      return Object.freeze([
+        ...new Set(
+          source
+            .snapshot()
+            .discovery.candidates.flatMap((candidate) =>
+              candidate.manifest === undefined ? [] : [candidate.manifest.id],
+            ),
+        ),
+      ]);
+    },
     facade(coordinator) {
       function project(state: ReturnType<ExtensionCoordinator['snapshot']>) {
         const current = source.snapshot();
@@ -143,13 +156,17 @@ export function createLocalExtensionSource(options: LocalPluginSourceOptions): {
 
       function mutate(command: () => LocalPluginSourceMutation): Promise<ReloadResult> {
         return coordinator
-          .mutate(sourceId, () => {
-            const change = command();
-            return source.mutate(change, {
-              hasActive: (pluginId) => coordinator.hasActive(sourceId, pluginId),
-              onImmediateRetry: () => coordinator.retryImmediateRevocation(sourceId, change.id),
-            });
-          })
+          .mutate(
+            sourceId,
+            () => {
+              const change = command();
+              return source.mutate(change, {
+                hasActive: (pluginId) => coordinator.hasActive(sourceId, pluginId),
+                onImmediateRetry: () => coordinator.retryImmediateRevocation(sourceId, change.id),
+              });
+            },
+            { force: true },
+          )
           .then(reloadResult);
       }
       const snapshot = () => project(coordinator.snapshot());
@@ -157,7 +174,7 @@ export function createLocalExtensionSource(options: LocalPluginSourceOptions): {
         runner: coordinator.runner,
         list: () => snapshot().plugins,
         snapshot,
-        reload: () => coordinator.reload().then(reloadResult),
+        reload: () => coordinator.reload({ force: true }).then(reloadResult),
         trust: (id, digest) => mutate(() => ({ kind: 'trust', id, digest })),
         revoke: (id, options) =>
           mutate(() => ({ kind: 'revoke', id, ...mutationOptions.parse(options) })),

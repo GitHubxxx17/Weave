@@ -8,6 +8,7 @@ import type {
   ExtensionSource,
   ExtensionSourceSnapshot,
 } from '../src/extension-types.js';
+import { ExtensionPreparationError } from '../src/extension-types.js';
 import {
   assembleServerGeneration,
   createServerAgentRunner,
@@ -38,11 +39,14 @@ class FixtureSource {
   onRefresh: (() => void | Promise<void>) | undefined;
   afterDecision: (() => Promise<void>) | undefined;
   appendFailure: Error | undefined;
+  prepareFailure: Error | undefined;
   recheckFailure: Error | undefined;
   onPreparationAbort: (() => void) | undefined;
   onPreparedDispose: (() => void | Promise<void>) | undefined;
   onSnapshot: (() => void) | undefined;
   recheckValid = true;
+  ready = true;
+  includeInstanceId = false;
 
   constructor(readonly id: string) {}
 
@@ -63,6 +67,7 @@ class FixtureSource {
         await this.onRefresh?.();
       },
       prepare: async (stamp, { excluded, signal }) => {
+        if (this.prepareFailure !== undefined) throw this.prepareFailure;
         this.attempts.push([...excluded]);
         const onPreparationAbort = this.onPreparationAbort;
         const onPreparedDispose = this.onPreparedDispose;
@@ -70,7 +75,7 @@ class FixtureSource {
           signal.addEventListener('abort', onPreparationAbort, { once: true });
         const recheck = async () => {
           if (this.recheckFailure) throw this.recheckFailure;
-          this.onRecheck?.();
+          await this.onRecheck?.();
           return this.recheckValid;
         };
         const disposePrepared = async () => {
@@ -125,7 +130,18 @@ class FixtureSource {
         };
         return {
           stamp,
-          items: [{ pluginId: this.id, identity, plugin, dispose }],
+          items: [
+            {
+              pluginId: this.id,
+              identity,
+              plugin,
+              dispose,
+              isReady: () => this.ready,
+              ...(this.includeInstanceId
+                ? { instanceId: `${this.id}:attempt-${this.attempts.length}` }
+                : {}),
+            },
+          ],
           failures: [],
           recheck,
           async dispose() {
@@ -146,7 +162,7 @@ class FixtureSource {
     await this.afterDecision?.();
   }
 
-  onRecheck: (() => void) | undefined;
+  onRecheck: (() => void | Promise<void>) | undefined;
 }
 
 async function fixture(...sources: FixtureSource[]) {
@@ -216,6 +232,202 @@ function toolContent(content: string) {
 }
 
 describe('Server extension coordination', () => {
+  it('rebuilds identical membership only when reload or mutation explicitly forces it', async () => {
+    const a = new FixtureSource('source-a');
+    const f = await fixture(a);
+    try {
+      const first = await f.coordinator.reload();
+      expect((await f.coordinator.reload()).unchanged).toBe(true);
+      expect(a.attempts).toHaveLength(1);
+      const reloaded = await f.coordinator.reload({ force: true });
+      expect(reloaded.unchanged).toBe(false);
+      expect(reloaded.generation.id).toBeGreaterThan(first.generation.id);
+      const mutated = await f.coordinator.mutate(a.id, async () => {}, { force: true });
+      expect(mutated.generation.id).toBeGreaterThan(reloaded.generation.id);
+      expect(a.attempts).toHaveLength(3);
+      expect(await f.turn(a.id)).toContainEqual(toolContent('first'));
+    } finally {
+      await f.close();
+    }
+  });
+
+  it.each([true, false])(
+    'preserves forced intent when pending reloads coalesce (%s first)',
+    async (forceFirst) => {
+      const a = new FixtureSource('source-a');
+      const f = await fixture(a);
+      try {
+        const first = await f.coordinator.reload();
+        const pending = f.coordinator.reload({ force: forceFirst });
+        const coalesced = f.coordinator.reload({ force: !forceFirst });
+        expect(coalesced).toBe(pending);
+        const result = await pending;
+        expect(result.unchanged).toBe(false);
+        expect(result.generation.id).toBeGreaterThan(first.generation.id);
+        expect(a.attempts).toHaveLength(2);
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  it('queues a forced reload separately when an ordinary reload has already started', async () => {
+    const a = new FixtureSource('source-a');
+    const entered = deferred();
+    const release = deferred();
+    const f = await fixture(a);
+    try {
+      await f.coordinator.reload();
+      a.onRefresh = async () => {
+        entered.resolve();
+        await release.promise;
+      };
+      const ordinary = f.coordinator.reload();
+      await entered.promise;
+      const forced = f.coordinator.reload({ force: true });
+      expect(forced).not.toBe(ordinary);
+      release.resolve();
+      expect((await ordinary).unchanged).toBe(true);
+      expect((await forced).unchanged).toBe(false);
+      expect(a.attempts).toHaveLength(2);
+    } finally {
+      release.resolve();
+      await f.close();
+    }
+  });
+
+  it('excludes a connection closed while another source rechecks and freshly prepares survivors', async () => {
+    const a = new FixtureSource('source-a');
+    const b = new FixtureSource('source-b');
+    const recheckEntered = deferred();
+    const recheckRelease = deferred();
+    const f = await fixture(a, b);
+    try {
+      await f.coordinator.reload();
+      b.onRecheck = async () => {
+        recheckEntered.resolve();
+        await recheckRelease.promise;
+      };
+      const updating = f.coordinator.reload({ force: true });
+      await recheckEntered.promise;
+      a.ready = false;
+      recheckRelease.resolve();
+      const result = await updating;
+      expect(result.failed).toEqual([
+        {
+          sourceId: a.id,
+          pluginId: a.id,
+          identity: 'first',
+          error: {
+            code: 'plugin-load-failed',
+            message: 'Extension resource became unavailable before publication',
+          },
+        },
+      ]);
+      expect(f.ids()).not.toContain(a.id);
+      expect(await f.turn(b.id)).toContainEqual(toolContent('first'));
+      expect(a.attempts).toEqual([[], [], ['first']]);
+      expect(b.attempts).toEqual([[], [], []]);
+      expect(b.disposers[1]).toHaveBeenCalledOnce();
+      expect(b.disposers[2]).not.toHaveBeenCalled();
+    } finally {
+      recheckRelease.resolve();
+      await f.close();
+    }
+  });
+
+  it('retains exact current and pinned generation instances until preparation cleanup settles', async () => {
+    const a = new FixtureSource('source-a');
+    a.includeInstanceId = true;
+    const turnEntered = deferred();
+    const turnRelease = deferred();
+    a.onTool = async () => {
+      turnEntered.resolve();
+      await turnRelease.promise;
+    };
+    const f = await fixture(a);
+    try {
+      const first = await f.coordinator.reload();
+      const oldTurn = f.turn(a.id, 'old-turn');
+      await turnEntered.promise;
+      a.onTool = undefined;
+      const second = await f.coordinator.reload({ force: true });
+      expect(f.coordinator.retainedGenerations()).toEqual([
+        {
+          generationId: first.generation.id,
+          current: false,
+          members: [expect.objectContaining({ instanceId: 'source-a:attempt-1' })],
+        },
+        {
+          generationId: second.generation.id,
+          current: true,
+          members: [expect.objectContaining({ instanceId: 'source-a:attempt-2' })],
+        },
+      ]);
+      const external = f.coordinator.retainedGenerations();
+      (external[0]!.members as unknown[]).splice(0);
+      expect(f.coordinator.retainedGenerations()[0]!.members).toHaveLength(1);
+      turnRelease.resolve();
+      await oldTurn;
+      await vi.waitFor(() => expect(f.coordinator.retainedGenerations()).toHaveLength(1));
+      expect(f.coordinator.retainedGenerations()[0]!.generationId).toBe(second.generation.id);
+    } finally {
+      turnRelease.resolve();
+      await f.close();
+    }
+  });
+
+  it('keeps generation ownership metadata when preparation cleanup fails', async () => {
+    const a = new FixtureSource('source-a');
+    a.includeInstanceId = true;
+    a.onPreparedDispose = async () => {
+      throw new Error('resource close failed');
+    };
+    const f = await fixture(a);
+    try {
+      const first = await f.coordinator.reload();
+      a.onPreparedDispose = undefined;
+      const second = await f.coordinator.reload({ force: true });
+      expect(f.coordinator.retainedGenerations()).toMatchObject([
+        { generationId: first.generation.id, current: false },
+        { generationId: second.generation.id, current: true },
+      ]);
+    } finally {
+      await expect(f.close()).rejects.toBeInstanceOf(AggregateError);
+    }
+  });
+
+  it('returns a resource preparation failure while preserving the current pointer and admission', async () => {
+    const a = new FixtureSource('source-a');
+    const f = await fixture(a);
+    try {
+      const initial = await f.coordinator.reload();
+      a.prepareFailure = new ExtensionPreparationError();
+      const result = await f.coordinator.reload({ force: true });
+      expect(result.generation).toEqual(initial.generation);
+      expect(result.members).toEqual(initial.members);
+      expect(result.error).toEqual({
+        code: 'plugin-reload-failed',
+        message: 'Extension resources are unavailable for this generation',
+      });
+      expect(await f.turn(a.id)).toContainEqual(toolContent('first'));
+      const revoked = await f.coordinator.mutate(a.id, () => a.decide('replacement'), {
+        force: true,
+      });
+      expect(revoked.generation).toMatchObject({
+        id: initial.generation.id,
+        acceptingRuns: false,
+        blocked: { code: 'plugin-generation-blocked' },
+      });
+      expect(revoked.error?.code).toBe('plugin-reload-failed');
+      a.prepareFailure = new Error('authority read failed');
+      await expect(f.coordinator.reload({ force: true })).rejects.toBe(a.prepareFailure);
+      expect(f.coordinator.generationSnapshot()).toEqual(revoked.generation);
+    } finally {
+      await f.close();
+    }
+  });
+
   it('queues two sources through one publisher while a pinned turn keeps its original tool', async () => {
     const a = new FixtureSource('source-a');
     const b = new FixtureSource('source-b');
@@ -531,6 +743,10 @@ describe('Server extension coordination', () => {
       await retired.promise;
       const current = f.runtime.serverHost.controller()!.current().id;
       expect(current).toBeGreaterThan(previous);
+      expect(f.coordinator.retainedGenerations()).toMatchObject([
+        { generationId: previous, current: false },
+        { generationId: current, current: true },
+      ]);
       expect(await f.getPlugins()).toMatchObject({
         generation: { id: current, acceptingRuns: true },
       });

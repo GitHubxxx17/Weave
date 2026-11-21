@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { Client } from '@modelcontextprotocol/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { connectMcp } from '../src/stdio-connection.js';
 import { McpClientError } from '../src/errors.js';
@@ -139,6 +140,68 @@ describe('MCP stdio connection', () => {
     expect(connection.stderrBytes).toBeGreaterThanOrEqual(
       Buffer.byteLength('fixture private stderr\n'),
     );
+  });
+
+  it('passes every own string environment name unchanged to the actual child', async () => {
+    const env = JSON.parse(
+      '{"__proto__":"proto-value","constructor":"constructor-value","toString":"string-value","_123":"numeric-suffix-value"}',
+    ) as Record<string, string>;
+    const connection = await connect('normal', { env });
+    const result = await connection.callTool('inspect', {}, { signal: signal() });
+    const details = JSON.parse(result.content[0]?.text as string) as Record<string, unknown>;
+    expect(details.specialEnvironment).toEqual(env);
+    expect(Object.getPrototypeOf(env)).toBe(Object.prototype);
+  });
+
+  it('rejects Proxy environment mappings before running their traps or spawning', async () => {
+    let traps = 0;
+    const env = new Proxy(
+      { MCP_EXPLICIT: 'secret-value' },
+      {
+        get(target, key, receiver) {
+          traps++;
+          return Reflect.get(target, key, receiver);
+        },
+        ownKeys(target) {
+          traps++;
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+    await expect(connect('normal', { env })).rejects.toMatchObject({
+      code: 'mcp-connect-failed',
+    });
+    expect(traps).toBe(0);
+    await expect(readFile(logFile)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rejects accessor environment values without evaluating them or spawning', async () => {
+    let reads = 0;
+    const env = Object.defineProperty({}, 'MCP_EXPLICIT', {
+      enumerable: true,
+      get() {
+        reads++;
+        return 'secret-value';
+      },
+    }) as Record<string, string>;
+    await expect(connect('normal', { env })).rejects.toMatchObject({
+      code: 'mcp-connect-failed',
+    });
+    expect(reads).toBe(0);
+    await expect(readFile(logFile)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each([
+    { MCP_EXPLICIT: 123 },
+    { MCP_EXPLICIT: {} },
+    Object.assign({}, { [Symbol('MCP_EXPLICIT')]: 'secret' }),
+    Object.defineProperty({}, 'MCP_EXPLICIT', { value: 'secret', enumerable: false }),
+    Object.assign(Object.create({ inherited: 'secret' }) as object, { MCP_EXPLICIT: 'provided' }),
+  ])('rejects a non-data environment mapping safely before spawning %#', async (env) => {
+    await expect(
+      connect('normal', { env: env as unknown as Readonly<Record<string, string>> }),
+    ).rejects.toMatchObject({ code: 'mcp-connect-failed' });
+    await expect(readFile(logFile)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('marks preparation and later changes stale without refreshing the frozen catalog', async () => {
@@ -428,7 +491,51 @@ describe('MCP stdio connection', () => {
     ['stdout-overflow', 'mcp-connect-failed'],
     ['exit-initialize', 'mcp-connect-failed'],
   ])('rejects %s during preparation', async (mode, code) => {
-    await expect(connect(mode)).rejects.toMatchObject({ code });
+    await expect(connect(mode)).rejects.toMatchObject({ code, cleanupFailed: false });
+  });
+
+  it('preserves the safe initialization error while exposing failed transport cleanup', async () => {
+    const originalClose = Client.prototype.close;
+    const close = vi.spyOn(Client.prototype, 'close').mockImplementation(async function () {
+      await originalClose.call(this);
+      throw new Error('private SDK close error with launch credentials');
+    });
+    try {
+      const error: unknown = await connect('invalid-list').catch((failure: unknown) => failure);
+      expect(error).toBeInstanceOf(McpClientError);
+      expect(error).toMatchObject({
+        code: 'mcp-invalid-catalog',
+        message: 'The MCP service returned an invalid tool catalog.',
+        cleanupFailed: true,
+      });
+      expect((error as Error).cause).toBeUndefined();
+      expect(JSON.stringify(error)).not.toContain('credentials');
+    } finally {
+      close.mockRestore();
+    }
+  });
+
+  it('marks explicit close failure without exposing raw errors and keeps it idempotent', async () => {
+    const connection = await connect();
+    connections.pop();
+    const originalClose = Client.prototype.close;
+    const close = vi.spyOn(Client.prototype, 'close').mockImplementation(async function () {
+      await originalClose.call(this);
+      throw new Error('private SDK close error');
+    });
+    try {
+      const first = connection.close();
+      expect(connection.close()).toBe(first);
+      const error: unknown = await first.catch((failure: unknown) => failure);
+      expect(error).toMatchObject({
+        code: 'mcp-close-failed',
+        cleanupFailed: true,
+        message: 'The MCP connection could not be closed within its time limit.',
+      });
+      expect((error as Error).cause).toBeUndefined();
+    } finally {
+      close.mockRestore();
+    }
   });
 
   it.each(['hang-initialize', 'hang-list'])(
@@ -454,6 +561,7 @@ describe('MCP stdio connection', () => {
     controller.abort();
     await expect(connect('normal', { signal: controller.signal })).rejects.toMatchObject({
       code: 'mcp-cancelled',
+      cleanupFailed: false,
     });
     await expect(readFile(logFile)).rejects.toMatchObject({ code: 'ENOENT' });
   });

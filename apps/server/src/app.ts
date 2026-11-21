@@ -10,6 +10,7 @@ import { registerWorkspaceRoutes, type WorkspaceAppOptions } from './workspace-a
 import { registerFileUndoRoutes } from './file-undo-api.js';
 import { registerFileRoutes, type FileAppOptions } from './file-api.js';
 import { registerPluginRoutes, type PluginAppOptions } from './plugin-api.js';
+import { registerMcpRoutes, type McpAppOptions } from './mcp-api.js';
 
 const healthResponseSchema = z.object({
   status: z.enum(['ok', 'unavailable']),
@@ -34,6 +35,7 @@ export interface AppOptions
     WorkspaceAppOptions,
     FileAppOptions,
     PluginAppOptions,
+    McpAppOptions,
     ProviderAppOptions {
   /**
    * Exact browser origin allowed to call the local control plane.
@@ -53,7 +55,7 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
       '*',
       cors({
         origin: studioOrigin,
-        allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+        allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
         allowHeaders: ['Content-Type'],
       }),
     );
@@ -77,6 +79,7 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
   registerAgentRoutes(app, runtime, options ?? {});
   registerProviderRoutes(app, options ?? {});
   registerPluginRoutes(app, options ?? {});
+  registerMcpRoutes(app, options ?? {});
 
   return app;
 }
@@ -84,5 +87,6 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
 export type { ApprovalAppOptions } from './approval-api.js';
 export type { AgentAppOptions } from './agent-api.js';
 export type { PluginAppOptions } from './plugin-api.js';
+export type { McpAppOptions } from './mcp-api.js';
 export type { ProviderAppOptions } from './provider-api.js';
 export type { ProviderSecretCodec } from './provider-secret-codec.js';

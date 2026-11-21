@@ -9,6 +9,9 @@ import {
 } from './runtime.js';
 import { createExtensionCoordinator } from './extension-coordinator.js';
 import { createLocalExtensionSource } from './local-extension-source.js';
+import { createMcpExtensionSource } from './mcp-source.js';
+import type { McpAuthorityStore } from './mcp-authority-store.js';
+import type { connectMcp } from '@weave/mcp-client';
 
 /** Trust persistence remains open until administration and generation draining finish. */
 export interface ClosablePluginTrustStore extends PluginTrustStore {
@@ -23,6 +26,11 @@ export type ServerLocalPluginHost = PluginHost<
 
 interface ServerExtensionOptions {
   readonly local?: { readonly directory: string; readonly trustStore: PluginTrustStore };
+  readonly mcp?: {
+    readonly store: McpAuthorityStore;
+    readonly readHostVariable?: (name: string) => string | undefined;
+    readonly connect?: typeof connectMcp;
+  };
   readonly runnerOptions: Omit<ServerAgentRunnerOptions, 'kernelPlugins'> & {
     readonly hostVersion: string;
   };
@@ -42,7 +50,7 @@ export function createServerExtensionCoordinator(
   }
   const controller = runtime.serverHost.controller();
   if (controller === undefined) {
-    throw new Error('Local plugins require an initialized Server generation');
+    throw new Error('Extensions require an initialized Server generation');
   }
   const baseline = controller.current().resources.plugins;
   const reservedIds = baseline.map((plugin) => plugin.id);
@@ -101,18 +109,52 @@ export function createServerExtensionCoordinator(
           },
           trustStore: options.local.trustStore,
         });
+  const mcp =
+    options.mcp === undefined
+      ? undefined
+      : createMcpExtensionSource({
+          ...options.mcp,
+          async reservedPluginIds() {
+            const discovered = (await local?.discoveredPluginIds()) ?? [];
+            const current = runtime.serverHost.controller()?.current().resources.plugins ?? [];
+            const retained = coordinator
+              .retainedGenerations()
+              .flatMap((generation) =>
+                generation.members
+                  .filter((member) => member.sourceId !== 'mcp')
+                  .map((member) => member.pluginId),
+              );
+            return Object.freeze([
+              ...new Set([
+                ...reservedIds,
+                ...current.filter((plugin) => plugin.host !== 'mcp').map((plugin) => plugin.id),
+                ...retained,
+                ...discovered,
+              ]),
+            ]);
+          },
+        });
   const coordinator = createExtensionCoordinator({
     host: runtime.serverHost,
-    sources: local === undefined ? [] : [local.register],
+    sources: [
+      ...(local === undefined ? [] : [local.register]),
+      ...(mcp === undefined ? [] : [mcp.register]),
+    ],
     assemble,
   });
   coordinatedHosts.add(runtime.serverHost);
   return {
     coordinator,
     pluginHost: local?.facade(coordinator),
+    mcpManager: mcp?.facade(coordinator),
     async closeUnpublished() {
       try {
-        await local?.close();
+        const outcomes = await Promise.allSettled([local?.close(), mcp?.close()]);
+        const failures = outcomes.flatMap((outcome) =>
+          outcome.status === 'rejected' ? [outcome.reason] : [],
+        );
+        if (failures.length > 0)
+          throw new AggregateError(failures, 'Extension sources could not close');
       } finally {
         coordinatedHosts.delete(runtime.serverHost);
       }
