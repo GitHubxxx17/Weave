@@ -1,0 +1,204 @@
+diff --git a/dist/stdio.mjs b/dist/stdio.mjs
+--- a/dist/stdio.mjs
++++ b/dist/stdio.mjs
+@@ -57,6 +57,8 @@
+ 	_readBuffer;
+ 	_serverParams;
+ 	_stderrStream = null;
++	_closePromise;
++	_closeNotified = false;
+ 	onclose;
+ 	onerror;
+ 	onmessage;
+@@ -70,6 +72,8 @@
+ 	*/
+ 	async start() {
+ 		if (this._process) throw new Error("StdioClientTransport already started! If using Client class, note that connect() calls start() automatically.");
++		this._closePromise = void 0;
++		this._closeNotified = false;
+ 		return new Promise((resolve, reject) => {
+ 			this._process = spawn(this._serverParams.command, this._serverParams.args ?? [], {
+ 				env: {
+@@ -94,7 +98,7 @@
+ 			});
+ 			this._process.on("close", (_code) => {
+ 				this._process = void 0;
+-				this.onclose?.();
++				this._notifyClose();
+ 			});
+ 			this._process.stdin?.on("error", (error) => {
+ 				this.onerror?.(error);
+@@ -178,31 +182,50 @@
+ 		} catch {}
+ 		this._readBuffer.clear();
+ 	}
++	_notifyClose() {
++		if (this._closeNotified) return;
++		this._closeNotified = true;
++		this.onclose?.();
++	}
+ 	async close() {
+-		if (this._process) {
+-			const processToClose = this._process;
+-			this._process = void 0;
+-			const closePromise = new Promise((resolve) => {
+-				processToClose.once("close", () => {
+-					resolve();
+-				});
+-			});
++		if (this._closePromise) return this._closePromise;
++		const processToClose = this._process;
++		this._process = void 0;
++		this._closePromise = (async () => {
+ 			try {
+-				processToClose.stdin?.end();
+-			} catch {}
+-			await Promise.race([closePromise, new Promise((resolve) => setTimeout(resolve, 2e3).unref())]);
+-			if (processToClose.exitCode === null) {
+-				try {
+-					processToClose.kill("SIGTERM");
++				if (processToClose) {
++					const closePromise = new Promise((resolve) => {
++						processToClose.once("close", () => {
++							resolve();
++						});
++					});
++					try {
++						processToClose.stdin?.end();
++					} catch {}
++					await Promise.race([closePromise, new Promise((resolve) => setTimeout(resolve, 2e3).unref())]);
++					if (processToClose.exitCode === null) {
++						try {
++							processToClose.kill("SIGTERM");
++						} catch {}
++						await Promise.race([closePromise, new Promise((resolve) => setTimeout(resolve, 2e3).unref())]);
++					}
++					if (processToClose.exitCode === null) try {
++						processToClose.kill("SIGKILL");
++					} catch {}
++				}
++			} finally {
++				// Descendants may retain inherited pipe ends after the child exits.
++				// Release only this transport's parent-side handles.
++				for (const stream of [processToClose?.stdin, processToClose?.stdout, processToClose?.stderr, this._stderrStream]) try {
++					stream?.destroy();
+ 				} catch {}
+-				await Promise.race([closePromise, new Promise((resolve) => setTimeout(resolve, 2e3).unref())]);
++				this._readBuffer.clear();
++				this._notifyClose();
+ 			}
+-			if (processToClose.exitCode === null) try {
+-				processToClose.kill("SIGKILL");
+-			} catch {}
+-		}
+-		this._readBuffer.clear();
+-	}
++		})();
++		return this._closePromise;
++	}
++
+ 	send(message) {
+ 		return new Promise((resolve) => {
+ 			if (!this._process?.stdin) throw new SdkError(SdkErrorCode.NotConnected, "Not connected");
+diff --git a/dist/stdio.cjs b/dist/stdio.cjs
+--- a/dist/stdio.cjs
++++ b/dist/stdio.cjs
+@@ -60,6 +60,8 @@
+ 	_readBuffer;
+ 	_serverParams;
+ 	_stderrStream = null;
++	_closePromise;
++	_closeNotified = false;
+ 	onclose;
+ 	onerror;
+ 	onmessage;
+@@ -73,6 +75,8 @@
+ 	*/
+ 	async start() {
+ 		if (this._process) throw new Error("StdioClientTransport already started! If using Client class, note that connect() calls start() automatically.");
++		this._closePromise = void 0;
++		this._closeNotified = false;
+ 		return new Promise((resolve, reject) => {
+ 			this._process = (0, cross_spawn.default)(this._serverParams.command, this._serverParams.args ?? [], {
+ 				env: {
+@@ -97,7 +101,7 @@
+ 			});
+ 			this._process.on("close", (_code) => {
+ 				this._process = void 0;
+-				this.onclose?.();
++				this._notifyClose();
+ 			});
+ 			this._process.stdin?.on("error", (error) => {
+ 				this.onerror?.(error);
+@@ -181,31 +185,50 @@
+ 		} catch {}
+ 		this._readBuffer.clear();
+ 	}
++	_notifyClose() {
++		if (this._closeNotified) return;
++		this._closeNotified = true;
++		this.onclose?.();
++	}
+ 	async close() {
+-		if (this._process) {
+-			const processToClose = this._process;
+-			this._process = void 0;
+-			const closePromise = new Promise((resolve) => {
+-				processToClose.once("close", () => {
+-					resolve();
+-				});
+-			});
++		if (this._closePromise) return this._closePromise;
++		const processToClose = this._process;
++		this._process = void 0;
++		this._closePromise = (async () => {
+ 			try {
+-				processToClose.stdin?.end();
+-			} catch {}
+-			await Promise.race([closePromise, new Promise((resolve) => setTimeout(resolve, 2e3).unref())]);
+-			if (processToClose.exitCode === null) {
+-				try {
+-					processToClose.kill("SIGTERM");
++				if (processToClose) {
++					const closePromise = new Promise((resolve) => {
++						processToClose.once("close", () => {
++							resolve();
++						});
++					});
++					try {
++						processToClose.stdin?.end();
++					} catch {}
++					await Promise.race([closePromise, new Promise((resolve) => setTimeout(resolve, 2e3).unref())]);
++					if (processToClose.exitCode === null) {
++						try {
++							processToClose.kill("SIGTERM");
++						} catch {}
++						await Promise.race([closePromise, new Promise((resolve) => setTimeout(resolve, 2e3).unref())]);
++					}
++					if (processToClose.exitCode === null) try {
++						processToClose.kill("SIGKILL");
++					} catch {}
++				}
++			} finally {
++				// Descendants may retain inherited pipe ends after the child exits.
++				// Release only this transport's parent-side handles.
++				for (const stream of [processToClose?.stdin, processToClose?.stdout, processToClose?.stderr, this._stderrStream]) try {
++					stream?.destroy();
+ 				} catch {}
+-				await Promise.race([closePromise, new Promise((resolve) => setTimeout(resolve, 2e3).unref())]);
++				this._readBuffer.clear();
++				this._notifyClose();
+ 			}
+-			if (processToClose.exitCode === null) try {
+-				processToClose.kill("SIGKILL");
+-			} catch {}
+-		}
+-		this._readBuffer.clear();
+-	}
++		})();
++		return this._closePromise;
++	}
++
+ 	send(message) {
+ 		return new Promise((resolve) => {
+ 			if (!this._process?.stdin) throw new require_src.SdkError(require_src.SdkErrorCode.NotConnected, "Not connected");

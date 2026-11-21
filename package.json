@@ -8,7 +8,10 @@
       "electron",
       "esbuild",
       "node-pty"
-    ]
+    ],
+    "patchedDependencies": {
+      "@modelcontextprotocol/client@2.4.0": "patches/@modelcontextprotocol__client@2.4.0.patch"
+    }
   },
   "engines": {
     "node": ">=24.4.0",

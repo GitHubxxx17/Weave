@@ -1,0 +1,25 @@
+{
+  "name": "@weave/mcp-client",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint src test",
+    "test": "vitest run --root ../.. --config vitest.config.ts packages/mcp-client/test",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1"
+  }
+}
