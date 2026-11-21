@@ -1,5 +1,14 @@
 # Weave Foundation Architecture
 
+The planned Stage 6.2d adds a loopback HTTP installer for already bundled
+local ESM directories on owned startup. It uses bounded, transient previews
+and reviewed artifact publication, then records candidate import without
+rebuilding the healthy Generation. Reviewed selection uses the same durable
+authority transaction and queue. Managed JSON projects saved decisions and
+actual members captured in the same ticket, with cached catalog reads. See
+the [installer design](../superpowers/specs/2026-11-22-managed-plugin-installer-api-design.md)
+and [implementation plan](../superpowers/plans/2026-11-22-managed-plugin-installer-api.md).
+
 Stage 6.2c.2 integrates managed plugin authority and artifact ownership into
 Server startup. With local ESM enabled, a registered store automatically resumes
 at its bound root before source preparation or HTTP listen. An unregistered
@@ -32,8 +41,8 @@ restart with binding options omitted. The existing `/plugins` and `/commands`
 GETs project cached state. Published managed members appear as path-free
 `kernel` entries, manual rows keep their discovery paths, and public failures
 use safe messages while retaining raw causes privately. Managed desired and
-retired state stay private. Installer HTTP and managed catalog DTOs, Studio
-installation, GitHub acquisition and the discovery catalog belong to later
+retired state stay private. Installer HTTP and managed catalog DTOs follow in
+Stage 6.2d. Studio installation, GitHub acquisition and the discovery catalog belong to later
 stages. See the
 [managed source design](../superpowers/specs/2026-11-21-managed-plugin-source-design.md)
 and [Server plan](../superpowers/plans/2026-11-21-managed-plugin-source-server.md).
