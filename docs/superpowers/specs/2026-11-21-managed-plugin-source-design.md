@@ -359,40 +359,100 @@ existing behavior.
 
 ### Publication and loss
 
-Managed origin flows through `PreparedExtensionItem`, `ExtensionMember` and
-private failure attribution. Keep origin independent of wire metadata.
-Before publication, asynchronously revalidate selected evidence with bounded
-owned reads and complete the existing source rechecks. After all awaits,
-perform the final synchronous lease and exact still-selected checks adjacent
-to the commit path, outside per-plugin attribution. Apply final cached
-revision, eligibility, membership and persistent-loss checks in the same
-stack, then call `ServerHost.commit`. A changed or absent artifact under intact
-authority uses the existing candidate identity recheck or an attributed
-selection issue. A guard marker, including the kernel setup cause, bypasses
-per-plugin exclusion and takes the authority failure path.
+Local origin flows through eligible identities, prepared items and failures,
+and current and retained members. Match source, plugin ID, package candidate
+identity and origin in admission and publication. Managed identity includes the
+activation sequence. Keep these checks and origin metadata private.
 
-A composition-local ownership-loss latch is independent of ordinary revision
-blocking. On first observed loss, latch and block any current managed
-Generation before attempting to withdraw managed eligibility. Admission,
-managed operations and publication consult the latch independently of the
-package snapshot. If withdrawal fails, preserve both causes privately and
-continue signalling unfinished work. The guard still surfaces the authority
-marker. Keep an already-compliant unmanaged current Generation available.
-If a compliant unmanaged commit proceeds after the persistent block was
-latched, reapply the block in the commit stack. Managed commands except
-durable replay fail for the rest of the composition.
+The composition supplies this private `managedAuthority` option to the
+coordinator when managed execution is enabled.
 
-Abort managed reads and the unpublished mixed attempt containing managed
-work, and detach its attempt abort target in the commit stack. Published MCP
-allocations retain their ordinary preparation signal listener until disposal.
-Keep that signal independent of the permanent loss signal so active and
-retired pins retain their resources.
+```ts
+interface ManagedGenerationAuthority {
+  readonly ownershipLossSignal: AbortSignal;
+  assertNotLostSync(): undefined;
+  assertManagedPublicationSync(identities: readonly ExtensionIdentity[]): undefined;
+  assertManagedStartSync(): undefined;
+}
+```
 
-Managed publication and already-queued turns check the held lease. Install
-`assertCanStartSync` on the exact published Generation containing managed
-members. The callback uses the synchronous lease check and loss handler before
-Runtime can create a turn. This adds no per-turn digest or ownership reacquire.
-Ownership is scoped to cooperating processes and the checks in 6.2b.
+The publication hook takes only the exact managed identities in the proposed
+membership. It checks the latch and held lease, then reconciles the latest
+durable selection, enabled matching trust and known paired MCP namespace. It
+resolves those identities against current ready evidence using the package
+identity contract. The closure shares the evaluation guard's authority and
+evidence and performs no artifact reads. Selection mismatch withdraws stale
+eligibility and rejects with `ExplicitLocalAuthorityError`.
+
+Before publication, complete the ordered ordinary source and bounded exact
+managed artifact rechecks. Use identity refresh or an attributed selection
+issue for an ordinary artifact mismatch. Validate stamps and surviving
+membership, check MCP `isReady`, and run the final publication hook outside
+per-plugin attribution. Because the hook can change authority synchronously,
+recapture cached stamps and eligibility and check revision, open state, exact
+origin-aware membership and the latch before `ServerHost.commit` in the same
+stack. Apply the same hook and post-guard checks to current managed members
+before returning an unchanged result after the ordered refresh. A change during
+the hook invalidates the unchanged result or candidate. Ordinary attributable
+assembly and ServerHost commit errors keep the existing isolation path.
+
+Recognize a direct `ExplicitLocalAuthorityError` and a `PluginError` with
+code `plugin-setup-failed` and that marker as its direct cause before
+normalizing or attributing errors. Both reject through the authority failure
+path and leave the current pointer in place. Preserve the original thrown
+value and its cause privately. When an interrupted mixed iteration reports an
+incidental cancellation or plugin failure, use the latched authority marker.
+
+The composition exposes the synchronous receiver
+`onOwnershipLostSync(error: PluginStoreOwnershipError): undefined`. The startup
+observer retains the first error before forwarding it.
+Attach the composition receiver after the coordinator exists and before initial
+authority adoption, reload and listen. Deliver a pending first error once at
+attachment. A held check that first observes loss also routes that error
+through the same receiver. Owned startup can transport loss while production
+managed execution is disabled.
+
+On first notification, latch the original loss before any callback and call
+the private coordinator `blockManagedOwnershipLossSync()` before withdrawing
+eligibility. The coordinator latches a persistent admission block if current
+membership contains a managed origin. The composition withdraws ready evidence
+synchronously through the paired authority flow. The latch stays authoritative
+for managed evidence, publication and fresh commands even if projection throws
+or a raw package snapshot is stale. Preserve the loss and any withdrawal
+failure as private causes and signal unfinished work even when withdrawal
+fails. The receiver returns `undefined` and managed checks surface the marker.
+Durable replay retains its existing no-effects path.
+
+An already-compliant unmanaged current remains available when loss observes it.
+If a persistent block was established and a compliant unmanaged commit later
+proceeds, reapply it in the same stack as the package commit that clears runner
+blocking. Keep ordinary revision and shutdown blocks independently.
+
+Give each unpublished preparation iteration its own abort controller. After
+the MCP-first snapshot and before preparing the first source, register the
+iteration as a loss target when the eligible survivors include managed work.
+Bridge loss to that controller through a detachable listener and consult the
+latch defensively before entering managed preparation. Use the iteration
+signal for both sources through assembly and the final rechecks. Detach its
+loss listener during successful publication before any retirement await, and
+on rollback or retry after disposal. The next iteration uses a new controller.
+Keep shutdown cancellation wired to the active iteration. Combine the caller
+and permanent loss signals only at the managed read boundary. A managed read
+in flight when loss occurs rejects through the authority path. Later runtime
+refreshes skip managed payloads and can still assemble compliant unmanaged
+membership from the paired snapshots.
+Published MCP allocations retain their iteration signal listener until disposal.
+Their signal stays independent of the permanent loss signal, preserving active
+and retired pins and their resources. Keep the existing local fallback
+invalidation of unresolved raw local preparations as a separate cancellation.
+
+Install `assertManagedStartSync` as `assertCanStartSync` on the exact wrapped
+Generation passed to `ServerHost.commit` when its final membership contains
+managed origin. The package invokes it at the actual Session queue head before
+the runner starts the turn. It checks the latch and held lease and routes any
+newly observed loss through the receiver. Start admission performs no selected
+evidence refresh, artifact read or ownership reacquire. Ownership is scoped to
+cooperating processes and the checks in 6.2b.
 
 ### Queued durable decisions
 
