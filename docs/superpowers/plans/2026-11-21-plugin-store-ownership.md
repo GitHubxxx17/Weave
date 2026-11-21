@@ -335,8 +335,11 @@ only its unique output after child exit. Parent passes compiled
 as `pathToFileURL(...).href` file URLs in IPC startup config; child does not
 import a test substitute. Use `{ execArgv: [] }` for ordinary forked `.mjs`
 fixtures so Vitest-only inherited loaders/arguments cannot leak into child startup.
-It reports `{kind:'held',pid,binding,nodeVersion,sqliteVersion}` only after actual
-acquisition, accepts `close`/`write-main` messages, and sends structured typed
+For race tests, the fixture first opens authority and reports `prepared`; the
+parent opens same-main handles sequentially, then releases their `start` gates.
+This prevents authority-constructor contention from substituting for an owner
+acquisition race. It reports `{kind:'held',pid,binding,nodeVersion,sqliteVersion}`
+only after actual acquisition, accepts `close`/`write-main` messages, and sends structured typed
 errors on failure. Parent uses fork/IPC and bounded event deadlines, no fixed
 sleep guesses. Use `createRequire(import.meta.url)` for CLI resolution and the
 existing Node util promisify; no ts-node/tsx dependency is added.
@@ -344,7 +347,9 @@ existing Node util promisify; no ts-node/tsx dependency is added.
 - [ ] **Step 2: Add RED exclusion and SIGKILL tests using three real children.** A
       obtains the root lease. B with same DB/root reports busy and exits with no store.
       Parent SIGKILLs A and awaits actual exit; C acquires same unchanged binding and
-      closes normally. Read bound event bytes/count before/after; integrity_check is
+      closes normally. Establish/release a seed binding and read its event baseline
+      before A starts, since a live exclusive holder blocks a second owner-file read.
+      Read bound event bytes/count after all holders close; integrity_check is
       ok. In finally terminate/await every live child before deleting temp data.
 
 The test harness defines `startOwnerChild(config)` returning an IPC handle with

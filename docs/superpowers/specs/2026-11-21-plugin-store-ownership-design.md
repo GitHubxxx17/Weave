@@ -96,7 +96,9 @@ Do not mistake its path/schema validation for a lease capability. The state
 obtains the main filename from `DatabaseSync.location('main')` on the
 OWNED connection, not a caller's arbitrary file claim. Node exposes `location`
 and `isTransaction` since v24.0, within the repository's >=24.4 floor. The
-ownership layer canonicalizes/checks that location. Registration verifies the
+ownership layer canonicalizes/checks that location. Because SQLite resolves a
+symlink leaf in its reported location, the managed root methods also check the
+constructor opening filename leaf without changing legacy manual API behavior. Registration verifies the
 binding database ID and its canonical path against that owned main file before
 its short write transaction; it never opens another main connection. `:memory:`
 remains usable by 6.2a/manual callers but cannot enter managed ownership.
@@ -110,7 +112,7 @@ rollback state and ambiguous COMMIT reconciliation. These two methods need no
 request ID, do not advance any install/trust/operation head and cannot select or
 trust a plugin. They are configuration metadata operations, not managed commands.
 
-The Server wrapper proposal is:
+The Server wrapper is:
 
 ```ts
 interface OwnedPluginArtifactStore extends PluginArtifactStore {
