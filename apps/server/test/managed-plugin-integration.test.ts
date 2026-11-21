@@ -476,6 +476,84 @@ describe('joint managed, manual and MCP Generation', () => {
     }
   });
 
+  it('cancels a retired managed turn on a fresh immediate no-op and leaves replay cancellation-free', async () => {
+    const f = await createRealManagedCompositionFixture();
+    const entered = Promise.withResolvers<AbortSignal>();
+    const release = Promise.withResolvers<void>();
+    let oldTurn: Promise<unknown> | undefined;
+    try {
+      await f.seedManaged('notes', 'retained');
+      await f.seedMcp('remote');
+      const first = echoConnection(async (_name, _args, options) => {
+        entered.resolve(options!.signal!);
+        await release.promise;
+        return { content: [{ type: 'text', text: 'Retired MCP reply' }] };
+      });
+      const connect = vi
+        .fn<typeof connectMcp>()
+        .mockResolvedValueOnce(first)
+        .mockImplementation(async () => echoConnection());
+      const host = f.compose({ mcpConnect: connect });
+      const original = await host.coordinator.reload();
+      const tool = original.members.find(({ sourceId }) => sourceId === 'mcp')!.manifest
+        .contributes!.tools![0]!;
+      oldTurn = f.runTool([tool, 'notes'], 'retired-managed');
+      const signal = await Promise.race([
+        entered.promise,
+        oldTurn.then(() => {
+          throw new Error('Expected a pinned turn');
+        }),
+      ]);
+      const disable = decisionInput('disable', 'disable-notes', f.authority.snapshotSync()).request;
+      if (disable.command.kind !== 'disable') throw new Error('Expected disable request');
+      const disabled = await host.applyManagedSelection!({ ...disable, command: disable.command });
+      if (disabled.kind !== 'committed') throw new Error('Expected committed disable');
+      expect(disabled.application.status).toBe('applied');
+      expect(signal.aborted).toBe(false);
+      expect(host.coordinator.retainedGenerations()).toContainEqual(
+        expect.objectContaining({
+          generationId: original.generation.id,
+          current: false,
+          members: expect.arrayContaining([
+            expect.objectContaining({ pluginId: 'notes', origin: 'managed' }),
+          ]),
+        }),
+      );
+      expect(host.coordinator.snapshot().members.map(({ pluginId }) => pluginId)).toEqual([
+        'mcp-remote',
+      ]);
+
+      const noOp = decisionInput(
+        'disable',
+        'repeat-immediately',
+        f.authority.snapshotSync(),
+        true,
+      ).request;
+      if (noOp.command.kind !== 'disable') throw new Error('Expected disable request');
+      const request = { ...noOp, command: noOp.command };
+      const abort = vi.spyOn(f.runtime.serverHost.controller()!, 'abortActiveRuns');
+      const retry = vi.spyOn(host.coordinator, 'retryImmediateRevocation');
+      const repeated = await host.applyManagedSelection!(request);
+      if (repeated.kind !== 'committed') throw new Error('Expected committed no-op');
+      expect(repeated.operation.decision.changed).toBe(false);
+      expect(repeated.application).toEqual(disabled.application);
+      expect(retry).toHaveBeenCalledExactlyOnceWith('local-esm', 'notes', 'managed');
+      expect(abort).toHaveBeenCalledOnce();
+      expect(signal.aborted).toBe(true);
+      await expect(host.applyManagedSelection!(request)).resolves.toEqual({
+        kind: 'replayed',
+        operation: repeated.operation,
+        currentAuthority: repeated.savedAuthority,
+      });
+      expect(retry).toHaveBeenCalledOnce();
+      expect(abort).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+      await Promise.allSettled([oldTurn]);
+      await f.close();
+    }
+  });
+
   it('detaches published MCP from ownership loss before awaiting retirement', async () => {
     const f = await createRealManagedCompositionFixture();
     const retiring = Promise.withResolvers<void>();
