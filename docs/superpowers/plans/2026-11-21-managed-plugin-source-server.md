@@ -628,7 +628,7 @@ pnpm exec vitest run apps/server/test/plugin-catalog-projection.test.ts apps/ser
 pnpm --filter @weave/server typecheck
 ```
 
-**Files:** `apps/server/src/{main,managed-plugin-startup,local-plugin-host,plugin-catalog,local-extension-source,mcp-source,extension-coordinator}.ts`, `apps/server/test/{plugin-catalog-projection,plugin-management-api,mcp-api,managed-plugin-integration}.test.ts`, and the existing managed composition support fixture.
+**Files:** `apps/server/src/{main,managed-plugin-startup,local-plugin-host,plugin-catalog,local-extension-source,mcp-source,extension-coordinator}.ts`, `apps/server/test/{plugin-catalog-projection,plugin-management-api,mcp-api,managed-plugin-integration,managed-plugin-startup,local-plugin-integration}.test.ts`, and the existing managed composition support fixture.
 
 **Consumes:** composition snapshots and private managed state from Tasks 3–5.
 
@@ -648,6 +648,10 @@ pnpm --filter @weave/server typecheck
       steps. Add a gated override mutation that becomes sticky after the
       initial check and verify the override receives no append for that ID.
 - [ ] Assert cached GET read counters, one same-ID published base row, manual-only `local.generation.plugins`, manual contributions/commands and existing trust errors. Inject a distinctive private payload path into both a managed-attributed failure and an unattributed mixed-generation failure. Assert its absence in serialized catalog/reload projections and the exact fixed public code/message.
+- [ ] Update the earlier production-off startup assertions to verify selected
+      execution. Update reserved-ID compatibility tests to assert unique
+      published public base entries while retaining invalid manual discoveries
+      in the private host snapshot. Keep manual display paths and diagnostics.
 - [ ] After origin filtering and sanitization, attach the guarded managed
       composition to normal startup. Run Task 3's joint fixture with real
       `startServer()`, check its cached HTTP projections, then restart with
