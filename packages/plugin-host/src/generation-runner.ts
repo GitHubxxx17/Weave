@@ -11,6 +11,7 @@ export interface RunnerGeneration<R extends GenerationRequest, E, T> {
   readonly id: number;
   readonly runner: GenerationRunner<R, E>;
   readonly resources: T;
+  readonly assertCanStartSync?: (() => undefined) | undefined;
   dispose(): void | Promise<void>;
 }
 
@@ -83,6 +84,7 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
 
   class Run implements AsyncIterableIterator<E> {
     private phase: 'idle' | 'queued' | 'running' | 'finished' = 'idle';
+    private guardInProgress = false;
     private readonly abort = new AbortController();
     private readonly buffer: E[] = [];
     private readonly waiting: PendingNext<E>[] = [];
@@ -149,8 +151,43 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
         this.release();
         return;
       }
-      this.phase = 'running';
       const state = current;
+      this.guardInProgress = true;
+      try {
+        const guard = state.generation.assertCanStartSync;
+        if (guard !== undefined) {
+          if (typeof guard !== 'function') {
+            throw new TypeError('Generation start guard must be a function');
+          }
+          const result: unknown = Reflect.apply(guard, state.generation, []);
+          if (result !== undefined) {
+            void Promise.resolve(result).catch(() => undefined);
+            throw new TypeError('Generation start guard must return undefined synchronously');
+          }
+        }
+      } catch (cause: unknown) {
+        const wasQueued = this.phase === 'queued';
+        this.finish(cause, true);
+        if (wasQueued) this.release();
+        return;
+      } finally {
+        this.guardInProgress = false;
+        this.flush();
+      }
+
+      if (this.phase !== 'queued') return;
+      if (closed || blocked) {
+        this.finish(blocked);
+        this.release();
+        return;
+      }
+      if (state !== current) {
+        this.finish(new Error('Current generation changed during start admission'));
+        this.release();
+        return;
+      }
+
+      this.phase = 'running';
       state.active += 1;
       const onAbort = () => this.cancel(state.abort.signal.reason);
       state.abort.signal.addEventListener('abort', onAbort, { once: true });
@@ -278,6 +315,8 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
     }
 
     private flush(): void {
+      // A guard can synchronously finish this run, then throw before admission settles.
+      if (this.guardInProgress) return;
       while (this.waiting.length > 0) {
         if (!this.returned && this.buffer.length > 0) {
           this.waiting.shift()!.resolve({ done: false, value: this.buffer.shift()! });
