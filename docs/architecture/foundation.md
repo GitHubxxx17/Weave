@@ -1,5 +1,13 @@
 # Weave Foundation Architecture
 
+Stage 6 installation is an approved delivery direction, with the filesystem
+artifact slice designed before implementation. It uses hidden content-addressed
+payloads, explicit durable selection and separate reviewed activation. Installing
+a candidate does not change the current Generation or grant trust. See
+[ADR 0005](../adr/0005-plugin-installation-and-distribution.md) and the
+[installation design](../superpowers/specs/2026-11-21-plugin-installation-design.md).
+These contracts are staged; this paragraph does not claim installer functionality.
+
 Stage 5.4 extends Studio's existing App-owned plugin catalog store with the MCP
 HTTP catalog and a shared ESM/MCP write gate. The two catalogs are published
 together only after their complete generation/admission projections agree;
