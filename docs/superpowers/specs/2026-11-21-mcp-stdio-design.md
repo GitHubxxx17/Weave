@@ -559,3 +559,24 @@ snapshot 及 result(decisionSequence/applied/unchanged/failed/error)。HTTP不�
 持久库、环境或连接。所有写接口复用管理安全守卫，CORS 支持 PUT，开发代理增加 /mcp。
 main 即使关闭 ESM 也创建 MCP store/source/manager，先 drain 来源资源再关闭持久库。
 实施计划见[5.3 Server 管理](../plans/2026-11-21-mcp-server-management.md)。
+
+### 10.5 5.4 Studio 实施契约
+
+沿用单一 App-owned PluginCatalogStore/context，增加 MCP 目录及动作；ESM/MCP
+共用一个写入门。初始/刷新并行 GET 两目录，最多三轮完整比较 generation 的
+id、acceptingRuns、blocked 后原子安装，失配保留上一致快照但标旧、禁管理写入。
+mutation 成功结果（持久决定序号和重建结果）单独保留，即使另一目录读取失败。
+旧 GET 不得覆盖新写入结果。面板激活仅 GET；用户明确重载走 /mcp/reload，
+关闭 ESM 时同样有效。只有明确的 management-disabled404 兼容插件只读旧服务。
+
+MCPConfigDialog 保存原始路径/argv/环境目标引用名给 Server 规范化；保存与
+信任独立。McpReview 捕获规范 config、configDigest、authoritySequence、
+reviewEpoch，展示上次 reviewedConfig 字段差异；任意409刷新并使本次审阅失效，
+不替换 token 自动重投。所有 schema/annotations 按数据展示，完整保留 JSON 字段。
+
+MCP 三类停用/撤销/移除对话框的 immediate 选择始终可用，明确影响所有当前及
+退役代回合；不依赖当前界面可见的 running session 才提供或提交此选项。
+复用 PluginDialog 的取消初始焦点、键盘、背景 inert、返回焦点和滚动外壳。
+MCPPanel 使用 /mcp 健康，合并 host:mcp 注册表实际贡献，避免重复健康普通行；
+状态、stale、active/draining 和持久结果分别展示，失败不推测为已加载。
+实施计划见[5.4 Studio](../plans/2026-11-21-studio-mcp-management.md)。

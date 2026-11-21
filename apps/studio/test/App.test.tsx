@@ -192,6 +192,12 @@ function createWorkspaceFetchMock(
     const url = String(input);
     const method = init?.method ?? 'GET';
     const requestPath = new URL(url, 'http://weave.local').pathname;
+    if (requestPath === '/mcp' && method === 'GET') {
+      return new Response(
+        JSON.stringify({ error: { code: 'mcp-management-disabled', message: 'MCP disabled' } }),
+        { status: 404, headers: { 'content-type': 'application/json' } },
+      );
+    }
     if (requestPath === '/plugins' && method === 'GET') {
       return new Response(JSON.stringify({ plugins: [] }), {
         status: 200,

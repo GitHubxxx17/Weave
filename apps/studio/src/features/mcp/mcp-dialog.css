@@ -1,0 +1,96 @@
+.mcp-config-fields {
+  display: grid;
+  gap: 8px;
+}
+.mcp-config-fields label,
+.mcp-environment-row label {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  font-weight: 500;
+}
+.mcp-config-fields input,
+.mcp-config-fields textarea,
+.mcp-environment-row input {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--surface-soft);
+  color: var(--ink);
+  font: inherit;
+}
+.mcp-config-fields textarea {
+  resize: vertical;
+  min-height: 70px;
+}
+.mcp-config-fields small,
+.mcp-environment-fields small {
+  display: block;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.mcp-environment-fields {
+  min-width: 0;
+  margin: 16px 0 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+.mcp-environment-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+.mcp-environment-fields button {
+  min-height: 32px;
+  padding: 5px 9px;
+  margin-bottom: 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--ink);
+}
+.mcp-environment-row button {
+  margin: 0;
+}
+.mcp-argument-list,
+.mcp-reference-list,
+.mcp-launch-details {
+  overflow-wrap: anywhere;
+}
+.mcp-argument-list code,
+.mcp-reference-list code,
+.plugin-review-differences pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.mcp-reference-list > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  margin-block: 5px;
+}
+.mcp-reference-list dd {
+  min-width: 0;
+  margin: 0;
+}
+.mcp-launch-details p {
+  line-height: 1.6;
+}
+@media (max-width: 480px) {
+  .mcp-environment-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .mcp-environment-row button {
+    justify-self: start;
+  }
+  .mcp-reference-list > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+}

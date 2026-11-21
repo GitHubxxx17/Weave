@@ -37,13 +37,16 @@ export function usePluginCatalogState(): PluginCatalogState {
 }
 
 export function PluginPendingBadge(): ReactElement | null {
-  const { catalog } = usePluginCatalogState();
+  const { catalog, mcp } = usePluginCatalogState();
   const count =
-    catalog?.plugins.filter(
+    (catalog?.plugins.filter(
       (plugin) =>
         plugin.origin === 'local' &&
+        plugin.host !== 'mcp' &&
         (plugin.state === 'pending-trust' || plugin.state === 'changed'),
-    ).length ?? 0;
+    ).length ?? 0) +
+    (mcp?.servers.filter((server) => server.state === 'untrusted' || server.state === 'changed')
+      .length ?? 0);
   if (count === 0) return null;
   return (
     <span className="plugin-pending-badge" aria-label={`${String(count)} 个插件待审阅`}>

@@ -49,7 +49,21 @@ function response(payload: unknown, status = 200): Response {
 function installFetch(responses: Array<Response | Promise<Response>>) {
   const fetchMock = vi.fn();
   for (const item of responses) fetchMock.mockImplementationOnce(() => item);
-  vi.stubGlobal('fetch', fetchMock);
+  vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) =>
+    String(input).endsWith('/mcp')
+      ? Promise.resolve(
+          response(
+            {
+              error: {
+                code: 'mcp-management-disabled',
+                message: 'MCP not enabled in legacy fixture',
+              },
+            },
+            404,
+          ),
+        )
+      : fetchMock(input, init),
+  );
   return fetchMock;
 }
 

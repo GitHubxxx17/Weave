@@ -1,0 +1,36 @@
+.mcp-panel {
+  min-width: 0;
+}
+.mcp-panel .overview-block-heading {
+  flex-wrap: wrap;
+}
+.mcp-panel .plugin-group-title {
+  flex: 1;
+}
+.mcp-panel pre {
+  max-width: 100%;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--font-xs, 12px);
+}
+.mcp-panel code,
+.mcp-panel p,
+.mcp-panel summary {
+  overflow-wrap: anywhere;
+}
+.mcp-panel .plugin-fact dd {
+  min-width: 0;
+}
+.mcp-tool-metadata,
+.mcp-generation-binding,
+.mcp-stale-note {
+  min-width: 0;
+  padding-block: 8px;
+}
+.mcp-tool-metadata > details {
+  margin-block: 8px;
+}
+.mcp-tool-metadata > details > summary {
+  cursor: pointer;
+}

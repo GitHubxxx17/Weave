@@ -42,6 +42,18 @@ const local = {
 function response(payload: unknown, status = 200) {
   return new Response(JSON.stringify(payload), { status });
 }
+/** Only the explicit disabled response permits the legacy plugin-only contract. */
+function legacyFetch(
+  pluginFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+) {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
+    String(input) === '/mcp'
+      ? response({ error: { code: 'mcp-management-disabled', message: 'disabled' } }, 404)
+      : pluginFetch(input, init),
+  );
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
 function CatalogProbe(): ReactElement {
   const state = usePluginCatalogState();
   const store = usePluginCatalogStore();
@@ -64,12 +76,12 @@ afterEach(() => {
 describe('plugin catalog React context', () => {
   it('deduplicates StrictMode reads for all consumers and only reads at startup', async () => {
     let resolve!: (value: Response) => void;
-    const fetchMock = vi.fn().mockReturnValue(
+    const pluginFetch = vi.fn().mockReturnValue(
       new Promise<Response>((r) => {
         resolve = r;
       }),
     );
-    vi.stubGlobal('fetch', fetchMock);
+    const fetchMock = legacyFetch(pluginFetch);
     const store = createPluginCatalogStore();
     render(
       <StrictMode>
@@ -79,18 +91,22 @@ describe('plugin catalog React context', () => {
         </PluginCatalogProvider>
       </StrictMode>,
     );
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(screen.getByLabelText('catalog').textContent).toBe('loading:shared');
     await act(async () => {
       resolve(response({ plugins: [row] }));
     });
     expect(screen.getByLabelText('catalog').textContent).toBe('pending-trust:shared');
     expect(screen.getByLabelText('1 个插件待审阅').textContent).toBe('1');
-    expect(fetchMock.mock.calls[0][1]).toEqual({ method: 'GET' });
+    expect(fetchMock.mock.calls.map(([path, init]) => [path, init])).toEqual([
+      ['/plugins', { method: 'GET' }],
+      ['/mcp', { method: 'GET' }],
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('counts only local pending-trust and changed rows and hides zero', async () => {
-    const fetchMock = vi
+    const pluginFetch = vi
       .fn()
       .mockResolvedValueOnce(
         response({
@@ -111,7 +127,7 @@ describe('plugin catalog React context', () => {
           result: { generation: 1, unchanged: false, failed: [] },
         }),
       );
-    vi.stubGlobal('fetch', fetchMock);
+    const fetchMock = legacyFetch(pluginFetch);
     const store = createPluginCatalogStore();
     render(
       <PluginCatalogProvider store={store}>
@@ -123,23 +139,24 @@ describe('plugin catalog React context', () => {
       await store.trust('echo', digest);
     });
     expect(screen.queryByLabelText(/个插件待审阅/)).toBeNull();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it('keeps shared GET alive after the provider unmounts and reuses its cached result', async () => {
     let resolve!: (value: Response) => void;
-    const fetchMock = vi.fn().mockReturnValue(
+    const pluginFetch = vi.fn().mockReturnValue(
       new Promise<Response>((r) => {
         resolve = r;
       }),
     );
-    vi.stubGlobal('fetch', fetchMock);
+    const fetchMock = legacyFetch(pluginFetch);
     const store = createPluginCatalogStore();
     const view = render(
       <PluginCatalogProvider store={store}>
         <CatalogProbe />
       </PluginCatalogProvider>,
     );
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     view.unmount();
     resolve(response({ plugins: [row] }));
     await store.ensureLoaded();
@@ -149,13 +166,13 @@ describe('plugin catalog React context', () => {
       </PluginCatalogProvider>,
     );
     expect(screen.getByLabelText('catalog').textContent).toBe('pending-trust:shared');
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0][1].signal).toBeUndefined();
   });
 
   it('preserves an in-flight write after provider unmount and exposes its completion after remount', async () => {
     let resolve!: (value: Response) => void;
-    const fetchMock = vi
+    const pluginFetch = vi
       .fn()
       .mockResolvedValueOnce(response({ plugins: [row], local }))
       .mockReturnValueOnce(
@@ -163,7 +180,7 @@ describe('plugin catalog React context', () => {
           resolve = r;
         }),
       );
-    vi.stubGlobal('fetch', fetchMock);
+    const fetchMock = legacyFetch(pluginFetch);
     const store = createPluginCatalogStore();
     const view = render(
       <PluginCatalogProvider store={store}>
@@ -175,7 +192,7 @@ describe('plugin catalog React context', () => {
     act(() => {
       operation = store.trust('echo', digest);
     });
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
     view.unmount();
     resolve(
       response({
@@ -193,16 +210,16 @@ describe('plugin catalog React context', () => {
     );
     expect(screen.getByLabelText('catalog').textContent).toBe('loaded:shared');
     expect(screen.queryByLabelText(/个插件待审阅/)).toBeNull();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it('catches the published startup error without retrying provider replay', async () => {
-    const fetchMock = vi
+    const pluginFetch = vi
       .fn()
       .mockResolvedValue(
         response({ error: { code: 'plugin-host-closed', message: 'closed' } }, 503),
       );
-    vi.stubGlobal('fetch', fetchMock);
+    const fetchMock = legacyFetch(pluginFetch);
     const store = createPluginCatalogStore();
     render(
       <StrictMode>
@@ -213,7 +230,7 @@ describe('plugin catalog React context', () => {
       </StrictMode>,
     );
     await screen.findByText('plugin-host-closed:shared');
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(screen.queryByLabelText(/个插件待审阅/)).toBeNull();
   });
 });

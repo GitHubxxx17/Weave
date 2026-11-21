@@ -2,6 +2,7 @@ import { useRef, useState, type ReactElement } from 'react';
 import { Puzzle, RotateCw } from 'lucide-react';
 
 import { usePluginCatalogState, usePluginCatalogStore } from './plugin-catalog-context.js';
+import { McpPanel } from '../mcp/mcp-panel.js';
 import { PluginDecisionDialog } from './plugin-decision-dialog.js';
 import { createPluginReview, type PluginReview } from './plugin-review.js';
 import { PluginTrustDialog } from './plugin-trust-dialog.js';
@@ -349,10 +350,16 @@ export function PluginsPanel({
   readonly hasRunningSessions: boolean;
 }): ReactElement {
   const store = usePluginCatalogStore();
-  const { catalog, initialLoading, pendingOperation, error, lastResult } = usePluginCatalogState();
+  const { catalog, mcp, consistency, initialLoading, pendingOperation, error, lastResult } =
+    usePluginCatalogState();
   const [dialog, setDialog] = useState<PanelDialog | null>(null);
   const regionRef = useRef<HTMLDivElement>(null);
   const busy = initialLoading || pendingOperation !== undefined;
+  const actionsBlocked = busy || consistency.kind !== 'ready';
+  const ordinaryPlugins = catalog?.plugins.filter((plugin) => plugin.host !== 'mcp') ?? [];
+  const hasMcpRows =
+    (mcp?.servers.length ?? 0) > 0 ||
+    catalog?.plugins.some((plugin) => plugin.host === 'mcp') === true;
   const idCounts = new Map<string, number>();
   for (const plugin of catalog?.plugins ?? [])
     idCounts.set(plugin.id, (idCounts.get(plugin.id) ?? 0) + 1);
@@ -377,16 +384,18 @@ export function PluginsPanel({
         <div className="overview-block-heading">
           <h3>插件</h3>
           <span className="activity-state">
-            {catalog === undefined ? null : `${String(catalog.plugins.length)} 个`}
+            {catalog === undefined ? null : `${String(ordinaryPlugins.length)} 个`}
           </span>
           <button
             type="button"
             className="icon-button"
             aria-label="刷新插件列表"
-            title="刷新"
+            title="全量重新发现并加载扩展"
             disabled={busy}
             onClick={() => {
-              void store.reload().catch(() => undefined);
+              void (consistency.kind === 'ready' ? store.reload() : store.refresh()).catch(
+                () => undefined,
+              );
             }}
           >
             <RotateCw
@@ -402,12 +411,36 @@ export function PluginsPanel({
         ) : null}
         {pendingOperation === undefined ? null : (
           <p className="activity-state" role="status">
-            {pendingOperation.kind === 'reload' ? '正在重新发现并加载插件…' : '正在保存插件决定…'}
+            {pendingOperation.kind === 'reload' ? '正在重新发现并加载扩展…' : '正在保存扩展决定…'}
           </p>
         )}
         {error === undefined ? null : (
           <p className="error-message" role="alert">
             {error.message}（{error.code}）
+          </p>
+        )}
+        {catalog !== undefined && consistency.kind !== 'ready' ? (
+          <div className="plugin-operation-result" role="status">
+            <p>当前显示旧目录；正在读取或等待目录同步，管理操作暂不可用。</p>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={busy || consistency.kind === 'refreshing'}
+              onClick={() => {
+                void store.refresh().catch(() => undefined);
+              }}
+            >
+              重新读取目录
+            </button>
+          </div>
+        ) : null}
+        {catalog?.generation === undefined ? null : (
+          <p className="plugin-note">
+            一致目录：第 {catalog.generation.id} 代 ·{' '}
+            {catalog.generation.acceptingRuns ? '可开始新回合' : '暂停接受新回合'}
+            {catalog.generation.blocked === undefined
+              ? null
+              : ` · ${catalog.generation.blocked.message}`}
           </p>
         )}
         {lastResult?.error === undefined ? null : (
@@ -422,7 +455,7 @@ export function PluginsPanel({
             <Issue issue={issue} />
           </div>
         ))}
-        {catalog?.plugins.length === 0 ? (
+        {catalog !== undefined && ordinaryPlugins.length === 0 && !hasMcpRows ? (
           <div className="activity-empty">
             <span className="activity-empty-icon" aria-hidden="true">
               <Puzzle aria-hidden="true" />
@@ -437,7 +470,7 @@ export function PluginsPanel({
         ) : null}
         {catalog === undefined
           ? null
-          : groupByOrigin(catalog.plugins).map((group) => (
+          : groupByOrigin(ordinaryPlugins).map((group) => (
               <div key={group.origin} className="plugin-group">
                 <h4 className="plugin-group-title">
                   {displayLabel(originLabels, group.origin)}
@@ -449,7 +482,7 @@ export function PluginsPanel({
                       key={JSON.stringify([plugin.origin, plugin.id, plugin.local?.directory])}
                       plugin={plugin}
                       manageable={local !== undefined && canManage(plugin, idCounts)}
-                      busy={busy}
+                      busy={actionsBlocked}
                       onReview={(item) => {
                         const review = createPluginReview(item);
                         if (review !== undefined) setDialog({ kind: 'review', review });
@@ -464,6 +497,7 @@ export function PluginsPanel({
               </div>
             ))}
       </section>
+      <McpPanel hasRunningSessions={hasRunningSessions} getFallbackFocus={getFallbackFocus} />
       {local === undefined ? (
         catalog === undefined ? null : (
           <p className="plugin-note">此服务仅提供插件列表，本地插件管理不可用。</p>
@@ -505,7 +539,7 @@ export function PluginsPanel({
       {dialog?.kind === 'review' ? (
         <PluginTrustDialog
           review={dialog.review}
-          busy={busy}
+          busy={actionsBlocked}
           onCancel={() => setDialog(null)}
           onTrust={(review) => store.trust(review.id, review.digest)}
           getFallbackFocus={getFallbackFocus}
@@ -516,7 +550,7 @@ export function PluginsPanel({
           plugin={dialog.plugin}
           action={dialog.kind}
           hasRunningSessions={hasRunningSessions}
-          busy={busy}
+          busy={actionsBlocked}
           onCancel={() => setDialog(null)}
           onConfirm={(immediate) =>
             dialog.kind === 'disable'

@@ -1,5 +1,16 @@
 # Weave Foundation Architecture
 
+Stage 5.4 extends Studio's existing App-owned plugin catalog store with the MCP
+HTTP catalog and a shared ESM/MCP write gate. The two catalogs are published
+together only after their complete generation/admission projections agree;
+bounded GET reconciliation never starts processes. Saving a launch configuration
+and reviewing its canonical trust snapshot are separate actions. Explicit reload
+rebuilds both extension sources, and immediate removal decisions can cancel all
+current and retired turns. Studio remains an HTTP/SSE client with no runtime,
+process, filesystem or secret access. See the
+[MCP design §10.5](../superpowers/specs/2026-11-21-mcp-stdio-design.md) and
+[Studio implementation plan](../superpowers/plans/2026-11-21-studio-mcp-management.md).
+
 This document explains the first runnable Weave slice, the implemented
 headless Agent Loop, the shared Tool Pipeline, and the Project/Session
 persistence boundary. It is a learning and maintenance guide, not a

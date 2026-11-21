@@ -46,7 +46,8 @@ function plugin(over: Partial<PluginListItem> = {}): PluginListItem {
 /** Answers each request with the next response; the last one repeats. */
 function stubPlugins(...responses: Array<readonly PluginListItem[] | number>) {
   const queue = [...responses];
-  const fetchMock = vi.fn(async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input) === '/mcp') return disabledMcp();
     const next = queue.length > 1 ? queue.shift() : queue[0];
     if (typeof next === 'number') {
       return new Response('{}', { status: next });
@@ -123,14 +124,22 @@ function catalog(
     },
   };
 }
+function disabledMcp(): Response {
+  return new Response(
+    JSON.stringify({ error: { code: 'mcp-management-disabled', message: 'disabled' } }),
+    { status: 404 },
+  );
+}
+
 function stubCatalog(...responses: unknown[]) {
   const queue = [...responses];
-  const fetchMock = vi.fn(
-    async () =>
-      new Response(JSON.stringify(queue.length > 1 ? queue.shift() : queue[0]), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      }),
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) =>
+    String(input) === '/mcp'
+      ? disabledMcp()
+      : new Response(JSON.stringify(queue.length > 1 ? queue.shift() : queue[0]), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
   );
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
@@ -196,7 +205,7 @@ describe('PluginsPanel', () => {
     stubPlugins([
       plugin({
         description: '回显文本',
-        host: 'mcp',
+        host: 'subprocess',
         capabilities: ['tool', 'prompt', 'event', 'command'],
         engines: { weave: '>=1.0.0' },
         permissions: ['workspace:read', 'service:weave.session.store'],
@@ -218,7 +227,7 @@ describe('PluginsPanel', () => {
     expect(item).not.toBeNull();
     const detail = within(item as HTMLElement);
     expect(detail.getByText('v1.2.3')).toBeTruthy();
-    expect(detail.getByText('MCP')).toBeTruthy();
+    expect(detail.getByText('子进程')).toBeTruthy();
     expect(detail.getByText('server-echo')).toBeTruthy();
     expect(detail.getByText('回显文本')).toBeTruthy();
     expect(detail.getByText('工具', { selector: '.plugin-chip' })).toBeTruthy();
@@ -285,7 +294,7 @@ describe('PluginsPanel', () => {
 
     expect(await screen.findByText('Server Echo')).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.filter(([path]) => String(path) !== '/mcp')).toHaveLength(2);
   });
 
   it('does not update after it is unmounted mid-request', async () => {
@@ -366,7 +375,9 @@ describe('local plugin management panel', () => {
     await store.reload();
     fireEvent.click(screen.getByRole('button', { name: '信任并启用' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    const [, request] = fetchMock.mock.calls[2]! as unknown as [string, RequestInit];
+    const [, request] = fetchMock.mock.calls.filter(
+      ([path]) => String(path) !== '/mcp',
+    )[2]! as unknown as [string, RequestInit];
     expect(JSON.parse(String(request.body))).toEqual({ digest });
   });
 
@@ -505,7 +516,9 @@ describe('local plugin management panel', () => {
     fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.click(screen.getByRole('button', { name: '确认撤销信任' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    const requests = fetchMock.mock.calls as unknown as [string, RequestInit][];
+    const requests = fetchMock.mock.calls.filter(
+      ([path]) => String(path) !== '/mcp',
+    ) as unknown as [string, RequestInit][];
     expect(requests.map(([url, init]) => [url, init.method])).toEqual([
       ['/plugins', 'GET'],
       ['/plugins/local-echo/enable', 'POST'],
@@ -520,6 +533,7 @@ describe('local plugin management panel', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(_input) === '/mcp') return disabledMcp();
         if (init?.method === 'POST') {
           writes += 1;
           return new Response(
@@ -605,7 +619,7 @@ describe('local plugin management panel', () => {
     first.unmount();
     renderPluginPanel(false, store);
     await screen.findByText('local-echo', { selector: '.plugin-name' });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.filter(([path]) => String(path) !== '/mcp')).toHaveLength(1);
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 });
