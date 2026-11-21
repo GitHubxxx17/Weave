@@ -98,9 +98,10 @@ export interface StartServerOptions {
 /**
  * Starts the local HTTP control plane and its Runtime.
  *
- * The function resolves only after the TCP server is listening. If binding
- * fails, it closes any partially-created server and stops the Runtime before
- * rethrowing the original error.
+ * The function resolves only after the TCP server is listening. If startup
+ * fails, the Server attempts to close acquired resources. Successful cleanup
+ * preserves the original error. An AggregateError includes the original error
+ * first, followed by any cleanup failures.
  *
  * @param portInput Port number or string value validated by the server boundary.
  * @param options Persistence configuration and optional test Store overrides.

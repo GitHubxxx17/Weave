@@ -94,8 +94,32 @@ describe('Server shutdown', () => {
     expect(options.resources).toHaveBeenCalledOnce();
     expect(original.owned.close).toHaveBeenCalledTimes(2);
     expect(original.authority.close).toHaveBeenCalledTimes(2);
-    expect(options.closeManualTrustStore).not.toHaveBeenCalled();
   });
+
+  it.each(['stop', 'failStartup'] as const)(
+    'closes a separately owned trust override once alongside main authority during %s',
+    async (method) => {
+      const calls: string[] = [];
+      const bootFailure = new Error('boot failed');
+      const authority = {
+        async close() {
+          calls.push('authority');
+        },
+      };
+      const options = cleanupOptions(() => ({ authority }));
+      options.closeManualTrustStore.mockImplementation(() => {
+        calls.push('manual trust override');
+      });
+      const shutdown = createServerShutdown(options);
+
+      if (method === 'failStartup') {
+        await expect(shutdown.failStartup(bootFailure)).rejects.toBe(bootFailure);
+      }
+      await shutdown.stop();
+      await shutdown.stop();
+      expect(calls).toEqual(['manual trust override', 'authority']);
+    },
+  );
 
   it.each([new Error('boot failed'), 'boot failed', undefined])(
     'retains the shutdown closure for the exact aggregate thrown after startup failure %s',

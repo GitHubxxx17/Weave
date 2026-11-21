@@ -21,6 +21,7 @@ interface ServerShutdownOptions {
   readonly stopRuntime: () => Promise<void>;
   readonly closeProjectStore: () => void | Promise<void>;
   readonly closeProviderSettingsStore: () => void | Promise<void>;
+  /** Closes only a separately owned trust store. */
   readonly closeManualTrustStore: () => void | Promise<void>;
   readonly closeMcpAuthorityStore: () => void | Promise<void>;
 }
@@ -133,9 +134,7 @@ export function createServerShutdown(options: ServerShutdownOptions): ServerShut
       await record(options.stopRuntime);
       await record(options.closeProjectStore);
       await record(options.closeProviderSettingsStore);
-      if (owned === undefined && authority === undefined) {
-        await record(options.closeManualTrustStore);
-      }
+      await record(options.closeManualTrustStore);
       await record(options.closeMcpAuthorityStore);
       settledCleanup = true;
     }
