@@ -474,6 +474,11 @@ Validate existing table column/index shapes needed by this contract; incompatibl
 schemas fail protocol instead of being hidden by `IF NOT EXISTS`. A schema check
 must not claim to prevent arbitrary same-user SQL tampering.
 
+An existing complete authority table set with a missing trust table is also
+protocol corruption during initialization; never recreate that lost log. A
+runtime trust SELECT that fails because its table was dropped remains a storage
+error at the legacy facade, as required by the existing trust API.
+
 All three streams are contiguous from 1; empty head is 0. Read integer columns
 losslessly with `setReadBigInts(true)` then reject gaps/unsafe/negative values and
 next-sequence exhaustion. Strictly parse JSON and match row/payload sequence,
@@ -572,6 +577,13 @@ and its integration tests are not part of 6.2a.
    callback is permitted. Injected clock/UUID functions are narrow synchronous
    construction dependencies, not transaction extensibility points; replay does
    not call the clock or generate an ID.
+
+   The resolver consumes a validated timestamp when building its transition. The
+   owner may obtain that timestamp after preparation validation and before the
+   resolver's CAS checks; failed review still appends nothing. This keeps one
+   transition policy and does not require a separate validation pass. Replay
+   always returns before either preparation or clock evaluation.
+
 5. Read/fold/validate the complete after-snapshot and all cross-links inside the
    transaction. Construct the **whole** result, detach and deep-freeze it before
    COMMIT. A validation/serialization/clone/freeze/readback failure rolls back all

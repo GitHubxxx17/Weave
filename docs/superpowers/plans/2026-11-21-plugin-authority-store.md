@@ -70,7 +70,7 @@ export function canonicalJson(input: unknown): string;
 export function detachAndFreeze<T>(value: T): T;
 ```
 
-- [ ] **Step 1: Add RED tests for the schema and static identity.** Use this complete
+- [x] **Step 1: Add RED tests for the schema and static identity.** Use this complete
       minimal fixture and assert invalid cases do not get normalized into acceptance:
 
 ```ts
@@ -99,10 +99,10 @@ equally; changed preview, expected head, manifest, intent or timing differ.
 Test object-key reordering is equal, array order is preserved, optional object
 undefined is omitted, and undefined-array/cycle/nonfinite/non-JSON values reject.
 
-- [ ] **Step 2: Run the targeted RED test.** Run
+- [x] **Step 2: Run the targeted RED test.** Run
       `pnpm exec vitest run --config vitest.config.ts apps/server/test/plugin-authority-input.test.ts`.
       Confirm missing intended exports/behavior, not an unrelated import typo.
-- [ ] **Step 3: Implement exact strict Zod types and pure helpers.** Schemas use safe
+- [x] **Step 3: Implement exact strict Zod types and pure helpers.** Schemas use safe
       integer refinements, managed ID syntax, digest/manifest identity, 200-character
       opaque IDs and static default false. Canonical JSON recursively sorts object
       keys; SHA-256 uses `node:crypto`. `detachAndFreeze` clones plain JSON data before
@@ -119,7 +119,7 @@ expect(Object.isFrozen(result.values)).toBe(true);
 expect(Object.isFrozen(result.values[0])).toBe(true);
 ```
 
-- [ ] **Step 4: Create pure reusable test fixtures.** Export `digestA`, `digestB`,
+- [x] **Step 4: Create pure reusable test fixtures.** Export `digestA`, `digestB`,
       `artifact(digest = digestA, version = '1.0.0')`,
       `importInput(requestId, expectedInstallSequence, identity = artifact())`,
       `activateInput(requestId, snapshot, identity = artifact(), intent = 'activate')`,
@@ -157,7 +157,7 @@ both authority heads and the selected digest from their supplied snapshot;
 enable throws a fixture error if no selection exists. Fixtures contain plain
 expected values and do not call production reducers or schemas as an oracle.
 
-- [ ] **Step 5: Run targeted test, Server typecheck and focused Prettier; self-review.**
+- [x] **Step 5: Run targeted test, Server typecheck and focused Prettier; self-review.**
       Run the command above, `pnpm --filter @weave/server typecheck`, and
       `pnpm exec prettier --check` with the four created paths. Report actual evidence.
       Independent review checks complete spec field coverage and no dynamic I/O in
@@ -201,11 +201,11 @@ export function appendRecordedTrustEventTx(
 The class body/code union is the existing four-code implementation, not a new
 subclass. Primitives do not open/close connections or begin/commit transactions.
 
-- [ ] **Step 1: Run the current trust test as baseline.** Run
+- [x] **Step 1: Run the current trust test as baseline.** Run
       `pnpm exec vitest run --config vitest.config.ts apps/server/test/plugin-trust-store.test.ts`.
       Read assertions for four errors, mutable copies, metadata, independent
       connections, read corruption, rollback cause and unchanged `user_version`.
-- [ ] **Step 2: Extract only trust SQL/validation/error primitives.** Move the exact
+- [x] **Step 2: Extract only trust SQL/validation/error primitives.** Move the exact
       existing row schema, trust identity check and BigInt contiguous-log reader.
       Have the existing standalone owner call these primitives in its current short
       transactions; re-export the same `PluginTrustStoreError` at the old path.
@@ -222,12 +222,12 @@ database.exec('COMMIT');
 return result;
 ```
 
-- [ ] **Step 3: Run unchanged trust tests plus Server typecheck/lint.** All original
+- [x] **Step 3: Run unchanged trust tests plus Server typecheck/lint.** All original
       tests pass without weakening mutable-data assertions or changing their expected
       four error codes. Confirm no nested transaction or async primitive exists.
       Run `pnpm --filter @weave/server typecheck` and `pnpm --filter @weave/server lint`;
       check formatting for both changed files.
-- [ ] **Step 4: Request independent behavior/quality review.** Deliver only the
+- [x] **Step 4: Request independent behavior/quality review.** Deliver only the
       extraction and its evidence. Confirm original API imports and class identity
       still work in existing management tests; do not add routes or new dependencies.
 
@@ -267,20 +267,20 @@ suffix means the caller already holds the read or write transaction required
 by the function. The read returns
 freshly parsed plain data; the owner applies deep-freeze at its public boundary.
 
-- [ ] **Step 1: Add RED tests for old-database upgrade and empty log.** Use actual
+- [x] **Step 1: Add RED tests for old-database upgrade and empty log.** Use actual
       `DatabaseSync` in a temporary filename with preexisting trust rows, unrelated
       table and `PRAGMA user_version = 17`. In one explicit transaction initialize the
       additive schema, then read/validate the snapshot. Assert UUID survives close/
       reopen; heads are `{installSequence:0,trustSequence:oldCount,operationSequence:0}`;
       no old row, unrelated value, or `user_version` changes. Test partial new tables,
       missing/empty/bad identity and missing required unique index fail protocol.
-- [ ] **Step 2: Run the targeted RED test.** Run
+- [x] **Step 2: Run the targeted RED test.** Run
       `pnpm exec vitest run --config vitest.config.ts apps/server/test/plugin-authority-log.test.ts`.
       Then implement exact spec §7 SQL initialization, identity/table/index validation
       and lossless envelope parsing. New UUID is generated only when **none** of the
       three new tables exist; trust-only DB upgrade is one transaction. Do not add
       root binding or path/lease metadata.
-- [ ] **Step 3: Add RED transition tests for every row in spec §8.** Build plain
+- [x] **Step 3: Add RED transition tests for every row in spec §8.** Build plain
       before-snapshots from explicit fixture records and compare exact events/heads:
 
 ```ts
@@ -310,20 +310,20 @@ no-op; repeat candidate with changed provenance but equal metadata; sticky
 ownership and no selection on import. Transition resolver is the single policy
 used for both new writes and persisted-command validation; avoid two reducers.
 
-- [ ] **Step 4: Implement the transition resolver and complete readback walk.**
+- [x] **Step 4: Implement the transition resolver and complete readback walk.**
       Apply manual trust intervals, then each operation's exact linked state facts in
       order, validating expected before/after states and fingerprint/evidence. Use
       existing `foldTrust` behavior without changing its package. Reject managed
       unlinked trust, orphan/reused links, wrong-kind/plugin/digest/manifest links,
       mismatched timestamps, unsafe/gapped stream heads and trailing install rows.
       Use SQL INSERT only in the append helper, with original trust JSON unchanged.
-- [ ] **Step 5: Add real SQL round-trip/integrity tests.** In a transaction call
+- [x] **Step 5: Add real SQL round-trip/integrity tests.** In a transaction call
       resolver/append, then compare the read snapshot to explicit expected facts;
       this seed mechanism does not replace the separately asserted transition oracle.
       Seed old manual facts before first import and permit them; reject manual facts
       for owned IDs after import. Corrupt one row/envelope/link/fingerprint/decision
       at a time and require protocol errors. Verify the snapshot's first-import order.
-- [ ] **Step 6: Run targeted log/input/trust tests, typecheck/lint and review.**
+- [x] **Step 6: Run targeted log/input/trust tests, typecheck/lint and review.**
       Run one Vitest invocation naming these three test files, then Server typecheck/
       lint and changed-file Prettier. Reviewer checks the prefix walk covers all rows
       and cannot bless an invalid operation merely because its final fold matches.
@@ -342,7 +342,7 @@ backwards-compatible standalone wrapper. One returned authority owner has one
 connection, borrowed `trust` without close, synchronous read/commit methods and
 idempotent async owner close.
 
-- [ ] **Step 1: Add RED tests for owner lifetime and facade compatibility.** Test
+- [x] **Step 1: Add RED tests for owner lifetime and facade compatibility.** Test
       borrowed `trust` has no close, owner close invalidates it with old trust-closed
       and managed reads with authority-closed, repeated owner close succeeds, and
       standalone/borrowed returned trust facts remain mutable isolated copies.
@@ -351,7 +351,7 @@ idempotent async owner close.
       reject every managed trust event kind with `plugin-trust-invalid`; manual IDs
       still append trust only without an operation. New snapshot/commit results are
       frozen; do not change the old mutable-copy test to accept freezing.
-- [ ] **Step 2: Add RED transaction and lookup tests.** Use one temp owner helper
+- [x] **Step 2: Add RED transaction and lookup tests.** Use one temp owner helper
       with test-local afterEach closing all owners/removing their files. Import then
       activate, disable, enable, revoke, uninstall and re-activate with fresh reviews;
       assert exact counts/cross-links and reopening preserves all facts. Repeat each
@@ -379,10 +379,10 @@ original CAS. Add global ID conflicts across commands/plugins and changed
 preview/review/intent/immediate fields. `lookupSync` must find the same operation
 after reopen and return current snapshot after later selection/revoke.
 
-- [ ] **Step 3: Run targeted RED tests.** Run
+- [x] **Step 3: Run targeted RED tests.** Run
       `pnpm exec vitest run --config vitest.config.ts apps/server/test/plugin-authority-store.test.ts apps/server/test/plugin-trust-store.test.ts`.
       Missing owner/expected behaviors are the intended failures.
-- [ ] **Step 4: Implement one connection owner and prebuilt sync results.** Open and
+- [x] **Step 4: Implement one connection owner and prebuilt sync results.** Open and
       initialize schema under a short transaction. Read methods use a short read
       transaction. `commitSync` canonicalizes request; begins immediate; validates
       logs; checks durable request; only absent requests validate evidence and resolve
@@ -405,14 +405,14 @@ and appends nothing. Clock/UUID are not called on replay. Rollback preserves the
 primary failure if SQLite already rolled back. Closed/busy/protocol/storage
 authority errors retain cause. Do not expose a general async transaction hook.
 
-- [ ] **Step 5: Delegate the standalone API and manual facade.** The wrapper creates
+- [x] **Step 5: Delegate the standalone API and manual facade.** The wrapper creates
       an owner and returns explicit `append`, `events`, `close` delegates. The owner
       manual facade reads full current logs inside its transaction, rejects owned IDs,
       appends through trust primitives and returns a prebuilt mutable detached copy.
       Facade errors retain the four original codes; a busy failure maps to trust-storage.
       Facade `events` returns mutable copied trust data after full validation. Only
       owner closes the connection; owner does not import the wrapper.
-- [ ] **Step 6: Run all authority and existing trust tests; request review.** Include
+- [x] **Step 6: Run all authority and existing trust tests; request review.** Include
       all four current targeted files, Server typecheck/lint and focused formatting.
       Reviewer verifies second lookup is before preparation/CAS, request ID is global,
       no-op has a durable operation, and successful COMMIT has no fallible tail. Do not
@@ -442,7 +442,7 @@ introduced solely for tests.
 **Produces:** behavior evidence proving the transaction/replay guarantees and
 accurate persistence-only documentation.
 
-- [ ] **Step 1: Add RED real-SQLite write-failure tests for all three streams.** After
+- [x] **Step 1: Add RED real-SQLite write-failure tests for all three streams.** After
       a valid imported candidate, install a trigger on the next expected write to
       trust/install/operation in turn, attempt activation and assert all heads/facts
       remain at the pre-operation snapshot. Drop trigger and repeat the **same** request
@@ -457,7 +457,7 @@ Also exercise `RAISE(ROLLBACK, 'primary failure')`; rollback cleanup must not
 replace the internal primary cause. Test the final operation INSERT failing
 after trust/install INSERTs so cross-stream rollback is actually exercised.
 
-- [ ] **Step 2: Add RED precommit readback/result-construction failure tests.** An
+- [x] **Step 2: Add RED precommit readback/result-construction failure tests.** An
       AFTER INSERT trigger may deliberately replace the new operation JSON with
       malformed content; after-read validation must roll back the corrupt row and
       its authority facts. For construction, spy/mock the exported pure
@@ -465,7 +465,7 @@ after trust/install INSERTs so cross-stream rollback is actually exercised.
       input has `kind:'committed'`. Assert no new trust/install/operation remains,
       restore the spy, and retry successfully with contiguous heads. No public
       `onBeforeCommit`/`faultInjector` option is added to the owner.
-- [ ] **Step 3: Add RED successful-COMMIT boundary tracing.** Capture real SQLite
+- [x] **Step 3: Add RED successful-COMMIT boundary tracing.** Capture real SQLite
       prototype methods before spying. Arm a test-only phase around one managed commit;
       after the real `exec('COMMIT')` succeeds, mark phase committed. A spied `prepare`
       or `detachAndFreeze` must throw if invoked while still in that post-commit phase.
@@ -474,7 +474,7 @@ after trust/install INSERTs so cross-stream rollback is actually exercised.
       in finally. This targets the externally important boundary rather than counts
       of incidental SQL calls. Also test invalid clock output rolls back and replay
       does not invoke the clock.
-- [ ] **Step 4: Add rollback/close lifecycle failures and remaining adversaries.**
+- [x] **Step 4: Add rollback/close lifecycle failures and remaining adversaries.**
       Spy on native `exec` only at ROLLBACK to inject a cleanup failure, and at
       `isTransaction` getter for unreadable transaction state. Assert the original
       primary cause and cleanup cause survive, every managed/facade read/write
@@ -494,11 +494,11 @@ after trust/install INSERTs so cross-stream rollback is actually exercised.
       persisted facts stay unchanged and managed outputs stay frozen. Existing trust
       output mutations still succeed without changing future reads.
 
-- [ ] **Step 5: Run the focused integrity test and fix only proven gaps.** Run
+- [x] **Step 5: Run the focused integrity test and fix only proven gaps.** Run
       `pnpm exec vitest run --config vitest.config.ts apps/server/test/plugin-authority-integrity.test.ts`.
       Each failure must demonstrate a missing promised behavior. Preserve primary
       causes; no test-only production escape hatch, relaxed schema or extra queue.
-- [ ] **Step 6: Synchronize design/learning documentation with final code.** Update
+- [x] **Step 6: Synchronize design/learning documentation with final code.** Update
       installation design's table list and request-replay contract to link the 6.2a
       spec. Foundation describes only persistence and states managed exposure is still
       deferred. Learning doc shows actual imports and this DB-only usage:
@@ -530,8 +530,8 @@ and no ownership/Runtime/HTTP capability in 6.2a. Do not suggest the preview abo
 exists, grant trust from old bytes, or make DB calls stand in for artifact checks.
 
 - [ ] **Step 7: Run complete verification and independent whole-topic review.**
-      Run `pnpm --filter @weave/server test`, targeted changed-file formatting, then
-      root `pnpm check`. Once passing, broaden/repeat only for new changes or concrete
+      Run targeted changed-file formatting, then root `pnpm check`, which includes
+      the complete Server test suite. Once passing, broaden/repeat only for new changes or concrete
       unresolved concerns. Record commands/results and review findings in the ledger.
       Review all diff paths for no package boundary/runtime/route/dependency changes,
       and ensure specification/plan/docs match final exported signatures.
