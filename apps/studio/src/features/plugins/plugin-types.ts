@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { extensionGenerationSchema } from '../mcp/mcp-types.js';
 
 const nameListSchema = z.array(z.string()).readonly();
 const digestSchema = z.string().regex(/^[0-9a-f]{64}$/);
@@ -128,6 +129,7 @@ export const pluginCatalogSchema = z
   .object({
     plugins: z.array(pluginListItemSchema).readonly(),
     local: localPluginHostSummarySchema.optional(),
+    generation: extensionGenerationSchema.optional(),
   })
   .readonly();
 export type PluginCatalog = z.infer<typeof pluginCatalogSchema>;
@@ -149,6 +151,7 @@ export const pluginMutationResponseSchema = z
   .object({
     plugins: z.array(pluginListItemSchema).readonly(),
     local: localPluginHostSummarySchema,
+    generation: extensionGenerationSchema.optional(),
     result: pluginReloadResultSchema,
   })
   .readonly();

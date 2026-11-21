@@ -16,17 +16,25 @@ remains a separate reference project and is not copied into this repository.
 The Foundation vertical slice, Session persistence, the headless Agent Tool
 Loop, the shared Tool Pipeline, the Approval HTTP control plane, the Agent
 HTTP/SSE adapter, the first Studio Agent Chat workspace, multi-Provider
-routing, and the first trusted in-process Plugin Registry are implemented.
+routing, the typed Plugin Kernel, local ESM plugin trust/management, and local
+stdio MCP tools are implemented. Studio manages local launch configurations,
+canonical trust reviews, enable/disable/revoke/remove decisions, and explicit
+extension reloads through the Server control plane.
 `@weave/protocol`, `@weave/llm`, `@weave/session`, `@weave/runtime`,
 `@weave/plugin`, `@weave/server`, and `@weave/studio` form the current
-architecture. Shell/Sandbox hardening, GitHub Plugin installation, the Plugin
-Catalog, and the broader Studio product remain later phases. The first
+architecture, alongside `@weave/plugin-builtins`, `@weave/plugin-host`,
+`@weave/mcp-client`, and `@weave/desktop`. OS Sandbox hardening, GitHub Plugin
+installation, remote MCP transports, and the broader Studio product remain later phases. The first
 protected Workspace file tools are now available in `@weave/runtime`.
 
 Start with the [Foundation architecture guide](docs/architecture/foundation.md)
 for the request path, package boundaries, and AI editing checklist. The
 [vertical-slice ADR](docs/adr/0001-foundation-vertical-slice.md) records why
 the repository begins with these four units.
+
+See [local MCP setup and lifecycle](docs/learning/2026-11-21-local-mcp.md)
+for the Studio workflow, launch configuration format, trust boundaries, and
+troubleshooting.
 
 ## Planned stack
 
@@ -70,13 +78,18 @@ weave/
 │   ├── session/      # Append-only Session events and projections
 │   ├── workspace/    # Project metadata and Project/Session references
 │   ├── runtime/      # Service assembly, Agent Runner, and Tool Pipeline
-│   └── plugin/       # Plugin Manifest, Context, Registry, and lifecycle
+│   ├── plugin/       # Typed Plugin Kernel, SDK, hooks, and extension points
+│   ├── plugin-builtins/ # Built-in plugins and the MCP tool adapter
+│   ├── plugin-host/  # Local ESM discovery, trust, loading, generation controller
+│   └── mcp-client/   # Bounded local stdio MCP transport and frozen catalog
 ├── docs/              # Architecture, ADR, and learning material
 └── root tooling       # pnpm, Turbo, TypeScript, ESLint, Prettier, Vitest
 ```
 
 The package dependency direction is
-`protocol -> {llm, session} -> runtime -> plugin -> server -> desktop`.
+`protocol -> {llm, session} -> runtime -> plugin -> {plugin-builtins, plugin-host} -> server -> desktop`.
+`mcp-client` is an independent transport package consumed by `plugin-builtins`
+and `server`; `workspace` remains independent and is consumed by `server`.
 `protocol` owns stable public contracts, `llm` isolates provider differences,
 `session` stores durable facts and rebuilds read models, `workspace` stores
 Project metadata, `runtime` assembles services and lifecycle state, `plugin`
@@ -127,7 +140,8 @@ pnpm --filter @weave/studio dev
 ```
 
 Open `http://127.0.0.1:5173`. Vite serves the React Studio and proxies
-`/agent/*`, `/approvals`, `/projects`, `/sessions`, and `/settings` to
+`/agent/*`, `/approvals`, `/projects`, `/sessions`, `/settings`, `/plugins`,
+`/commands`, and `/mcp` to
 `http://127.0.0.1:4317`, so the browser can call the local Server without a
 separate CORS setup. The Server `dev` script builds the TypeScript packages
 first and then starts `dist/main.js`.

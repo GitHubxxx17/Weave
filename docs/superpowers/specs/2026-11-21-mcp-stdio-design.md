@@ -1,10 +1,13 @@
 # Stage 5 — 本地 stdio MCP Tools 设计
 
-状态：用户已于 2026-11-21 确认推荐方案。5.1a–5.2 已合入；5.3 Server 管理正在实现，5.4 Studio 尚未接入。本文规定完整跨包契约。
+状态：用户已于 2026-11-21 确认推荐方案。5.1a–5.3 已合入；5.4 Studio 已实现并完成完整检查、独立审查及真实浏览器和 Electron 验收。5.4 的 CI 与合入状态见 [PR #82](https://github.com/GitHubxxx17/Weave/pull/82)。本文规定完整跨包契约。
 基线：`origin/main` 的 `a0b38b4`（Stage 4.5，PR #76）。
 决策记录：[ADR 0004](../../adr/0004-mcp-stdio-tools.md)。
 实施计划：[5.1a 统一扩展协调器](../plans/2026-11-21-extension-coordinator.md)、
-[5.1b stdio 客户端](../plans/2026-11-21-mcp-stdio-client.md)。
+[5.1b stdio 客户端](../plans/2026-11-21-mcp-stdio-client.md)、
+[5.2 工具适配器](../plans/2026-11-21-mcp-tool-plugin.md)、
+[5.3 Server 管理](../plans/2026-11-21-mcp-server-management.md)、
+[5.4 Studio 管理](../plans/2026-11-21-studio-mcp-management.md)。
 
 产品对标 Codex、Kiro、DeepSeek Harness；参考来源和当前采用原则见
 [Foundation 的 Product references](../../architecture/foundation.md#product-references)。
@@ -480,9 +483,10 @@ MCP 状态从 `/mcp` 获取，当前内核插件仍来自 `/plugins`；面板将
 `ServerHost.commit` 提供同步所有权移交，完整候选提交前复验全部来源；
 来源聚合清理器随发布代保留，最后一个旧回合结束后再释放。
 
-本轮测试使用两个带真实工具贡献的可控来源验证交错变更，并使用真实 ESM
+5.1a 当时的测试使用两个带真实工具贡献的可控来源验证交错变更，并使用真实 ESM
 目录和 Server 启停验证信任、HTTP 投影和持久库关闭顺序。它们未启动 MCP
-服务；协议客户端、连接状态、MCP 配置持久化及 Studio 表单仍按 5.1b–5.4 交付。
+服务；协议客户端、连接状态、MCP 配置持久化及 Studio 表单由后续 5.1b–5.4 实现，
+当前交付状态见本文顶部。
 
 ## 11. 已知边界与后续方向
 
@@ -511,8 +515,8 @@ JSON 属性名遗漏时的语义，内部校验副本对所有数据键及对应
 const/enum 使用一致的单射前缀；公开 schema 与发出的参数保持原样。
 
 固定 SDK 的 ESM/CJS transport 补丁释放父端管道、共享关闭 promise 并通知关闭
-一次；独立宿主测试实际观察退出。此交付尚不提供 Server 启动授权、
-MCP 工具适配或 Studio 管理；后续5.2–5.4 必须经过这些边界后才允许用户启动服务。
+一次；独立宿主测试实际观察退出。5.1b 当时不包含 Server 启动授权、
+MCP 工具适配或 Studio 管理；后续 5.2–5.4 实现了这些启动边界，当前交付状态见本文顶部。
 
 ### 10.3 5.2 工具适配实施契约
 
@@ -559,3 +563,24 @@ snapshot 及 result(decisionSequence/applied/unchanged/failed/error)。HTTP不�
 持久库、环境或连接。所有写接口复用管理安全守卫，CORS 支持 PUT，开发代理增加 /mcp。
 main 即使关闭 ESM 也创建 MCP store/source/manager，先 drain 来源资源再关闭持久库。
 实施计划见[5.3 Server 管理](../plans/2026-11-21-mcp-server-management.md)。
+
+### 10.5 5.4 Studio 实施契约
+
+沿用单一 App-owned PluginCatalogStore/context，增加 MCP 目录及动作；ESM/MCP
+共用一个写入门。初始/刷新并行 GET 两目录，最多三轮完整比较 generation 的
+id、acceptingRuns、blocked 后原子安装，失配保留上一致快照但标旧、禁管理写入。
+mutation 成功结果（持久决定序号和重建结果）单独保留，即使另一目录读取失败。
+旧 GET 不得覆盖新写入结果。面板激活仅 GET；用户明确重载走 /mcp/reload，
+关闭 ESM 时同样有效。只有明确的 management-disabled404 兼容插件只读旧服务。
+
+MCPConfigDialog 保存原始路径/argv/环境目标引用名给 Server 规范化；保存与
+信任独立。McpReview 捕获规范 config、configDigest、authoritySequence、
+reviewEpoch，展示上次 reviewedConfig 字段差异；任意409刷新并使本次审阅失效，
+不替换 token 自动重投。所有 schema/annotations 按数据展示，完整保留 JSON 字段。
+
+MCP 三类停用/撤销/移除对话框的 immediate 选择始终可用，明确影响所有当前及
+退役代回合；不依赖当前界面可见的 running session 才提供或提交此选项。
+复用 PluginDialog 的取消初始焦点、键盘、背景 inert、返回焦点和滚动外壳。
+MCPPanel 使用 /mcp 健康，合并 host:mcp 注册表实际贡献，避免重复健康普通行；
+状态、stale、active/draining 和持久结果分别展示，失败不推测为已加载。
+实施计划见[5.4 Studio](../plans/2026-11-21-studio-mcp-management.md)。

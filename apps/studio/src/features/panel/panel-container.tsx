@@ -75,8 +75,8 @@ export function PanelContainer({
 }: PanelContainerProps): ReactElement {
   const tabs = usePanelTabs();
   const pluginStore = usePluginCatalogStore();
-  const reloadPlugins = (): void => {
-    void pluginStore.reload().catch(() => undefined);
+  const refreshPlugins = (): void => {
+    void pluginStore.refresh().catch(() => undefined);
   };
   const [menu, setMenu] = useState<OpenMenu>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
@@ -165,7 +165,7 @@ export function PanelContainer({
                   onClick={() => {
                     tabs.activate(tab.id);
                     if (tab.kind === 'plugins') {
-                      reloadPlugins();
+                      refreshPlugins();
                     }
                   }}
                   data-plugin-tab={tab.kind === 'plugins' ? '' : undefined}
@@ -252,7 +252,7 @@ export function PanelContainer({
                       onClick={() => {
                         tabs.open(descriptor.kind);
                         if (descriptor.kind === 'plugins') {
-                          reloadPlugins();
+                          refreshPlugins();
                         }
                         setMenu(null);
                       }}

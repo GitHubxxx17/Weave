@@ -17,9 +17,20 @@ beforeEach(() => {
   localStorage.clear();
   vi.stubGlobal(
     'fetch',
-    vi.fn(async () => new Response(JSON.stringify({ plugins: [] }), { status: 200 })),
+    vi.fn(async (input: RequestInfo | URL) =>
+      String(input) === '/mcp'
+        ? disabledMcp()
+        : new Response(JSON.stringify({ plugins: [] }), { status: 200 }),
+    ),
   );
 });
+
+function disabledMcp(): Response {
+  return new Response(
+    JSON.stringify({ error: { code: 'mcp-management-disabled', message: 'disabled' } }),
+    { status: 404 },
+  );
+}
 
 function panelContext(): PanelContext {
   return {
@@ -167,7 +178,7 @@ const managedCatalog = {
 };
 
 describe('plugin activation boundary', () => {
-  it('only reads on restored active mount and reloads once for every explicit activation', async () => {
+  it('only reads on restored mount and every activation while explicit reload writes once', async () => {
     localStorage.setItem(
       'weave.studio.panelTabs.v2',
       JSON.stringify({ tabs: [{ id: 'plugins', kind: 'plugins' }], active: 'plugins', pinned: [] }),
@@ -176,6 +187,7 @@ describe('plugin activation boundary', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(_input) === '/mcp') return disabledMcp();
         const method = init?.method ?? 'GET';
         methods.push(method);
         return new Response(
@@ -192,14 +204,14 @@ describe('plugin activation boundary', () => {
     await screen.findByText('0 个');
     expect(methods).toEqual(['GET']);
     fireEvent.click(screen.getByRole('tab', { name: '插件' }));
-    await waitFor(() => expect(methods).toEqual(['GET', 'POST']));
+    await waitFor(() => expect(methods).toEqual(['GET', 'GET']));
     await waitFor(() =>
       expect(
         (screen.getByRole('button', { name: '刷新插件列表' }) as HTMLButtonElement).disabled,
       ).toBe(false),
     );
     addPanel('插件');
-    await waitFor(() => expect(methods).toEqual(['GET', 'POST', 'POST']));
+    await waitFor(() => expect(methods).toEqual(['GET', 'GET', 'GET']));
     expect(screen.getAllByRole('tab', { name: '插件' })).toHaveLength(1);
     await waitFor(() =>
       expect(
@@ -208,7 +220,9 @@ describe('plugin activation boundary', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: '关闭插件' }));
     addPanel('插件');
-    await waitFor(() => expect(methods).toEqual(['GET', 'POST', 'POST', 'POST']));
+    await waitFor(() => expect(methods).toEqual(['GET', 'GET', 'GET', 'GET']));
+    fireEvent.click(screen.getByRole('button', { name: '刷新插件列表' }));
+    await waitFor(() => expect(methods).toEqual(['GET', 'GET', 'GET', 'GET', 'POST']));
   });
 
   it('shares a pending-review badge between the add menu and plugin tab', async () => {
@@ -244,16 +258,17 @@ describe('plugin activation boundary', () => {
     ];
     vi.stubGlobal(
       'fetch',
-      vi.fn(
-        async (_input: RequestInfo | URL, init?: RequestInit) =>
-          new Response(
-            JSON.stringify(
-              init?.method === 'POST'
-                ? { ...managedCatalog, result: { generation: 1, unchanged: false, failed: [] } }
-                : { ...managedCatalog, plugins },
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
+        String(_input) === '/mcp'
+          ? disabledMcp()
+          : new Response(
+              JSON.stringify(
+                init?.method === 'POST'
+                  ? { ...managedCatalog, result: { generation: 1, unchanged: false, failed: [] } }
+                  : { ...managedCatalog, plugins },
+              ),
+              { status: 200 },
             ),
-            { status: 200 },
-          ),
       ),
     );
     renderPanel();
@@ -261,7 +276,7 @@ describe('plugin activation boundary', () => {
     await screen.findByLabelText('1 个插件待审阅');
     fireEvent.click(screen.getByRole('menuitem', { name: /插件/ }));
     expect(screen.getByRole('tab', { name: /插件/ }).textContent).toContain('1');
-    await waitFor(() => expect(screen.queryByLabelText('1 个插件待审阅')).toBeNull());
+    await waitFor(() => expect(screen.getByLabelText('1 个插件待审阅')).toBeTruthy());
   });
 
   it('keeps old-server explicit activation and refresh on GET', async () => {
@@ -269,6 +284,7 @@ describe('plugin activation boundary', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(_input) === '/mcp') return disabledMcp();
         methods.push(init?.method ?? 'GET');
         return new Response(JSON.stringify({ plugins: [] }), { status: 200 });
       }),
