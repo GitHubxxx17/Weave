@@ -44,6 +44,16 @@ export class PluginHostError extends Error {
   }
 }
 
+/** The managed selection lost the authority required to execute. */
+export class ExplicitLocalAuthorityError extends Error {
+  readonly code = 'plugin-explicit-authority-failed';
+
+  constructor(cause?: unknown) {
+    super('Explicit local plugin authority check failed', { cause });
+    this.name = 'ExplicitLocalAuthorityError';
+  }
+}
+
 /** The text of an error, for a message that wraps it. */
 export function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
