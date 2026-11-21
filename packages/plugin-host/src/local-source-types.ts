@@ -1,8 +1,49 @@
-import type { KernelPlugin, PluginSdk } from '@weave/plugin';
+import type { KernelPlugin, PluginManifest, PluginSdk } from '@weave/plugin';
 
-import type { DiscoverOptions, DiscoveryResult, LocalPluginIssue } from './discovery.js';
+import type {
+  DiscoverOptions,
+  DiscoveryResult,
+  LocalPluginIssue,
+  ReadyLocalPlugin,
+} from './discovery.js';
 import type { ActiveLocalPlugin } from './host-types.js';
-import type { PluginTrustRecord, PluginTrustStore, ResolvedLocalPlugin } from './trust.js';
+import type {
+  PluginTrustRecord,
+  PluginTrustStore,
+  RecordedPluginTrustEvent,
+  ResolvedLocalPlugin,
+} from './trust.js';
+
+export interface ExplicitLocalSelection {
+  readonly manifest: PluginManifest;
+  readonly digest: string;
+  readonly activationSequence: number;
+  readonly ready?: ReadyLocalPlugin | undefined;
+  readonly issue?: LocalPluginIssue | undefined;
+}
+
+export interface ExplicitLocalSelectionInput {
+  readonly stickyIds: readonly string[];
+  readonly selections: readonly ExplicitLocalSelection[];
+  readonly deniedIds: readonly string[];
+  readonly trustEvents: readonly RecordedPluginTrustEvent[];
+}
+
+export type ManagedLocalCandidate = ReadyLocalPlugin & {
+  readonly origin: 'managed';
+  readonly activationSequence: number;
+};
+
+export type LocalSourceCandidate =
+  (ReadyLocalPlugin & { readonly origin: 'manual' }) | ManagedLocalCandidate;
+
+export interface ExplicitLocalCandidateChecks {
+  verify(
+    candidate: ManagedLocalCandidate,
+    signal: AbortSignal,
+  ): Promise<Pick<ReadyLocalPlugin, 'entry' | 'digest'>>;
+  assertReadySync(candidate: ManagedLocalCandidate): undefined;
+}
 
 export interface LocalSourceStamp {
   readonly revision: number;
@@ -12,6 +53,7 @@ export interface LocalSourceStamp {
 export interface LocalPluginSourceSnapshot {
   readonly discovery: DiscoveryResult;
   readonly plugins: readonly ResolvedLocalPlugin[];
+  readonly managedEligible: readonly ManagedLocalCandidate[];
   readonly trust: readonly PluginTrustRecord[];
   readonly stamp: LocalSourceStamp;
 }
@@ -32,7 +74,7 @@ export interface LocalSourceMutationContext {
 }
 
 export type LocalSourceAuthorityReason =
-  'trust-log' | 'discovery' | 'trusted' | 'enabled' | 'disabled' | 'revoked';
+  'trust-log' | 'discovery' | 'explicit-selection' | 'trusted' | 'enabled' | 'disabled' | 'revoked';
 
 export interface LocalSourceAuthorityChange {
   readonly snapshot: LocalPluginSourceSnapshot;
@@ -45,6 +87,7 @@ export interface PreparedLocalPlugin {
   readonly id: string;
   readonly identity: string;
   readonly digest: string;
+  readonly origin: LocalSourceCandidate['origin'];
   readonly plugin: KernelPlugin;
   readonly normalize: (error: unknown) => unknown;
   readonly cleanupErrors: readonly unknown[];
@@ -54,6 +97,7 @@ export interface PreparedLocalPlugin {
 export interface PreparedLocalPluginFailure {
   readonly id: string;
   readonly identity: string;
+  readonly origin: LocalSourceCandidate['origin'];
   readonly kind: 'load' | 'identity';
   readonly error: unknown;
 }
@@ -76,11 +120,13 @@ export interface LocalPluginSourceOptions {
   readonly sdk?: PluginSdk | undefined;
   readonly setupTimeoutMs?: number | undefined;
   readonly importModule?: ((specifier: string) => Promise<unknown>) | undefined;
+  readonly explicitChecks?: ExplicitLocalCandidateChecks | undefined;
   readonly onAuthorityChange?: ((change: LocalSourceAuthorityChange) => void) | undefined;
 }
 
 export interface LocalPluginSourceController {
   snapshot(): LocalPluginSourceSnapshot;
+  adoptExplicitSelectionSync(input: ExplicitLocalSelectionInput): LocalPluginSourceSnapshot;
   refresh(): Promise<LocalPluginSourceSnapshot>;
   mutate(
     command: LocalPluginSourceMutation,

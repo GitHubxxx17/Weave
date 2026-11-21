@@ -74,7 +74,7 @@ export interface PluginGenerationPort<R extends GenerationRequest, E, T> {
 
 export interface CreatePluginHostOptions<R extends GenerationRequest, E, T> extends Omit<
   LocalPluginSourceOptions,
-  'onAuthorityChange'
+  'onAuthorityChange' | 'explicitChecks'
 > {
   readonly generations: PluginGenerationPort<R, E, T>;
   readonly assemble: (localPlugins: readonly KernelPlugin[]) => Promise<RunnerGeneration<R, E, T>>;

@@ -317,6 +317,23 @@ function applyIdRules(
  * followed.
  */
 export async function discoverLocalPlugins(options: DiscoverOptions): Promise<DiscoveryResult> {
+  const declarations = await scanLocalPluginDeclarations(options);
+  return declarations.exists
+    ? finalizeLocalPluginDiscovery(declarations, new Set(options.reservedIds ?? []))
+    : declarations;
+}
+
+export function finalizeLocalPluginDiscovery(
+  declarations: DiscoveryResult,
+  reservedIds: ReadonlySet<string>,
+): DiscoveryResult {
+  return { ...declarations, candidates: applyIdRules(declarations.candidates, reservedIds) };
+}
+
+/** Captures the inspected declarations before applying any ID policy. */
+export async function scanLocalPluginDeclarations(
+  options: DiscoverOptions,
+): Promise<DiscoveryResult> {
   assertHostVersion(options.hostVersion);
   const root = path.resolve(options.directory);
   const maxCandidates = options.maxCandidates ?? defaultMaxCandidates;
@@ -385,7 +402,7 @@ export async function discoverLocalPlugins(options: DiscoverOptions): Promise<Di
   return {
     directory: root,
     exists: true,
-    candidates: applyIdRules(found, new Set(options.reservedIds ?? [])),
+    candidates: found,
     truncated,
   };
 }
