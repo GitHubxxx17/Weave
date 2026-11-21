@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { connectMcp } from '@weave/mcp-client';
 import * as pluginHost from '@weave/plugin-host';
@@ -159,6 +159,93 @@ describe('joint managed, manual and MCP Generation', () => {
         expect.objectContaining({ pluginId: 'notes', digest: managed.digest }),
       );
     } finally {
+      await f.close();
+    }
+  });
+
+  it('serves the last reconciled catalog while a local scan sees a new managed activation', async () => {
+    const f = await createRealManagedCompositionFixture();
+    const writer = createSqlitePluginAuthorityDatabase({ filename: f.databaseFile });
+    const createSource = pluginHost.createLocalPluginSource;
+    const readsAtNotifications = new Map<string, Promise<Response>>();
+    let capture: ((reason: string) => void) | undefined;
+    const inject = vi
+      .spyOn(pluginHost, 'createLocalPluginSource')
+      .mockImplementationOnce((options) =>
+        createSource({
+          ...options,
+          onAuthorityChange(change) {
+            options.onAuthorityChange?.(change);
+            capture?.(change.reason);
+          },
+        }),
+      );
+    try {
+      const manual = await f.seedManual('notes', 'manual directory', false);
+      const directory = join(f.root, 'selected-input');
+      const manifest = { ...manual.manifest, name: 'Private managed review', version: '2.0.0' };
+      await mkdir(directory);
+      await writeFile(
+        join(directory, 'weave-plugin.json'),
+        JSON.stringify({ schemaVersion: 1, entry: 'index.mjs', manifest }),
+      );
+      await writeFile(join(directory, 'index.mjs'), 'export default () => ({ setup() {} });');
+      const { digest, files, bytes } = await f.owned.stage({ sourceDirectory: directory });
+      const artifact = { pluginId: 'notes', digest, files, bytes, manifest };
+      const events = vi.fn(f.authority.trust.events);
+      const host = f.compose({ localTrustStore: { ...f.authority.trust, events } });
+      await host.coordinator.reload();
+      const app = catalogApp(f, host);
+      const baseline = await (await app.request('/plugins')).json();
+      const other = await f.seedManual('new-manual', 'manual follow-up', false);
+      const counters = [events, f.readAuthoritySync, f.readOwned, f.readMcp, f.assertHeldSync];
+      capture = (reason) => {
+        if (readsAtNotifications.has(reason) || (reason !== 'trust-log' && reason !== 'discovery'))
+          return;
+        const before = counters.map((counter) => counter.mock.calls.length);
+        readsAtNotifications.set(reason, Promise.resolve(app.request('/plugins')));
+        expect(counters.map((counter) => counter.mock.calls.length)).toEqual(before);
+      };
+      events.mockImplementationOnce(async () => {
+        writer.commitSync(importInput('intervening-import', 0, artifact));
+        writer.commitSync(activateInput('intervening-activate', writer.snapshotSync(), artifact));
+        return f.authority.trust.events();
+      });
+      await host.coordinator.reload();
+      expect([...readsAtNotifications.keys()]).toEqual(['trust-log', 'discovery']);
+      for (const read of readsAtNotifications.values()) {
+        const response = await read;
+        expect(response.status).toBe(200);
+        const during = await response.text();
+        expect(during).not.toContain(digest);
+        expect(during).not.toContain(manifest.name);
+        expect(JSON.parse(during)).toEqual(baseline);
+      }
+      const settled = pluginListResponseSchema.parse(await (await app.request('/plugins')).json());
+      const collision = settled.plugins.find(({ id }) => id === 'notes');
+      expect(collision).toMatchObject({
+        origin: 'local',
+        state: 'invalid',
+        error: { code: 'plugin-id-reserved' },
+        local: { directory: manual.directory, manifest: manual.manifest, enabled: false },
+      });
+      expect(collision?.local?.trusted).toBeUndefined();
+      expect(settled.local?.trustSequence).toBe(writer.snapshotSync().heads.trustSequence);
+      const response = await app.request(
+        '/plugins/new-manual/trust',
+        post({ digest: other.digest }),
+      );
+      expect(response.status).toBe(200);
+      const afterTrust = pluginListResponseSchema.parse(
+        await (await app.request('/plugins')).json(),
+      );
+      expect(afterTrust.plugins.find(({ id }) => id === 'new-manual')).toMatchObject({
+        state: 'loaded',
+        local: { enabled: true, trusted: { digest: other.digest } },
+      });
+    } finally {
+      inject.mockRestore();
+      await writer.close();
       await f.close();
     }
   });

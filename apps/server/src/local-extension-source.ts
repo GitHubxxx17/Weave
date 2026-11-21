@@ -65,6 +65,7 @@ export function createLocalExtensionSource(
   let effective: ExtensionSourceSnapshot | undefined;
   let rawStamp: LocalSourceStamp | undefined;
   let withdrawn: WithdrawnSelection | undefined;
+  let reconciledCatalog: LocalPluginSourceSnapshot;
   let stickyIds: ReadonlySet<string> = new Set();
   let adopting = false;
   const pendingRawPreparations = new Set<AbortController>();
@@ -112,7 +113,7 @@ export function createLocalExtensionSource(
     const recovery = withdrawn !== undefined;
     adopting = true;
     try {
-      source.adoptExplicitSelectionSync(input);
+      reconciledCatalog = source.adoptExplicitSelectionSync(input);
       stickyIds = new Set(input.stickyIds);
       withdrawn = undefined;
     } finally {
@@ -209,9 +210,15 @@ export function createLocalExtensionSource(
     source = createLocalPluginSource({
       ...options,
       onAuthorityChange(change) {
-        if (!adopting) observe(sourceId, { ...change, snapshot: updateEffective(change.snapshot) });
+        if (adopting) return;
+        // A package trust read can advance ahead of the paired sticky policy.
+        if (change.snapshot.stamp.trustSequence === reconciledCatalog.stamp.trustSequence) {
+          reconciledCatalog = change.snapshot;
+        }
+        observe(sourceId, { ...change, snapshot: updateEffective(change.snapshot) });
       },
     });
+    reconciledCatalog = source.snapshot();
     return {
       id: sourceId,
       snapshot,
@@ -329,7 +336,7 @@ export function createLocalExtensionSource(
       dispose?: () => Promise<void>,
     ): ServerLocalPluginHost {
       function project(state: ReturnType<ExtensionCoordinator['snapshot']>) {
-        const current = source.snapshot();
+        const current = managed?.usesUnifiedTrust ? reconciledCatalog : source.snapshot();
         const failures = new Map(
           state.failed
             .filter((item) => item.sourceId === sourceId && item.origin === 'manual')
