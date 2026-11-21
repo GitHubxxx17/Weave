@@ -14,6 +14,7 @@ export interface PluginLifecycle {
 export function createPluginLifecycle(
   original: KernelPlugin,
   setupTimeoutMs: number,
+  attemptSignal?: AbortSignal,
 ): PluginLifecycle {
   const abort = new AbortController();
   const timeout = new Error(`Plugin "${original.manifest.id}" setup exceeded ${setupTimeoutMs}ms`);
@@ -33,7 +34,10 @@ export function createPluginLifecycle(
   }
 
   function guardEnv(env: PluginEnv): PluginEnv {
-    const signal = AbortSignal.any([env.signal, abort.signal]);
+    const signals = [env.signal, abort.signal];
+    if (attemptSignal !== undefined) signals.push(attemptSignal);
+    const signal = AbortSignal.any(signals);
+    assertActive(signal);
     // A function proxy keeps generic/overloaded signatures and binds every
     // forwarded call to the original env, including calls detached by plugins.
     const guard = <T extends (...args: never[]) => unknown>(method: T): T =>
@@ -67,6 +71,7 @@ export function createPluginLifecycle(
   }
 
   async function setup(env: PluginEnv): Promise<void> {
+    attemptSignal?.throwIfAborted();
     assertActive(env.signal);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<void>((_resolve, reject) => {
@@ -75,17 +80,27 @@ export function createPluginLifecycle(
         reject(timeout);
       }, setupTimeoutMs);
     });
+    let onAbort: (() => void) | undefined;
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      if (attemptSignal === undefined) return;
+      onAbort = () => {
+        invalidate(attemptSignal.reason);
+        reject(attemptSignal.reason);
+      };
+      attemptSignal.addEventListener('abort', onAbort, { once: true });
+    });
     const pending = Promise.resolve().then(() => original.setup(guardEnv(env)));
     try {
       // The race observes a late rejection, without awaiting setup after the
       // deadline. The kernel sees rejection now and rolls registrations back.
-      await Promise.race([pending, deadline]);
+      await Promise.race([pending, deadline, cancelled]);
     } catch (error: unknown) {
       invalidate(error);
       void dispose();
       throw error;
     } finally {
       clearTimeout(timer);
+      if (onAbort !== undefined) attemptSignal?.removeEventListener('abort', onAbort);
     }
   }
 

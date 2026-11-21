@@ -1,8 +1,9 @@
-import type { KernelPlugin, PluginManifest, PluginSdk } from '@weave/plugin';
+import type { KernelPlugin, PluginManifest } from '@weave/plugin';
 
-import type { DiscoverOptions, LocalPluginCandidate, LocalPluginIssue } from './discovery.js';
+import type { LocalPluginCandidate, LocalPluginIssue } from './discovery.js';
 import type { GenerationRequest, GenerationRunner, RunnerGeneration } from './generation-runner.js';
-import type { LocalPluginState, PluginTrustRecord, PluginTrustStore } from './trust.js';
+import type { LocalPluginSourceOptions } from './local-source-types.js';
+import type { LocalPluginState, PluginTrustRecord } from './trust.js';
 
 export interface LocalPluginIdentity {
   readonly id: string;
@@ -71,14 +72,12 @@ export interface PluginGenerationPort<R extends GenerationRequest, E, T> {
   dispose(): Promise<void>;
 }
 
-export interface CreatePluginHostOptions<R extends GenerationRequest, E, T> {
-  readonly discovery: DiscoverOptions;
-  readonly trustStore: PluginTrustStore;
+export interface CreatePluginHostOptions<R extends GenerationRequest, E, T> extends Omit<
+  LocalPluginSourceOptions,
+  'onAuthorityChange'
+> {
   readonly generations: PluginGenerationPort<R, E, T>;
   readonly assemble: (localPlugins: readonly KernelPlugin[]) => Promise<RunnerGeneration<R, E, T>>;
-  readonly sdk?: PluginSdk | undefined;
-  readonly setupTimeoutMs?: number | undefined;
-  readonly importModule?: ((specifier: string) => Promise<unknown>) | undefined;
 }
 
 // T is the injected generation's resources; the host intentionally never exposes them.

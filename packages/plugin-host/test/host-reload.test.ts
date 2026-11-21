@@ -330,6 +330,39 @@ describe('PluginHost reload attempts', () => {
       errors: expect.arrayContaining([cleanup, portError]),
     });
   });
+
+  it('reports cleanup errors from published modules when the host closes', async () => {
+    const h = await harness(['a'], true);
+    const cleanup = new Error('published module cleanup');
+    h.factories.set('a', () => ({
+      setup() {},
+      dispose() {
+        h.calls.disposed.push('a');
+        throw cleanup;
+      },
+    }));
+    const host = await createPluginHost(h.options);
+    await host.setEnabled('a', false);
+    expect(h.calls.disposed).toEqual(['a']);
+    await expect(host.dispose()).rejects.toMatchObject({ errors: [cleanup] });
+  });
+
+  it('retains a published generation when the compatibility port reports a retirement error', async () => {
+    const h = await harness(['a']);
+    const host = await createPluginHost(h.options);
+    const retirement = new Error('retirement failed');
+    const publish = h.port.publish;
+    h.port.publish = async (candidate) => {
+      await publish(candidate);
+      throw retirement;
+    };
+    const result = await host.trust('a', h.ready[0]!.digest);
+    expect(result).toMatchObject({ generation: 2, failed: [] });
+    expect(host.list()).toMatchObject([{ state: 'loaded' }]);
+    expect(h.calls.disposed).toEqual([]);
+    await expect(host.dispose()).rejects.toMatchObject({ errors: [retirement] });
+    expect(h.calls.disposed).toEqual(['a']);
+  });
 });
 
 describe('PluginHost administrative queue', () => {

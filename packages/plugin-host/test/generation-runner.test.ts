@@ -51,6 +51,177 @@ async function tick(): Promise<void> {
 }
 
 describe('createGenerationRunner', () => {
+  it('commits the new generation before a slow retirement finishes', async () => {
+    const disposalStarted = gate();
+    const finishDisposal = gate();
+    const previous = generation(
+      1,
+      () => source(['previous']),
+      () => {
+        disposalStarted.resolve();
+        return finishDisposal.promise;
+      },
+    );
+    const next = generation(2, () => source(['next']));
+    const controller = createGenerationRunner(previous);
+
+    try {
+      const committed = controller.commit(next);
+      expect(controller.current()).toBe(next);
+      let retired = false;
+      void committed.retirement.then(() => {
+        retired = true;
+      });
+      await disposalStarted.promise;
+      expect(await collect(controller.runner.run({ sessionId: 's', value: 'x' }))).toEqual([
+        'next',
+      ]);
+      expect(retired).toBe(false);
+      finishDisposal.resolve();
+      await committed.retirement;
+      expect(retired).toBe(true);
+    } finally {
+      finishDisposal.resolve();
+      await controller.dispose();
+    }
+  });
+
+  it('lets the final pinned turn retire its generation after commit returns', async () => {
+    const finishTurn = gate();
+    const disposalStarted = gate();
+    const previous = generation(
+      1,
+      () => source(['previous'], { wait: finishTurn.promise }),
+      () => disposalStarted.resolve(),
+    );
+    const next = generation(2, () => source(['next']));
+    const controller = createGenerationRunner(previous);
+    const active = collect(controller.runner.run({ sessionId: 's', value: 'x' }));
+    await tick();
+
+    try {
+      const committed = controller.commit(next);
+      expect(controller.current()).toBe(next);
+      let retired = false;
+      void committed.retirement.then(() => {
+        retired = true;
+      });
+      let disposing = false;
+      void disposalStarted.promise.then(() => {
+        disposing = true;
+      });
+      await tick();
+      expect(retired).toBe(true);
+      expect(disposing).toBe(false);
+      finishTurn.resolve();
+      expect(await active).toEqual(['previous']);
+      await disposalStarted.promise;
+    } finally {
+      finishTurn.resolve();
+      await active;
+      await controller.dispose();
+    }
+  });
+
+  it.each([10, 9, Number.NaN, Number.MAX_SAFE_INTEGER + 1])(
+    'throws synchronously for invalid generation id %s without taking ownership',
+    async (id) => {
+      const previous = generation(10, () => source(['previous']));
+      const controller = createGenerationRunner(previous);
+      let candidateDisposed = false;
+      const candidate = generation(
+        id,
+        () => source([]),
+        () => {
+          candidateDisposed = true;
+        },
+      );
+
+      try {
+        controller.blockNewRuns(new Error('blocked'));
+        expect(() => controller.commit(candidate)).toThrow('Generation ids must increase');
+        expect(controller.current()).toBe(previous);
+        await expect(
+          collect(controller.runner.run({ sessionId: 's', value: 'x' })),
+        ).rejects.toThrow('blocked');
+      } finally {
+        await controller.dispose();
+      }
+      expect(candidateDisposed).toBe(false);
+    },
+  );
+
+  it('throws synchronously after disposal without changing the current generation', async () => {
+    const previous = generation(1, () => source([]));
+    const controller = createGenerationRunner(previous);
+    const closing = controller.dispose();
+
+    expect(() => controller.commit(generation(2, () => source([])))).toThrow(
+      'Generation runner is disposed',
+    );
+    expect(controller.current()).toBe(previous);
+    await closing;
+  });
+
+  it('preserves the current generation and admission block when reading immediate throws', async () => {
+    const previous = generation(1, () => source([]));
+    const controller = createGenerationRunner(previous);
+    const blocked = new Error('blocked');
+    const failure = new Error('cannot read immediate');
+    let candidateDisposed = false;
+    const candidate = generation(
+      2,
+      () => source([]),
+      () => {
+        candidateDisposed = true;
+      },
+    );
+    const options = {
+      get immediate(): boolean {
+        throw failure;
+      },
+    };
+
+    try {
+      controller.blockNewRuns(blocked);
+      expect(() => controller.commit(candidate, options)).toThrow(failure);
+      expect(controller.current()).toBe(previous);
+      await expect(collect(controller.runner.run({ sessionId: 's', value: 'x' }))).rejects.toBe(
+        blocked,
+      );
+    } finally {
+      await controller.dispose();
+    }
+    expect(candidateDisposed).toBe(false);
+  });
+
+  it('rejects a candidate when reading immediate closes the controller', async () => {
+    const previous = generation(1, () => source([]));
+    const controller = createGenerationRunner(previous);
+    let candidateDisposed = false;
+    const candidate = generation(
+      2,
+      () => source([]),
+      () => {
+        candidateDisposed = true;
+      },
+    );
+    const options = {
+      get immediate(): boolean {
+        void controller.dispose();
+        return true;
+      },
+    };
+
+    try {
+      expect(() => controller.commit(candidate, options)).toThrow('Generation runner is disposed');
+      expect(controller.current()).toBe(previous);
+    } finally {
+      await controller.dispose();
+    }
+    expect(candidateDisposed).toBe(false);
+  });
+
   it('starts lazily and pins a generation when a session turn starts', async () => {
     const starts: string[] = [];
     const disposed: number[] = [];

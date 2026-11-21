@@ -14,10 +14,11 @@ import { resolvePluginsDirectory } from './plugin-path.js';
 import { serverHostVersion } from './host-version.js';
 import { createSqlitePluginTrustStore } from './plugin-trust-store.js';
 import {
-  createServerLocalPluginHost,
+  createServerExtensionCoordinator,
   type ClosablePluginTrustStore,
   type ServerLocalPluginHost,
 } from './local-plugin-host.js';
+import type { ExtensionCoordinator } from './extension-coordinator.js';
 import type { ProviderSecretCodec } from './provider-secret-codec.js';
 import {
   createProviderSettingsManager,
@@ -166,6 +167,7 @@ export async function startServer(
   let projectStore: ProjectStore | undefined;
   let pluginTrustStore: ClosablePluginTrustStore | undefined;
   let pluginHost: ServerLocalPluginHost | undefined;
+  let coordinator: ExtensionCoordinator | undefined;
   let server: ServerType | undefined;
 
   try {
@@ -205,14 +207,16 @@ export async function startServer(
       resolveWorkspaceRoot: createWorkspaceRootResolver(projects),
       ...(maxSteps === undefined ? {} : { maxSteps }),
     }) satisfies ServerAgentRunnerOptions;
-    const agentRunner = await createServerAgentRunner(runtime, runnerOptions);
-    if (pluginsDirectory !== false && pluginTrustStore !== undefined) {
-      pluginHost = await createServerLocalPluginHost(runtime, {
-        directory: pluginsDirectory,
-        trustStore: pluginTrustStore,
-        runnerOptions,
-      });
-    }
+    await createServerAgentRunner(runtime, runnerOptions);
+    const extensions = createServerExtensionCoordinator(runtime, {
+      runnerOptions,
+      ...(pluginsDirectory === false || pluginTrustStore === undefined
+        ? {}
+        : { local: { directory: pluginsDirectory, trustStore: pluginTrustStore } }),
+    });
+    coordinator = extensions.coordinator;
+    pluginHost = extensions.pluginHost;
+    await coordinator.reload();
 
     let resolveListening!: () => void;
     let rejectListening!: (error: unknown) => void;
@@ -224,7 +228,7 @@ export async function startServer(
       {
         fetch: createApp(runtime, {
           approvalBrokerService,
-          agentRunner,
+          agentRunner: coordinator.runner,
           projectStore: projects,
           sessionService,
           providerRegistry: runtime.serverHost.providerRegistry,
@@ -232,6 +236,7 @@ export async function startServer(
           providerSettingsManager,
           canManageProviders: providerSettingsManager !== undefined,
           pluginCatalog: () => listServerPlugins(runtime),
+          generationSnapshot: coordinator.generationSnapshot,
           commandCatalog: () => listServerCommands(runtime),
           ...(pluginHost === undefined ? {} : { pluginManager: pluginHost }),
           ...(studioOrigin === undefined ? {} : { studioOrigin }),
@@ -263,7 +268,7 @@ export async function startServer(
     const onSigterm = (): void => {
       void stop();
     };
-    const stop = async (): Promise<void> => {
+    const stop = (): Promise<void> => {
       if (stopPromise !== undefined) {
         return stopPromise;
       }
@@ -271,7 +276,13 @@ export async function startServer(
       process.removeListener('SIGINT', onSigint);
       process.removeListener('SIGTERM', onSigterm);
 
-      stopPromise = (async () => {
+      let resolveStop!: () => void;
+      let rejectStop!: (error: unknown) => void;
+      stopPromise = new Promise<void>((resolve, reject) => {
+        resolveStop = resolve;
+        rejectStop = reject;
+      });
+      void (async () => {
         let firstError: unknown;
         let hasError = false;
         const cleanup = async (operation: () => Promise<void>): Promise<void> => {
@@ -294,7 +305,7 @@ export async function startServer(
           () => undefined,
           (error: unknown) => error,
         );
-        await cleanup(async () => pluginHost?.dispose());
+        await cleanup(async () => coordinator?.dispose());
         await cleanup(() => disposeServerPlugins(runtime));
         // Approval SSE and other idle streams do not belong to an Agent iterator.
         // Their sockets can close once Agent terminal writes have settled.
@@ -311,7 +322,7 @@ export async function startServer(
         if (hasError) {
           throw firstError;
         }
-      })();
+      })().then(resolveStop, rejectStop);
       return stopPromise;
     };
 
@@ -322,7 +333,7 @@ export async function startServer(
   } catch (error) {
     // Begin closing HTTP, then cancel generations before awaiting SSE sockets.
     const closed = server === undefined ? undefined : closeServer(server).catch(() => undefined);
-    await pluginHost?.dispose().catch(() => undefined);
+    await coordinator?.dispose().catch(() => undefined);
     await disposeServerPlugins(runtime).catch(() => undefined);
     if (server !== undefined && 'closeAllConnections' in server) server.closeAllConnections();
     await closed;

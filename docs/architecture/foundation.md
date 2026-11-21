@@ -880,7 +880,7 @@ the local-plugin design section 8.6. Server persistence/routes remain Stage 4.4b
 
 ## Server local-plugin composition (Stage 4.4b)
 
-Server injects its existing stable generation controller and guarded publisher
+The Stage 4 baseline injects its stable generation controller and guarded publisher
 into PluginHost, opens an append-only SQLite trust event store alongside the
 other shared stores, and projects desired local state separately from retained
 active membership. Thin plugin management routes share one JSON/loopback/origin
@@ -891,6 +891,32 @@ close. The wire/config/persistence contracts are in local-plugin design §10.5.
 Embedded configured kernel plugins use factories to create independent instances
 for every candidate generation; a retiring generation never disposes an instance
 borrowed by its replacement. Legacy registered plugins retain ServerHost ownership.
+
+## Unified extension composition (Stage 5.1a)
+
+The owner-approved migration extracts a `LocalPluginSourceController` from the
+standalone host. The existing loader's `LocalPluginSource` data alias remains
+available. A source discovers and validates desired authority, prepares fresh
+instances, and rechecks identities; it owns neither a Generation controller nor
+current membership. Its synchronous authority observer lets the owner block
+new admission immediately after durable revocation, before another await.
+
+Server becomes the sole owner of one extension coordinator, including when
+local ESM discovery is disabled. Every source mutation and full candidate
+assembly shares its administrative queue. Candidate membership and all source
+stamps are revalidated before a synchronous `commit`; an invalid commit throws
+without taking candidate ownership. The successful return commits the current
+pointer, then the coordinator commits its membership/admission projection in
+the same synchronous section. Slow retirement cannot undo or misreport that
+publication. The legacy Promise `replace`/`publish` APIs remain compatible.
+
+The returned retirement promise waits for cleanup eligible at commit time;
+an old generation still pinned by a running turn is released by that final
+turn instead of delaying the management response. Closing synchronously blocks
+admission and aborts candidates and all active generations before waiting for
+cleanup, and durable stores close last. `GET /plugins` gains a compatible
+top-level generation/admission projection even without local plugin discovery.
+This is the 5.1a contract; MCP protocol support is delivered by later PRs.
 
 ## Studio local-plugin management (Stage 4.5)
 

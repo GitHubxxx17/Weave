@@ -45,8 +45,10 @@ commit(next: RunnerGeneration<R, E, T>, options?: { immediate?: boolean }): Gene
 
 原有 replace/publish 保留 Promise API，由同步 commit 后等待 retirement 实现。
 commit 完成全部同步验证后切换 current，验证失败同步 throw；不提前创建资源所有权。
+retirement 仅等待提交时已经符合条件的清理；旧代仍有回合 pin 时不等待这些回合，
+由其最后一个回合触发最终清理，保持既有管理请求不等待当前回合的行为。
 
-- [ ] 新增测试：无效 ID、disposed 和 Provider 冲突同步抛错且 current 未变；有效 commit
+- [x] 新增测试：无效 ID、disposed 和 Provider 冲突同步抛错且 current 未变；有效 commit
       返回前 current 已变，旧代 disposer 被 gate 阻塞时 retirement 仍 pending。
 
 ```ts
@@ -65,9 +67,9 @@ await committed.retirement;
 expect(retired).toBe(true);
 ```
 
-- [ ] 运行目标测试并确认新测试因缺失 commit 失败；实现最小契约后再次运行。
-- [ ] 验证旧 replace/publish 的取消、会话顺序、Provider 冲突和关闭测试保持通过。
-- [ ] 独立审查同步临界段与所有权移交；记录测试和改动，不由子代理提交或切换分支。
+- [x] 运行目标测试并确认新测试因缺失 commit 失败；实现最小契约后再次运行。
+- [x] 验证旧 replace/publish 的取消、会话顺序、Provider 冲突和关闭测试保持通过。
+- [x] 独立审查同步临界段与所有权移交；记录测试和改动，不由子代理提交或切换分支。
 
 ## Task 2: 提取 LocalPluginSource，保留独立 PluginHost
 
@@ -111,16 +113,16 @@ generation controller 或 acceptingRuns。创建选项提供同步 onAuthorityCh
 内含 snapshot/reason/affectedIds/immediate。source 的行政操作由上层统一串行化。
 未知 ID 的外部管理错误在门面保持兼容；撤销已经撤销但仍在旧代的插件可幂等执行。
 
-- [ ] 先测试 source 不触发装配、refresh 不 import；未授权 prepare 不执行工厂；
+- [x] 先测试 source 不触发装配、refresh 不 import；未授权 prepare 不执行工厂；
       已授权 prepare 分配新实例且 close 不销毁已移交 Generation 的实例。
-- [ ] 测试相同 refresh 不增 revision；摘要变化增 revision；日志回退/前缀改写拒绝。
-- [ ] 用 deferred append 验证 observer 看到已 fold 的状态，且在后续 discovery await
+- [x] 测试相同 refresh 不增 revision；摘要变化增 revision；日志回退/前缀改写拒绝。
+- [x] 用 deferred append 验证 observer 看到已 fold 的状态，且在后续 discovery await
       前同步调用；append 失败无通知；外部撤销即使后续发现失败也先通知宿主。
-- [ ] 测试 prepare 后文件变化使 recheck 失效；取消后分配晚到的资源仍释放一次。
-- [ ] 运行新测试观察缺失行为的失败，实施 source，再迁移独立 host 的内部使用。
-- [ ] 运行所有 plugin-host 测试，保留原有目录竞态、setup deadline、可归因重试及
+- [x] 测试 prepare 后文件变化使 recheck 失效；取消后分配晚到的资源仍释放一次。
+- [x] 运行新测试观察缺失行为的失败，实施 source，再迁移独立 host 的内部使用。
+- [x] 运行所有 plugin-host 测试，保留原有目录竞态、setup deadline、可归因重试及
       慢 retirement 状态投影；不通过弱化旧断言掩盖语义变化。
-- [ ] 审查资源所有权及源/门面之间无重复行政状态机。
+- [x] 审查资源所有权及源/门面之间无重复行政状态机。
 
 ## Task 3: Server 唯一协调器与来源适配
 
@@ -140,9 +142,9 @@ desiredRevision，阻断不再授权的 current 成员，必要时取消所有�
 统一协调器提供 local PluginHost 兼容 facade、统一 reload、runner、generationSnapshot
 和 dispose；后续 MCP source 消费同一内部接口。
 
-- [ ] 用两个真实贡献插件的可控假 source 写测试：慢 source A 重建时排入 source B
+- [x] 用两个真实贡献插件的可控假 source 写测试：慢 source A 重建时排入 source B
       的变更，最终 current 同时保留两者最新状态，旧回合保持原代。
-- [ ] 验证 revoke durable append 成功后装配失败，新回合被阻断；随后另一个来源的
+- [x] 验证 revoke durable append 成功后装配失败，新回合被阻断；随后另一个来源的
       reload 不复活被撤销成员；旧候选/无效 stamp 不能解封。
 
 ```ts
@@ -154,15 +156,15 @@ expect(currentPluginIds()).not.toContain('mcp-fixture');
 expect(await nextTurn()).toEqual(expectedHealthyOutput);
 ```
 
-- [ ] 覆盖单来源失败健康来源继续；不可归因装配错误保留旧指针；排除集合严格扩大，
+- [x] 覆盖单来源失败健康来源继续；不可归因装配错误保留旧指针；排除集合严格扩大，
       每轮全新实例；候选清理和已发布实例清理均幂等。
-- [ ] 覆盖同步 commit throw 不改变 projection；慢 retirement 时 projection 立即
+- [x] 覆盖同步 commit throw 不改变 projection；慢 retirement 时 projection 立即
       对齐 current；关闭中不允许旧 commit/清理完成回调解除新阻断。
-- [ ] 实施同一队列的完整候选 assembly，并在无 await 临界段检查 revision/stamp /
+- [x] 实施同一队列的完整候选 assembly，并在无 await 临界段检查 revision/stamp /
       enabled/trust/closed 后调用 Task 1 的 commit；随后同步提交 membership/latch。
-- [ ] createServerLocalPluginHost 变为协调器兼容入口；Server 不再创建独立
+- [x] createServerLocalPluginHost 变为协调器兼容入口；Server 不再创建独立
       createPluginHost。既有配置工厂按代新建，保留 memoized disposal 及基线 ID 检查。
-- [ ] 目标测试与既有 local-plugin-integration 全通过后独立审查。
+- [x] 目标测试与既有 local-plugin-integration 全通过后独立审查。
 
 ## Task 4: 启动和 HTTP Generation 投影
 
@@ -178,15 +180,22 @@ expect(await nextTurn()).toEqual(expectedHealthyOutput);
 真实 startServer 即使 `pluginsDirectory: false` 也提供该字段；纯路由依赖注入可保留
 可选 generationSnapshot 回调以兼容无真实 Runtime 的调用方。不泄露 controller/resources。
 
-- [ ] 测试关闭本地 ESM 时，真实 Server 仍投影当前代；manager 启用时顶层 generation
+- [x] 测试关闭本地 ESM 时，真实 Server 仍投影当前代；manager 启用时顶层 generation
       与 local.generation 一致，慢 retirement/blocked/关闭场景不读出假 acceptingRuns。
-- [ ] 启动只创建一个 coordinator，停止时先同步取消/阻断、再 drain 所有代、最后
+- [x] 启动只创建一个 coordinator，停止时先同步取消/阻断、再 drain 所有代、最后
       关闭信任库；失败启动和重复 stop 仍满足一次释放。
-- [ ] 保留旧 `/plugins` 写接口、安全守卫和 Studio 消费兼容性；本项不增加 MCP UI。
-- [ ] 运行 `pnpm check` 并保存日志，独立整分支审查并修复可复现问题。
-- [ ] 仅提交当前任务文件，创建独立 PR，CI 通过后按用户已确认的顺序推进。
+- [x] 保留旧 `/plugins` 写接口、安全守卫和 Studio 消费兼容性；本项不增加 MCP UI。
+- [x] 运行 `pnpm check` 并保存日志，独立整分支审查并修复可复现问题。
+
+集成流程：仅提交当前任务文件，创建独立 PR，CI 通过后按用户已确认的顺序推进。
+提交、PR 和 CI 的最终状态以对应 GitHub PR 为准，不在提交前预先标记完成。
 
 ## 交付证据
 
 进度、红绿测试、接口裁定和审查记录保存在本计划专属的 ignored SDD ledger。
 完成时报告实际检查、测试数量、PR 和合并状态；不以 API 预留能力声称已交付 MCP。
+
+2026-11-21 本地实施验证：`pnpm check` 全链通过；plugin-host 271 项、Server 409 项
+测试实际执行通过。全仓 11 个测试包合计 1,851 项通过（包括 Turbo 缓存重放）。
+分任务和整分支独立审查均通过，已复现的提交原子性、退役回合立即重试和关闭重入
+问题已补回归并修复。进行中的 ESM 工厂仍依赖协作式取消，工厂返回后再释放其资源。

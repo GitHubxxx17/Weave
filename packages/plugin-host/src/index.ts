@@ -45,6 +45,7 @@ export type { LoadLocalPluginOptions, LocalPluginSource } from './loader.js';
 
 export { createGenerationRunner } from './generation-runner.js';
 export type {
+  GenerationCommit,
   GenerationController,
   GenerationRequest,
   GenerationRunner,
@@ -52,6 +53,23 @@ export type {
 } from './generation-runner.js';
 
 export { createPluginHost } from './host.js';
+export { createLocalPluginSource } from './local-plugin-source.js';
+export { projectLocalPluginSnapshot } from './host-state.js';
+export type {
+  LocalPluginSourceController,
+  LocalPluginSourceMutation,
+  LocalPluginSourceOptions,
+  LocalPluginSourceSnapshot,
+  LocalSourceAuthorityChange,
+  LocalSourceAuthorityReason,
+  LocalSourceMutationContext,
+  LocalSourceProjectionOptions,
+  LocalSourceRecheck,
+  LocalSourceStamp,
+  PreparedLocalPlugin,
+  PreparedLocalPluginFailure,
+  PreparedLocalPlugins,
+} from './local-source-types.js';
 export type {
   ActiveLocalPlugin,
   CreatePluginHostOptions,

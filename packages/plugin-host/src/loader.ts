@@ -25,6 +25,7 @@ export interface LoadLocalPluginOptions {
   /** Replaces `import()`, for tests. */
   readonly importModule?: ((specifier: string) => Promise<unknown>) | undefined;
   readonly limits?: Partial<DigestLimits> | undefined;
+  readonly signal?: AbortSignal | undefined;
 }
 
 /** The part of a discovered plugin the loader needs. */
@@ -95,10 +96,12 @@ export async function loadLocalPlugin(
       ...(cause === undefined ? {} : { cause }),
     });
 
+  options.signal?.throwIfAborted();
   const { digest } = await computeDirectoryDigest(plugin.directory, {
     limits: options.limits,
     pluginId: id,
   });
+  options.signal?.throwIfAborted();
   if (digest !== options.trustedDigest) {
     throw fail(
       'plugin-digest-mismatch',
@@ -121,6 +124,7 @@ export async function loadLocalPlugin(
     );
   }
 
+  options.signal?.throwIfAborted();
   const factory =
     typeof moduleNamespace === 'object' && moduleNamespace !== null
       ? (moduleNamespace as { readonly default?: unknown }).default

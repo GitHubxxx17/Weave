@@ -3,6 +3,7 @@ import type { PluginHostSnapshot } from '@weave/plugin-host';
 import {
   localPluginMetadataSchema,
   localPluginSummarySchema,
+  pluginGenerationSchema,
   pluginIssueSchema,
   pluginReloadResultSchema,
 } from './plugin-management-types.js';
@@ -66,6 +67,7 @@ export type PluginListItem = z.infer<typeof pluginListItemSchema>;
 /** Response body of `GET /plugins`. */
 export const pluginListResponseSchema = z.object({
   plugins: z.array(pluginListItemSchema),
+  generation: pluginGenerationSchema.optional(),
   local: localPluginSummarySchema.optional(),
 });
 

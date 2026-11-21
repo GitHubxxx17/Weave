@@ -19,6 +19,11 @@ export interface ServerPluginManager {
 export const pluginIssueSchema = z.object({ code: z.string(), message: z.string() });
 export const pluginErrorResponseSchema = z.object({ error: pluginIssueSchema });
 export const pluginDigestSchema = z.string().regex(/^[0-9a-f]{64}$/);
+export const pluginGenerationSchema = z.object({
+  id: z.number().int().positive(),
+  acceptingRuns: z.boolean(),
+  blocked: pluginIssueSchema.optional(),
+});
 
 export const activeLocalPluginSchema = z.object({
   generation: z.number().int().positive(),
@@ -42,13 +47,10 @@ export const localPluginSummarySchema = z.object({
   exists: z.boolean(),
   truncated: z.boolean(),
   trustSequence: z.number().int().nonnegative(),
-  generation: z.object({
-    id: z.number().int().positive(),
+  generation: pluginGenerationSchema.extend({
     plugins: z.array(
       z.object({ id: z.string(), digest: pluginDigestSchema, manifest: pluginManifestSchema }),
     ),
-    acceptingRuns: z.boolean(),
-    blocked: pluginIssueSchema.optional(),
   }),
   error: pluginIssueSchema.optional(),
 });

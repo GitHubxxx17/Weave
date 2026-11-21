@@ -17,6 +17,7 @@ import {
 } from '@weave/runtime';
 import {
   createGenerationRunner,
+  type GenerationCommit,
   type GenerationController,
   type RunnerGeneration,
 } from '@weave/plugin-host';
@@ -58,6 +59,7 @@ export interface ServerHost {
   releaseProviderClaim(id: string): void;
   nextGenerationId(): number;
   controller(): ServerGenerationController | undefined;
+  commit(generation: ServerGeneration, options?: { immediate?: boolean }): GenerationCommit;
   publish(generation: ServerGeneration, options?: { immediate?: boolean }): Promise<void>;
   plugins(): readonly PluginListItem[];
   commands(): readonly CommandListItem[];
@@ -125,6 +127,33 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
         throw conflict('Provider', provider, snapshot.id);
       }
     }
+  };
+
+  const commit: ServerHost['commit'] = (generation, options) => {
+    if (disposePromise !== undefined) throw new Error('Server host is disposed');
+    for (const descriptor of generation.resources.pluginProviderRegistry.list()) {
+      if (
+        providerRegistry.getDescriptor(descriptor.id) !== undefined ||
+        reservedProviders.has(descriptor.id) ||
+        claimedProviders.has(descriptor.id)
+      ) {
+        const owner = generation.resources.plugins.find((plugin) =>
+          plugin.provides.providers.includes(descriptor.id),
+        );
+        throw new PluginError(
+          'plugin-registration-conflict',
+          `Provider "${descriptor.id}" conflicts with a host registration`,
+          { pluginId: owner?.id },
+        );
+      }
+    }
+    if (controller !== undefined) return controller.commit(generation, options);
+    if (!Number.isSafeInteger(generation.id) || generation.id <= 0) {
+      throw new Error('Generation ids must increase monotonically');
+    }
+    controller = createGenerationRunner(generation);
+    locked = true;
+    return { retirement: Promise.resolve() };
   };
 
   return {
@@ -205,27 +234,9 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
     },
     nextGenerationId: () => ++generationId,
     controller: () => controller,
+    commit,
     async publish(generation, publishOptions) {
-      if (disposePromise !== undefined) throw new Error('Server host is disposed');
-      for (const descriptor of generation.resources.pluginProviderRegistry.list()) {
-        if (
-          providerRegistry.getDescriptor(descriptor.id) !== undefined ||
-          reservedProviders.has(descriptor.id) ||
-          claimedProviders.has(descriptor.id)
-        ) {
-          const owner = generation.resources.plugins.find((plugin) =>
-            plugin.provides.providers.includes(descriptor.id),
-          );
-          throw new PluginError(
-            'plugin-registration-conflict',
-            `Provider "${descriptor.id}" conflicts with a host registration`,
-            { pluginId: owner?.id },
-          );
-        }
-      }
-      if (controller === undefined) controller = createGenerationRunner(generation);
-      else await controller.replace(generation, publishOptions);
-      locked = true;
+      await commit(generation, publishOptions).retirement;
     },
     plugins: () => controller?.current().resources.plugins ?? [],
     commands: () => controller?.current().resources.commands ?? [],
