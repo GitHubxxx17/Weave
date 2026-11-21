@@ -130,6 +130,14 @@ missing manual directory meets this requirement. Managed eligibility also
 requires a folded, enabled trust record with exactly matching digest and
 manifest. The snapshot's `plugins` and `discovery` remain manual projections.
 
+Stage 6.2d keeps declaration completeness private and exposes the same manual
+namespace predicate through `LocalPluginSourceController.mayReadManagedSync(id)`.
+Server delegates the routine selected-artifact read gate to this method. An
+incomplete ordinary scan withdraws managed readiness, and a failed root scan
+preserves prior manual rows while withdrawing readiness before rethrowing the
+legacy discovery error. See the
+[installer design](2026-11-22-managed-plugin-installer-api-design.md#reviewed-selection-and-readback).
+
 Adoption replaces the cached projection and synchronously notifies the observer
 after assignment. Recompute the manual and managed results against the latest
 cached authorities. Preserve existing manual revision behavior. Advance the
