@@ -391,10 +391,15 @@ membership, check MCP `isReady`, and run the final publication hook outside
 per-plugin attribution. Because the hook can change authority synchronously,
 recapture cached stamps and eligibility and check revision, open state, exact
 origin-aware membership and the latch before `ServerHost.commit` in the same
-stack. Apply the same hook and post-guard checks to current managed members
-before returning an unchanged result after the ordered refresh. A change during
-the hook invalidates the unchanged result or candidate. Ordinary attributable
-assembly and ServerHost commit errors keep the existing isolation path.
+stack. Check prepared MCP `isReady` again after the guard and cached checks,
+immediately before commit. The guard can synchronously close a prepared MCP
+connection while authority stamps and eligibility stay unchanged. A failed
+liveness check follows the existing attributable resource-failure retry.
+Apply the same managed authority hook and post-guard authority checks to
+current managed members before returning an unchanged result after the ordered
+refresh. A change during the hook invalidates the unchanged result or
+candidate. Ordinary attributable assembly and ServerHost commit errors keep
+the existing isolation path.
 
 Recognize a direct `ExplicitLocalAuthorityError` and a `PluginError` with
 code `plugin-setup-failed` and that marker as its direct cause before
@@ -451,8 +456,10 @@ Generation passed to `ServerHost.commit` when its final membership contains
 managed origin. The package invokes it at the actual Session queue head before
 the runner starts the turn. It checks the latch and held lease and routes any
 newly observed loss through the receiver. Start admission performs no selected
-evidence refresh, artifact read or ownership reacquire. Ownership is scoped to
-cooperating processes and the checks in 6.2b.
+evidence refresh, artifact read or ownership reacquire. Prepared MCP liveness
+is a publication check. The actual-start hook is limited to the ownership
+latch and lease. Ownership is scoped to cooperating processes and the checks
+in 6.2b.
 
 ### Queued durable decisions
 
