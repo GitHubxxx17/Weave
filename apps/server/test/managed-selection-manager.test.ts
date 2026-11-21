@@ -533,6 +533,48 @@ describe('queued managed selection', () => {
     }
   });
 
+  it('preserves both errors when publishing withdrawal fails after committed adoption throws', async () => {
+    const f = await createRealManagedCompositionFixture();
+    try {
+      await f.seedManaged('notes', 'live');
+      const host = f.compose();
+      const before = await host.coordinator.reload();
+      const adoption = new Error('Private adoption failure');
+      const publication = new Error('Private withdrawal observer failure');
+      vi.spyOn(host.localSource!, 'adoptExplicitSelectionSync').mockImplementationOnce(() => {
+        throw adoption;
+      });
+      const observe = vi
+        .spyOn(host.coordinator, 'observeAuthorityBatchSync')
+        .mockImplementationOnce((changes) => {
+          expect(changes.get('local-esm')?.snapshot.eligible).toEqual([]);
+          expect(host.coordinator.generationSnapshot().acceptingRuns).toBe(false);
+          throw publication;
+        });
+      const retry = vi.spyOn(host.coordinator, 'retryImmediateRevocation');
+      const result = await host.applyManagedSelection!(
+        decision(f, 'disable', 'observer-failure', true),
+      );
+
+      if (result.kind !== 'committed') throw new Error('Expected a committed disable');
+      expect(observe).toHaveBeenCalledOnce();
+      expect(result.savedAuthority).toEqual(f.authority.snapshotSync());
+      expect(result.application).toMatchObject({
+        status: 'failed',
+        generation: { id: before.generation.id, acceptingRuns: false },
+      });
+      expect(retry).toHaveBeenCalledExactlyOnceWith('local-esm', 'notes', 'managed');
+      expect(result.application.cause).toBeInstanceOf(AggregateError);
+      const cause = result.application.cause as AggregateError;
+      expect(cause.cause).toBe(adoption);
+      expect(cause.errors).toHaveLength(2);
+      expect(cause.errors[0]).toBe(adoption);
+      expect(cause.errors[1]).toBe(publication);
+    } finally {
+      await f.close();
+    }
+  });
+
   it('blocks a displaced manual member when paired withdrawal fails without cancelling it as managed', async () => {
     const f = await createRealManagedCompositionFixture();
     try {

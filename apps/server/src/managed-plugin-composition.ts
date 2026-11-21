@@ -322,6 +322,9 @@ export function createManagedPluginComposition(
           }
         }
       });
+    } catch (cause: unknown) {
+      committed?.causes.push(cause);
+      throw cause;
     } finally {
       cancelPreparation?.();
     }
