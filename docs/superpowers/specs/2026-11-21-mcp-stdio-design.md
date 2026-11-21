@@ -1,9 +1,10 @@
 # Stage 5 — 本地 stdio MCP Tools 设计
 
-状态：用户已于 2026-11-21 确认推荐方案。本文规定下一阶段的跨包契约；尚未实现其中的 MCP 功能。
+状态：用户已于 2026-11-21 确认推荐方案。5.1a 已合入，5.1b 客户端正在验证交付；5.2–5.4 尚未接入。本文规定完整跨包契约。
 基线：`origin/main` 的 `a0b38b4`（Stage 4.5，PR #76）。
 决策记录：[ADR 0004](../../adr/0004-mcp-stdio-tools.md)。
-实施计划：[5.1a 统一扩展协调器](../plans/2026-11-21-extension-coordinator.md)。
+实施计划：[5.1a 统一扩展协调器](../plans/2026-11-21-extension-coordinator.md)、
+[5.1b stdio 客户端](../plans/2026-11-21-mcp-stdio-client.md)。
 
 产品对标 Codex、Kiro、DeepSeek Harness；参考来源和当前采用原则见
 [Foundation 的 Product references](../../architecture/foundation.md#product-references)。
@@ -499,3 +500,16 @@ MCP 状态从 `/mcp` 获取，当前内核插件仍来自 `/plugins`；面板将
 - [Stage 4 设计](2026-11-20-plugin-host-design.md)、[Foundation](../../architecture/foundation.md)。
 
 以上 SDK 行为基于固定版本源码和 npm 元数据核对；设计阶段未安装 SDK 或启动第三方服务。
+
+### 10.2 5.1b 实施边界
+
+独立 MCP 客户端实现显式 legacy stdio、手动分页、冻结目录、受限 schema、
+调用预算、取消与安全错误。官方 v2.4.0 的实际公开结果 schema 入口为
+`specTypeSchemas.ListToolsResult`；不使用 v1 的导出名称。每代按精确 schema
+内容缓存隔离 provider 编译函数，schema 位置拒绝 `$id`。为保留 AJV 对特殊
+JSON 属性名遗漏时的语义，内部校验副本对所有数据键及对应 properties/required/
+const/enum 使用一致的单射前缀；公开 schema 与发出的参数保持原样。
+
+固定 SDK 的 ESM/CJS transport 补丁释放父端管道、共享关闭 promise 并通知关闭
+一次；独立宿主测试实际观察退出。此交付尚不提供 Server 启动授权、
+MCP 工具适配或 Studio 管理；后续5.2–5.4 必须经过这些边界后才允许用户启动服务。

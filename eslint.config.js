@@ -13,6 +13,7 @@ const workspacePackageNames = new Set([
   '@weave/plugin',
   '@weave/plugin-builtins',
   '@weave/plugin-host',
+  '@weave/mcp-client',
   '@weave/server',
   '@weave/desktop',
   '@weave/studio',
@@ -61,6 +62,7 @@ const packageLayers = new Map([
       layer: 'plugin',
     },
   ],
+  ['@weave/mcp-client', { allowedDependencies: [], layer: 'mcp-client' }],
   [
     '@weave/plugin-builtins',
     {
@@ -73,6 +75,7 @@ const packageLayers = new Map([
         '@weave/workspace',
         '@weave/runtime',
         '@weave/plugin',
+        '@weave/mcp-client',
       ],
       layer: 'plugin-builtins',
     },
@@ -99,6 +102,7 @@ const packageLayers = new Map([
         '@weave/plugin',
         '@weave/plugin-builtins',
         '@weave/plugin-host',
+        '@weave/mcp-client',
       ],
       layer: 'server',
     },

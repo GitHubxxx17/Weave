@@ -933,3 +933,17 @@ delivered, Studio reconciles the current run with one existing Session GET and
 uses the durable terminal fact; it does not infer a successful or cancelled turn
 from EOF. Both sides of this asynchronous read check run identity so a previous
 request cannot overwrite a later turn.
+
+### Stage 5.1b MCP 客户端边界
+
+`@weave/mcp-client` 是不依赖任何 Weave 包的独立叶子，负责本地 stdio 协议、
+冻结工具目录、受限 JSON Schema 校验、调用取消与有界关闭。仅
+`plugin-builtins` 和 Server 可以消费它；Runtime、plugin-host 和 Studio 不依赖
+客户端或 SDK。客户端不决定启动信任，不接触 SQLite、Session 或 HTTP。
+
+公共 `connectMcp` 接收已获授权并解析完环境引用的 command/argv/cwd/env、
+AbortSignal 和同步 stale/closed 通知；返回连接的冻结工具、输入校验、工具调用
+及幂等关闭。第三方错误不透传原始异常。客户端使用固定官方 SDK2.4.0，
+受限 schema 通过其公开 AJV provider 校验，不增加第二份 AJV；SDK transport
+关闭补丁及其独立宿主退出回归在包 README 说明。完整策略和预算见
+[Stage 5 设计](../superpowers/specs/2026-11-21-mcp-stdio-design.md)。
