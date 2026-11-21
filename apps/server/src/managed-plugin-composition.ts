@@ -93,6 +93,10 @@ export interface ManagedPluginCompositionOptions {
   readonly readLocalTrustEventsSync?: () => readonly RecordedPluginTrustEvent[] | undefined;
   /** Only private execution-enabled callers supply a store. */
   readonly executionStore?: Pick<OwnedPluginArtifactStore, 'binding' | 'assertHeldSync' | 'read'>;
+  readonly selectionAuthority?: Pick<
+    PluginAuthorityDatabase,
+    'lookupSync' | 'commitSync' | 'snapshotSync'
+  >;
 }
 
 interface SelectedTarget {
@@ -113,15 +117,20 @@ function identityChanged() {
   return new PluginHostError('plugin-digest-mismatch', artifactUnavailable.message);
 }
 
-function matchesArtifact(artifact: PluginArtifact, target: SelectedTarget): boolean {
-  const { candidate } = target;
+function matchesArtifact(artifact: PluginArtifact, candidate: ManagedCandidate): boolean {
   return (
     artifact.digest === candidate.digest &&
     artifact.descriptor.manifest.id === candidate.pluginId &&
     artifact.files === candidate.files &&
     artifact.bytes === candidate.bytes &&
-    canonicalJson(artifact.descriptor.manifest) === target.manifest
+    canonicalJson(artifact.descriptor.manifest) === canonicalJson(candidate.manifest)
   );
+}
+
+interface CommittedAdoption {
+  readonly causes: unknown[];
+  readonly blockSync: () => void;
+  withdrew: boolean;
 }
 
 export function createManagedPluginComposition(
@@ -144,6 +153,7 @@ export function createManagedPluginComposition(
     allowEvidence: boolean,
     failure: ExplicitLocalAuthorityError | undefined,
     onWithdrawal: (cancelPreparation: () => void) => void,
+    committed?: CommittedAdoption,
   ): void {
     const { local, mcp } = getSources();
     const stickyIds = authority.installations.map(({ pluginId }) => pluginId);
@@ -206,10 +216,24 @@ export function createManagedPluginComposition(
       selections.push(selectionInput);
     }
     targets = nextTargets;
+    function applyMcpDenialsSync() {
+      try {
+        mcp?.setDeniedPluginIdsSync(denied);
+      } catch (cause: unknown) {
+        committed?.causes.push(cause);
+        throw cause;
+      }
+    }
     try {
       if (local === undefined) return;
       if (prefix === undefined) {
-        onWithdrawal(local.withdrawExplicitSelectionSync(sticky, undefined, failure));
+        if (committed !== undefined) committed.withdrew = true;
+        try {
+          onWithdrawal(local.withdrawExplicitSelectionSync(sticky, undefined, failure));
+        } catch (cause: unknown) {
+          committed?.causes.push(cause);
+          throw cause;
+        }
       } else {
         try {
           local.adoptExplicitSelectionSync({
@@ -221,11 +245,17 @@ export function createManagedPluginComposition(
         } catch (cause: unknown) {
           targets.clear();
           const error = failure ?? new ExplicitLocalAuthorityError(cause);
+          if (committed !== undefined) {
+            committed.causes.push(cause);
+            committed.withdrew = true;
+            committed.blockSync();
+          }
           try {
             onWithdrawal(
               local.withdrawExplicitSelectionSync(sticky, prefix.at(-1)?.sequence, error),
             );
           } catch (withdrawal: unknown) {
+            committed?.causes.push(withdrawal);
             if (lossMarker !== undefined) {
               throw new ExplicitLocalAuthorityError(
                 new AggregateError([cause, withdrawal], 'Local readiness withdrawal failed', {
@@ -238,7 +268,7 @@ export function createManagedPluginComposition(
         }
       }
     } finally {
-      mcp?.setDeniedPluginIdsSync(denied);
+      applyMcpDenialsSync();
     }
   }
 
@@ -246,6 +276,7 @@ export function createManagedPluginComposition(
     snapshot: () => PluginAuthoritySnapshot,
     applyMcp?: () => void,
     priorFailure?: ExplicitLocalAuthorityError,
+    committed?: CommittedAdoption,
   ): void {
     let failure = priorFailure;
     let cancelPreparation: (() => void) | undefined;
@@ -260,6 +291,8 @@ export function createManagedPluginComposition(
               ? authority.trustEvents
               : options.readLocalTrustEventsSync();
         } catch (cause: unknown) {
+          committed?.causes.push(cause);
+          committed?.blockSync();
           failure ??= new ExplicitLocalAuthorityError(cause);
           if (options.readLocalTrustEventsSync === undefined) prefix = authority.trustEvents;
         }
@@ -271,6 +304,7 @@ export function createManagedPluginComposition(
             (cancel) => {
               cancelPreparation = cancel;
             },
+            committed,
           );
         } catch (cause: unknown) {
           if (failure === undefined) {
@@ -296,6 +330,64 @@ export function createManagedPluginComposition(
 
   function adoptAuthoritySync(snapshot: PluginAuthoritySnapshot): void {
     reconcileSync(() => snapshot);
+  }
+
+  function adoptCommittedAuthoritySync(
+    snapshot: PluginAuthoritySnapshot,
+    blockSync: () => void,
+  ): void {
+    let blocked = false;
+    const committed: CommittedAdoption = {
+      causes: [],
+      withdrew: false,
+      blockSync() {
+        if (blocked) return;
+        blocked = true;
+        try {
+          blockSync();
+        } catch (cause: unknown) {
+          committed.causes.push(cause);
+        }
+      },
+    };
+    const { causes } = committed;
+    try {
+      reconcileSync(() => snapshot, undefined, undefined, committed);
+      return;
+    } catch (cause: unknown) {
+      if (causes.length === 0) causes.push(cause);
+      committed.blockSync();
+      if (!committed.withdrew) {
+        targets.clear();
+        const { local, mcp } = getSources();
+        const sticky = new Set(snapshot.installations.map(({ pluginId }) => pluginId));
+        let cancelPreparation: (() => void) | undefined;
+        try {
+          buffer.runSync(() => {
+            try {
+              cancelPreparation = local?.withdrawExplicitSelectionSync(
+                sticky,
+                snapshot.heads.trustSequence,
+                new ExplicitLocalAuthorityError(causes[0]),
+              );
+            } catch (withdrawal: unknown) {
+              causes.push(withdrawal);
+            } finally {
+              mcp?.setDeniedPluginIdsSync(
+                new Set(mcp.declaredPluginIds().filter((id) => sticky.has(id))),
+              );
+            }
+          });
+          cancelPreparation?.();
+        } catch (withdrawal: unknown) {
+          causes.push(withdrawal);
+        }
+      }
+    }
+    if (causes.length === 1) throw causes[0];
+    throw new AggregateError(causes, 'Could not adopt committed managed authority', {
+      cause: causes[0],
+    });
   }
 
   function adoptLatestAuthoritySync(): void {
@@ -369,6 +461,40 @@ export function createManagedPluginComposition(
     return assertNotLostSync();
   }
 
+  async function readArtifact(candidate: ManagedCandidate, signal: AbortSignal) {
+    const artifact = await owned!.read(candidate.digest, {
+      signal: AbortSignal.any([signal, ownershipLoss.signal]),
+    });
+    if (!matchesArtifact(artifact, candidate)) throw identityChanged();
+    return artifact;
+  }
+
+  async function readCommandArtifact(candidate: ManagedCandidate, signal: AbortSignal) {
+    try {
+      const artifact = await readArtifact(candidate, signal);
+      return {
+        artifact: {
+          pluginId: candidate.pluginId,
+          digest: artifact.digest,
+          manifest: artifact.descriptor.manifest,
+          files: artifact.files,
+          bytes: artifact.bytes,
+        },
+        ready: {
+          status: 'ready' as const,
+          id: candidate.pluginId,
+          digest: artifact.digest,
+          manifest: candidate.manifest,
+          directory: artifact.directory,
+          entry: artifact.entry,
+        },
+      };
+    } catch (cause: unknown) {
+      rejectOwnershipFailure(cause);
+      throw cause;
+    }
+  }
+
   async function refreshNamespace(signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
     const { mcp } = getSources();
@@ -403,10 +529,9 @@ export function createManagedPluginComposition(
     }
     assertHeldSync();
     signal.throwIfAborted();
-    const readSignal = AbortSignal.any([signal, ownershipLoss.signal]);
     let artifact: PluginArtifact | undefined;
     try {
-      artifact = await owned!.read(target.candidate.digest, { signal: readSignal });
+      artifact = await readArtifact(target.candidate, signal);
     } catch (cause: unknown) {
       rejectOwnershipFailure(cause);
       if (cause instanceof PluginStoreOwnershipError) invalidateAuthoritySync(cause);
@@ -419,7 +544,7 @@ export function createManagedPluginComposition(
     if (targets.get(id) !== target) return undefined;
     assertHeldSync();
     let ready =
-      artifact !== undefined && matchesArtifact(artifact, target)
+      artifact !== undefined
         ? {
             status: 'ready' as const,
             id,
@@ -488,12 +613,15 @@ export function createManagedPluginComposition(
 
   return {
     adoptAuthoritySync,
+    adoptCommittedAuthoritySync,
     adoptLatestAuthoritySync,
     adoptInitialAuthoritySync: () => adoptAuthoritySync(options.initialAuthority),
     invalidateAuthoritySync,
     managedAuthority,
     onOwnershipLostSync,
     explicitChecks,
+    assertCommandLeaseSync: assertManagedStartSync,
+    readCommandArtifact,
     async refreshSelectedEvidence(signal: AbortSignal): Promise<void> {
       signal.throwIfAborted();
       adoptLatestAuthoritySync();

@@ -215,6 +215,7 @@ export async function createRealManagedCompositionFixture(
 
   return {
     root,
+    databaseFile,
     authority,
     owned,
     mcpStore,
@@ -324,7 +325,10 @@ export async function createRealManagedCompositionFixture(
           readAuthoritySync,
           ...(options.execution === false
             ? {}
-            : { executionStore: { binding: owned.binding, assertHeldSync, read: readOwned } }),
+            : {
+                executionStore: { binding: owned.binding, assertHeldSync, read: readOwned },
+                selectionAuthority: authority,
+              }),
           ...(options.readLocalTrustEventsSync === undefined
             ? {}
             : { readLocalTrustEventsSync: options.readLocalTrustEventsSync }),

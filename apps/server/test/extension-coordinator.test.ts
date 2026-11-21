@@ -49,6 +49,7 @@ class FixtureSource {
   onTool: ((signal: AbortSignal) => void | Promise<void>) | undefined;
   onDispose: (() => void | Promise<void>) | undefined;
   onRefresh: (() => void | Promise<void>) | undefined;
+  normalizeError: ((cause: unknown) => unknown) | undefined;
   afterDecision: (() => Promise<void>) | undefined;
   appendFailure: Error | undefined;
   prepareFailure: Error | undefined;
@@ -156,6 +157,7 @@ class FixtureSource {
               ...this.itemIdentity(identity),
               plugin,
               dispose,
+              ...(this.normalizeError === undefined ? {} : { normalizeError: this.normalizeError }),
               isReady: () => this.ready,
               ...(this.includeInstanceId
                 ? { instanceId: `${this.id}:attempt-${this.attempts.length}` }
@@ -286,6 +288,104 @@ function toolContent(content: string) {
 }
 
 describe('Server extension coordination', () => {
+  it('captures managed completions in each ticket before the next mutation changes admission', async () => {
+    const local = new FixtureSource('local-esm');
+    local.origin = 'managed';
+    const f = await fixture(local);
+    try {
+      const first = f.coordinator.mutateManaged(local.id, async () => ({
+        disposition: 'rebuild',
+        saved: 'first-saved',
+      }));
+      const second = f.coordinator.mutateManaged(local.id, async () => {
+        await local.decide(undefined);
+        return { disposition: 'committed-failed', saved: 'second-saved', cause: undefined };
+      });
+      const firstResult = await first;
+      expect(f.coordinator.generationSnapshot().acceptingRuns).toBe(false);
+      const secondResult = await second;
+      expect(firstResult).toMatchObject({
+        kind: 'committed',
+        saved: 'first-saved',
+        generation: { acceptingRuns: true },
+        members: [{ identity: 'first', origin: 'managed' }],
+        outcome: { kind: 'completed' },
+      });
+      expect(secondResult).toMatchObject({
+        kind: 'committed',
+        saved: 'second-saved',
+        generation: { acceptingRuns: false },
+        members: [{ identity: 'first', origin: 'managed' }],
+        outcome: { kind: 'failed', cause: undefined },
+      });
+      if (secondResult.kind !== 'committed') throw new Error('Expected a committed result');
+      expect(Object.hasOwn(secondResult.outcome, 'cause')).toBe(true);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it('uses the original publication exception for attribution after rendering its normalized issue', async () => {
+    const local = new FixtureSource('local-esm');
+    local.origin = 'managed';
+    const original = new Error('Original publication exception');
+    const normalized = new PluginError('plugin-setup-failed', 'Normalized publication issue', {
+      pluginId: local.id,
+      cause: original,
+    });
+    local.normalizeError = (cause) => (cause === original ? normalized : cause);
+    const f = await fixture(local);
+    try {
+      vi.spyOn(f.runtime.serverHost, 'commit').mockImplementationOnce(() => {
+        throw original;
+      });
+      const result = await f.coordinator.mutateManaged(local.id, async () => ({
+        disposition: 'rebuild',
+        saved: 'saved',
+      }));
+      expect(result).toMatchObject({
+        kind: 'committed',
+        members: [],
+        outcome: { kind: 'completed' },
+      });
+      if (result.kind !== 'committed' || result.outcome.kind !== 'completed')
+        throw new Error('Expected a completed publication');
+      expect(result.outcome.attributedFailures).toMatchObject([
+        {
+          sourceId: local.id,
+          pluginId: local.id,
+          origin: 'managed',
+          identity: 'first',
+        },
+      ]);
+      expect(result.outcome.attributedFailures?.[0]?.cause).toBe(original);
+      expect(f.coordinator.snapshot().failed.map(({ error }) => error.message)).toEqual([
+        normalized.message,
+      ]);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it('retains a thrown undefined from refresh as a failed managed completion', async () => {
+    const local = new FixtureSource('local-esm');
+    local.onRefresh = () => {
+      throw undefined;
+    };
+    const f = await fixture(local);
+    try {
+      const result = await f.coordinator.mutateManaged(local.id, async () => ({
+        disposition: 'rebuild',
+        saved: 'saved',
+      }));
+      if (result.kind !== 'committed') throw new Error('Expected a committed decision');
+      expect(result.outcome).toStrictEqual({ kind: 'failed', cause: undefined });
+      await expect(f.coordinator.reload()).rejects.toBeUndefined();
+    } finally {
+      await f.close();
+    }
+  });
+
   it('rebuilds for the same plugin and digest when local origin changes', async () => {
     const local = new FixtureSource('local-esm');
     local.origin = 'manual';

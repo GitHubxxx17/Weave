@@ -25,7 +25,8 @@ import {
 } from './extension-types.js';
 import type { ServerLocalPluginHost } from './local-plugin-host.js';
 
-const sourceId = 'local-esm';
+export const localExtensionSourceId = 'local-esm';
+const sourceId = localExtensionSourceId;
 const mutationOptions = z.strictObject({ immediate: z.boolean().optional() }).optional();
 
 interface ManagedLocalSourceOptions {

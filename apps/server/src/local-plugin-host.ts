@@ -18,6 +18,7 @@ import {
   createManagedPluginComposition,
   type ManagedPluginCompositionOptions,
 } from './managed-plugin-composition.js';
+import { createManagedSelectionManager } from './managed-selection-manager.js';
 
 /** Trust persistence remains open until administration and generation draining finish. */
 export interface ClosablePluginTrustStore extends PluginTrustStore {
@@ -185,10 +186,18 @@ export function createServerExtensionCoordinator(
       ? {}
       : { managedAuthority: managed!.managedAuthority }),
   });
+  const applyManagedSelection =
+    local !== undefined &&
+    managed !== undefined &&
+    options.managed?.executionStore !== undefined &&
+    options.managed.selectionAuthority !== undefined
+      ? createManagedSelectionManager(coordinator, options.managed.selectionAuthority, managed)
+      : undefined;
   coordinatedHosts.add(runtime.serverHost);
   return {
     coordinator,
     managed,
+    applyManagedSelection,
     localSource: local,
     adoptInitialAuthoritySync: managed?.adoptInitialAuthoritySync,
     pluginHost: local?.facade(coordinator, options.local?.dispose),

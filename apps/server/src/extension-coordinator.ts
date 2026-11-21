@@ -43,6 +43,35 @@ export interface ExtensionMutationContext {
   readonly signal: AbortSignal;
 }
 
+export type ManagedMutationStep<Replay, Saved> =
+  | { disposition: 'skip-rebuild'; replay: Replay }
+  | { disposition: 'rebuild'; saved: Saved }
+  | { disposition: 'committed-failed'; saved: Saved; cause: unknown };
+
+type ManagedAttributedFailure = ExtensionIdentity & {
+  readonly sourceId: string;
+  readonly cause: unknown;
+};
+
+type ManagedMutationOutcome =
+  | { kind: 'completed'; attributedFailures?: readonly ManagedAttributedFailure[] }
+  | { kind: 'failed'; cause: unknown };
+
+export type ManagedMutationCompletion<Replay, Saved> =
+  | { kind: 'replayed'; replay: Replay }
+  | {
+      kind: 'committed';
+      saved: Saved;
+      generation: ExtensionGenerationSnapshot;
+      members: readonly ExtensionMember[];
+      outcome: ManagedMutationOutcome;
+    };
+
+interface ManagedRebuildDiagnostics {
+  terminal?: { cause: unknown };
+  attributed: ManagedAttributedFailure[];
+}
+
 export type OwnedDrainOutcome =
   | { readonly kind: 'drained'; readonly cleanupCauses: readonly unknown[] }
   | { readonly kind: 'incomplete'; readonly cause: unknown };
@@ -52,6 +81,7 @@ export interface ExtensionCoordinator {
   generationSnapshot(): ExtensionGenerationSnapshot;
   observeAuthorityBatchSync(changes: ReadonlyMap<string, ExtensionAuthorityChange>): void;
   blockManagedOwnershipLossSync(): void;
+  blockManagedAdoptionFailureSync(sourceId: string, stickyIds: ReadonlySet<string>): void;
   snapshot(): ExtensionState;
   retainedGenerations(): readonly RetainedExtensionGeneration[];
   reload(options?: { readonly force?: boolean }): Promise<ExtensionReloadResult>;
@@ -60,8 +90,16 @@ export interface ExtensionCoordinator {
     operation: (context: ExtensionMutationContext) => Promise<unknown>,
     options?: { readonly force?: boolean },
   ): Promise<ExtensionReloadResult>;
+  mutateManaged<Replay, Saved>(
+    sourceId: string,
+    operation: (context: ExtensionMutationContext) => Promise<ManagedMutationStep<Replay, Saved>>,
+  ): Promise<ManagedMutationCompletion<Replay, Saved>>;
   hasActive(sourceId: string, pluginId: string): boolean;
-  retryImmediateRevocation(sourceId: string, pluginId: string): void;
+  retryImmediateRevocation(
+    sourceId: string,
+    pluginId: string,
+    origin?: ExtensionIdentity['origin'],
+  ): void;
   beginOwnedDrainSync(): void;
   drainOwnedConsumers(preDrain: () => Promise<void>): Promise<OwnedDrainOutcome>;
   dispose(): Promise<void>;
@@ -75,12 +113,17 @@ interface ExtensionCoordinatorOptions {
   readonly managedAuthority?: ManagedGenerationAuthority;
 }
 
-interface PendingOperation {
-  readonly reload: boolean;
+interface OperationTicket {
   force: boolean;
-  readonly run: (force: boolean) => Promise<ExtensionReloadResult>;
-  readonly result: ReturnType<typeof deferred<ExtensionReloadResult>>;
+  readonly run: (force: boolean) => Promise<() => void>;
+  readonly reject: (reason: unknown) => void;
 }
+
+type PendingOperation = OperationTicket &
+  (
+    | { readonly kind: 'reload'; readonly promise: Promise<ExtensionReloadResult> }
+    | { readonly kind: 'mutation' }
+  );
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -179,6 +222,27 @@ export function createExtensionCoordinator(
     if (!closed) controller.blockNewRuns(ownershipBlock);
   }
 
+  function blockForChangedAuthority(): void {
+    blocked = new PluginHostError(
+      'plugin-generation-blocked',
+      'Extension trust changed; new runs wait for a compliant generation',
+    );
+    controller.blockNewRuns(ownershipBlock ?? blocked);
+  }
+
+  function blockManagedAdoptionFailureSync(sourceId: string, stickyIds: ReadonlySet<string>): void {
+    if (closed) return;
+    if (
+      members.some(
+        (member) =>
+          (member.sourceId === sourceId && member.origin === 'managed') ||
+          ((member.sourceId === sourceId || member.sourceId === mcpAuthoritySource?.id) &&
+            stickyIds.has(member.pluginId)),
+      )
+    )
+      blockForChangedAuthority();
+  }
+
   function observeAuthorityBatchSync(changes: ReadonlyMap<string, ExtensionAuthorityChange>): void {
     if (closed) return;
     const changed = new Map<string, ExtensionSourceSnapshot>();
@@ -197,13 +261,7 @@ export function createExtensionCoordinator(
       (member) =>
         changed.get(member.sourceId)?.eligible.some((item) => matches(item, member)) === false,
     );
-    if (unauthorized) {
-      blocked = new PluginHostError(
-        'plugin-generation-blocked',
-        'Extension trust changed; new runs wait for a compliant generation',
-      );
-      controller.blockNewRuns(ownershipBlock ?? blocked);
-    }
+    if (unauthorized) blockForChangedAuthority();
     if (immediate) {
       controller.abortActiveRuns(
         ownershipBlock ?? blocked ?? new Error('Extension admission changed'),
@@ -265,9 +323,20 @@ export function createExtensionCoordinator(
     return { ...snapshot(), unchanged };
   }
 
-  function hasActive(sourceId: string, pluginId: string): boolean {
+  function hasActive(
+    sourceId: string,
+    pluginId: string,
+    origin?: ExtensionIdentity['origin'],
+  ): boolean {
     for (const active of activeByGeneration.values()) {
-      if (active.some((member) => member.sourceId === sourceId && member.pluginId === pluginId)) {
+      if (
+        active.some(
+          (member) =>
+            member.sourceId === sourceId &&
+            member.pluginId === pluginId &&
+            (origin === undefined || member.origin === origin),
+        )
+      ) {
         return true;
       }
     }
@@ -279,9 +348,10 @@ export function createExtensionCoordinator(
       while (pending.length > 0) {
         const operation = pending.shift()!;
         try {
-          operation.result.resolve(await operation.run(operation.force));
+          const resolve = await operation.run(operation.force);
+          resolve();
         } catch (reason: unknown) {
-          operation.result.reject(reason);
+          operation.reject(reason);
         }
       }
     } finally {
@@ -289,20 +359,52 @@ export function createExtensionCoordinator(
     }
   }
 
-  function enqueue(
-    reload: boolean,
-    run: (force: boolean) => Promise<ExtensionReloadResult>,
-    force = false,
-  ): Promise<ExtensionReloadResult> {
+  function ticket<T>(run: (force: boolean) => Promise<T>, force: boolean) {
+    const { resolve, reject, promise } = deferred<T>();
+    return {
+      force,
+      reject,
+      promise,
+      async run(force: boolean) {
+        const completion = await run(force);
+        return () => resolve(completion);
+      },
+    };
+  }
+
+  function enqueue(operation: PendingOperation): void {
+    pending.push(operation);
+    running ??= Promise.resolve().then(drain);
+  }
+
+  function reload(force: boolean): Promise<ExtensionReloadResult> {
     if (closed) return Promise.reject(disposed());
     const previous = pending.at(-1);
-    if (reload && previous?.reload) {
+    if (previous?.kind === 'reload') {
       previous.force ||= force;
-      return previous.result.promise;
+      return previous.promise;
     }
-    const operation = deferred<ExtensionReloadResult>();
-    pending.push({ reload, force, run, result: operation });
-    running ??= Promise.resolve().then(drain);
+    const operation = ticket(async (force) => {
+      await refresh();
+      return rebuild(force);
+    }, force);
+    enqueue({ kind: 'reload', ...operation });
+    return operation.promise;
+  }
+
+  function enqueueMutation<T>(
+    sourceId: string,
+    run: (context: ExtensionMutationContext, force: boolean) => Promise<T>,
+    force = false,
+  ): Promise<T> {
+    if (closed) return Promise.reject(disposed());
+    const operation = ticket((force) => {
+      if (!sources.some((source) => source.id === sourceId)) {
+        throw new Error(`Unknown extension source "${sourceId}"`);
+      }
+      return run({ assertOpenSync: ensureOpen, signal: lifetime.signal }, force);
+    }, force);
+    enqueue({ kind: 'mutation', ...operation });
     return operation.promise;
   }
 
@@ -337,7 +439,7 @@ export function createExtensionCoordinator(
     if (cancelActiveRuns) controller.abortActiveRuns(reason);
     lifetime.abort(reason);
     preparing?.abort(reason);
-    for (const operation of pending.splice(0)) operation.result.reject(reason);
+    for (const operation of pending.splice(0)) operation.reject(reason);
   }
 
   async function disposeConsumers(): Promise<void> {
@@ -421,18 +523,34 @@ export function createExtensionCoordinator(
     return [...before].every(([source, state]) => sameStamp(state.stamp, after.get(source)!.stamp));
   }
 
-  async function rebuild(force: boolean): Promise<ExtensionReloadResult> {
+  async function rebuild(
+    force: boolean,
+    diagnostics?: ManagedRebuildDiagnostics,
+  ): Promise<ExtensionReloadResult> {
     const excluded = new Map(sources.map((source) => [source.id, new Set<string>()]));
     const failures: ExtensionFailure[] = [];
     const changed = new Set<string>();
     let refreshes = 0;
     let readingAuthority = false;
 
-    function exclude(sourceId: string, item: ExtensionIdentity, reason: unknown): void {
+    function exclude(
+      sourceId: string,
+      item: ExtensionIdentity,
+      reason: unknown,
+      original?: { cause: unknown },
+    ): void {
       const keys = excluded.get(sourceId)!;
       if (keys.has(item.identity)) throw new Error('Extension exclusions must increase on retry');
       keys.add(item.identity);
       const { pluginId, identity } = item;
+      if (original !== undefined)
+        diagnostics?.attributed.push({
+          sourceId,
+          pluginId,
+          identity,
+          ...originOf(item),
+          cause: original.cause,
+        });
       failures.push({ sourceId, pluginId, identity, ...originOf(item), error: issueOf(reason) });
     }
 
@@ -449,9 +567,12 @@ export function createExtensionCoordinator(
           ? reason.pluginId
           : undefined;
       const blamed = items.filter(({ item }) => item.pluginId === owner);
-      if (blamed.length !== 1) throw reason;
+      if (blamed.length !== 1) {
+        if (diagnostics !== undefined) diagnostics.terminal = { cause: original };
+        throw reason;
+      }
       const { sourceId, item } = blamed[0]!;
-      exclude(sourceId, item, reason);
+      exclude(sourceId, item, reason, { cause: original });
     }
 
     function excludeUnready(items: readonly OwnedItem[]): boolean {
@@ -556,7 +677,7 @@ export function createExtensionCoordinator(
                 identityFailure = { ...failure, sourceId: source.id };
                 break;
               }
-              exclude(source.id, failure, failure.error);
+              exclude(source.id, failure, failure.error, { cause: failure.error });
             }
             if (identityFailure !== undefined) break;
           }
@@ -691,6 +812,7 @@ export function createExtensionCoordinator(
         }
       }
     } catch (reason: unknown) {
+      if (diagnostics !== undefined) diagnostics.terminal ??= { cause: reason };
       const marker = authorityMarker(reason);
       if (closed && marker !== undefined) throw reason;
       ensureOpen();
@@ -702,38 +824,62 @@ export function createExtensionCoordinator(
     }
   }
 
+  function mutateManaged<Replay, Saved>(
+    sourceId: string,
+    operation: (context: ExtensionMutationContext) => Promise<ManagedMutationStep<Replay, Saved>>,
+  ): Promise<ManagedMutationCompletion<Replay, Saved>> {
+    return enqueueMutation(sourceId, async (context) => {
+      const step = await operation(context);
+      if (step.disposition === 'skip-rebuild') return { kind: 'replayed', replay: step.replay };
+      let outcome: ManagedMutationOutcome;
+      if (step.disposition === 'committed-failed') {
+        outcome = { kind: 'failed', cause: step.cause };
+      } else {
+        const diagnostics: ManagedRebuildDiagnostics = { attributed: [] };
+        try {
+          await refresh();
+          await rebuild(false, diagnostics);
+        } catch (cause: unknown) {
+          diagnostics.terminal ??= { cause };
+        }
+        outcome =
+          diagnostics.terminal !== undefined
+            ? { kind: 'failed', cause: diagnostics.terminal.cause }
+            : { kind: 'completed', attributedFailures: diagnostics.attributed };
+      }
+      return {
+        kind: 'committed',
+        saved: step.saved,
+        generation: generationSnapshot(),
+        members: structuredClone(members),
+        outcome,
+      };
+    });
+  }
+
   return {
     runner: controller.runner,
     generationSnapshot,
     observeAuthorityBatchSync,
     blockManagedOwnershipLossSync,
+    blockManagedAdoptionFailureSync,
     snapshot,
     retainedGenerations,
-    reload: (reloadOptions) =>
-      enqueue(
-        true,
-        async (force) => {
-          await refresh();
-          return rebuild(force);
-        },
-        reloadOptions?.force === true,
-      ),
+    reload: (reloadOptions) => reload(reloadOptions?.force === true),
     mutate: (sourceId, operation, mutationOptions) =>
-      enqueue(
-        false,
-        async (force) => {
-          if (!sources.some((source) => source.id === sourceId)) {
-            throw new Error(`Unknown extension source "${sourceId}"`);
-          }
-          await operation({ assertOpenSync: ensureOpen, signal: lifetime.signal });
+      enqueueMutation(
+        sourceId,
+        async (context, force) => {
+          await operation(context);
           await refresh(sourceId);
           return rebuild(force);
         },
         mutationOptions?.force === true,
       ),
+    mutateManaged,
     hasActive,
-    retryImmediateRevocation(sourceId, pluginId) {
-      if (!closed && hasActive(sourceId, pluginId)) {
+    retryImmediateRevocation(sourceId, pluginId, origin) {
+      if (!closed && hasActive(sourceId, pluginId, origin)) {
         controller.abortActiveRuns(
           ownershipBlock ?? blocked ?? new Error('Extension admission changed'),
         );
