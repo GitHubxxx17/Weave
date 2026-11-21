@@ -1,14 +1,25 @@
+import { createServer } from 'node:http';
 import { PluginError, toolsExtensionPoint, type KernelPlugin } from '@weave/plugin';
+import { ExplicitLocalAuthorityError } from '@weave/plugin-host';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createApp } from '../src/app.js';
-import { createExtensionCoordinator } from '../src/extension-coordinator.js';
+import {
+  createExtensionCoordinator,
+  type ExtensionMutationContext,
+} from '../src/extension-coordinator.js';
 import type {
+  ExtensionAuthorityChange,
   ExtensionAuthorityObserver,
+  ExtensionIdentity,
   ExtensionSource,
+  ExtensionSourceFactory,
   ExtensionSourceSnapshot,
+  ManagedGenerationAuthority,
 } from '../src/extension-types.js';
 import { ExtensionPreparationError } from '../src/extension-types.js';
+import { createManagedAuthorityObserverBuffer } from '../src/managed-plugin-composition.js';
+import { createServerShutdown } from '../src/server-shutdown.js';
 import {
   assembleServerGeneration,
   createServerAgentRunner,
@@ -28,6 +39,7 @@ function deferred() {
 
 class FixtureSource {
   private revision = 0;
+  private trustSequence = 0;
   private identity: string | undefined = 'first';
   private observer: ExtensionAuthorityObserver | undefined;
   readonly close = vi.fn(async () => {});
@@ -37,6 +49,7 @@ class FixtureSource {
   onTool: ((signal: AbortSignal) => void | Promise<void>) | undefined;
   onDispose: (() => void | Promise<void>) | undefined;
   onRefresh: (() => void | Promise<void>) | undefined;
+  normalizeError: ((cause: unknown) => unknown) | undefined;
   afterDecision: (() => Promise<void>) | undefined;
   appendFailure: Error | undefined;
   prepareFailure: Error | undefined;
@@ -47,14 +60,23 @@ class FixtureSource {
   recheckValid = true;
   ready = true;
   includeInstanceId = false;
+  origin: ExtensionIdentity['origin'];
 
   constructor(readonly id: string) {}
 
-  private snapshot(): ExtensionSourceSnapshot {
+  snapshot(): ExtensionSourceSnapshot {
     this.onSnapshot?.();
     return {
-      stamp: { revision: this.revision, trustSequence: this.revision },
-      eligible: this.identity === undefined ? [] : [{ pluginId: this.id, identity: this.identity }],
+      stamp: { revision: this.revision, trustSequence: this.trustSequence },
+      eligible: this.identity === undefined ? [] : [this.itemIdentity(this.identity)],
+    };
+  }
+
+  private itemIdentity(identity: string): ExtensionIdentity {
+    return {
+      pluginId: this.id,
+      identity,
+      ...(this.origin === undefined ? {} : { origin: this.origin }),
     };
   }
 
@@ -132,10 +154,10 @@ class FixtureSource {
           stamp,
           items: [
             {
-              pluginId: this.id,
-              identity,
+              ...this.itemIdentity(identity),
               plugin,
               dispose,
+              ...(this.normalizeError === undefined ? {} : { normalizeError: this.normalizeError }),
               isReady: () => this.ready,
               ...(this.includeInstanceId
                 ? { instanceId: `${this.id}:attempt-${this.attempts.length}` }
@@ -156,16 +178,37 @@ class FixtureSource {
 
   async decide(identity: string | undefined, immediate = false): Promise<void> {
     if (this.appendFailure) throw this.appendFailure;
+    this.publish(this.stageDecision(identity, immediate));
+    await this.afterDecision?.();
+  }
+
+  stageDecision(identity: string | undefined, immediate = false): ExtensionAuthorityChange {
     this.identity = identity;
     this.revision += 1;
-    this.observer?.(this.id, { snapshot: this.snapshot(), affectedIds: [this.id], immediate });
-    await this.afterDecision?.();
+    this.trustSequence += 1;
+    return { snapshot: this.snapshot(), affectedIds: [this.id], immediate };
+  }
+
+  stageValidatedSequence(): ExtensionAuthorityChange {
+    this.trustSequence += 1;
+    return { snapshot: this.snapshot(), affectedIds: [], immediate: false };
+  }
+
+  publish(change: ExtensionAuthorityChange): void {
+    this.observer?.(this.id, change);
   }
 
   onRecheck: (() => void | Promise<void>) | undefined;
 }
 
-async function fixture(...sources: FixtureSource[]) {
+async function fixture(...sources: Array<{ readonly register: ExtensionSourceFactory }>) {
+  return fixtureWithAuthorityOrder(false, ...sources);
+}
+
+async function fixtureWithAuthorityOrder(
+  mode: boolean | ManagedGenerationAuthority,
+  ...sources: Array<{ readonly register: ExtensionSourceFactory }>
+) {
   const runtime = createServerRuntime();
   await runtime.start();
   const runner = await createServerAgentRunner(runtime);
@@ -178,6 +221,8 @@ async function fixture(...sources: FixtureSource[]) {
   const coordinator = createExtensionCoordinator({
     host: runtime.serverHost,
     sources: sources.map((source) => source.register),
+    mcpFirstAuthority: mode === true,
+    ...(typeof mode === 'boolean' ? {} : { managedAuthority: mode }),
     assemble: async (kernelPlugins) => {
       if (failAssembly) throw new Error('Shared assembly failed');
       return assembleServerGeneration(runtime, { kernelPlugins });
@@ -224,6 +269,17 @@ async function fixture(...sources: FixtureSource[]) {
   };
 }
 
+function managedAuthority(
+  assertManagedPublicationSync: ManagedGenerationAuthority['assertManagedPublicationSync'],
+): ManagedGenerationAuthority {
+  return {
+    ownershipLossSignal: new AbortController().signal,
+    assertNotLostSync: () => undefined,
+    assertManagedPublicationSync,
+    assertManagedStartSync: () => undefined,
+  };
+}
+
 function toolContent(content: string) {
   return expect.objectContaining({
     type: 'tool-result',
@@ -232,6 +288,579 @@ function toolContent(content: string) {
 }
 
 describe('Server extension coordination', () => {
+  it('captures managed completions in each ticket before the next mutation changes admission', async () => {
+    const local = new FixtureSource('local-esm');
+    local.origin = 'managed';
+    const f = await fixture(local);
+    try {
+      const first = f.coordinator.mutateManaged(local.id, async () => ({
+        disposition: 'rebuild',
+        saved: 'first-saved',
+      }));
+      const second = f.coordinator.mutateManaged(local.id, async () => {
+        await local.decide(undefined);
+        return { disposition: 'committed-failed', saved: 'second-saved', cause: undefined };
+      });
+      const firstResult = await first;
+      expect(f.coordinator.generationSnapshot().acceptingRuns).toBe(false);
+      const secondResult = await second;
+      expect(firstResult).toMatchObject({
+        kind: 'committed',
+        saved: 'first-saved',
+        generation: { acceptingRuns: true },
+        members: [{ identity: 'first', origin: 'managed' }],
+        outcome: { kind: 'completed' },
+      });
+      expect(secondResult).toMatchObject({
+        kind: 'committed',
+        saved: 'second-saved',
+        generation: { acceptingRuns: false },
+        members: [{ identity: 'first', origin: 'managed' }],
+        outcome: { kind: 'failed', cause: undefined },
+      });
+      if (secondResult.kind !== 'committed') throw new Error('Expected a committed result');
+      expect(Object.hasOwn(secondResult.outcome, 'cause')).toBe(true);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it('preserves the original publication exception and renders a fixed managed issue', async () => {
+    const local = new FixtureSource('local-esm');
+    local.origin = 'managed';
+    const original = new Error('Original publication exception');
+    const normalized = new PluginError('plugin-setup-failed', 'Normalized publication issue', {
+      pluginId: local.id,
+      cause: original,
+    });
+    local.normalizeError = (cause) => (cause === original ? normalized : cause);
+    const f = await fixture(local);
+    try {
+      vi.spyOn(f.runtime.serverHost, 'commit').mockImplementationOnce(() => {
+        throw original;
+      });
+      const result = await f.coordinator.mutateManaged(local.id, async () => ({
+        disposition: 'rebuild',
+        saved: 'saved',
+      }));
+      expect(result).toMatchObject({
+        kind: 'committed',
+        members: [],
+        outcome: { kind: 'completed' },
+      });
+      if (result.kind !== 'committed' || result.outcome.kind !== 'completed')
+        throw new Error('Expected a completed publication');
+      expect(result.outcome.attributedFailures).toMatchObject([
+        {
+          sourceId: local.id,
+          pluginId: local.id,
+          origin: 'managed',
+          identity: 'first',
+        },
+      ]);
+      expect(result.outcome.attributedFailures?.[0]?.cause).toBe(original);
+      expect(f.coordinator.snapshot().failed.map(({ error }) => error)).toEqual([
+        { code: 'plugin-load-failed', message: 'Managed plugin preparation failed' },
+      ]);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it('retains a thrown undefined from refresh as a failed managed completion', async () => {
+    const local = new FixtureSource('local-esm');
+    local.onRefresh = () => {
+      throw undefined;
+    };
+    const f = await fixture(local);
+    try {
+      const result = await f.coordinator.mutateManaged(local.id, async () => ({
+        disposition: 'rebuild',
+        saved: 'saved',
+      }));
+      if (result.kind !== 'committed') throw new Error('Expected a committed decision');
+      expect(result.outcome).toStrictEqual({ kind: 'failed', cause: undefined });
+      await expect(f.coordinator.reload()).rejects.toBeUndefined();
+    } finally {
+      await f.close();
+    }
+  });
+
+  it('rebuilds for the same plugin and digest when local origin changes', async () => {
+    const local = new FixtureSource('local-esm');
+    local.origin = 'manual';
+    const f = await fixtureWithAuthorityOrder(
+      managedAuthority(() => undefined),
+      local,
+    );
+    try {
+      const first = await f.coordinator.reload();
+      local.origin = 'managed';
+      await local.decide('first');
+      expect(f.coordinator.generationSnapshot().acceptingRuns).toBe(false);
+      const second = await f.coordinator.reload();
+      expect(second.generation.id).toBeGreaterThan(first.generation.id);
+      expect(second.members).toMatchObject([{ identity: 'first', origin: 'managed' }]);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it.each(['candidate', 'unchanged'] as const)(
+    'recaptures changed authority after the managed %s guard',
+    async (path) => {
+      const local = new FixtureSource('local-esm');
+      local.origin = 'managed';
+      let changeOnGuard = path === 'candidate';
+      const guard = vi.fn<ManagedGenerationAuthority['assertManagedPublicationSync']>(() => {
+        if (changeOnGuard) {
+          changeOnGuard = false;
+          local.publish(local.stageDecision('replacement'));
+        }
+        return undefined;
+      });
+      const f = await fixtureWithAuthorityOrder(managedAuthority(guard), local);
+      const commit = vi.spyOn(f.runtime.serverHost, 'commit');
+      try {
+        if (path === 'unchanged') {
+          await f.coordinator.reload();
+          guard.mockClear();
+          commit.mockClear();
+          changeOnGuard = true;
+        }
+        const result = await f.coordinator.reload();
+        expect(result.unchanged).toBe(false);
+        expect(result.members).toMatchObject([{ identity: 'replacement', origin: 'managed' }]);
+        expect(guard.mock.calls).toEqual([
+          [[{ pluginId: 'local-esm', identity: 'first', origin: 'managed' }]],
+          [[{ pluginId: 'local-esm', identity: 'replacement', origin: 'managed' }]],
+        ]);
+        expect(commit).toHaveBeenCalledOnce();
+        expect(await f.turn(local.id)).toContainEqual(toolContent('replacement'));
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  it.each(['candidate', 'unchanged'] as const)(
+    'keeps the current pointer when the managed %s guard closes admission',
+    async (path) => {
+      const local = new FixtureSource('local-esm');
+      local.origin = 'managed';
+      let closeOnGuard = path === 'candidate';
+      const f = await fixtureWithAuthorityOrder(
+        managedAuthority(() => {
+          if (closeOnGuard) f.coordinator.beginOwnedDrainSync();
+          return undefined;
+        }),
+        local,
+      );
+      try {
+        if (path === 'unchanged') {
+          await f.coordinator.reload();
+          closeOnGuard = true;
+        }
+        const before = f.runtime.serverHost.controller()!.current();
+        await expect(f.coordinator.reload()).rejects.toMatchObject({
+          code: 'plugin-host-disposed',
+        });
+        expect(f.runtime.serverHost.controller()!.current()).toBe(before);
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  it('retains the original kernel setup error carrying a direct authority failure', async () => {
+    const local = new FixtureSource('local-esm');
+    local.origin = 'managed';
+    const marker = new ExplicitLocalAuthorityError(new Error('Private authority failure'));
+    local.onSetup = () => {
+      throw marker;
+    };
+    const f = await fixtureWithAuthorityOrder(
+      managedAuthority(() => undefined),
+      local,
+    );
+    try {
+      const before = f.runtime.serverHost.controller()!.current();
+      await expect(f.coordinator.reload()).rejects.toMatchObject({
+        code: 'plugin-setup-failed',
+        pluginId: 'local-esm',
+        cause: marker,
+      });
+      expect(local.attempts).toEqual([[]]);
+      expect(f.coordinator.snapshot().failed).toEqual([]);
+      expect(f.runtime.serverHost.controller()!.current()).toBe(before);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it.each(['direct', 'setup-wrapped', 'ordinary'] as const)(
+    'handles %s failure when owned drain closes admission during rollback',
+    async (kind) => {
+      const local = new FixtureSource('local-esm');
+      local.origin = 'managed';
+      const marker = new ExplicitLocalAuthorityError(new Error('Private authority failure'));
+      const failure =
+        kind === 'direct'
+          ? marker
+          : kind === 'setup-wrapped'
+            ? new PluginError('plugin-setup-failed', 'Setup failed', { cause: marker })
+            : new Error('Ordinary recheck failure');
+      local.recheckFailure = failure;
+      const disposing = deferred();
+      const release = deferred();
+      local.onPreparedDispose = () => {
+        disposing.resolve();
+        return release.promise;
+      };
+      const f = await fixtureWithAuthorityOrder(
+        managedAuthority(() => undefined),
+        local,
+      );
+      const before = f.runtime.serverHost.controller()!.current();
+      const reload = f.coordinator.reload();
+      const rejection = reload.catch((cause: unknown) => cause);
+      try {
+        await Promise.race([
+          disposing.promise,
+          rejection.then(() => {
+            throw new Error('Expected pending rollback');
+          }),
+        ]);
+        f.coordinator.beginOwnedDrainSync();
+        release.resolve();
+        if (kind === 'ordinary') {
+          await expect(reload).rejects.toMatchObject({ code: 'plugin-host-disposed' });
+        } else {
+          await expect(reload).rejects.toBe(failure);
+        }
+        expect(f.runtime.serverHost.controller()!.current()).toBe(before);
+        expect(f.coordinator.generationSnapshot()).toMatchObject({
+          acceptingRuns: false,
+          blocked: { code: 'plugin-host-disposed' },
+        });
+      } finally {
+        release.resolve();
+        await rejection;
+        await f.close();
+      }
+    },
+  );
+
+  it('attributes a non-setup PluginError even when its cause is an authority marker', async () => {
+    const other = new FixtureSource('other');
+    const local = new FixtureSource('local-esm');
+    local.origin = 'managed';
+    const original = new PluginError('plugin-registration-conflict', 'Provider conflict', {
+      pluginId: local.id,
+      cause: new ExplicitLocalAuthorityError(),
+    });
+    const f = await fixtureWithAuthorityOrder(
+      managedAuthority(() => undefined),
+      local,
+      other,
+    );
+    const serverHost = f.runtime.serverHost;
+    vi.spyOn(serverHost, 'commit').mockImplementationOnce(() => {
+      throw original;
+    });
+    try {
+      const result = await f.coordinator.reload();
+      expect(result.members.map(({ pluginId }) => pluginId)).toEqual(['other']);
+      expect(result.failed).toEqual([
+        expect.objectContaining({
+          pluginId: 'local-esm',
+          origin: 'managed',
+          error: { code: 'plugin-load-failed', message: 'Managed plugin preparation failed' },
+        }),
+      ]);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it('bridges ownership loss before MCP prepares first in a mixed iteration', async () => {
+    const local = new FixtureSource('local-esm');
+    local.origin = 'managed';
+    const mcp = new FixtureSource('mcp');
+    const entered = Promise.withResolvers<AbortSignal>();
+    const release = deferred();
+    const aborted = deferred();
+    const loss = new ExplicitLocalAuthorityError(new Error('Lost ownership'));
+    const lossController = new AbortController();
+    const f = await fixtureWithAuthorityOrder(
+      {
+        ...managedAuthority(() => undefined),
+        assertNotLostSync: () => lossController.signal.throwIfAborted(),
+        ownershipLossSignal: lossController.signal,
+      },
+      {
+        register(observe) {
+          const source = mcp.register(observe);
+          return {
+            ...source,
+            async prepare(_stamp, { signal }) {
+              signal.addEventListener('abort', aborted.resolve, { once: true });
+              entered.resolve(signal);
+              await release.promise;
+              throw new Error('MCP preparation interrupted');
+            },
+          };
+        },
+      },
+      local,
+    );
+    const reload = f.coordinator.reload();
+    const rejection = reload.catch((cause: unknown) => cause);
+    try {
+      const signal = await entered.promise;
+      lossController.abort(loss);
+      expect(signal.aborted).toBe(true);
+      await aborted.promise;
+      release.resolve();
+      expect(await rejection).toBe(loss);
+      expect(local.attempts).toEqual([]);
+      expect(f.coordinator.snapshot().failed).toEqual([]);
+    } finally {
+      release.resolve();
+      await rejection;
+      await f.close();
+    }
+  });
+
+  it('discards pending changes and stamps after a paired callback throws', async () => {
+    const local = new FixtureSource('local-esm');
+    const mcp = new FixtureSource('mcp');
+    const publish = vi.fn();
+    const buffer = createManagedAuthorityObserverBuffer(publish);
+    const f = await fixture(
+      { register: buffer.wrapSource(local.register) },
+      { register: buffer.wrapSource(mcp.register) },
+    );
+    try {
+      const localChange = local.stageDecision(undefined);
+      const mcpChange = mcp.stageDecision(undefined);
+      expect(() =>
+        buffer.runSync(() => {
+          local.publish(localChange);
+          mcp.publish(mcpChange);
+          throw new Error('Authority reconciliation failed');
+        }),
+      ).toThrow('Authority reconciliation failed');
+      expect(publish).not.toHaveBeenCalled();
+      buffer.runSync(() => {
+        local.publish(localChange);
+        mcp.publish(mcpChange);
+      });
+      expect(publish).toHaveBeenCalledExactlyOnceWith(
+        new Map([
+          [local.id, localChange],
+          [mcp.id, mcpChange],
+        ]),
+      );
+    } finally {
+      await f.close();
+    }
+  });
+
+  it.each(['setup', 'readiness'])(
+    'validates MCP before the next local preparation after an attributed %s failure',
+    async (failure) => {
+      const local = new FixtureSource('local-esm');
+      const mcp = new FixtureSource('mcp');
+      const calls: string[] = [];
+      const preparationSignals: AbortSignal[] = [];
+      local.onRefresh = () => {
+        calls.push('local refresh');
+      };
+      mcp.onRefresh = () => {
+        calls.push('mcp refresh');
+      };
+      local.onRecheck = () => {
+        calls.push('local recheck');
+      };
+      mcp.onRecheck = () => {
+        calls.push('mcp recheck');
+      };
+      const f = await fixtureWithAuthorityOrder(
+        true,
+        {
+          register(observe) {
+            const source = local.register(observe);
+            return {
+              ...source,
+              prepare(stamp, options) {
+                calls.push('local prepare');
+                preparationSignals.push(options.signal);
+                return source.prepare(stamp, options);
+              },
+            };
+          },
+        },
+        mcp,
+      );
+      if (failure === 'setup') {
+        mcp.onSetup = () => {
+          throw new Error('MCP setup failed');
+        };
+      } else {
+        mcp.ready = false;
+      }
+      try {
+        const result = await f.coordinator.reload();
+        expect(result.failed).toHaveLength(1);
+        expect(result.members.map(({ pluginId }) => pluginId)).toEqual([local.id]);
+        expect(calls.slice(0, 2)).toEqual(['mcp refresh', 'local refresh']);
+        const firstPrepare = calls.indexOf('local prepare');
+        const lastPrepare = calls.lastIndexOf('local prepare');
+        expect(calls.slice(firstPrepare + 1, lastPrepare)).toContain('mcp refresh');
+        expect(preparationSignals).toHaveLength(2);
+        expect(preparationSignals[0]).not.toBe(preparationSignals[1]);
+        expect(calls.slice(-2)).toEqual(['mcp recheck', 'local recheck']);
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  it('discards unchanged-stamp metadata and retains a change from an earlier stamp in a pair', async () => {
+    const local = new FixtureSource('local-esm');
+    const mcp = new FixtureSource('mcp');
+    const batches: Array<ReadonlyMap<string, ExtensionAuthorityChange>> = [];
+    const buffer = createManagedAuthorityObserverBuffer((changes) => {
+      batches.push(changes);
+      f.coordinator.observeAuthorityBatchSync(changes);
+    });
+    const f = await fixture(
+      { register: buffer.wrapSource(local.register) },
+      { register: buffer.wrapSource(mcp.register) },
+    );
+    const abort = vi.spyOn(f.runtime.serverHost.controller()!, 'abortActiveRuns');
+    const started = deferred();
+    const released = deferred();
+    const observed: unknown[] = [];
+    local.onTool = (signal) => {
+      signal.addEventListener(
+        'abort',
+        () => {
+          observed.push({
+            local: local.snapshot().eligible,
+            mcp: mcp.snapshot().eligible,
+            acceptingRuns: f.coordinator.generationSnapshot().acceptingRuns,
+          });
+          buffer.runSync(() => local.publish(local.stageValidatedSequence()));
+          released.resolve();
+        },
+        { once: true },
+      );
+      started.resolve();
+      return released.promise;
+    };
+    try {
+      await f.coordinator.reload();
+      local.publish({ snapshot: local.snapshot(), affectedIds: [local.id], immediate: true });
+      buffer.runSync(() => {
+        local.publish({ snapshot: local.snapshot(), affectedIds: [local.id], immediate: true });
+        local.publish(local.stageValidatedSequence());
+      });
+      expect(abort).not.toHaveBeenCalled();
+      expect(f.coordinator.generationSnapshot().acceptingRuns).toBe(true);
+      expect(batches[0]?.get(local.id)).toEqual({
+        snapshot: local.snapshot(),
+        affectedIds: [],
+        immediate: false,
+      });
+      const turn = f.turn(local.id);
+      await started.promise;
+      buffer.runSync(() => {
+        local.publish(local.stageDecision('first', true));
+        local.publish(local.stageValidatedSequence());
+        mcp.publish(mcp.stageDecision(undefined));
+      });
+      expect(observed).toEqual([
+        {
+          local: [{ pluginId: 'local-esm', identity: 'first' }],
+          mcp: [],
+          acceptingRuns: false,
+        },
+      ]);
+      expect(abort).toHaveBeenCalledOnce();
+      expect(batches[1]?.get(local.id)).toEqual({
+        snapshot: {
+          stamp: { revision: 1, trustSequence: 3 },
+          eligible: [{ pluginId: 'local-esm', identity: 'first' }],
+        },
+        affectedIds: [local.id],
+        immediate: true,
+      });
+      expect(batches[2]?.get(local.id)?.snapshot.stamp).toEqual({
+        revision: 1,
+        trustSequence: 4,
+      });
+      await turn;
+    } finally {
+      released.resolve();
+      abort.mockRestore();
+      await f.close();
+    }
+  });
+
+  it('blocks admission for the entire authority batch before synchronously aborting runs', async () => {
+    const local = new FixtureSource('local-esm');
+    const mcp = new FixtureSource('mcp');
+    const started = deferred();
+    const released = deferred();
+    const observed: unknown[] = [];
+    const f = await fixture(local, mcp);
+    const abort = vi.spyOn(f.runtime.serverHost.controller()!, 'abortActiveRuns');
+    local.onTool = (signal) => {
+      signal.addEventListener(
+        'abort',
+        () => {
+          observed.push({
+            local: local.snapshot().eligible,
+            mcp: mcp.snapshot().eligible,
+            acceptingRuns: f.coordinator.generationSnapshot().acceptingRuns,
+          });
+          released.resolve();
+        },
+        { once: true },
+      );
+      started.resolve();
+      return released.promise;
+    };
+    try {
+      await f.coordinator.reload();
+      const turn = f.turn(local.id);
+      await started.promise;
+      const localChange = local.stageDecision('first', true);
+      const mcpChange = mcp.stageDecision(undefined, true);
+      f.coordinator.observeAuthorityBatchSync(
+        new Map([
+          [local.id, localChange],
+          [mcp.id, mcpChange],
+        ]),
+      );
+      expect(observed).toEqual([
+        {
+          local: [{ pluginId: 'local-esm', identity: 'first' }],
+          mcp: [],
+          acceptingRuns: false,
+        },
+      ]);
+      expect(abort).toHaveBeenCalledOnce();
+      await turn;
+    } finally {
+      released.resolve();
+      abort.mockRestore();
+      await f.close();
+    }
+  });
+
   it('rebuilds identical membership only when reload or mutation explicitly forces it', async () => {
     const a = new FixtureSource('source-a');
     const f = await fixture(a);
@@ -618,6 +1247,240 @@ describe('Server extension coordination', () => {
     } finally {
       setupRelease.resolve();
       await f.close();
+    }
+  });
+
+  it('keeps consumers live through an incomplete owned barrier and drains before release on retry', async () => {
+    const a = new FixtureSource('source-a');
+    const b = new FixtureSource('source-b');
+    const turnStarted = deferred();
+    const turnAborted = deferred();
+    const operationStarted = deferred();
+    const operationRelease = deferred();
+    const firstQuiesce = deferred();
+    const secondQuiesce = deferred();
+    const terminalStarted = deferred();
+    const terminalRelease = deferred();
+    const calls: string[] = [];
+    const server = createServer();
+    vi.spyOn(server, 'closeAllConnections').mockImplementation(() => {
+      calls.push('idle-sse');
+    });
+    const quiescenceFailure = new Error('Could not confirm quiescence');
+    a.onTool = (signal) => {
+      signal.addEventListener('abort', turnAborted.resolve, { once: true });
+      turnStarted.resolve();
+      return turnAborted.promise;
+    };
+    a.onDispose = () => {
+      calls.push('generation');
+    };
+    a.close.mockImplementation(async () => {
+      calls.push('source-a');
+    });
+    b.close.mockImplementation(async () => {
+      calls.push('source-b');
+    });
+    const f = await fixture(a, b);
+    const store = getServerSessionStore(f.runtime);
+    const append = store.append.bind(store);
+    vi.spyOn(store, 'append').mockImplementation(async (id, events) => {
+      if (events.some((event) => event.type === 'turn.completed')) {
+        terminalStarted.resolve();
+        await terminalRelease.promise;
+        const result = await append(id, events);
+        calls.push('terminal');
+        return result;
+      }
+      return append(id, events);
+    });
+    let context: ExtensionMutationContext | undefined;
+    let reentered: Promise<void> | undefined;
+    let attempts = 0;
+    let stopped = false;
+    try {
+      const shutdown = createServerShutdown({
+        resources: () => ({
+          server,
+          coordinator: f.coordinator,
+          owned: {
+            async quiesce() {
+              calls.push('quiesce');
+              attempts += 1;
+              if (attempts === 1) {
+                await firstQuiesce.promise;
+                throw quiescenceFailure;
+              }
+              await secondQuiesce.promise;
+            },
+            async close() {
+              calls.push('release');
+            },
+          },
+          authority: {
+            async close() {
+              calls.push('authority');
+            },
+          },
+        }),
+        async disposeHost() {
+          calls.push('host');
+          await disposeServerPlugins(f.runtime);
+        },
+        async stopRuntime() {
+          calls.push('runtime');
+          await f.runtime.stop();
+        },
+        closeProjectStore() {
+          calls.push('project');
+        },
+        closeProviderSettingsStore() {
+          calls.push('provider');
+        },
+        closeManualTrustStore() {},
+        closeMcpAuthorityStore() {
+          calls.push('mcp');
+        },
+      });
+      await f.coordinator.reload();
+      const turn = f.turn(a.id, 'old-turn');
+      await turnStarted.promise;
+      const running = f.coordinator
+        .mutate(a.id, async (mutationContext) => {
+          context = mutationContext;
+          context.assertOpenSync();
+          context.signal.addEventListener(
+            'abort',
+            () => {
+              reentered = shutdown.stop();
+            },
+            { once: true },
+          );
+          operationStarted.resolve();
+          await operationRelease.promise;
+          context.assertOpenSync();
+        })
+        .catch((cause: unknown) => cause);
+      await operationStarted.promise;
+      const queued = f.coordinator.reload().catch((cause: unknown) => cause);
+
+      const first = shutdown.stop();
+      const failedStop = first.catch((cause: unknown) => cause);
+      expect(shutdown.stop()).toBe(first);
+      expect(reentered).toBe(first);
+      expect(context?.signal.aborted).toBe(true);
+      expect(f.coordinator.generationSnapshot().acceptingRuns).toBe(false);
+      await expect(queued).resolves.toMatchObject({ code: 'plugin-host-disposed' });
+      await expect(f.turn(a.id)).rejects.toMatchObject({ code: 'plugin-host-disposed' });
+      expect(calls).toEqual(['quiesce']);
+      firstQuiesce.resolve();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(shutdown.stop()).toBe(first);
+      expect(calls).toEqual(['quiesce']);
+      expect(a.disposers[0]).not.toHaveBeenCalled();
+      operationRelease.resolve();
+      await expect(running).resolves.toMatchObject({ code: 'plugin-host-disposed' });
+      const failure = await failedStop;
+      expect(failure).toBe(quiescenceFailure);
+      expect(calls).toEqual(['quiesce']);
+      expect(f.runtime.status).toBe('running');
+
+      const second = shutdown.stop();
+      expect(second).not.toBe(first);
+      expect(calls).toEqual(['quiesce', 'quiesce']);
+      secondQuiesce.resolve();
+      await terminalStarted.promise;
+      expect(calls).toEqual(['quiesce', 'quiesce']);
+      expect(f.runtime.status).toBe('running');
+      terminalRelease.resolve();
+      await turn;
+      await second;
+      stopped = true;
+      expect(calls).toEqual([
+        'quiesce',
+        'quiesce',
+        'terminal',
+        'generation',
+        'source-b',
+        'source-a',
+        'host',
+        'idle-sse',
+        'runtime',
+        'project',
+        'provider',
+        'mcp',
+        'release',
+        'authority',
+      ]);
+    } finally {
+      operationRelease.resolve();
+      firstQuiesce.resolve();
+      secondQuiesce.resolve();
+      terminalRelease.resolve();
+      turnAborted.resolve();
+      if (!stopped) await f.close();
+    }
+  });
+
+  it('aborts pending setup immediately and awaits its settlement before draining active turns', async () => {
+    const a = new FixtureSource('source-a');
+    const turnStarted = deferred();
+    const turnAborted = deferred();
+    const setupStarted = deferred();
+    const setupRelease = deferred();
+    const generationDisposal = new Error('Generation disposition failed');
+    const onCandidateAbort = vi.fn();
+    const f = await fixture(a);
+    a.onTool = (signal) => {
+      signal.addEventListener('abort', turnAborted.resolve, { once: true });
+      turnStarted.resolve();
+      return turnAborted.promise;
+    };
+    try {
+      await expect(f.coordinator.drainOwnedConsumers(async () => {})).rejects.toThrow();
+      await f.coordinator.reload();
+      const turn = f.turn(a.id, 'old-turn');
+      await turnStarted.promise;
+      a.onPreparationAbort = onCandidateAbort;
+      a.onSetup = () => {
+        setupStarted.resolve();
+        return setupRelease.promise;
+      };
+      a.onDispose = () => {
+        throw generationDisposal;
+      };
+      const changing = f.coordinator
+        .mutate(a.id, () => a.decide('next'))
+        .catch((cause: unknown) => cause);
+      await setupStarted.promise;
+      f.coordinator.beginOwnedDrainSync();
+      f.coordinator.beginOwnedDrainSync();
+      expect(onCandidateAbort).toHaveBeenCalledOnce();
+
+      const preDrain = vi.fn(async () => {});
+      let reentered: Promise<unknown> | undefined;
+      const draining = f.coordinator.drainOwnedConsumers(async () => {
+        reentered = f.coordinator.drainOwnedConsumers(preDrain);
+      });
+      expect(reentered).toBe(draining);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(a.disposers[0]).not.toHaveBeenCalled();
+      expect(a.close).not.toHaveBeenCalled();
+      setupRelease.resolve();
+      await expect(changing).resolves.toMatchObject({ code: 'plugin-host-disposed' });
+      await turn;
+      const result = await draining;
+      expect(result).toMatchObject({
+        kind: 'drained',
+        cleanupCauses: expect.arrayContaining([generationDisposal]),
+      });
+      expect(f.coordinator.drainOwnedConsumers(preDrain)).toBe(draining);
+      expect(preDrain).not.toHaveBeenCalled();
+      expect(a.close).toHaveBeenCalledOnce();
+    } finally {
+      setupRelease.resolve();
+      turnAborted.resolve();
+      await f.runtime.stop();
     }
   });
 

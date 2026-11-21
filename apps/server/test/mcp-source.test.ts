@@ -4,14 +4,16 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { McpClientError, type ConnectMcpOptions, type McpConnection } from '@weave/mcp-client';
 import { createSqliteMcpAuthorityStore } from '../src/mcp-authority-store.js';
-import { createMcpExtensionSource } from '../src/mcp-source.js';
+import { createMcpExtensionSource, type McpExtensionSourceOptions } from '../src/mcp-source.js';
 import { createExtensionCoordinator } from '../src/extension-coordinator.js';
+import type { ExtensionSource } from '../src/extension-types.js';
 import {
   createServerRuntime,
   createServerAgentRunner,
   assembleServerGeneration,
   disposeServerPlugins,
 } from '../src/runtime.js';
+import { createManagedPluginCompositionFixture } from './support/managed-plugin-composition-fixture.js';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -29,7 +31,18 @@ function connection(options: ConnectMcpOptions) {
     close,
   } satisfies McpConnection;
 }
-async function fixture(connectOverride?: (options: ConnectMcpOptions) => Promise<McpConnection>) {
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+async function fixture(
+  connectOverride?: (options: ConnectMcpOptions) => Promise<McpConnection>,
+  sourceOptions: Partial<Omit<McpExtensionSourceOptions, 'store' | 'connect'>> = {},
+  paired?: ReturnType<typeof createManagedPluginCompositionFixture>,
+) {
   const directory = await mkdtemp(join(tmpdir(), 'weave-mcp-source-'));
   cleanups.push(() => rm(directory, { recursive: true, force: true }));
   const store = createSqliteMcpAuthorityStore({ filename: join(directory, 'authority.sqlite') });
@@ -55,15 +68,31 @@ async function fixture(connectOverride?: (options: ConnectMcpOptions) => Promise
     store,
     connect,
     readHostVariable: (name) => (name === 'TEST_SECRET' ? 'source-secret' : undefined),
+    ...sourceOptions,
+    ...(paired === undefined
+      ? {}
+      : {
+          installAuthoritySync: paired.installAuthoritySync,
+          assertCreateAllowedSync: paired.assertCreateAllowedSync,
+        }),
   });
+  let registered!: ExtensionSource;
+  const register = paired?.wrapSource(source.register) ?? source.register;
   const coordinator = createExtensionCoordinator({
     host: runtime.serverHost,
-    sources: [source.register],
+    sources: [
+      ...(paired === undefined ? [] : [paired.registerLocal]),
+      (observe) => {
+        registered = register(observe);
+        return registered;
+      },
+    ],
     assemble: (kernelPlugins) => {
       if (failAssembly) throw new Error('private assembly error');
       return assembleServerGeneration(runtime, { kernelPlugins });
     },
   });
+  paired?.attach(coordinator, source);
   cleanups.push(() => coordinator.dispose());
   const manager = source.facade(coordinator);
   await coordinator.reload();
@@ -85,6 +114,8 @@ async function fixture(connectOverride?: (options: ConnectMcpOptions) => Promise
     connect,
     coordinator,
     manager,
+    source,
+    registered,
     config,
     runtime,
     failAssembly: (value: boolean) => {
@@ -93,7 +124,231 @@ async function fixture(connectOverride?: (options: ConnectMcpOptions) => Promise
   };
 }
 
+async function runTool(f: Awaited<ReturnType<typeof fixture>>, tool: string, sessionId: string) {
+  for await (const event of f.coordinator.runner.run({
+    sessionId,
+    provider: 'mock',
+    model: 'test',
+    permissionMode: 'yolo',
+    userMessage: { role: 'user', content: [{ type: 'text', text: `/tool ${tool} {}` }] },
+  })) {
+    void event;
+  }
+}
+
 describe('MCP source authority and generation ownership', () => {
+  it('publishes the local reservation and MCP eligibility before synchronously aborting a run', async () => {
+    const paired = createManagedPluginCompositionFixture();
+    const started = deferred();
+    const observed: unknown[] = [];
+    const f = await fixture(
+      async (options) => ({
+        ...connection(options),
+        callTool: async (_name, _input, callOptions) => {
+          started.resolve();
+          return new Promise((_resolve, reject) => {
+            callOptions.signal.addEventListener(
+              'abort',
+              () => {
+                observed.push({
+                  local: paired.localSnapshot(),
+                  mcp: f.registered.snapshot(),
+                  acceptingRuns: f.coordinator.generationSnapshot().acceptingRuns,
+                });
+                reject(new McpClientError('mcp-cancelled'));
+              },
+              { once: true },
+            );
+          });
+        },
+      }),
+      {},
+      paired,
+    );
+    const configured = await f.manager.configure(0, f.config);
+    const trusted = await f.manager.trust('fixture', 1, configured.servers[0]!.configDigest);
+    const turn = runTool(f, trusted.servers[0]!.tools[0]!.toolName, 'paired');
+    await started.promise;
+    const abort = vi.spyOn(f.runtime.serverHost.controller()!, 'abortActiveRuns');
+    try {
+      const before = f.registered.snapshot();
+      paired.adoptStickyIdsSync(['mcp-fixture'], true);
+      expect(observed).toEqual([
+        {
+          local: { stamp: { revision: 1, trustSequence: 0 }, eligible: [] },
+          mcp: {
+            stamp: { revision: before.stamp.revision + 1, trustSequence: 2 },
+            eligible: [],
+          },
+          acceptingRuns: false,
+        },
+      ]);
+      expect(abort).toHaveBeenCalledOnce();
+      await turn;
+    } finally {
+      abort.mockRestore();
+    }
+  });
+
+  it('excludes a denied trusted declaration from both snapshot and preparation', async () => {
+    const f = await fixture();
+    const added = await f.manager.configure(0, f.config);
+    await f.manager.trust('fixture', 1, added.servers[0]!.configDigest);
+    const before = f.registered.snapshot();
+    f.source.setDeniedPluginIdsSync(new Set(['mcp-fixture']));
+    const denied = f.registered.snapshot();
+    expect(denied.eligible).toEqual([]);
+    expect(denied.stamp.revision).toBeGreaterThan(before.stamp.revision);
+    expect(denied.stamp.trustSequence).toBe(2);
+    const prepared = await f.registered.prepare(denied.stamp, {
+      signal: new AbortController().signal,
+      excluded: new Set(),
+    });
+    try {
+      expect(prepared.items).toEqual([]);
+      expect(f.launches).toHaveLength(1);
+      expect(f.coordinator.generationSnapshot().acceptingRuns).toBe(false);
+      expect(f.connections[0]!.close).not.toHaveBeenCalled();
+    } finally {
+      await prepared.dispose();
+    }
+  });
+
+  it('keeps disabled, untrusted, and broken declarations in the namespace', async () => {
+    const f = await fixture(async (options) => {
+      if (options.args.includes('--broken')) throw new McpClientError('mcp-connect-failed');
+      return connection(options);
+    });
+    await f.manager.configure(0, { ...f.config, id: 'untrusted' });
+    const disabled = await f.manager.configure(1, { ...f.config, id: 'disabled' });
+    await f.manager.trust('disabled', 2, disabled.servers[1]!.configDigest);
+    await f.manager.disable('disabled', 3);
+    const broken = await f.manager.configure(4, {
+      ...f.config,
+      id: 'broken',
+      args: ['--broken'],
+    });
+    const result = await f.manager.trust('broken', 5, broken.servers[2]!.configDigest);
+    expect(result.servers.map(({ state }) => state)).toEqual(['untrusted', 'disabled', 'failed']);
+    expect(f.source.declaredPluginIds()).toEqual(['mcp-untrusted', 'mcp-disabled', 'mcp-broken']);
+  });
+
+  it('releases a removed declaration while its pinned allocation drains', async () => {
+    const started = deferred();
+    const release = deferred();
+    const close = vi.fn(async () => {});
+    const f = await fixture(async (options) => ({
+      ...connection(options),
+      close,
+      async callTool() {
+        started.resolve();
+        await release.promise;
+        return { content: [{ type: 'text', text: 'drained' }] };
+      },
+    }));
+    const configured = await f.manager.configure(0, f.config);
+    const trusted = await f.manager.trust('fixture', 1, configured.servers[0]!.configDigest);
+    const turn = runTool(f, trusted.servers[0]!.tools[0]!.toolName, 'pinned-removal');
+    await started.promise;
+    try {
+      const removed = await f.manager.remove('fixture', 2);
+      expect(f.source.declaredPluginIds()).toEqual([]);
+      expect(f.registered.snapshot().eligible).toEqual([]);
+      expect(f.launches).toHaveLength(1);
+      expect(removed.servers[0]).toMatchObject({
+        state: 'removed',
+        drainingGenerations: [{ generation: trusted.generation.id }],
+      });
+      expect(close).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await turn;
+    }
+    await vi.waitFor(() => expect(f.manager.snapshot().servers).toEqual([]));
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('runs the install hook for equal validated logs and rejects invalid prefixes before the hook', async () => {
+    let installs = 0;
+    const hooks = {
+      installAuthoritySync(apply: () => void) {
+        installs++;
+        apply();
+      },
+    };
+    const f = await fixture(undefined, hooks);
+    await f.manager.configure(0, f.config);
+    const valid = await f.store.read();
+    const beforeEqual = installs;
+    await f.source.refresh();
+    expect(installs).toBe(beforeEqual + 1);
+    const beforeInvalid = installs;
+    const read = vi.spyOn(f.store, 'read');
+    try {
+      read.mockResolvedValueOnce({ ...valid, sequence: valid.sequence + 1 });
+      await expect(f.registered.refresh()).rejects.toMatchObject({
+        code: 'mcp-authority-protocol',
+      });
+      read.mockResolvedValueOnce({
+        ...valid,
+        events: valid.events.map((event) => ({
+          ...event,
+          occurredAt: '2010-01-01T00:00:00.000Z',
+        })),
+      });
+      await expect(f.registered.refresh()).rejects.toMatchObject({
+        code: 'mcp-authority-protocol',
+      });
+      expect(installs).toBe(beforeInvalid);
+      expect(f.registered.snapshot().stamp.trustSequence).toBe(1);
+    } finally {
+      read.mockRestore();
+    }
+  });
+
+  it('rejects a sticky declaration added while configuration is suspended', async () => {
+    const entered = deferred();
+    const release = deferred();
+    const paired = createManagedPluginCompositionFixture();
+    const f = await fixture(
+      undefined,
+      {
+        async reservedPluginIds() {
+          entered.resolve();
+          await release.promise;
+          return [];
+        },
+      },
+      paired,
+    );
+    const configuring = f.manager.configure(0, f.config);
+    const settled = expect(configuring).rejects.toMatchObject({ code: 'mcp-conflict' });
+    await entered.promise;
+    paired.adoptStickyIdsSync(['mcp-fixture']);
+    release.resolve();
+    await settled;
+    expect((await f.store.read()).sequence).toBe(0);
+  });
+
+  it('rejects store dispatch when administration closes while configuration is suspended', async () => {
+    const entered = deferred();
+    const release = deferred();
+    const f = await fixture(undefined, {
+      async reservedPluginIds() {
+        entered.resolve();
+        await release.promise;
+        return [];
+      },
+    });
+    const configuring = f.manager.configure(0, f.config);
+    const settled = expect(configuring).rejects.toMatchObject({ code: 'plugin-host-disposed' });
+    await entered.promise;
+    f.coordinator.beginOwnedDrainSync();
+    release.resolve();
+    await settled;
+    expect((await f.store.read()).sequence).toBe(0);
+  });
+
   it('preserves nested annotation arrays while redacting without mutating connection metadata', async () => {
     const annotations = {
       groups: [[{ note: 'source-secret', flags: [true, null, 'source-secret'] }], []],
@@ -281,10 +536,32 @@ describe('MCP source authority and generation ownership', () => {
     ]);
     const current = run('pinned-current');
     await ready[1];
-    await f.manager.revoke('fixture', 2, { immediate: true });
+    const abort = vi.spyOn(f.runtime.serverHost.controller()!, 'abortActiveRuns');
+    try {
+      await f.manager.revoke('fixture', 2, { immediate: true });
+      expect(abort).toHaveBeenCalledOnce();
+    } finally {
+      abort.mockRestore();
+    }
     await Promise.all([old, current]);
     expect(f.manager.snapshot().servers[0]?.state).toBe('untrusted');
     expect(f.manager.snapshot().servers[0]?.drainingGenerations).toEqual([]);
+  });
+  it('retries immediate cancellation when a previous decision left membership retained', async () => {
+    const f = await fixture();
+    const added = await f.manager.configure(0, f.config);
+    const trusted = await f.manager.trust('fixture', 1, added.servers[0]!.configDigest);
+    f.failAssembly(true);
+    await f.manager.disable('fixture', 2);
+    const abort = vi.spyOn(f.runtime.serverHost.controller()!, 'abortActiveRuns');
+    try {
+      const replayed = await f.manager.disable('fixture', 3, { immediate: true });
+      expect(replayed.authoritySequence).toBe(3);
+      expect(replayed.generation.id).toBe(trusted.generation.id);
+      expect(abort).toHaveBeenCalledOnce();
+    } finally {
+      abort.mockRestore();
+    }
   });
   it('keeps append failures inert and blocks durable revoke through assembly failure and subsequent reload', async () => {
     const f = await fixture();

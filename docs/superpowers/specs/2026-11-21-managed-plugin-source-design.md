@@ -2,9 +2,9 @@
 
 Stage 6.2c follows the store ownership work merged in PR #86 at `47aabaa`. It
 delivers selected, trusted managed ESM through the same Generation as manual ESM
-and MCP. The first PR (6.2c.1) delivers the reusable `@weave/plugin-host`
-capabilities below. The second topic (6.2c.2) starts from fresh `origin/main`
-after the first merges and wires the Server composition and end-to-end behavior.
+and MCP. Stage 6.2c.1 delivered the reusable `@weave/plugin-host` capabilities
+in PR #87 at `0e61168`. Stage 6.2c.2 uses that baseline to wire the Server
+composition and end-to-end behavior.
 Stage 6.2d owns installer HTTP, preview and import workflows, first-import
 collision prevention, and managed catalog DTOs. Stage 6.3 owns Studio and
 Desktop product integration.
@@ -241,22 +241,49 @@ pinned-run cleanup semantics continue to apply.
 
 Add a Zod-validated
 `StartServerOptions.managedPluginStore?: { readonly initialBinding: 'allow-unbound' | 'require-bound' }`.
-Resolve the artifact root to `<pluginsDirectory>/.weave-store`. With ESM enabled,
+Resolve the configured plugin directory as the manual scanner does, including
+relative paths, then join `.weave-store`. With ESM enabled,
 default Server startup opens one `PluginAuthorityDatabase` and borrows its
-`.trust` facet. If the validated database is registered, auto-resume with
+`.trust` facet. Add this Server-private decision read:
+
+```ts
+readStartupAuthoritySync(): {
+  readonly snapshot: PluginAuthoritySnapshot;
+  readonly registration: ManagedRootRegistration | null;
+};
+```
+
+Run `readAuthoritySnapshotTx` and `readManagedRootRegistrationTx` in one
+`BEGIN` read transaction and return the validated, detached and frozen
+snapshot and registration. Validate the durable registration schema and
+database identity. Use this read for override, sticky history, ESM-disabled
+and default-unbound startup decisions. Legacy database paths, including
+SQLite-openable main-file symlinks, remain usable on those paths.
+Apply strict filesystem eligibility checks via `readManagedRootStateSync()`
+when attempting acquisition, including registered ESM auto-resume and
+explicit managed mode. Registration and the owner factory continue using
+the existing strict path checks.
+
+If the validated database is registered, auto-resume with
 `require-bound` at the exact configured root, including when explicit options
 request `allow-unbound`. With no registration and no explicit option, read
 sticky and selection history, create no artifact root and permit no managed
 execution. Explicit `allow-unbound` can bind through the existing owner factory.
+Create a missing plugin parent only for this explicit first bind when
+validated registration is absent. Registered startup and unregistered
+`require-bound` create neither the plugin parent nor the artifact root.
 Root mismatch, busy lease, missing or corrupt ownership and unsatisfied
 `require-bound` fail startup. Acquire before source preparation or HTTP listen,
 with the synchronous loss observer registered and baseline reserved IDs known.
 
 Reject explicit managed mode if local ESM is disabled or a legacy
 `pluginTrustStore` override is supplied. In normal `startServer` with ESM
-enabled, inspect validated root state and authority even for a custom override
+enabled, inspect validated registration and authority even for a custom override
 and reject the override when registration exists or any sticky history is
-present, including imported-only and uninstalled IDs. Keep one trust writer.
+present, including imported-only and uninstalled IDs. A clean override's
+Server-owned adapter forwards and retains its raw trust events for source
+adoption. The main database supplies sticky reservations separately.
+Keep one trust writer.
 Embedded manual composition without authority retains its standalone contract.
 With ESM disabled, read known sticky history for MCP reservation, without binding
 or opening the managed artifact root. Preserve explicit database isolation and
@@ -281,8 +308,9 @@ payload work. On ordinary artifact failures capture a safe issue and omit
 eligibility. Authority read failure invalidates cached managed eligibility and
 fails the attempt. Detach invalid evidence synchronously when adopting the
 latest validated authority. Retain previously checked readiness only while
-exact selection, enabled trust, binding and namespace remain valid. After an
-await, revalidate current authority before adopting evidence. The final async
+exact selection, enabled trust, binding and namespace remain valid. Check
+effective policy before dispatching each digest and revalidate current
+authority after each awaited read before adopting or returning evidence. The final async
 verification callback uses the same bounded owned read and exact comparison
 with selected identity. Each immediate import/factory/setup handoff asserts
 held lease and confirms exact current selection, enabled matching trust and the
@@ -294,42 +322,144 @@ and IDs from validated non-removed MCP declarations. MCP owns refresh and
 validated `knownPrefix`. Give the composition a private cached read of these
 declaration IDs, including disabled/broken MCP declarations, and a synchronous
 denied-ID update used by both MCP snapshot eligibility and preparation.
-Whenever either validated authority is adopted, one synchronous composition
-callback derives the set and publishes both effective snapshots before it
-returns. This applies to MCP install, refresh and recheck. Run it without
-recursive queue calls or selected payload reads. Validate initial MCP
-declarations before managed preparation, and refresh MCP authority before the
-local managed read phase. A removed MCP declaration releases its claim for
-future Generations. A retired Generation keeps pinned resources until drain.
-New MCP configuration rejects every sticky ID using current validated
-authority and the existing manual ID check. Manual-only collisions otherwise
-follow the existing behavior.
+Whenever either validated authority is adopted, derive the set and apply both
+effective snapshots in the same stack before emitting either source
+notification. Publish stamps and admission blocks before an immediate
+observer can trigger cancellation. This applies to MCP install, refresh and
+recheck and uses no recursive queue calls or selected payload reads.
+
+Validate and reconcile MCP authority before each runtime phase that reads
+selected bytes, including initial load, reload, prepare, identity retry,
+postcommit refresh and final publication recheck. Complete the MCP recheck
+before the local bounded recheck even when local preparation ran first.
+Reviewed precommit evidence for a managed command precedes its separate
+runtime readback. A removed MCP declaration releases its claim for future
+Generations, and a retired Generation keeps pinned resources until drain.
+
+A failed local adoption also invalidates local preparation that was already
+using the old raw package snapshot. Publish both final effective source
+snapshots and the resulting admission block before synchronously cancelling
+that unfinished work. Preserve the authority marker as its rejection, and do
+not invalidate published or retired resource signals. A new prepare-entry
+check alone does not protect a candidate captured before an await.
+
+MCP owns validation at the actual log installation boundary, including its
+facade's initial refresh and mutation result. Route read or malformed/rewritten
+prefix failures at that boundary to the composition's authority withdrawal,
+including when the store fulfilled with invalid data. Preserve the original
+cause in the marker. Ordinary request conflicts keep their existing handling.
+
+New MCP configuration rejects every sticky ID. Finish awaited request
+preparation and existing manual ID checks first, then read and adopt sticky
+authority and check that administration is open at store dispatch, after the
+last await. This uses MCP's validated declaration cache and performs no
+managed payload reads. Sticky reservation applies with ESM disabled and with
+the managed root unopened. Manual-only collisions otherwise follow the
+existing behavior.
 
 ### Publication and loss
 
-Managed origin flows through `PreparedExtensionItem`, `ExtensionMember` and
-private failure attribution. Keep origin independent of wire metadata.
-Before publication, asynchronously revalidate selected evidence with bounded
-owned reads and complete the existing source rechecks. After all awaits,
-perform the final synchronous lease and exact still-selected checks adjacent
-to the commit path, outside per-plugin attribution. Apply final cached
-revision, eligibility, membership and persistent-loss checks in the same
-stack, then call `ServerHost.commit`. A changed or absent artifact under intact
-authority uses the existing candidate identity recheck or an attributed
-selection issue. A guard marker, including the kernel setup cause, bypasses
-per-plugin exclusion and takes the authority failure path.
+Local origin flows through eligible identities, prepared items and failures,
+and current and retained members. Match source, plugin ID, package candidate
+identity and origin in admission and publication. Managed identity includes the
+activation sequence. Keep these checks and origin metadata private.
 
-A composition-local ownership-loss latch is independent of ordinary revision
-blocking. On first observed loss, synchronously withdraw managed eligibility
-and block new runs when current has managed members. Keep an already-compliant
-unmanaged current Generation available and keep already-pinned turns on their
-resources. Commits cannot clear the persistent admission block after loss.
-Managed commands except durable replay fail for the rest of the composition.
-Managed publication and already-queued turns check the held lease. Install
-`assertCanStartSync` on the exact published Generation containing managed
-members. The callback uses the synchronous lease check and loss handler before
-Runtime can create a turn. This adds no per-turn digest or ownership reacquire.
-Ownership is scoped to cooperating processes and the checks in 6.2b.
+The composition supplies this private `managedAuthority` option to the
+coordinator when managed execution is enabled.
+
+```ts
+interface ManagedGenerationAuthority {
+  readonly ownershipLossSignal: AbortSignal;
+  assertNotLostSync(): undefined;
+  assertManagedPublicationSync(identities: readonly ExtensionIdentity[]): undefined;
+  assertManagedStartSync(): undefined;
+}
+```
+
+The publication hook takes only the exact managed identities in the proposed
+membership. It checks the latch and held lease, then reconciles the latest
+durable selection, enabled matching trust and known paired MCP namespace. It
+resolves those identities against current ready evidence using the package
+identity contract. The closure shares the evaluation guard's authority and
+evidence and performs no artifact reads. Selection mismatch withdraws stale
+eligibility and rejects with `ExplicitLocalAuthorityError`.
+
+Before publication, complete the ordered ordinary source and bounded exact
+managed artifact rechecks. Use identity refresh or an attributed selection
+issue for an ordinary artifact mismatch. Validate stamps and surviving
+membership, check MCP `isReady`, and run the final publication hook outside
+per-plugin attribution. Because the hook can change authority synchronously,
+recapture cached stamps and eligibility and check revision, open state, exact
+origin-aware membership and the latch before `ServerHost.commit` in the same
+stack. Check prepared MCP `isReady` again after the guard and cached checks,
+immediately before commit. The guard can synchronously close a prepared MCP
+connection while authority stamps and eligibility stay unchanged. A failed
+liveness check follows the existing attributable resource-failure retry.
+Apply the same managed authority hook and post-guard authority checks to
+current managed members before returning an unchanged result after the ordered
+refresh. A change during the hook invalidates the unchanged result or
+candidate. Ordinary attributable assembly and ServerHost commit errors keep
+the existing isolation path.
+
+Recognize a direct `ExplicitLocalAuthorityError` and a `PluginError` with
+code `plugin-setup-failed` and that marker as its direct cause before
+normalizing or attributing errors. Both reject through the authority failure
+path and leave the current pointer in place. Preserve the original thrown
+value and its cause privately. When an interrupted mixed iteration reports an
+incidental cancellation or plugin failure, use the latched authority marker.
+
+The composition exposes the synchronous receiver
+`onOwnershipLostSync(error: PluginStoreOwnershipError): undefined`. The startup
+observer retains the first error before forwarding it.
+Attach the composition receiver after the coordinator exists and before initial
+authority adoption, reload and listen. Deliver a pending first error once at
+attachment. A held check that first observes loss also routes that error
+through the same receiver. Owned startup can transport loss while production
+managed execution is disabled.
+
+On first notification, latch the original loss before any callback and call
+the private coordinator `blockManagedOwnershipLossSync()` before withdrawing
+eligibility. The coordinator latches a persistent admission block if current
+membership contains a managed origin. The composition withdraws ready evidence
+synchronously through the paired authority flow. The latch stays authoritative
+for managed evidence, publication and fresh commands even if projection throws
+or a raw package snapshot is stale. Preserve the loss and any withdrawal
+failure as private causes and signal unfinished work even when withdrawal
+fails. The receiver returns `undefined` and managed checks surface the marker.
+Durable replay retains its existing no-effects path.
+
+An already-compliant unmanaged current remains available when loss observes it.
+If a persistent block was established and a compliant unmanaged commit later
+proceeds, reapply it in the same stack as the package commit that clears runner
+blocking. Keep ordinary revision and shutdown blocks independently.
+
+Give each unpublished preparation iteration its own abort controller. After
+the MCP-first snapshot and before preparing the first source, register the
+iteration as a loss target when the eligible survivors include managed work.
+Bridge loss to that controller through a detachable listener and consult the
+latch defensively before entering managed preparation. Use the iteration
+signal for both sources through assembly and the final rechecks. Detach its
+loss listener during successful publication before any retirement await, and
+on rollback or retry after disposal. The next iteration uses a new controller.
+Keep shutdown cancellation wired to the active iteration. Combine the caller
+and permanent loss signals only at the managed read boundary. A managed read
+in flight when loss occurs rejects through the authority path. Later runtime
+refreshes skip managed payloads and can still assemble compliant unmanaged
+membership from the paired snapshots.
+Published MCP allocations retain their iteration signal listener until disposal.
+Their signal stays independent of the permanent loss signal, preserving active
+and retired pins and their resources. Keep the existing local fallback
+invalidation of unresolved raw local preparations as a separate cancellation.
+
+Install `assertManagedStartSync` as `assertCanStartSync` on the exact wrapped
+Generation passed to `ServerHost.commit` when its final membership contains
+managed origin. The package invokes it at the actual Session queue head before
+the runner starts the turn. It checks the latch and held lease and routes any
+newly observed loss through the receiver. Start admission performs no selected
+evidence refresh, artifact read or ownership reacquire. Prepared MCP liveness
+is a publication check. The actual-start hook is limited to the ownership
+latch and lease. Ownership is scoped to cooperating processes and the checks
+in 6.2b.
 
 ### Queued durable decisions
 
@@ -361,44 +491,88 @@ function applyManagedSelection(request: ManagedSelectionRequest): Promise<Manage
 ```
 
 Normalize the request with the authority parser and exclude import before
-file work. Extend the existing queued mutation callback with
-`{ assertOpenSync, signal }` and a per-call `'skip-rebuild'` disposition.
-Legacy callbacks default to the usual refresh/rebuild. A replay lookup runs
-first and returns the original operation and current authority even after
+file work. Use the existing admin queue and `{ assertOpenSync, signal }`
+callback context for a typed `mutateManaged` ticket. Legacy callbacks keep
+their existing refresh, rebuild and result behavior. The managed callback
+returns a per-ticket disposition to skip rebuild, run the ordered rebuild,
+or report a failure after commit. Reject true precommit failures normally.
+
+Within the ticket, look up the request ID before any managed work. An early
+replay returns the original operation and current authority even after
 prior application failure or ownership loss. It performs no lease checks,
-payload reads, adoption, refresh, assembly or cancellation. A replay detected
-by `commitSync` after provisional evidence performs no runtime work or additional
-reads. Both skip before the queue refreshes sources and leave cached admission
-as it was.
+payload reads, adoption, refresh, assembly or cancellation. A request ID
+conflict surfaces from the authority lookup. After provisional evidence,
+`commitSync` can also return a replay. Both replay branches skip rebuild
+and leave cached authority and admission untouched. The transactional replay
+discards provisional evidence and performs no further lease checks or runtime
+work. Replay reports the durable decision and current authority only.
 
-Fresh activate/rollback and enable pass exact owned evidence for the requested
-candidate to the existing authority transaction. Disable, revoke and uninstall
-need no bytes. After any await, check openness and the lease synchronously
-before the write. Capture the returned fresh `operation` and `afterSnapshot`
-immediately. Adopt the new authority, sticky and selected projection and
-publish both effective sources in the same stack before the first await.
-Reuse prechecked evidence only when the exact candidate and current policy
-still agree. Fresh evidence or refresh can follow adoption, since the queue's
-usual refresh skips its mutated source. If adoption fails, immediately
-invalidate affected eligibility and block any now-unauthorized current
-membership, including a formerly manual same-ID member. Recover through a
-fresh authoritative refresh. Return the saved durable decision with a failed
-application when adoption, later checks or publication fail.
+Fresh activate and rollback use the requested digest's durable candidate.
+Enable requires the exact current selection link to the candidate's import
+sequence and digest. Reuse the bounded owned read and artifact identity
+comparison for command evidence. The command may review an unselected
+candidate or a disabled selection under the held lease. This read does no
+import, factory or setup work and leaves cached runtime readiness untouched.
+The authority transaction validates the exact CAS and reviewed evidence.
+Pass only plugin ID, digest, manifest, file count and byte count in the
+preparation artifact. Retain any checked ready evidence separately. For
+disable, revoke and uninstall, prepare only the command kind. Check the queue
+context and the ownership-loss latch and held lease before evidence work,
+after evidence awaits and immediately before `commitSync`.
 
-Compare application against the exact Generation returned by this queue
-operation. An enabled selected target is applied only when that exact managed
-identity, including activation sequence, is published. A requested
-disable/revoke/uninstall is applied when the compliant Generation excludes
-the target managed member. A fresh no-op may reuse a compliant current
-Generation. Honor a fresh destructive immediate request once through
-`retryImmediateRevocation`, including a durable no-op when a retained
-Generation still has the target. Replays perform no cancellation. Normal
+On a fresh commit, capture the returned `operation` and `afterSnapshot`
+immediately. In the same stack adopt that authority through the paired
+sticky and selected projection and publish both effective snapshots. If
+adoption throws, use the paired withdrawal path to invalidate affected
+eligibility and block any now-unauthorized current membership, including a
+formerly manual same-ID member. Keep admission blocked for affected current
+membership even if withdrawal throws, record both failures privately and
+recover through fresh authoritative refresh and compliant publication. The
+Task 4 ownership-loss latch and its persistent block remain authoritative
+when the failure is ownership loss.
+
+Run a fresh destructive request with `immediate: true` once through
+`retryImmediateRevocation` after adoption or the fail-closed invalidation
+attempt, including when invalidation throws or the durable decision is a
+no-op. The retained-membership check uses source, plugin ID and managed
+origin across current and retired Generations. Managed adoption publishes
+with immediate cancellation disabled so the retry owns cancellation for
+this request. Both replay paths leave running turns alone. Normal
 publication preserves pinned turns and their payloads.
 
+When adoption succeeds, the ordered rebuild disposition uses the same queue
+ticket to refresh and adopt MCP authority before managed runtime readback.
+Include the mutated local source. Runtime readback applies the selected,
+enabled and namespace policy. Any reused command evidence must agree with
+the exact saved candidate and activation, current trust, binding and the
+refreshed namespace. Detach evidence for any newly denied target and skip
+runtime payload reads for that target.
+
+Capture the committed ticket's Generation snapshot, membership and private
+attempt outcome before the next ticket can run, including on failure. The
+result uses this capture and the saved durable decision. An adoption or
+refresh failure, or a terminal rebuild or publication failure, yields failed
+application with its original private cause. A discriminated private failed
+outcome distinguishes a thrown `undefined` from a missing cause. Retain raw
+attributed preparation or assembly failures for the attempt, keyed by
+source, plugin ID, origin and exact identity, independently of rendered
+issues. Use a target's original attributed cause when that target fails to
+apply and the cause is available. When only an issue or missing membership
+is available, leave the optional cause absent.
+
+A completed attempt applies an enabled selection only when a compliant
+Generation contains its exact saved managed identity, including activation
+sequence. A completed destructive attempt applies when the compliant
+Generation excludes the target managed member. An unrelated plugin exclusion
+can coexist with a compliant Generation that applies the requested target.
+A fresh no-op may reuse a compliant current Generation.
+
 Legacy manual trust, enable, disable and revoke read current sticky authority
-before mutation and again before any awaited branch can return idempotent
-success. Preserve the existing trust transaction backstop. These commands
-return the existing safe invalid-trust error for a sticky ID.
+before mutation, before immediate retry, and again before any awaited branch
+can return idempotent success. Preserve the existing trust transaction
+backstop. For a custom override, check current sticky authority synchronously
+at the override append dispatch as well. Use the existing safe invalid-trust
+error for a sticky ID.
 
 ### Legacy public projection
 
@@ -407,7 +581,11 @@ membership, desired rows and reload failures by source origin. Use the
 existing path-free base `kernel` item for a published managed member. When a
 failed or displaced manual row shares an ID with a published managed or MCP
 contribution, keep the published base entry and a single catalog ID. Keep
-managed desired and retired state private. Before projection, map attributed
+managed desired and retired state private. A visible manual collision row retains
+its discovery path, its own manifest and safe conflict issue. Omit the unified
+managed trust digest, reviewed manifest and enabled state from sticky-ID manual
+rows, including when no same-ID published base survives. Keep persisted trust
+and private manual diagnostic rows unchanged. Before projection, map attributed
 managed failures and mixed or unattributed whole-candidate failures to fixed
 safe codes and messages. Use the existing `plugin-load-failed` code with
 `Managed plugin preparation failed` for attributed managed failures, and
@@ -417,30 +595,47 @@ causes private. Catalog GETs project cached state.
 
 ### Shutdown and failed startup
 
-Begin HTTP close and synchronously close admin and admission, reject pending
-commands, and abort in-flight evidence and preparation with the lifetime
-signal. Start owned `quiesce()` while the lease is held. A narrow Server-private
-pre-drain barrier waits for dispatched artifact work and the running admin
-operation before explicitly cancelling active turns and disposing the
-controller, sources and ServerHost. Natural retirement and pinned work can
-settle independently while the lease is held. Retain consumers and the lease
-until tracked plugin work settles, including managed setup that outlives
-timeout or cancellation. Keep terminal Session writes available during
-run drain and close remaining idle SSE before waiting for HTTP close.
+Install the owned consumer drain before startup can acquire a wrapper. Begin
+HTTP close and synchronously close admin and admission, reject pending
+commands and abort in-flight evidence and preparation through the lifetime
+signal. Start owned `quiesce()` while the lease is held. The Server-private
+barrier waits for dispatched artifact work and the running admin operation
+before cancelling active turns and disposing the controller, sources and
+ServerHost. Direct and manual disposal retain their current cancellation
+order. Keep Session persistence open through terminal writes and close idle
+SSE before awaiting HTTP close.
+Unowned stop continues through the existing cleanup phases and returns its
+first cleanup failure unchanged, even when later phases also fail.
 
-Release the owned wrapper and lease after confirmed consumer drain, then close
-the borrowed authority. A settled cleanup aggregate can accompany confirmed
-drain. A failed or incomplete barrier delays release. Keep completed phases
-and previously reported cleanup causes separate from the retryable release
-phase. Subsequent `stop()` calls retry the unfinished owned or authority close.
-Keep the authority available between owned close attempts.
+When `startServer` owns a wrapper, the returned `pluginHost.dispose()` calls
+the same memoized Server shutdown as `stop()`. Both entry points share the
+owned barrier and phase bookkeeping. Manual startup and embedded facades
+keep their existing coordinator dispose binding.
 
-Use the same completed-resource ordering after partial boot or listen failure.
-The owner factory handles failures before it returns a wrapper. After a
-confirmed drain, boot-failure cleanup makes one retry of a rejected owned
-close. If it still fails, propagate both startup and cleanup errors and keep
-a private retry handle with the failed composition so the same owner and
-authority can be closed later. This handle carries cleanup only.
+Confirmed drain includes settlement of tracked plugin work, including managed
+setup that outlives timeout or cancellation. A confirmed drain may carry
+settled cleanup causes. An incomplete barrier leaves host, Session persistence,
+authority and lease live. Normal stop and failed startup share a phase
+tracker for HTTP close, fulfilled quiescence, consumer drain, wrapper release
+and authority close. Concurrent stops share an active attempt. Later attempts
+resume unfinished phases and retain settled cleanup causes separately. Close
+the wrapper only after confirmed drain and close the authority after successful
+wrapper release.
+
+Use the same cleanup phases after partial boot or listen failure. The owner
+factory handles failures before it returns a wrapper. After confirmed drain,
+boot cleanup retries a rejected owned close once. If an acquired managed
+phase remains unfinished, including an incomplete barrier before release,
+associate the thrown error with the retained cleanup closure in a module
+private `WeakMap<object, () => Promise<void>>`.
+`retryFailedServerStartupCleanup(cause: unknown): Promise<void>` is available
+only from the Server-private cleanup module. When startup and cleanup both
+fail, throw an aggregate object with the exact startup value as its first
+error and `cause`. This preserves primitive startup errors and supplies an
+object key for the association. Remove the association once resource cleanup
+completes, even when a settled cleanup error still needs reporting. The
+successful startup return and public Server and HTTP surfaces retain their
+existing shapes.
 
 ## Acceptance
 

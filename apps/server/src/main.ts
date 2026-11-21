@@ -1,6 +1,7 @@
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { serve, type ServerType } from '@hono/node-server';
+import { ExplicitLocalAuthorityError } from '@weave/plugin-host';
 import { createSqliteSessionEventStore, type SessionEventStore } from '@weave/session';
 import type { WeavePlugin } from '@weave/plugin';
 import { createSqliteProjectStore, type ProjectStore } from '@weave/workspace';
@@ -9,16 +10,22 @@ import { createApp } from './app.js';
 import { createSessionService } from './session-service.js';
 import { createWorkspaceRootResolver } from './workspace-root.js';
 import { createServerLlmProviders } from './llm-providers.js';
-import { resolveDatabaseFile } from './persistence-path.js';
-import { resolvePluginsDirectory } from './plugin-path.js';
 import { serverHostVersion } from './host-version.js';
-import { createSqlitePluginTrustStore } from './plugin-trust-store.js';
 import {
   createServerExtensionCoordinator,
   type ClosablePluginTrustStore,
   type ServerLocalPluginHost,
 } from './local-plugin-host.js';
 import type { ExtensionCoordinator } from './extension-coordinator.js';
+import {
+  acquireManagedPluginStartup,
+  resolvePluginStartupOptions,
+  type ManagedPluginStoreOptions,
+} from './managed-plugin-startup.js';
+import type { OwnedPluginArtifactStore } from './owned-plugin-artifact-store.js';
+import type { PluginAuthorityDatabase } from './plugin-authority-types.js';
+import type { PluginStoreOwnershipError } from './plugin-store-ownership-types.js';
+import { createServerShutdown } from './server-shutdown.js';
 import { createSqliteMcpAuthorityStore, type McpAuthorityStore } from './mcp-authority-store.js';
 import type { connectMcp } from '@weave/mcp-client';
 import type { ServerMcpManager } from './mcp-management-types.js';
@@ -84,9 +91,10 @@ export interface StartServerOptions {
   readonly projectStore?: ProjectStore;
   readonly sessionStoreFactory?: () => SessionEventStore | Promise<SessionEventStore>;
   readonly plugins?: readonly WeavePlugin[];
-  /** `false` disables local discovery and trust persistence. */
+  /** `false` disables the local ESM source while preserving managed ID reservations. */
   readonly pluginsDirectory?: string | false;
-  /** Optional trust persistence override, owned and closed by this Server. */
+  readonly managedPluginStore?: ManagedPluginStoreOptions;
+  /** Optional trust persistence override, owned by the Server once accepted. */
   readonly pluginTrustStore?: ClosablePluginTrustStore;
   /** MCP persistence remains enabled independently of ESM discovery and is Server-owned. */
   readonly mcpAuthorityStore?: McpAuthorityStore;
@@ -94,51 +102,13 @@ export interface StartServerOptions {
   readonly mcpConnect?: typeof connectMcp;
 }
 
-async function closeServer(server: ServerType): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    try {
-      server.close((error?: Error) => {
-        if (
-          error === undefined ||
-          (error as NodeJS.ErrnoException).code === 'ERR_SERVER_NOT_RUNNING'
-        ) {
-          resolve();
-          return;
-        }
-        reject(error);
-      });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ERR_SERVER_NOT_RUNNING') {
-        resolve();
-        return;
-      }
-      reject(error);
-    }
-  });
-}
-
-async function closeProjectStore(projectStore: ProjectStore | undefined): Promise<void> {
-  if (projectStore === undefined) {
-    return;
-  }
-  await projectStore.close();
-}
-
-async function closeProviderSettingsStore(
-  providerSettingsStore: ProviderSettingsStore | undefined,
-): Promise<void> {
-  if (providerSettingsStore === undefined) {
-    return;
-  }
-  await providerSettingsStore.close();
-}
-
 /**
  * Starts the local HTTP control plane and its Runtime.
  *
- * The function resolves only after the TCP server is listening. If binding
- * fails, it closes any partially-created server and stops the Runtime before
- * rethrowing the original error.
+ * The function resolves only after the TCP server is listening. If startup
+ * fails, the Server attempts to close acquired resources. Successful cleanup
+ * preserves the original error. An AggregateError includes the original error
+ * first, followed by any cleanup failures.
  *
  * @param portInput Port number or string value validated by the server boundary.
  * @param options Persistence configuration and optional test Store overrides.
@@ -149,17 +119,11 @@ export async function startServer(
   options: StartServerOptions = {},
 ) {
   const port = portSchema.parse(portInput);
-  const persistence = persistenceOptionsSchema.parse(options);
+  persistenceOptionsSchema.parse(options);
   const studioOrigin = studioOriginSchema.parse(options.studioOrigin);
   const maxSteps = parseAgentMaxSteps((options.environment ?? process.env).WEAVE_AGENT_MAX_STEPS);
-  const pluginsDirectory = resolvePluginsDirectory(options);
-  const databaseFile = resolveDatabaseFile({
-    ...(persistence.databaseFile === undefined ? {} : { databaseFile: persistence.databaseFile }),
-    ...(persistence.dataDirectory === undefined
-      ? {}
-      : { dataDirectory: persistence.dataDirectory }),
-    ...(options.environment === undefined ? {} : { environment: options.environment }),
-  });
+  const pluginStartup = resolvePluginStartupOptions(options);
+  const { databaseFile, pluginsDirectory } = pluginStartup;
   await mkdir(dirname(databaseFile), { recursive: true });
   const providerSettings = createServerLlmProviders({
     ...(options.environment === undefined ? {} : { environment: options.environment }),
@@ -172,12 +136,39 @@ export async function startServer(
   const runtime = createServerRuntime({ sessionStoreFactory, providerSettings });
   let providerSettingsStore: ProviderSettingsStore | undefined;
   let projectStore: ProjectStore | undefined;
-  let pluginTrustStore: ClosablePluginTrustStore | undefined;
+  let manualTrustStore: ClosablePluginTrustStore | undefined;
+  let authority: PluginAuthorityDatabase | undefined;
+  let owned: OwnedPluginArtifactStore | undefined;
+  let ownershipLoss: PluginStoreOwnershipError | undefined;
+  let ownershipReceiverFailure: AggregateError | undefined;
+  let receiveOwnershipLoss: ((error: PluginStoreOwnershipError) => void) | undefined;
   let mcpAuthorityStore: McpAuthorityStore | undefined;
   let mcpManager: ServerMcpManager | undefined;
   let pluginHost: ServerLocalPluginHost | undefined;
   let coordinator: ExtensionCoordinator | undefined;
   let server: ServerType | undefined;
+  const shutdown = createServerShutdown({
+    resources: () => ({ server, coordinator, authority, owned }),
+    disposeHost: () => disposeServerPlugins(runtime),
+    stopRuntime: () => runtime.stop(),
+    closeProjectStore: () => projectStore?.close(),
+    closeProviderSettingsStore: () => providerSettingsStore?.close(),
+    closeManualTrustStore: () => manualTrustStore?.close(),
+    closeMcpAuthorityStore: () => mcpAuthorityStore?.close(),
+  });
+  const onSignal = (): void => {
+    void stop().catch(() => undefined);
+  };
+  const stop = (): Promise<void> => {
+    process.removeListener('SIGINT', onSignal);
+    process.removeListener('SIGTERM', onSignal);
+    return shutdown.stop();
+  };
+
+  function assertStartupOwnership(): void {
+    if (ownershipLoss !== undefined) throw ownershipLoss;
+    owned?.assertHeldSync();
+  }
 
   try {
     mcpAuthorityStore =
@@ -189,10 +180,6 @@ export async function startServer(
         : createSqliteProviderSettingsStore({ filename: databaseFile }));
     const projects = options.projectStore ?? createSqliteProjectStore({ filename: databaseFile });
     projectStore = projects;
-    if (pluginsDirectory !== false) {
-      pluginTrustStore =
-        options.pluginTrustStore ?? createSqlitePluginTrustStore({ filename: databaseFile });
-    }
     const providerSettingsManager: ProviderSettingsManager | undefined =
       providerSettingsStore === undefined || options.providerSecretCodec === undefined
         ? undefined
@@ -219,21 +206,73 @@ export async function startServer(
       ...(maxSteps === undefined ? {} : { maxSteps }),
     }) satisfies ServerAgentRunnerOptions;
     await createServerAgentRunner(runtime, runnerOptions);
+    const baseline = runtime.serverHost.controller()!.current();
+    const startup = await acquireManagedPluginStartup(pluginStartup, {
+      baselinePluginIds: baseline.resources.plugins.map(({ id }) => id),
+      registerAuthority(value) {
+        authority = value;
+        return undefined;
+      },
+      registerManualTrustStore(value) {
+        manualTrustStore = value;
+        return undefined;
+      },
+      registerOwnedStore(value) {
+        owned = value;
+        return undefined;
+      },
+      onOwnershipLost(error) {
+        if (ownershipLoss === undefined) {
+          ownershipLoss = error;
+          receiveOwnershipLoss?.(error);
+        }
+        return undefined;
+      },
+    });
+    const { localTrust } = startup;
     const extensions = createServerExtensionCoordinator(runtime, {
       runnerOptions,
+      managed: {
+        initialAuthority: startup.snapshot,
+        readAuthoritySync: startup.authority.snapshotSync,
+        ...(startup.owned === undefined
+          ? {}
+          : { executionStore: startup.owned, selectionAuthority: startup.authority }),
+        ...(localTrust?.kind === 'override'
+          ? { readLocalTrustEventsSync: localTrust.readTrustEventsSync }
+          : {}),
+      },
       mcp: {
         store: mcpAuthorityStore,
         readHostVariable: (name) => (options.environment ?? process.env)[name],
         ...(options.mcpConnect === undefined ? {} : { connect: options.mcpConnect }),
       },
-      ...(pluginsDirectory === false || pluginTrustStore === undefined
+      ...(pluginsDirectory === false || localTrust === undefined
         ? {}
-        : { local: { directory: pluginsDirectory, trustStore: pluginTrustStore } }),
+        : {
+            local: {
+              directory: pluginsDirectory,
+              trustStore: localTrust.store,
+              ...(startup.owned === undefined ? {} : { dispose: stop }),
+            },
+          }),
     });
     coordinator = extensions.coordinator;
+    const managed = extensions.managed!;
+    receiveOwnershipLoss = (error) => {
+      managed.onOwnershipLostSync(error);
+      const marker: unknown = managed.managedAuthority.ownershipLossSignal.reason;
+      if (marker instanceof ExplicitLocalAuthorityError && marker.cause instanceof AggregateError) {
+        ownershipReceiverFailure = marker.cause;
+      }
+    };
+    if (ownershipLoss !== undefined) receiveOwnershipLoss(ownershipLoss);
+    managed.adoptInitialAuthoritySync();
+    assertStartupOwnership();
     pluginHost = extensions.pluginHost;
     mcpManager = extensions.mcpManager;
     await coordinator.reload();
+    assertStartupOwnership();
 
     let resolveListening!: () => void;
     let rejectListening!: (error: unknown) => void;
@@ -279,89 +318,12 @@ export async function startServer(
       throw new Error('Expected the server to have a TCP address after listening');
     }
 
-    let stopPromise: Promise<void> | undefined;
-    const onSigint = (): void => {
-      void stop();
-    };
-    const onSigterm = (): void => {
-      void stop();
-    };
-    const stop = (): Promise<void> => {
-      if (stopPromise !== undefined) {
-        return stopPromise;
-      }
-
-      process.removeListener('SIGINT', onSigint);
-      process.removeListener('SIGTERM', onSigterm);
-
-      let resolveStop!: () => void;
-      let rejectStop!: (error: unknown) => void;
-      stopPromise = new Promise<void>((resolve, reject) => {
-        resolveStop = resolve;
-        rejectStop = reject;
-      });
-      void (async () => {
-        let firstError: unknown;
-        let hasError = false;
-        const cleanup = async (operation: () => Promise<void>): Promise<void> => {
-          try {
-            await operation();
-          } catch (error: unknown) {
-            if (!hasError) {
-              hasError = true;
-              firstError = error;
-            }
-          }
-        };
-
-        // Stop accepting connections now, then cancel/drain Agent streams while
-        // their durable Session store is still open. Awaiting HTTP first would
-        // deadlock on an SSE stream blocked in Approval.
-        const closed = closeServer(createdServer);
-        // Attach rejection handling immediately while generation cancellation runs.
-        const closeOutcome = closed.then(
-          () => undefined,
-          (error: unknown) => error,
-        );
-        await cleanup(async () => coordinator?.dispose());
-        await cleanup(() => disposeServerPlugins(runtime));
-        // Approval SSE and other idle streams do not belong to an Agent iterator.
-        // Their sockets can close once Agent terminal writes have settled.
-        if ('closeAllConnections' in createdServer) createdServer.closeAllConnections();
-        await cleanup(async () => {
-          const error = await closeOutcome;
-          if (error !== undefined) throw error;
-        });
-        await cleanup(() => runtime.stop());
-        await cleanup(() => closeProjectStore(projectStore));
-        await cleanup(() => closeProviderSettingsStore(providerSettingsStore));
-        await cleanup(async () => pluginTrustStore?.close());
-        await cleanup(async () => mcpAuthorityStore?.close());
-
-        if (hasError) {
-          throw firstError;
-        }
-      })().then(resolveStop, rejectStop);
-      return stopPromise;
-    };
-
-    process.on('SIGINT', onSigint);
-    process.on('SIGTERM', onSigterm);
+    process.on('SIGINT', onSignal);
+    process.on('SIGTERM', onSignal);
 
     return { port: address.port, runtime, pluginHost, mcpManager, server: createdServer, stop };
   } catch (error) {
-    // Begin closing HTTP, then cancel generations before awaiting SSE sockets.
-    const closed = server === undefined ? undefined : closeServer(server).catch(() => undefined);
-    await coordinator?.dispose().catch(() => undefined);
-    await disposeServerPlugins(runtime).catch(() => undefined);
-    if (server !== undefined && 'closeAllConnections' in server) server.closeAllConnections();
-    await closed;
-    await runtime.stop().catch(() => undefined);
-    await closeProjectStore(projectStore).catch(() => undefined);
-    await closeProviderSettingsStore(providerSettingsStore).catch(() => undefined);
-    await pluginTrustStore?.close().catch(() => undefined);
-    await mcpAuthorityStore?.close().catch(() => undefined);
-    throw error;
+    return shutdown.failStartup(ownershipReceiverFailure ?? ownershipLoss ?? error);
   }
 }
 

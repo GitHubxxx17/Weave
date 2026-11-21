@@ -1,3 +1,4 @@
+import { ExplicitLocalAuthorityError } from '@weave/plugin-host';
 import { describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.js';
 import { McpAuthorityError } from '../src/mcp-errors.js';
@@ -303,6 +304,50 @@ describe('MCP HTTP management', () => {
     ).request('/mcp/reload', { method: 'POST', headers, body: '{"expectedSequence":4}' });
     expect(response.status).toBe(500);
     expect(await response.json()).toMatchObject({ error: { code: 'mcp-management-failed' } });
+  });
+
+  it.each([
+    [
+      'an untyped marker cause',
+      () =>
+        new ExplicitLocalAuthorityError({
+          code: 'mcp-authority-storage',
+          message: 'private untyped authority failure',
+        }),
+    ],
+    [
+      'a nested marker cause',
+      (cause: McpAuthorityError) =>
+        new ExplicitLocalAuthorityError(new Error('private nested authority failure', { cause })),
+    ],
+    [
+      'an aggregate marker cause',
+      (cause: McpAuthorityError) =>
+        new ExplicitLocalAuthorityError(
+          new AggregateError([cause], 'private aggregate authority failure', { cause }),
+        ),
+    ],
+    [
+      'an unrelated wrapper',
+      (cause: McpAuthorityError) => new Error('private wrapped authority failure', { cause }),
+    ],
+  ] as const)('returns a generic response for %s', async (_name, wrap) => {
+    const response = await appFor(
+      manager({
+        reload: async () => {
+          throw wrap(
+            new McpAuthorityError('mcp-authority-storage', 'private MCP authority failure'),
+          );
+        },
+      }),
+    ).request('/mcp/reload', { method: 'POST', headers, body: '{"expectedSequence":4}' });
+
+    expect(response.status).toBe(500);
+    const body = await response.text();
+    expect(body).not.toContain('private');
+    expect(JSON.parse(body)).toEqual({
+      error: { code: 'mcp-management-failed', message: 'MCP management is unavailable.' },
+    });
   });
 
   it('preserves own JSON Schema keys in the public metadata projection', async () => {

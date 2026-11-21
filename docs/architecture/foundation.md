@@ -1,5 +1,43 @@
 # Weave Foundation Architecture
 
+Stage 6.2c.2 integrates managed plugin authority and artifact ownership into
+Server startup. With local ESM enabled, a registered store automatically resumes
+at its bound root before source preparation or HTTP listen. An unregistered
+store requires explicit `allow-unbound` for its first binding. Default
+unregistered startup leaves the store unopened. Sticky IDs from installation
+history reserve the namespace even with local ESM disabled.
+
+One admin queue serializes reloads and manual, MCP and managed mutations.
+Server adopts paired local and MCP snapshots together, quarantines IDs claimed
+by both managed history and non-removed MCP declarations, and validates MCP
+authority before bounded reads that verify selected, enabled and trusted
+artifacts against their durable candidates. Generation publication checks the
+exact managed identity, including its activation sequence, against current
+selection, trust, namespace and lease. A Generation with managed members checks
+the ownership latch and lease at the Session queue head. Ownership loss blocks
+new turns if the current Generation has managed members, withdraws managed
+eligibility and cancels unpublished work while preserving current and retired
+Generation pins.
+
+The private selection API records a durable decision and reports application
+to a Generation separately. Replay returns the original decision and current
+authority without runtime effects. Owned `stop()` and `pluginHost.dispose()`
+share retryable shutdown phases. They drain dispatched artifact and admin work
+before cancelling turns, keep Session persistence open through terminal writes,
+and release the lease only after tracked plugin work settles. Failed startup
+uses the same cleanup phases.
+
+Normal owned startup loads eligible selected managed ESM plugins, including on
+restart with binding options omitted. The existing `/plugins` and `/commands`
+GETs project cached state. Published managed members appear as path-free
+`kernel` entries, manual rows keep their discovery paths, and public failures
+use safe messages while retaining raw causes privately. Managed desired and
+retired state stay private. Installer HTTP and managed catalog DTOs, Studio
+installation, GitHub acquisition and the discovery catalog belong to later
+stages. See the
+[managed source design](../superpowers/specs/2026-11-21-managed-plugin-source-design.md)
+and [Server plan](../superpowers/plans/2026-11-21-managed-plugin-source-server.md).
+
 Stage 6.2c.1 adds package support for explicitly selected managed ESM plugins.
 The artifact store returns the validated concrete entry. The shared local source
 combines manual declarations with explicit selections, sticky ID reservations,
@@ -11,8 +49,6 @@ or invoking Runtime. These callbacks carry no Server, HTTP or SQLite types, and
 the standalone host keeps its manual contract. See the
 [managed source design](../superpowers/specs/2026-11-21-managed-plugin-source-design.md)
 and [package plan](../superpowers/plans/2026-11-21-managed-plugin-source-support.md).
-Server startup, selected-source composition, managed HTTP and Studio installation
-follow in separate slices.
 
 Stage 6.2b adds a Server-private owned artifact-store factory. It binds an exact
 authority UUID/path and artifact root through append-once metadata, then retains
@@ -22,9 +58,6 @@ store queue, synchronously abort on observed ownership loss, and drain while the
 lease remains held during normal quiescence. See the
 [ownership design](../superpowers/specs/2026-11-21-plugin-store-ownership-design.md)
 and [protocol and limits](../learning/2026-11-21-plugin-store-ownership.md).
-This utility does not enable managed startup or expose an installer route.
-Selected-source/Generation integration, managed HTTP routes and Studio remain
-subsequent slices.
 
 Stage 6.2a adds Server-private plugin authority persistence on one SQLite
 connection. Installation, existing trust and managed operation logs are appended
@@ -35,16 +68,13 @@ frozen before COMMIT; the legacy trust facade keeps mutable detached copies and
 rejects writes for sticky managed IDs. See the
 [authority design](../superpowers/specs/2026-11-21-plugin-authority-design.md) and
 [usage and boundaries](../learning/2026-11-21-plugin-authority-database.md).
-Selected-source/Generation integration, managed HTTP routes and Studio
-installation remain subsequent slices.
 
 Stage 6.1 provides a bounded filesystem artifact store in `@weave/plugin-host`.
 It copies already bundled directories without executing them, validates concrete
 payload bytes and publishes hidden content-addressed paths. It never overwrites
 or deletes published content, grants trust, changes selection or reloads a
-Generation. The Server authority database records durable selection and reviewed
-activation; connecting those decisions to artifact loading and Studio remains a
-subsequent slice. See
+Generation. Stage 6.2a adds the durable selection and reviewed activation
+records used by the later Server composition. See
 [ADR 0005](../adr/0005-plugin-installation-and-distribution.md) and the
 [installation design](../superpowers/specs/2026-11-21-plugin-installation-design.md), plus
 [artifact-store usage](../learning/2026-11-21-plugin-artifact-store.md). This is a

@@ -228,6 +228,10 @@ export interface PluginAuthorityDatabase {
   readonly identity: PluginDatabaseIdentity;
   readonly trust: PluginTrustStore;
   snapshotSync(): PluginAuthoritySnapshot;
+  readStartupAuthoritySync(): {
+    readonly snapshot: PluginAuthoritySnapshot;
+    readonly registration: ManagedRootRegistration | null;
+  };
   lookupSync(request: ManagedRequest): ManagedLookup;
   commitSync(input: ManagedCommitInput): ManagedCommit;
   readManagedRootStateSync(): ManagedRootState;

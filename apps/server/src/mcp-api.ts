@@ -1,3 +1,4 @@
+import { ExplicitLocalAuthorityError } from '@weave/plugin-host';
 import type { Context, Hono } from 'hono';
 import { z } from 'zod';
 import { McpAuthorityError } from './mcp-errors.js';
@@ -39,7 +40,9 @@ const issues = {
 } as const;
 
 function respondError(context: Context, error: unknown): Response {
-  const code = error instanceof McpAuthorityError ? error.code : 'mcp-management-failed';
+  const authorityError = error instanceof ExplicitLocalAuthorityError ? error.cause : error;
+  const code =
+    authorityError instanceof McpAuthorityError ? authorityError.code : 'mcp-management-failed';
   const issue = code in issues ? issues[code as keyof typeof issues] : undefined;
   return context.json(
     errorResponseSchema.parse({

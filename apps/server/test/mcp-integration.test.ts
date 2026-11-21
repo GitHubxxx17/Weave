@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -7,13 +7,199 @@ import { createServer } from 'node:http';
 import { describe, expect, it, vi } from 'vitest';
 import { startServer } from '../src/main.js';
 import { createSqliteMcpAuthorityStore } from '../src/mcp-authority-store.js';
+import { McpAuthorityError } from '../src/mcp-errors.js';
 import { computeDirectoryDigest } from '@weave/plugin-host';
 import { getServerSessionStore } from '../src/runtime.js';
+import { createSqlitePluginAuthorityDatabase } from '../src/plugin-authority-store.js';
+import { createSqlitePluginTrustStore } from '../src/plugin-trust-store.js';
+import { artifact, importInput } from './support/plugin-authority-fixtures.js';
 import { z } from 'zod';
 
 const headers = { 'Content-Type': 'application/json' };
 
+function fixtureConfig(directory: string, id = 'fixture') {
+  return {
+    schemaVersion: 1 as const,
+    id,
+    label: 'Fixture',
+    transport: 'stdio' as const,
+    command: process.execPath,
+    args: [],
+    cwd: directory,
+    env: {},
+  };
+}
+
+function importFixture(
+  authority: ReturnType<typeof createSqlitePluginAuthorityDatabase>,
+  digest?: string,
+) {
+  const identity = artifact(digest);
+  authority.commitSync(
+    importInput('import-mcp-fixture', 0, {
+      ...identity,
+      pluginId: 'mcp-fixture',
+      manifest: { ...identity.manifest, id: 'mcp-fixture' },
+    }),
+  );
+}
+
 describe('MCP Server composition', () => {
+  describe.each(['enabled', 'disabled'] as const)('authority errors with ESM %s', (esm) => {
+    const privateDetail = 'private-mcp-authority-detail';
+    it.each([
+      {
+        name: 'a rejected storage read',
+        failure: new McpAuthorityError('mcp-authority-storage', privateDetail),
+        code: 'mcp-authority-storage',
+        message: 'MCP authority persistence is unavailable.',
+      },
+      {
+        name: 'a fulfilled malformed log',
+        failure: { sequence: 1, events: [], records: [], diagnostic: privateDetail },
+        code: 'mcp-authority-protocol',
+        message: 'MCP authority contains invalid persisted data.',
+      },
+    ])('maps $name to its public MCP error', async ({ failure, code, message }) => {
+      const directory = await mkdtemp(join(tmpdir(), 'weave-mcp-authority-error-'));
+      const store = createSqliteMcpAuthorityStore({ filename: join(directory, 'weave.sqlite') });
+      const read = vi.spyOn(store, 'read');
+      let server: Awaited<ReturnType<typeof startServer>> | undefined;
+      try {
+        server = await startServer(0, {
+          dataDirectory: directory,
+          environment: {},
+          mcpAuthorityStore: store,
+          ...(esm === 'disabled' ? { pluginsDirectory: false } : {}),
+        });
+        expect(server.pluginHost !== undefined).toBe(esm === 'enabled');
+        if (failure instanceof McpAuthorityError) read.mockRejectedValueOnce(failure);
+        else read.mockResolvedValueOnce(failure);
+
+        const response = await fetch(`http://127.0.0.1:${server.port}/mcp/reload`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ expectedSequence: 0 }),
+        });
+
+        expect(response.status).toBe(500);
+        const body = await response.text();
+        expect(body).not.toContain(privateDetail);
+        expect(JSON.parse(body)).toEqual({ error: { code, message } });
+      } finally {
+        await server?.stop();
+        await store.close();
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it.each(['enabled', 'disabled'] as const)(
+    'reserves an imported-only managed ID without creating an artifact root with ESM %s',
+    async (esm) => {
+      const directory = await mkdtemp(join(tmpdir(), 'weave-mcp-sticky-'));
+      const filename = join(directory, 'weave.sqlite');
+      const authority = createSqlitePluginAuthorityDatabase({ filename });
+      const store = createSqliteMcpAuthorityStore({ filename });
+      const mutate = vi.spyOn(store, 'mutate');
+      let server: Awaited<ReturnType<typeof startServer>> | undefined;
+      try {
+        importFixture(authority);
+        await authority.close();
+        server = await startServer(0, {
+          dataDirectory: directory,
+          environment: {},
+          mcpAuthorityStore: store,
+          ...(esm === 'disabled' ? { pluginsDirectory: false } : {}),
+        });
+        expect(server.pluginHost !== undefined).toBe(esm === 'enabled');
+        const request = await fetch(`http://127.0.0.1:${server.port}/mcp/servers`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ expectedSequence: 0, config: fixtureConfig(directory) }),
+        });
+        expect(request.status).toBe(409);
+        expect(await request.json()).toMatchObject({ error: { code: 'mcp-conflict' } });
+        expect(mutate).not.toHaveBeenCalled();
+        expect((await store.read()).events).toEqual([]);
+        await expect(access(join(directory, 'plugins', '.weave-store'))).rejects.toMatchObject({
+          code: 'ENOENT',
+        });
+      } finally {
+        await server?.stop();
+        await store.close();
+        await authority.close();
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('uses an independent override trust prefix while enforcing newly sticky IDs', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'weave-mcp-override-'));
+    const filename = join(directory, 'weave.sqlite');
+    const local = join(directory, 'plugins', 'manual');
+    const manifest = { ...artifact().manifest, id: 'mcp-fixture', contributes: {} };
+    const authority = createSqlitePluginAuthorityDatabase({ filename });
+    const override = createSqlitePluginTrustStore({ filename: join(directory, 'override.sqlite') });
+    const store = createSqliteMcpAuthorityStore({ filename });
+    const mutate = vi.spyOn(store, 'mutate');
+    let server: Awaited<ReturnType<typeof startServer>> | undefined;
+    try {
+      await mkdir(local, { recursive: true });
+      await writeFile(
+        join(local, 'weave-plugin.json'),
+        JSON.stringify({ schemaVersion: 1, entry: 'index.mjs', manifest }),
+      );
+      await writeFile(join(local, 'index.mjs'), 'export default () => ({ setup() {} });\n');
+      const { digest } = await computeDirectoryDigest(local);
+      const mainRecord = await authority.trust.append({ kind: 'revoked', pluginId: 'unrelated' });
+      const overrideRecord = await override.append({
+        kind: 'trusted',
+        pluginId: 'mcp-fixture',
+        digest,
+        manifest,
+      });
+      const close = vi.spyOn(override, 'close');
+      expect(overrideRecord.sequence).toBe(mainRecord.sequence);
+      server = await startServer(0, {
+        dataDirectory: directory,
+        environment: {},
+        pluginTrustStore: override,
+        mcpAuthorityStore: store,
+      });
+      const controller = server.runtime.serverHost.controller()!;
+      const plugins = () => controller.current().resources.plugins.map(({ id }) => id);
+      await server.mcpManager!.configure(0, fixtureConfig(directory, 'other'));
+      await server.pluginHost!.reload();
+      expect(plugins()).toContain('mcp-fixture');
+
+      importFixture(authority, digest);
+      await server.pluginHost!.reload();
+      expect(plugins()).not.toContain('mcp-fixture');
+      await rm(local, { recursive: true });
+      mutate.mockClear();
+      await expect(server.mcpManager!.configure(1, fixtureConfig(directory))).rejects.toMatchObject(
+        { code: 'mcp-conflict' },
+      );
+      expect(mutate).not.toHaveBeenCalled();
+      expect((await store.read()).sequence).toBe(1);
+      expect(await authority.trust.events()).toEqual([mainRecord]);
+      expect(await override.events()).toEqual([overrideRecord]);
+      await expect(access(join(directory, 'plugins', '.weave-store'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      await server.stop();
+      await server.stop();
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      await server?.stop();
+      await store.close();
+      await override.close();
+      await authority.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('reserves an ESM ID while an old generation remains pinned and releases it after draining', async () => {
     const directory = join(tmpdir(), `weave-mcp-retained-${randomUUID()}`);
     const pluginsDirectory = join(directory, 'plugins');

@@ -370,6 +370,14 @@ export function createSqlitePluginAuthorityDatabase(
     snapshotSync() {
       return transaction('BEGIN', () => detachAndFreeze(readAuthoritySnapshotTx(database)));
     },
+    readStartupAuthoritySync() {
+      return transaction('BEGIN', () =>
+        detachAndFreeze({
+          snapshot: readAuthoritySnapshotTx(database),
+          registration: readManagedRootRegistrationTx(database, identity),
+        }),
+      );
+    },
     lookupSync(input) {
       const canonical = canonicalizeManagedRequest(input);
       return transaction('BEGIN', () => {
