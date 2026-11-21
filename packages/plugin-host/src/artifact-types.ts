@@ -4,6 +4,8 @@ export interface PluginArtifact {
   readonly digest: string;
   /** The concrete payload directory. */
   readonly directory: string;
+  /** The absolute path to the validated payload entry. */
+  readonly entry: string;
   readonly descriptor: PluginDescriptor;
   readonly files: number;
   readonly bytes: number;

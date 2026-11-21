@@ -228,7 +228,7 @@ export function createPluginArtifactStore(
         );
       }
       abort?.throwIfAborted();
-      return freezeTree({ directory: payload, descriptor, digest, bytes, files });
+      return freezeTree({ directory: payload, entry, descriptor, digest, bytes, files });
     } catch (error: unknown) {
       if (error instanceof PluginHostError && !isAbort(error, abort)) {
         throw new PluginArtifactError(
@@ -370,7 +370,12 @@ export function createPluginArtifactStore(
           throw error;
         }
         published = true;
-        result = Object.freeze({ ...finalArtifact, directory: path.join(object, 'payload') });
+        const directory = path.join(object, 'payload');
+        const entry = path.join(
+          directory,
+          path.relative(finalArtifact.directory, finalArtifact.entry),
+        );
+        result = Object.freeze({ ...finalArtifact, directory, entry });
       }
     } catch (error: unknown) {
       try {
