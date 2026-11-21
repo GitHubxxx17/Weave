@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { setImmediate } from 'node:timers/promises';
 import { createPluginArtifactStore, type PluginArtifact } from '@weave/plugin-host';
 import { afterEach, expect, it, vi } from 'vitest';
 import {
@@ -663,6 +664,39 @@ it.each(['async', 'thenable', 'throwing then getter', 'value'])(
     expect(onOwnershipLost).toHaveBeenCalledTimes(1);
   },
 );
+
+it('observes a rejection returned by a thenable observer method', async () => {
+  const { authority, open } = fixture();
+  const eventual = new Error('async then method rejected');
+  const invoked = vi.fn();
+  const invalidObserver = () => ({
+    async then() {
+      invoked();
+      throw eventual;
+    },
+  });
+  const onOwnershipLost = invalidObserver as unknown as StoreOptions['onOwnershipLost'];
+  const store = await open({ onOwnershipLost });
+  await authority.close();
+
+  const unhandled: unknown[] = [];
+  const recordUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on('unhandledRejection', recordUnhandled);
+  try {
+    const failure = syncFailure(store.assertHeldSync);
+    expect(failure).toMatchObject(lost);
+    expect(errorTree(failure)).toContainEqual(
+      expect.objectContaining({ message: expect.stringMatching(/return undefined/) }),
+    );
+    expect(invoked).not.toHaveBeenCalled();
+    await setImmediate();
+    expect(invoked).toHaveBeenCalledTimes(1);
+    expect(unhandled).toEqual([]);
+    await expect(store.read('f'.repeat(64))).rejects.toBe(failure);
+  } finally {
+    process.off('unhandledRejection', recordUnhandled);
+  }
+});
 
 it('waits for active work before concurrent closes release the native lock once', async () => {
   const fx = await queueFixture();

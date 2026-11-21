@@ -124,7 +124,9 @@ function checkObserverResult(result: unknown): void {
     if (typeof then === 'function') {
       void Promise.resolve({
         then(resolve: (value: unknown) => void, reject: (reason: unknown) => void) {
-          Reflect.apply(then, result, [resolve, reject]);
+          const completion: unknown = Reflect.apply(then, result, [resolve, reject]);
+          // An async then method can reject independently of the supplied callback.
+          if (completion !== result) void Promise.resolve(completion).catch(reject);
         },
       }).catch(() => undefined);
     }
