@@ -14,6 +14,9 @@ export default defineConfig({
       '/plugins': {
         target: 'http://127.0.0.1:4317',
       },
+      '/mcp': {
+        target: 'http://127.0.0.1:4317',
+      },
       '/commands': {
         target: 'http://127.0.0.1:4317',
       },

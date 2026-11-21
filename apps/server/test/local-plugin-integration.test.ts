@@ -1025,7 +1025,9 @@ describe('local plugin startup integration', () => {
             await writeFile(f.pluginsDirectory, 'expected a directory');
             await expect(decide(true)).rejects.toMatchObject({ code: 'plugin-unreadable' });
           } else {
-            await expect(decide(true)).resolves.toMatchObject({ generation: first.generation });
+            await expect(decide(true)).resolves.toMatchObject({
+              generation: rebuildFails ? first.generation : first.generation + 1,
+            });
             await expect(host.revoke('unknown', { immediate: true })).rejects.toMatchObject({
               code: 'plugin-not-found',
             });

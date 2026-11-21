@@ -65,6 +65,9 @@ importers:
       '@weave/llm':
         specifier: workspace:*
         version: link:../../packages/llm
+      '@weave/mcp-client':
+        specifier: workspace:*
+        version: link:../../packages/mcp-client
       '@weave/plugin':
         specifier: workspace:*
         version: link:../../packages/plugin

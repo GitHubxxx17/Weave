@@ -164,6 +164,11 @@ lines.on('line', (line) => {
                   explicit: process.env.MCP_EXPLICIT,
                   unexpected: process.env.MCP_UNEXPECTED,
                   path: process.env.PATH,
+                  specialEnvironment: Object.fromEntries(
+                    ['__proto__', 'constructor', 'toString', '_123'].flatMap((name) =>
+                      Object.hasOwn(process.env, name) ? [[name, process.env[name]]] : [],
+                    ),
+                  ),
                   listCount,
                   callCount,
                 }),

@@ -1,6 +1,16 @@
 import type { KernelPlugin, PluginManifest } from '@weave/plugin';
 import type { LocalPluginIssue } from '@weave/plugin-host';
 
+/** Candidate-wide resource failure; authority read errors must remain distinct. */
+export class ExtensionPreparationError extends Error {
+  readonly code = 'plugin-reload-failed';
+
+  constructor() {
+    super('Extension resources are unavailable for this generation');
+    this.name = 'ExtensionPreparationError';
+  }
+}
+
 export interface ExtensionSourceStamp {
   readonly revision: number;
   readonly trustSequence: number;
@@ -29,7 +39,11 @@ export type ExtensionAuthorityObserver = (
 ) => void;
 
 export interface PreparedExtensionItem extends ExtensionIdentity {
+  /** Server-private identity of these exact preparation resources. */
+  readonly instanceId?: string;
   readonly plugin: KernelPlugin;
+  /** Pure synchronous liveness check, without plugin code or authority mutation. */
+  isReady?(): boolean;
   normalizeError?(error: unknown): unknown;
   dispose(): Promise<void>;
 }
@@ -64,7 +78,14 @@ export type ExtensionSourceFactory = (observe: ExtensionAuthorityObserver) => Ex
 
 export interface ExtensionMember extends ExtensionIdentity {
   readonly sourceId: string;
+  readonly instanceId?: string;
   readonly manifest: PluginManifest;
+}
+
+export interface RetainedExtensionGeneration {
+  readonly generationId: number;
+  readonly current: boolean;
+  readonly members: readonly ExtensionMember[];
 }
 
 export interface ExtensionFailure extends ExtensionIdentity {

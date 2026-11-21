@@ -11,6 +11,7 @@ import {
   type Tool,
 } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
+import { types } from 'node:util';
 import { z } from 'zod';
 import { McpClientError } from './errors.js';
 import { MCP_LIMITS } from './limits.js';
@@ -25,11 +26,44 @@ import type {
 
 const ListToolsResultSchema = specTypeSchemas.ListToolsResult;
 type Validator = (input: unknown) => McpValidationResult;
+const environmentSchema = z.unknown().transform((input, context): Record<string, string> => {
+  try {
+    if (
+      input === null ||
+      typeof input !== 'object' ||
+      types.isProxy(input) ||
+      Array.isArray(input) ||
+      ![Object.prototype, null].includes(Object.getPrototypeOf(input))
+    )
+      throw new Error();
+    const env: Record<string, string> = {};
+    for (const key of Reflect.ownKeys(input)) {
+      if (typeof key !== 'string') throw new Error();
+      const descriptor = Object.getOwnPropertyDescriptor(input, key);
+      if (
+        !descriptor?.enumerable ||
+        !('value' in descriptor) ||
+        typeof descriptor.value !== 'string'
+      )
+        throw new Error();
+      Object.defineProperty(env, key, {
+        value: descriptor.value,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
+    return env;
+  } catch {
+    context.addIssue({ code: 'custom', message: 'Invalid resolved MCP environment.' });
+    return z.NEVER;
+  }
+});
 const launchOptionsSchema = z.object({
   command: z.string().min(1),
   args: z.array(z.string()),
   cwd: z.string().min(1),
-  env: z.record(z.string(), z.string()),
+  env: environmentSchema,
   signal: z.instanceof(AbortSignal),
   onStale: z.custom<() => void>((value) => typeof value === 'function').optional(),
   onClosed: z.custom<() => void>((value) => typeof value === 'function').optional(),
@@ -233,7 +267,7 @@ export async function connectMcp(launchOptions: ConnectMcpOptions): Promise<McpC
       try {
         await bounded(client.close(), scope.signal);
       } catch {
-        throw new McpClientError('mcp-close-failed');
+        throw new McpClientError('mcp-close-failed', { cleanupFailed: true });
       } finally {
         scope.dispose();
       }
@@ -358,7 +392,11 @@ export async function connectMcp(launchOptions: ConnectMcpOptions): Promise<McpC
       : error instanceof McpClientError
         ? error
         : new McpClientError('mcp-connect-failed');
-    await close().catch(() => {});
+    try {
+      await close();
+    } catch {
+      throw new McpClientError(failure.code, { cleanupFailed: true });
+    }
     throw failure;
   } finally {
     scope.dispose();

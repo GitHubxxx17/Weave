@@ -19,6 +19,9 @@ import {
   type ServerLocalPluginHost,
 } from './local-plugin-host.js';
 import type { ExtensionCoordinator } from './extension-coordinator.js';
+import { createSqliteMcpAuthorityStore, type McpAuthorityStore } from './mcp-authority-store.js';
+import type { connectMcp } from '@weave/mcp-client';
+import type { ServerMcpManager } from './mcp-management-types.js';
 import type { ProviderSecretCodec } from './provider-secret-codec.js';
 import {
   createProviderSettingsManager,
@@ -85,6 +88,10 @@ export interface StartServerOptions {
   readonly pluginsDirectory?: string | false;
   /** Optional trust persistence override, owned and closed by this Server. */
   readonly pluginTrustStore?: ClosablePluginTrustStore;
+  /** MCP persistence remains enabled independently of ESM discovery and is Server-owned. */
+  readonly mcpAuthorityStore?: McpAuthorityStore;
+  /** Optional transport seam for embedded Servers and integration tests. */
+  readonly mcpConnect?: typeof connectMcp;
 }
 
 async function closeServer(server: ServerType): Promise<void> {
@@ -166,11 +173,15 @@ export async function startServer(
   let providerSettingsStore: ProviderSettingsStore | undefined;
   let projectStore: ProjectStore | undefined;
   let pluginTrustStore: ClosablePluginTrustStore | undefined;
+  let mcpAuthorityStore: McpAuthorityStore | undefined;
+  let mcpManager: ServerMcpManager | undefined;
   let pluginHost: ServerLocalPluginHost | undefined;
   let coordinator: ExtensionCoordinator | undefined;
   let server: ServerType | undefined;
 
   try {
+    mcpAuthorityStore =
+      options.mcpAuthorityStore ?? createSqliteMcpAuthorityStore({ filename: databaseFile });
     providerSettingsStore =
       options.providerSettingsStore ??
       (options.providerSecretCodec === undefined
@@ -210,12 +221,18 @@ export async function startServer(
     await createServerAgentRunner(runtime, runnerOptions);
     const extensions = createServerExtensionCoordinator(runtime, {
       runnerOptions,
+      mcp: {
+        store: mcpAuthorityStore,
+        readHostVariable: (name) => (options.environment ?? process.env)[name],
+        ...(options.mcpConnect === undefined ? {} : { connect: options.mcpConnect }),
+      },
       ...(pluginsDirectory === false || pluginTrustStore === undefined
         ? {}
         : { local: { directory: pluginsDirectory, trustStore: pluginTrustStore } }),
     });
     coordinator = extensions.coordinator;
     pluginHost = extensions.pluginHost;
+    mcpManager = extensions.mcpManager;
     await coordinator.reload();
 
     let resolveListening!: () => void;
@@ -239,6 +256,7 @@ export async function startServer(
           generationSnapshot: coordinator.generationSnapshot,
           commandCatalog: () => listServerCommands(runtime),
           ...(pluginHost === undefined ? {} : { pluginManager: pluginHost }),
+          ...(mcpManager === undefined ? {} : { mcpManager }),
           ...(studioOrigin === undefined ? {} : { studioOrigin }),
         }).fetch,
         hostname: '127.0.0.1',
@@ -318,6 +336,7 @@ export async function startServer(
         await cleanup(() => closeProjectStore(projectStore));
         await cleanup(() => closeProviderSettingsStore(providerSettingsStore));
         await cleanup(async () => pluginTrustStore?.close());
+        await cleanup(async () => mcpAuthorityStore?.close());
 
         if (hasError) {
           throw firstError;
@@ -329,7 +348,7 @@ export async function startServer(
     process.on('SIGINT', onSigint);
     process.on('SIGTERM', onSigterm);
 
-    return { port: address.port, runtime, pluginHost, server: createdServer, stop };
+    return { port: address.port, runtime, pluginHost, mcpManager, server: createdServer, stop };
   } catch (error) {
     // Begin closing HTTP, then cancel generations before awaiting SSE sockets.
     const closed = server === undefined ? undefined : closeServer(server).catch(() => undefined);
@@ -341,6 +360,7 @@ export async function startServer(
     await closeProjectStore(projectStore).catch(() => undefined);
     await closeProviderSettingsStore(providerSettingsStore).catch(() => undefined);
     await pluginTrustStore?.close().catch(() => undefined);
+    await mcpAuthorityStore?.close().catch(() => undefined);
     throw error;
   }
 }

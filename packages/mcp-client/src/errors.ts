@@ -29,8 +29,14 @@ const messages: Record<McpClientErrorCode, string> = {
 
 /** Intentionally does not retain arbitrary SDK errors or child process output. */
 export class McpClientError extends Error {
-  constructor(readonly code: McpClientErrorCode) {
+  readonly cleanupFailed: boolean;
+
+  constructor(
+    readonly code: McpClientErrorCode,
+    options?: { readonly cleanupFailed?: boolean },
+  ) {
     super(messages[code]);
     this.name = 'McpClientError';
+    this.cleanupFailed = options?.cleanupFailed ?? false;
   }
 }

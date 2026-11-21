@@ -12,8 +12,10 @@ import type {
   ExtensionSourceSnapshot,
   ExtensionSourceStamp,
   PreparedExtensionSource,
+  RetainedExtensionGeneration,
 } from './extension-types.js';
 import type { ServerGeneration, ServerGenerationController, ServerHost } from './server-host.js';
+import { ExtensionPreparationError } from './extension-types.js';
 
 interface ExtensionState {
   readonly generation: ExtensionGenerationSnapshot;
@@ -30,8 +32,13 @@ export interface ExtensionCoordinator {
   readonly runner: ServerGenerationController['runner'];
   generationSnapshot(): ExtensionGenerationSnapshot;
   snapshot(): ExtensionState;
-  reload(): Promise<ExtensionReloadResult>;
-  mutate(sourceId: string, operation: () => Promise<unknown>): Promise<ExtensionReloadResult>;
+  retainedGenerations(): readonly RetainedExtensionGeneration[];
+  reload(options?: { readonly force?: boolean }): Promise<ExtensionReloadResult>;
+  mutate(
+    sourceId: string,
+    operation: () => Promise<unknown>,
+    options?: { readonly force?: boolean },
+  ): Promise<ExtensionReloadResult>;
   hasActive(sourceId: string, pluginId: string): boolean;
   retryImmediateRevocation(sourceId: string, pluginId: string): void;
   dispose(): Promise<void>;
@@ -45,7 +52,8 @@ interface ExtensionCoordinatorOptions {
 
 interface PendingOperation {
   readonly reload: boolean;
-  readonly run: () => Promise<ExtensionReloadResult>;
+  force: boolean;
+  readonly run: (force: boolean) => Promise<ExtensionReloadResult>;
   readonly result: ReturnType<typeof deferred<ExtensionReloadResult>>;
 }
 
@@ -164,6 +172,17 @@ export function createExtensionCoordinator(
     });
   }
 
+  function retainedGenerations(): readonly RetainedExtensionGeneration[] {
+    const currentId = controller.current().id;
+    return structuredClone(
+      [...activeByGeneration].map(([generationId, retainedMembers]) => ({
+        generationId,
+        current: generationId === currentId,
+        members: retainedMembers,
+      })),
+    );
+  }
+
   function result(unchanged: boolean): ExtensionReloadResult {
     return { ...snapshot(), unchanged };
   }
@@ -182,7 +201,7 @@ export function createExtensionCoordinator(
       while (pending.length > 0) {
         const operation = pending.shift()!;
         try {
-          operation.result.resolve(await operation.run());
+          operation.result.resolve(await operation.run(operation.force));
         } catch (reason: unknown) {
           operation.result.reject(reason);
         }
@@ -194,13 +213,17 @@ export function createExtensionCoordinator(
 
   function enqueue(
     reload: boolean,
-    run: () => Promise<ExtensionReloadResult>,
+    run: (force: boolean) => Promise<ExtensionReloadResult>,
+    force = false,
   ): Promise<ExtensionReloadResult> {
     if (closed) return Promise.reject(disposed());
     const previous = pending.at(-1);
-    if (reload && previous?.reload) return previous.result.promise;
+    if (reload && previous?.reload) {
+      previous.force ||= force;
+      return previous.result.promise;
+    }
     const operation = deferred<ExtensionReloadResult>();
-    pending.push({ reload, run, result: operation });
+    pending.push({ reload, force, run, result: operation });
     running ??= Promise.resolve().then(drain);
     return operation.promise;
   }
@@ -217,20 +240,24 @@ export function createExtensionCoordinator(
     return new Map(sources.map((source) => [source, source.snapshot()]));
   }
 
-  async function cleanup(operation: () => void | Promise<void>): Promise<void> {
+  async function cleanup(operation: () => void | Promise<void>): Promise<boolean> {
     try {
       await operation();
+      return true;
     } catch (reason: unknown) {
       cleanupErrors.push(reason);
+      return false;
     }
   }
 
   async function disposePreparations(
     preparations: Iterable<PreparedExtensionSource>,
-  ): Promise<void> {
+  ): Promise<boolean> {
+    let released = true;
     for (const preparation of [...preparations].reverse()) {
-      await cleanup(() => preparation.dispose());
+      if (!(await cleanup(() => preparation.dispose()))) released = false;
     }
+    return released;
   }
 
   function ownPreparations(
@@ -243,15 +270,14 @@ export function createExtensionCoordinator(
       dispose() {
         disposal ??= (async () => {
           await cleanup(() => generation.dispose());
-          await disposePreparations(preparations);
-          activeByGeneration.delete(generation.id);
+          if (await disposePreparations(preparations)) activeByGeneration.delete(generation.id);
         })();
         return disposal;
       },
     };
   }
 
-  async function rebuild(): Promise<ExtensionReloadResult> {
+  async function rebuild(force: boolean): Promise<ExtensionReloadResult> {
     const initialAuthority = captureAuthority();
     ensureOpen();
     const eligibleCount = [...initialAuthority.values()].reduce(
@@ -267,7 +293,13 @@ export function createExtensionCoordinator(
             initialAuthority.get(source)?.eligible.some((item) => matches(item, member)),
         ),
       );
-    if (alreadyCurrent && blocked === undefined && error === undefined && failed.length === 0) {
+    if (
+      !force &&
+      alreadyCurrent &&
+      blocked === undefined &&
+      error === undefined &&
+      failed.length === 0
+    ) {
       return result(true);
     }
     const abort = new AbortController();
@@ -362,11 +394,25 @@ export function createExtensionCoordinator(
                     sourceId,
                     pluginId: item.pluginId,
                     identity: item.identity,
+                    ...(item.instanceId === undefined ? {} : { instanceId: item.instanceId }),
                     manifest: item.plugin.manifest,
                   })),
                 );
                 const next = ownPreparations(candidate, [...preparations.values()]);
+                const unready = items.find(({ item }) => item.isReady?.() === false);
                 ensureOpen();
+                if (unready !== undefined) {
+                  exclude(
+                    unready.sourceId,
+                    { pluginId: unready.item.pluginId, identity: unready.item.identity },
+                    new PluginHostError(
+                      'plugin-load-failed',
+                      'Extension resource became unavailable before publication',
+                      { pluginId: unready.item.pluginId },
+                    ),
+                  );
+                  continue;
+                }
                 if (revision === desiredRevision) {
                   retirement = options.host.commit(next).retirement;
                   activeByGeneration.set(next.id, nextMembers);
@@ -440,6 +486,7 @@ export function createExtensionCoordinator(
       }
     } catch (reason: unknown) {
       ensureOpen();
+      if (reason instanceof ExtensionPreparationError) readingAuthority = false;
       failed = [...failures];
       error = { code: 'plugin-reload-failed', message: issueOf(reason).message };
       if (readingAuthority) throw reason;
@@ -453,20 +500,29 @@ export function createExtensionCoordinator(
     runner: controller.runner,
     generationSnapshot,
     snapshot,
-    reload: () =>
-      enqueue(true, async () => {
-        await refresh();
-        return rebuild();
-      }),
-    mutate: (sourceId, operation) =>
-      enqueue(false, async () => {
-        if (!sources.some((source) => source.id === sourceId)) {
-          throw new Error(`Unknown extension source "${sourceId}"`);
-        }
-        await operation();
-        await refresh(sourceId);
-        return rebuild();
-      }),
+    retainedGenerations,
+    reload: (reloadOptions) =>
+      enqueue(
+        true,
+        async (force) => {
+          await refresh();
+          return rebuild(force);
+        },
+        reloadOptions?.force === true,
+      ),
+    mutate: (sourceId, operation, mutationOptions) =>
+      enqueue(
+        false,
+        async (force) => {
+          if (!sources.some((source) => source.id === sourceId)) {
+            throw new Error(`Unknown extension source "${sourceId}"`);
+          }
+          await operation();
+          await refresh(sourceId);
+          return rebuild(force);
+        },
+        mutationOptions?.force === true,
+      ),
     hasActive,
     retryImmediateRevocation(sourceId, pluginId) {
       if (!closed && hasActive(sourceId, pluginId)) {
