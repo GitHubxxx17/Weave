@@ -15,6 +15,14 @@ the Session, Agent, Tool Pipeline, and Plugin boundaries defined for Weave.
 2. Weave Runtime: plugin-native runtime and SDK.
 3. Weave Crew: multi-agent orchestration.
 
+## Product references
+
+Weave 对标 Codex、Kiro 和 DeepSeek Harness。设计、实现、交互与验证都可以借鉴
+这三个项目的优点；先核对官方文档或具体源码版本，记录采用的原则及 Weave 的取舍。
+参考应适配现有 Session、Agent、Tool Pipeline 和 Plugin 边界，不直接复制架构，
+也不把其它项目的沙箱或权限保证套用到 Weave。参考项目与当前取舍见
+`docs/architecture/foundation.md` 的 Product references。
+
 ## Engineering rules
 
 - TypeScript, ESM, and strict typing.

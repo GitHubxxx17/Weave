@@ -506,6 +506,43 @@ cancellation state machine.
 
 ## Layer Boundaries
 
+### Product references
+
+Weave benchmarks Codex, Kiro and DeepSeek Harness across product behavior,
+architecture and verification. References inform explicit decisions within
+Weave's own Session, Agent, Tool Pipeline and Plugin boundaries; they do not
+replace those boundaries or imply another project's security guarantees.
+
+| Reference                                                                                                                                                                                                                                                                                | Principles to learn from                                                                                  | Current Weave decision                                                                                                       |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| [Codex MCP runtime](https://github.com/openai/codex/blob/bfe3c825702e9235a631a1db58f291bed7a44cfe/codex-rs/codex-mcp/README.md) and [binding tests](https://github.com/openai/codex/blob/bfe3c825702e9235a631a1db58f291bed7a44cfe/codex-rs/codex-mcp/src/binding_tests.rs)               | Bind prepared execution to the actual connection and policy; keep approval in the common execution path   | Pin each turn to its generation; no fallback to a new same-name tool or separate MCP approval path                           |
+| [Kiro MCP configuration](https://kiro.dev/docs/mcp/configuration/), [security](https://kiro.dev/docs/mcp/security/) and [requirements-first specs](https://kiro.dev/docs/specs/feature-specs/requirements-first/)                                                                        | Clear configuration meaning and activation boundaries; trace requirements through design, tasks and tests | Normalize launch configuration, distinguish launch trust from tool approval, derive behavior tests from lifecycle invariants |
+| [DeepSeek Harness architecture](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/docs/architecture.md) and [HMR](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/boot/hmr/README.md) | Reclaim registrations, separate durable facts from live events, and serialize extension mutations         | One Server coordinator, prepare before commit, preserve old pinned generations and release resources after their final turn  |
+
+These references were checked on 2026-11-21; source links pin the inspected
+revisions where available. Harness here means `deepseek-ai/deepseek-harness`
+(`@deepseek-ai/dsh`, based on Cordis). Its HMR documents describe different
+recovery guarantees for different failure paths; the earlier third-party audit
+mentioned in ADR 0003 is not a fresh audit of the current implementation.
+
+### Stage 5 contracts
+
+Stage 5 MCP is an owner-approved design, not implemented functionality.
+[ADR 0004](../adr/0004-mcp-stdio-tools.md) and the
+[stdio design](../superpowers/specs/2026-11-21-mcp-stdio-design.md) define the
+contracts before implementation: an independent `@weave/mcp-client` leaf package,
+a `plugin-builtins` ToolDefinition adapter, and one Server coordinator for the
+complete ESM + MCP generation. `plugin-host` remains independent of Runtime and
+MCP; Studio remains HTTP-only. The existing standalone PluginHost facade stays
+available, while Server administration moves to the sole coordinator.
+
+Local stdio processes run with normal OS user privileges. Launch configuration
+trust is separate from ESM directory-content trust, and neither a filtered
+environment nor tool approval provides an OS sandbox. All MCP tools use the
+shared Pipeline with explicit high-risk approval metadata. These proposed
+contracts take effect through the separately reviewed Stage 5 implementation
+PRs; the implemented Stage 4 behavior described below is the current baseline.
+
 ```text
                          ┌── @weave/llm ──┐
 @weave/protocol ──────────┤                ├── @weave/runtime -> @weave/plugin -> @weave/server -> @weave/desktop

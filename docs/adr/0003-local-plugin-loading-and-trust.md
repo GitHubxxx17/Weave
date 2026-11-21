@@ -298,6 +298,8 @@ latest `main`:
 - **4.5** Studio: states, trust dialog, reload. Add `/plugins` and `/commands` to the
   Vite development proxy.
 - **Later:** 4b project-level plugins; a fence for the whole local API; Stage 5 MCP
-  as sandboxed plugins; Stage 6 installer, signatures and marketplace; a development
+  as external-process tools (ADR 0004: local stdio is not an OS sandbox and launch
+  configuration trust is distinct from ESM directory-content trust); Stage 6
+  installer, signatures and marketplace; a development
   mode; code-free plugins that carry only declarations (still confirmed, because
   prompt sections are an injection surface).
