@@ -628,7 +628,7 @@ pnpm exec vitest run apps/server/test/plugin-catalog-projection.test.ts apps/ser
 pnpm --filter @weave/server typecheck
 ```
 
-**Files:** `apps/server/src/{main,managed-plugin-startup,local-plugin-host,plugin-catalog,local-extension-source,mcp-source,extension-coordinator}.ts`, `apps/server/test/{plugin-catalog-projection,plugin-management-api,mcp-api,managed-plugin-integration,managed-plugin-startup,local-plugin-integration}.test.ts`, and the existing managed composition support fixture.
+**Files:** `apps/server/src/{main,managed-plugin-startup,local-plugin-host,plugin-catalog,local-extension-source,mcp-source,extension-coordinator}.ts`, `apps/server/test/{plugin-catalog-projection,plugin-management-api,mcp-api,managed-plugin-integration,managed-plugin-startup,local-plugin-integration,extension-coordinator}.test.ts`, and the existing managed composition support fixture.
 
 **Consumes:** composition snapshots and private managed state from Tasks 3–5.
 
@@ -652,6 +652,9 @@ pnpm --filter @weave/server typecheck
       execution. Update reserved-ID compatibility tests to assert unique
       published public base entries while retaining invalid manual discoveries
       in the private host snapshot. Keep manual display paths and diagnostics.
+      Existing coordinator tests for managed failures now assert the fixed
+      public issue while retaining their exact raw private cause and attribution
+      checks. Preserve safe positively attributed manual messages.
 - [ ] After origin filtering and sanitization, attach the guarded managed
       composition to normal startup. Run Task 3's joint fixture with real
       `startServer()`, check its cached HTTP projections, then restart with
