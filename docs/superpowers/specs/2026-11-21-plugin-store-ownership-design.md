@@ -376,9 +376,13 @@ into a stricter payload limit. Stop immediately at a per-tree limit/unexpected
 entry. Cleanup is still performed only by 6.1 after an owned stage operation;
 no ownership code deletes staging or published content.
 
-Perform a bounded initial scan before creating/binding the owner DB, and recheck
-canonical leaf identities/layout after acquiring the lifetime lease, before main
-registration/return. A normal returned wrapper checks native lease state and
+Perform a bounded initial scan of an unbound root before creating/binding the
+owner DB. For a root with an existing owner file, check the canonical leaf
+identities, fixed root children and sidecars before opening owner SQLite.
+Defer traversal below `artifacts/` and `staging/` until holding the lifetime
+lease so a live owner's staging changes cannot interfere with contention
+detection. Recheck canonical leaf identities and the complete bounded layout
+under the lease, before main registration/return. A normal returned wrapper checks native lease state and
 cached main/root/owner canonical identities/nlink at each guarded boundary
 using synchronous lstat; descriptor binding/content remains immutable under the
 held private lock. Transient replacement checks compare device/inode/type and the
@@ -401,8 +405,9 @@ over `allow-unbound`; the option never permits reset, relocation or takeover.
 
 1. Validate static options/callback and require authority open. Read main identity,
    actual SQLite main location and existing registration in a completed SHORT
-   main read transaction. Canonicalize paths, enforce persistent/nlink/layout
-   rules. If an existing registration conflicts with the requested canonical
+   main read transaction. Canonicalize paths and validate persistent/nlink
+   eligibility and the pre-acquisition layout described in §5. If an existing
+   registration conflicts with the requested canonical
    database/root, stop BEFORE creating/binding another root. Never retain this
    main transaction while touching/acquiring owner SQLite.
 2. If owner file is missing and main registration exists, fail recovery-required;

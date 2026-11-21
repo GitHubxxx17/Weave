@@ -183,7 +183,11 @@ async function acquireManagedStoreLease(options: {
       it. Exact binding reopens; database/path/store mismatch fails; no binding rewrite.
 - [ ] **Step 3: Implement bounded validation and exclusive reservation.** Use async
       realpath/lstat/scans for acquisition; synchronous lstat/stat identity comparison
-      for later assertion guards. Owner reservation uses `wx` 0600 and only its creator
+      for later assertion guards. Scan the complete layout before initializing an
+      unbound root. For an existing owner, validate canonical leaves, fixed root
+      children and sidecars before open and defer artifact/staging traversal until
+      the lease is held so live staging changes do not interfere with contention.
+      Owner reservation uses `wx` 0600 and only its creator
       initializes schema. Never pass unsupported read-write/no-create flags to Node
       SQLite 24.4: existing-file open is bracketed by identity checks and no repair SQL.
       Detectable disappearance/replacement fails closed and may leave an inert empty
