@@ -262,6 +262,14 @@ it('rejects invalid or rewritten input atomically and rejects ordinary reads beh
       ...input,
       trustEvents: input.trustEvents.map((event) => ({ ...event, occurredAt: 'rewritten' })),
     },
+    {
+      ...input,
+      trustEvents: input.trustEvents.map((event) =>
+        event.kind === 'trusted'
+          ? { ...event, manifest: { ...event.manifest, description: undefined } }
+          : event,
+      ),
+    },
   ];
   for (const rejected of cases) {
     expect(() => source.adoptExplicitSelectionSync(rejected)).toThrow();
@@ -401,6 +409,64 @@ it('detaches input, preserves equivalent stamps, and rechecks activation identit
     await source.close();
   }
 });
+
+it.each(['recheck', 'setup'] as const)(
+  'accepts normalized equivalent manifest fields at %s',
+  async (phase) => {
+    const { options, checks, input } = await fixture();
+    const selection = input.selections[0]!;
+    const equivalent = {
+      ...input,
+      selections: [
+        {
+          ...selection,
+          manifest: {
+            ...selection.manifest,
+            description: undefined,
+            contributes: { ...selection.manifest.contributes, tools: undefined },
+          },
+          ready: {
+            ...selection.ready,
+            manifest: { ...selection.ready.manifest, host: undefined },
+          },
+        },
+      ],
+    };
+    let guardCalls = 0;
+    const source = createLocalPluginSource({
+      ...options,
+      explicitChecks: {
+        ...checks,
+        assertReadySync() {
+          guardCalls += 1;
+          if (phase === 'setup' && guardCalls === 3) {
+            source.adoptExplicitSelectionSync(equivalent);
+          }
+          return undefined;
+        },
+      },
+    });
+    await source.refresh();
+    const { stamp } = source.adoptExplicitSelectionSync(input);
+    const preparation = prepareOptions();
+    const prepared = await source.prepare(stamp, preparation);
+    const kernel = createPluginKernel();
+    try {
+      if (phase === 'setup') {
+        await kernel.register(prepared.items[0]!.plugin);
+        expect(guardCalls).toBe(3);
+      } else {
+        source.adoptExplicitSelectionSync(equivalent);
+      }
+      expect(source.snapshot().stamp).toEqual(stamp);
+      await expect(source.recheck(prepared, preparation.signal)).resolves.toMatchObject({
+        valid: true,
+      });
+    } finally {
+      await Promise.all([kernel.dispose(), prepared.dispose(), source.close()]);
+    }
+  },
+);
 
 it.each(['verify', 'guard'] as const)(
   'propagates authority failure from %s and disposes a prior manual item',

@@ -18,21 +18,23 @@ export const localPluginIdSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/
 export const localPluginDigestSchema = z.string().regex(/^[0-9a-f]{64}$/);
 const absolutePath = z.string().refine((value) => path.isAbsolute(value) && !value.includes('\0'));
 
-function sameManifest(left: PluginManifest, right: PluginManifest): boolean {
+function normalizeManifest(manifest: PluginManifest): PluginManifest {
   // Optional fields with explicit undefined do not occur in a descriptor or persisted log.
-  return isDeepStrictEqual(JSON.parse(JSON.stringify(left)), JSON.parse(JSON.stringify(right)));
+  return JSON.parse(JSON.stringify(manifest)) as PluginManifest;
 }
+
+const normalizedManifestSchema = pluginManifestSchema.transform(normalizeManifest);
 
 const explicitSelectionSchema = z
   .strictObject({
-    manifest: pluginManifestSchema,
+    manifest: normalizedManifestSchema,
     digest: localPluginDigestSchema,
     activationSequence: z.number().int().positive(),
     ready: z
       .strictObject({
         status: z.literal('ready'),
         id: localPluginIdSchema,
-        manifest: pluginManifestSchema,
+        manifest: normalizedManifestSchema,
         digest: localPluginDigestSchema,
         directory: absolutePath,
         entry: absolutePath,
@@ -52,7 +54,7 @@ const explicitSelectionSchema = z
     if (
       ready.id !== manifest.id ||
       ready.digest !== digest ||
-      !sameManifest(ready.manifest, manifest)
+      !isDeepStrictEqual(ready.manifest, manifest)
     ) {
       context.addIssue({
         code: 'custom',
@@ -113,7 +115,7 @@ export function eligibleManagedLocalCandidates(
         claimed.has(manifest.id) ||
         !record?.enabled ||
         record.digest !== digest ||
-        !sameManifest(record.manifest, manifest)
+        !isDeepStrictEqual(normalizeManifest(record.manifest), manifest)
       ) {
         return [];
       }
