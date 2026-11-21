@@ -1,5 +1,9 @@
 import { PluginError, type KernelPlugin } from '@weave/plugin';
-import { PluginHostError, type LocalPluginIssue } from '@weave/plugin-host';
+import {
+  ExplicitLocalAuthorityError,
+  PluginHostError,
+  type LocalPluginIssue,
+} from '@weave/plugin-host';
 import type {
   ExtensionAuthorityChange,
   ExtensionAuthorityObserver,
@@ -64,6 +68,7 @@ interface ExtensionCoordinatorOptions {
   readonly host: ServerHost;
   readonly sources: readonly ExtensionSourceFactory[];
   readonly assemble: (plugins: readonly KernelPlugin[]) => Promise<ServerGeneration>;
+  readonly mcpFirstAuthority?: boolean;
 }
 
 interface PendingOperation {
@@ -92,6 +97,10 @@ function requireController(host: ServerHost): ServerGenerationController {
 
 function matches(left: ExtensionIdentity, right: ExtensionIdentity) {
   return left.pluginId === right.pluginId && left.identity === right.identity;
+}
+
+function originOf({ origin }: ExtensionIdentity) {
+  return origin === undefined ? {} : { origin };
 }
 
 function issueOf(error: unknown): LocalPluginIssue {
@@ -176,6 +185,13 @@ export function createExtensionCoordinator(
   for (const source of sources) {
     authorityStamps.set(source.id, source.snapshot().stamp);
   }
+  const mcpAuthoritySource = options.mcpFirstAuthority
+    ? sources.find((source) => source.id === 'mcp')
+    : undefined;
+  const authorityOrder =
+    mcpAuthoritySource === undefined
+      ? sources
+      : [mcpAuthoritySource, ...sources.filter((source) => source !== mcpAuthoritySource)];
 
   function ensureOpen(): void {
     if (closed) throw disposed();
@@ -254,10 +270,10 @@ export function createExtensionCoordinator(
     return operation.promise;
   }
 
-  async function refresh(skip?: string): Promise<void> {
+  async function refresh(skip?: string, signal = lifetime.signal): Promise<void> {
     ensureOpen();
-    for (const source of sources) {
-      if (source.id !== skip) await source.refresh();
+    for (const source of authorityOrder) {
+      if (options.mcpFirstAuthority || source.id !== skip) await source.refresh(signal);
       ensureOpen();
     }
   }
@@ -363,6 +379,12 @@ export function createExtensionCoordinator(
     try {
       while (true) {
         ensureOpen();
+        if (mcpAuthoritySource !== undefined) {
+          readingAuthority = true;
+          await mcpAuthoritySource.refresh(abort.signal);
+          readingAuthority = false;
+          ensureOpen();
+        }
         const revision = desiredRevision;
         const authority = captureAuthority();
         const preparations = new Map<ExtensionSource, PreparedExtensionSource>();
@@ -386,7 +408,7 @@ export function createExtensionCoordinator(
               }
               exclude(
                 source.id,
-                { pluginId: failure.pluginId, identity: failure.identity },
+                { pluginId: failure.pluginId, identity: failure.identity, ...originOf(failure) },
                 failure.error,
               );
             }
@@ -400,7 +422,8 @@ export function createExtensionCoordinator(
             try {
               candidate = await options.assemble(items.map(({ item }) => item.plugin));
               ensureOpen();
-              for (const preparation of preparations.values()) {
+              for (const source of authorityOrder) {
+                const preparation = preparations.get(source)!;
                 readingAuthority = true;
                 if (!(await preparation.recheck(abort.signal))) valid = false;
                 readingAuthority = false;
@@ -437,6 +460,7 @@ export function createExtensionCoordinator(
                     sourceId,
                     pluginId: item.pluginId,
                     identity: item.identity,
+                    ...originOf(item),
                     ...(item.instanceId === undefined ? {} : { instanceId: item.instanceId }),
                     manifest: item.plugin.manifest,
                   })),
@@ -447,7 +471,11 @@ export function createExtensionCoordinator(
                 if (unready !== undefined) {
                   exclude(
                     unready.sourceId,
-                    { pluginId: unready.item.pluginId, identity: unready.item.identity },
+                    {
+                      pluginId: unready.item.pluginId,
+                      identity: unready.item.identity,
+                      ...originOf(unready.item),
+                    },
                     new PluginHostError(
                       'plugin-load-failed',
                       'Extension resource became unavailable before publication',
@@ -469,6 +497,11 @@ export function createExtensionCoordinator(
               }
             } catch (original: unknown) {
               if (readingAuthority) throw original;
+              const authorityFailure = original instanceof PluginError ? original.cause : original;
+              if (authorityFailure instanceof ExplicitLocalAuthorityError) {
+                readingAuthority = true;
+                throw authorityFailure;
+              }
               const reason = items.reduce(
                 (current, { item }) => item.normalizeError?.(current) ?? current,
                 original,
@@ -480,7 +513,11 @@ export function createExtensionCoordinator(
               const blamed = items.filter(({ item }) => item.pluginId === owner);
               if (blamed.length !== 1) throw reason;
               const { sourceId, item } = blamed[0]!;
-              exclude(sourceId, { pluginId: item.pluginId, identity: item.identity }, reason);
+              exclude(
+                sourceId,
+                { pluginId: item.pluginId, identity: item.identity, ...originOf(item) },
+                reason,
+              );
               continue;
             }
           }
@@ -506,7 +543,7 @@ export function createExtensionCoordinator(
           changed.add(key);
         }
         readingAuthority = true;
-        await refresh();
+        await refresh(undefined, abort.signal);
         readingAuthority = false;
         const refreshedAuthority = captureAuthority();
         if (identityFailure !== undefined) {

@@ -189,6 +189,13 @@ class FixtureSource {
 }
 
 async function fixture(...sources: Array<{ readonly register: ExtensionSourceFactory }>) {
+  return fixtureWithAuthorityOrder(false, ...sources);
+}
+
+async function fixtureWithAuthorityOrder(
+  mcpFirstAuthority: boolean,
+  ...sources: Array<{ readonly register: ExtensionSourceFactory }>
+) {
   const runtime = createServerRuntime();
   await runtime.start();
   const runner = await createServerAgentRunner(runtime);
@@ -201,6 +208,7 @@ async function fixture(...sources: Array<{ readonly register: ExtensionSourceFac
   const coordinator = createExtensionCoordinator({
     host: runtime.serverHost,
     sources: sources.map((source) => source.register),
+    mcpFirstAuthority,
     assemble: async (kernelPlugins) => {
       if (failAssembly) throw new Error('Shared assembly failed');
       return assembleServerGeneration(runtime, { kernelPlugins });
@@ -255,6 +263,97 @@ function toolContent(content: string) {
 }
 
 describe('Server extension coordination', () => {
+  it('discards pending changes and stamps after a paired callback throws', async () => {
+    const local = new FixtureSource('local-esm');
+    const mcp = new FixtureSource('mcp');
+    const publish = vi.fn();
+    const buffer = createManagedAuthorityObserverBuffer(publish);
+    const f = await fixture(
+      { register: buffer.wrapSource(local.register) },
+      { register: buffer.wrapSource(mcp.register) },
+    );
+    try {
+      const localChange = local.stageDecision(undefined);
+      const mcpChange = mcp.stageDecision(undefined);
+      expect(() =>
+        buffer.runSync(() => {
+          local.publish(localChange);
+          mcp.publish(mcpChange);
+          throw new Error('Authority reconciliation failed');
+        }),
+      ).toThrow('Authority reconciliation failed');
+      expect(publish).not.toHaveBeenCalled();
+      buffer.runSync(() => {
+        local.publish(localChange);
+        mcp.publish(mcpChange);
+      });
+      expect(publish).toHaveBeenCalledExactlyOnceWith(
+        new Map([
+          [local.id, localChange],
+          [mcp.id, mcpChange],
+        ]),
+      );
+    } finally {
+      await f.close();
+    }
+  });
+
+  it.each(['setup', 'readiness'])(
+    'validates MCP before the next local preparation after an attributed %s failure',
+    async (failure) => {
+      const local = new FixtureSource('local-esm');
+      const mcp = new FixtureSource('mcp');
+      const calls: string[] = [];
+      local.onRefresh = () => {
+        calls.push('local refresh');
+      };
+      mcp.onRefresh = () => {
+        calls.push('mcp refresh');
+      };
+      local.onRecheck = () => {
+        calls.push('local recheck');
+      };
+      mcp.onRecheck = () => {
+        calls.push('mcp recheck');
+      };
+      const f = await fixtureWithAuthorityOrder(
+        true,
+        {
+          register(observe) {
+            const source = local.register(observe);
+            return {
+              ...source,
+              prepare(stamp, options) {
+                calls.push('local prepare');
+                return source.prepare(stamp, options);
+              },
+            };
+          },
+        },
+        mcp,
+      );
+      if (failure === 'setup') {
+        mcp.onSetup = () => {
+          throw new Error('MCP setup failed');
+        };
+      } else {
+        mcp.ready = false;
+      }
+      try {
+        const result = await f.coordinator.reload();
+        expect(result.failed).toHaveLength(1);
+        expect(result.members.map(({ pluginId }) => pluginId)).toEqual([local.id]);
+        expect(calls.slice(0, 2)).toEqual(['mcp refresh', 'local refresh']);
+        const firstPrepare = calls.indexOf('local prepare');
+        const lastPrepare = calls.lastIndexOf('local prepare');
+        expect(calls.slice(firstPrepare + 1, lastPrepare)).toContain('mcp refresh');
+        expect(calls.slice(-2)).toEqual(['mcp recheck', 'local recheck']);
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
   it('discards unchanged-stamp metadata and retains a change from an earlier stamp in a pair', async () => {
     const local = new FixtureSource('local-esm');
     const mcp = new FixtureSource('mcp');

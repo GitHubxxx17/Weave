@@ -1,6 +1,14 @@
+import { isDeepStrictEqual } from 'node:util';
 import {
   createLocalPluginSource,
+  eligibleLocalSourceCandidates,
+  ExplicitLocalAuthorityError,
+  localSourceCandidateIdentity,
+  PluginHostError,
   projectLocalPluginSnapshot,
+  type ExplicitLocalCandidateChecks,
+  type ExplicitLocalSelectionInput,
+  type LocalSourceStamp,
   type LocalPluginSourceOptions,
   type LocalPluginSourceSnapshot,
   type LocalPluginSourceMutation,
@@ -9,34 +17,152 @@ import {
 } from '@weave/plugin-host';
 import { z } from 'zod';
 import type { ExtensionCoordinator } from './extension-coordinator.js';
-import type { ExtensionSourceFactory, ExtensionSourceSnapshot } from './extension-types.js';
+import {
+  sameExtensionSourceStamp,
+  type ExtensionAuthorityObserver,
+  type ExtensionSourceFactory,
+  type ExtensionSourceSnapshot,
+} from './extension-types.js';
 import type { ServerLocalPluginHost } from './local-plugin-host.js';
 
 const sourceId = 'local-esm';
 const mutationOptions = z.strictObject({ immediate: z.boolean().optional() }).optional();
 
-function sourceSnapshot(snapshot: LocalPluginSourceSnapshot): ExtensionSourceSnapshot {
-  return {
-    stamp: snapshot.stamp,
-    eligible: snapshot.plugins.flatMap(({ state, candidate }) => {
-      if (state !== 'eligible' || candidate.status !== 'ready') return [];
-      return [
-        { pluginId: candidate.id, identity: JSON.stringify([candidate.id, candidate.digest]) },
-      ];
-    }),
-  };
+interface ManagedLocalSourceOptions {
+  readonly refreshSelectedEvidence: (signal: AbortSignal) => Promise<void>;
+  readonly invalidateAuthoritySync: (cause: unknown) => never;
 }
 
-export function createLocalExtensionSource(options: LocalPluginSourceOptions): {
-  register: ExtensionSourceFactory;
-  facade(coordinator: ExtensionCoordinator): ServerLocalPluginHost;
-  discoveredPluginIds(): Promise<readonly string[]>;
-  close(): Promise<void>;
-} {
+interface WithdrawnSelection {
+  readonly stickyIds: ReadonlySet<string>;
+  readonly trustSequence: number | undefined;
+  readonly failure: ExplicitLocalAuthorityError | undefined;
+}
+
+export function createLocalExtensionSource(
+  options: LocalPluginSourceOptions,
+  managed?: ManagedLocalSourceOptions,
+) {
   let source: LocalPluginSourceController;
+  let observe: ExtensionAuthorityObserver;
+  let effective: ExtensionSourceSnapshot | undefined;
+  let rawStamp: LocalSourceStamp | undefined;
+  let withdrawn: WithdrawnSelection | undefined;
+  let adopting = false;
+  const reservedIds = new Set(options.discovery.reservedIds);
   // The ESM lifecycle captures cleanup errors so plugin code cannot interrupt
   // rollback. Collect them after draining both rejected and published attempts.
   const cleanupErrors: unknown[] = [];
+
+  function effectiveCandidates(raw: LocalPluginSourceSnapshot) {
+    return eligibleLocalSourceCandidates(raw).filter(
+      (candidate) =>
+        withdrawn === undefined ||
+        (candidate.origin === 'manual' && !withdrawn.stickyIds.has(candidate.id)),
+    );
+  }
+
+  function updateEffective(raw: LocalPluginSourceSnapshot, policyChanged = false) {
+    const eligible = effectiveCandidates(raw).map((candidate) => ({
+      pluginId: candidate.id,
+      identity: localSourceCandidateIdentity(candidate),
+      origin: candidate.origin,
+    }));
+    const revision =
+      (effective?.stamp.revision ?? 0) +
+      Number(
+        policyChanged ||
+          (rawStamp !== undefined && rawStamp.revision !== raw.stamp.revision) ||
+          (effective !== undefined && !isDeepStrictEqual(eligible, effective.eligible)),
+      );
+    const trustSequence = Math.max(
+      raw.stamp.trustSequence,
+      effective?.stamp.trustSequence ?? 0,
+      withdrawn?.trustSequence ?? 0,
+    );
+    rawStamp = raw.stamp;
+    effective = { stamp: { revision, trustSequence }, eligible };
+    return effective;
+  }
+
+  function snapshot(): ExtensionSourceSnapshot {
+    return updateEffective(source.snapshot());
+  }
+
+  function adoptExplicitSelectionSync(input: ExplicitLocalSelectionInput): void {
+    const recovery = withdrawn !== undefined;
+    adopting = true;
+    try {
+      source.adoptExplicitSelectionSync(input);
+      withdrawn = undefined;
+    } finally {
+      adopting = false;
+    }
+    observe(sourceId, {
+      snapshot: updateEffective(source.snapshot(), recovery),
+      affectedIds: [],
+      immediate: false,
+    });
+  }
+
+  function withdrawExplicitSelectionSync(
+    stickyIds: ReadonlySet<string>,
+    trustSequence?: number,
+    failure?: ExplicitLocalAuthorityError,
+  ): void {
+    const before = effective;
+    const policyChanged =
+      withdrawn === undefined ||
+      !isDeepStrictEqual(withdrawn.stickyIds, stickyIds) ||
+      (withdrawn.failure === undefined) !== (failure === undefined);
+    withdrawn = { stickyIds, trustSequence, failure };
+    const current = updateEffective(source.snapshot(), policyChanged);
+    observe(sourceId, {
+      snapshot: current,
+      affectedIds:
+        before?.eligible
+          .filter(({ identity }) =>
+            current.eligible.every((candidate) => candidate.identity !== identity),
+          )
+          .map(({ pluginId }) => pluginId) ?? [],
+      immediate: false,
+    });
+  }
+
+  function mayReadManagedSync(id: string): boolean {
+    const { discovery } = source.snapshot();
+    return (
+      !reservedIds.has(id) &&
+      !discovery.truncated &&
+      !discovery.candidates.some((candidate) => candidate.manifest?.id === id)
+    );
+  }
+
+  async function recheckManaged(
+    prepared: Awaited<ReturnType<typeof source.prepare>>,
+    rawCandidates: ReturnType<typeof effectiveCandidates>,
+    signal: AbortSignal,
+    checks: ExplicitLocalCandidateChecks,
+  ): Promise<boolean> {
+    for (const item of prepared.items) {
+      if (item.origin !== 'managed') continue;
+      const expected = rawCandidates.find(
+        (candidate) => localSourceCandidateIdentity(candidate) === item.identity,
+      );
+      const current = effectiveCandidates(source.snapshot()).find(
+        (candidate) => localSourceCandidateIdentity(candidate) === item.identity,
+      );
+      if (expected?.origin !== 'managed' || !isDeepStrictEqual(expected, current)) return false;
+      try {
+        await checks.verify(expected, signal);
+      } catch (error: unknown) {
+        if (error instanceof PluginHostError && error.code === 'plugin-digest-mismatch')
+          return false;
+        throw error;
+      }
+    }
+    return true;
+  }
 
   async function close() {
     try {
@@ -51,38 +177,67 @@ export function createLocalExtensionSource(options: LocalPluginSourceOptions): {
     }
   }
 
-  const register: ExtensionSourceFactory = (observe) => {
+  const register: ExtensionSourceFactory = (observer) => {
+    observe = observer;
     source = createLocalPluginSource({
       ...options,
       onAuthorityChange(change) {
-        observe(sourceId, { ...change, snapshot: sourceSnapshot(change.snapshot) });
+        if (!adopting) observe(sourceId, { ...change, snapshot: updateEffective(change.snapshot) });
       },
     });
     return {
       id: sourceId,
-      snapshot: () => sourceSnapshot(source.snapshot()),
-      async refresh() {
-        await source.refresh();
+      snapshot,
+      async refresh(signal) {
+        try {
+          await source.refresh();
+        } catch (cause: unknown) {
+          if (managed !== undefined) managed.invalidateAuthoritySync(cause);
+          throw cause;
+        }
+        if (signal !== undefined) await managed?.refreshSelectedEvidence(signal);
       },
       async prepare(stamp, preparationOptions) {
-        const prepared = await source.prepare(stamp, preparationOptions);
+        if (withdrawn !== undefined) throw withdrawn.failure ?? new ExplicitLocalAuthorityError();
+        const raw = source.snapshot();
+        if (!sameExtensionSourceStamp(stamp, updateEffective(raw).stamp)) {
+          throw new PluginHostError(
+            'plugin-reload-failed',
+            'Local plugin source changed before preparation',
+          );
+        }
+        const candidates = options.explicitChecks === undefined ? [] : effectiveCandidates(raw);
+        const prepared = await source.prepare(raw.stamp, preparationOptions);
         let disposal: Promise<void> | undefined;
         return {
-          stamp: prepared.stamp,
+          stamp,
           items: prepared.items.map((item) => ({
             pluginId: item.id,
             identity: item.identity,
+            origin: item.origin,
             plugin: item.plugin,
             normalizeError: item.normalize,
             dispose: item.dispose,
           })),
-          failures: prepared.failures.map(({ id, identity, kind, error }) => ({
+          failures: prepared.failures.map(({ id, identity, origin, kind, error }) => ({
             pluginId: id,
             identity,
+            origin,
             kind,
             error,
           })),
-          recheck: async (signal) => (await source.recheck(prepared, signal)).valid,
+          async recheck(signal) {
+            try {
+              if (!(await source.recheck(prepared, signal)).valid) return false;
+            } catch (cause: unknown) {
+              if (managed !== undefined) managed.invalidateAuthoritySync(cause);
+              throw cause;
+            }
+            return (
+              options.explicitChecks === undefined ||
+              recheckManaged(prepared, candidates, signal, options.explicitChecks)
+            );
+          },
           dispose() {
             disposal ??= prepared.dispose().then(() => {
               for (const item of prepared.items) cleanupErrors.push(...item.cleanupErrors);
@@ -98,6 +253,10 @@ export function createLocalExtensionSource(options: LocalPluginSourceOptions): {
   return {
     register,
     close,
+    snapshot,
+    adoptExplicitSelectionSync,
+    withdrawExplicitSelectionSync,
+    mayReadManagedSync,
     async discoveredPluginIds() {
       await source.refresh();
       return Object.freeze([
@@ -110,7 +269,7 @@ export function createLocalExtensionSource(options: LocalPluginSourceOptions): {
         ),
       ]);
     },
-    facade(coordinator) {
+    facade(coordinator: ExtensionCoordinator): ServerLocalPluginHost {
       function project(state: ReturnType<ExtensionCoordinator['snapshot']>) {
         const current = source.snapshot();
         const failures = new Map(
@@ -119,7 +278,7 @@ export function createLocalExtensionSource(options: LocalPluginSourceOptions): {
             .map((item) => [item.identity, item.error]),
         );
         if (state.error !== undefined) {
-          for (const item of sourceSnapshot(current).eligible) {
+          for (const item of snapshot().eligible) {
             if (!failures.has(item.identity)) failures.set(item.identity, state.error);
           }
         }
@@ -140,9 +299,7 @@ export function createLocalExtensionSource(options: LocalPluginSourceOptions): {
       function reloadResult(
         result: Awaited<ReturnType<ExtensionCoordinator['reload']>>,
       ): ReloadResult {
-        const eligible = new Set(
-          sourceSnapshot(source.snapshot()).eligible.map((item) => item.identity),
-        );
+        const eligible = new Set(snapshot().eligible.map((item) => item.identity));
         return {
           generation: result.generation.id,
           unchanged: result.unchanged,
@@ -169,11 +326,11 @@ export function createLocalExtensionSource(options: LocalPluginSourceOptions): {
           )
           .then(reloadResult);
       }
-      const snapshot = () => project(coordinator.snapshot());
+      const managementSnapshot = () => project(coordinator.snapshot());
       return {
         runner: coordinator.runner,
-        list: () => snapshot().plugins,
-        snapshot,
+        list: () => managementSnapshot().plugins,
+        snapshot: managementSnapshot,
         reload: () => coordinator.reload({ force: true }).then(reloadResult),
         trust: (id, digest) => mutate(() => ({ kind: 'trust', id, digest })),
         revoke: (id, options) =>

@@ -12,6 +12,12 @@ import { createLocalExtensionSource } from './local-extension-source.js';
 import { createMcpExtensionSource } from './mcp-source.js';
 import type { McpAuthorityStore } from './mcp-authority-store.js';
 import type { connectMcp } from '@weave/mcp-client';
+import type { ExtensionSourceFactory } from './extension-types.js';
+import {
+  createManagedAuthorityObserverBuffer,
+  createManagedPluginComposition,
+  type ManagedPluginCompositionOptions,
+} from './managed-plugin-composition.js';
 
 /** Trust persistence remains open until administration and generation draining finish. */
 export interface ClosablePluginTrustStore extends PluginTrustStore {
@@ -31,6 +37,7 @@ interface ServerExtensionOptions {
     readonly readHostVariable?: (name: string) => string | undefined;
     readonly connect?: typeof connectMcp;
   };
+  readonly managed?: ManagedPluginCompositionOptions;
   readonly runnerOptions: Omit<ServerAgentRunnerOptions, 'kernelPlugins'> & {
     readonly hostVersion: string;
   };
@@ -98,22 +105,46 @@ export function createServerExtensionCoordinator(
       throw error;
     }
   }
-  const local =
+  const buffer = createManagedAuthorityObserverBuffer((changes) =>
+    coordinator.observeAuthorityBatchSync(changes),
+  );
+  const managed =
+    options.managed === undefined
+      ? undefined
+      : createManagedPluginComposition(options.managed, buffer, () => ({ local, mcp }));
+  const local: ReturnType<typeof createLocalExtensionSource> | undefined =
     options.local === undefined
       ? undefined
-      : createLocalExtensionSource({
-          discovery: {
-            directory: options.local.directory,
-            hostVersion: baseOptions.hostVersion,
-            reservedIds,
+      : createLocalExtensionSource(
+          {
+            discovery: {
+              directory: options.local.directory,
+              hostVersion: baseOptions.hostVersion,
+              reservedIds,
+            },
+            trustStore: options.local.trustStore,
+            ...(options.managed?.executionStore === undefined
+              ? {}
+              : { explicitChecks: managed!.explicitChecks }),
           },
-          trustStore: options.local.trustStore,
-        });
-  const mcp =
+          managed,
+        );
+  const mcp: ReturnType<typeof createMcpExtensionSource> | undefined =
     options.mcp === undefined
       ? undefined
       : createMcpExtensionSource({
           ...options.mcp,
+          ...(managed === undefined
+            ? {}
+            : {
+                installAuthoritySync: managed.installAuthoritySync,
+                assertCreateAllowedSync: managed.assertCreateAllowedSync,
+                store: {
+                  ...options.mcp.store,
+                  read: (readOptions) =>
+                    managed.refreshMcpAuthority(() => options.mcp!.store.read(readOptions)),
+                },
+              }),
           async reservedPluginIds() {
             const discovered = (await local?.discoveredPluginIds()) ?? [];
             const current = runtime.serverHost.controller()?.current().resources.plugins ?? [];
@@ -134,17 +165,39 @@ export function createServerExtensionCoordinator(
             ]);
           },
         });
+  function registerSource(register: ExtensionSourceFactory): ExtensionSourceFactory {
+    return managed === undefined ? register : buffer.wrapSource(register);
+  }
+  const registerMcp: ExtensionSourceFactory = (observe) => {
+    const source = mcp!.register(observe);
+    if (managed === undefined) return source;
+    return {
+      ...source,
+      refresh: () => managed.refreshMcpAuthority(source.refresh),
+      async prepare(stamp, preparationOptions) {
+        const prepared = await source.prepare(stamp, preparationOptions);
+        return {
+          ...prepared,
+          recheck: (signal) => managed.refreshMcpAuthority(() => prepared.recheck(signal)),
+        };
+      },
+    };
+  };
   const coordinator = createExtensionCoordinator({
     host: runtime.serverHost,
     sources: [
-      ...(local === undefined ? [] : [local.register]),
-      ...(mcp === undefined ? [] : [mcp.register]),
+      ...(local === undefined ? [] : [registerSource(local.register)]),
+      ...(mcp === undefined ? [] : [registerSource(registerMcp)]),
     ],
     assemble,
+    mcpFirstAuthority: managed !== undefined,
   });
   coordinatedHosts.add(runtime.serverHost);
   return {
     coordinator,
+    managed,
+    localSource: local,
+    adoptInitialAuthoritySync: managed?.adoptInitialAuthoritySync,
     pluginHost: local?.facade(coordinator),
     mcpManager: mcp?.facade(coordinator),
     async closeUnpublished() {

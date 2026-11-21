@@ -1,5 +1,5 @@
 import type { KernelPlugin, PluginManifest } from '@weave/plugin';
-import type { LocalPluginIssue } from '@weave/plugin-host';
+import type { LocalPluginIssue, LocalSourceCandidate } from '@weave/plugin-host';
 
 /** Candidate-wide resource failure; authority read errors must remain distinct. */
 export class ExtensionPreparationError extends Error {
@@ -24,6 +24,7 @@ export interface ExtensionIdentity {
   readonly pluginId: string;
   /** Unique within the source. */
   readonly identity: string;
+  readonly origin?: LocalSourceCandidate['origin'];
 }
 
 export interface ExtensionSourceSnapshot {
@@ -70,7 +71,7 @@ export interface PreparedExtensionSource {
 export interface ExtensionSource {
   readonly id: string;
   snapshot(): ExtensionSourceSnapshot;
-  refresh(): Promise<void>;
+  refresh(signal?: AbortSignal): Promise<void>;
   prepare(
     stamp: ExtensionSourceStamp,
     options: { readonly signal: AbortSignal; readonly excluded: ReadonlySet<string> },
