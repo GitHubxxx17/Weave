@@ -538,21 +538,23 @@ mentioned in ADR 0003 is not a fresh audit of the current implementation.
 
 ### Stage 5 contracts
 
-Stage 5 MCP is an owner-approved design, not implemented functionality.
+Stage 5 local stdio MCP Tools are implemented and verified through Studio.
 [ADR 0004](../adr/0004-mcp-stdio-tools.md) and the
 [stdio design](../superpowers/specs/2026-11-21-mcp-stdio-design.md) define the
-contracts before implementation: an independent `@weave/mcp-client` leaf package,
+contracts established before implementation: an independent `@weave/mcp-client` leaf package,
 a `plugin-builtins` ToolDefinition adapter, and one Server coordinator for the
 complete ESM + MCP generation. `plugin-host` remains independent of Runtime and
 MCP; Studio remains HTTP-only. The existing standalone PluginHost facade stays
-available, while Server administration moves to the sole coordinator.
+available, while Server administration uses the sole coordinator.
 
 Local stdio processes run with normal OS user privileges. Launch configuration
 trust is separate from ESM directory-content trust, and neither a filtered
 environment nor tool approval provides an OS sandbox. All MCP tools use the
-shared Pipeline with explicit high-risk approval metadata. These proposed
-contracts take effect through the separately reviewed Stage 5 implementation
-PRs; the implemented Stage 4 behavior described below is the current baseline.
+shared Pipeline with explicit high-risk approval metadata. Stages 5.1a–5.3 are
+merged; the verified Studio implementation is delivered through
+[PR #82](https://github.com/GitHubxxx17/Weave/pull/82), which records its CI and
+merge status. The Stage 4 sections below describe the ESM foundation; Stage 5
+adds joint ESM/MCP generation management and the shared Studio catalog.
 
 ```text
                          ┌── @weave/llm ──┐
@@ -927,17 +929,18 @@ turn instead of delaying the management response. Closing synchronously blocks
 admission and aborts candidates and all active generations before waiting for
 cleanup, and durable stores close last. `GET /plugins` gains a compatible
 top-level generation/admission projection even without local plugin discovery.
-This is the 5.1a contract; MCP protocol support is delivered by later PRs.
+This is the 5.1a contract; the following Stage 5 changes add the MCP client,
+tool adapter, Server management and Studio interface.
 
 ## Studio local-plugin management (Stage 4.5)
 
 Studio consumes the cached plugin HTTP projection through one App-lifetime browser
-store. Startup and restored tabs only read; explicit plugin-entry activation
-rediscoveries through the guarded management endpoint. Review dialogs capture
+store. Startup, restored tabs and plugin-panel activation only read; explicit
+reload rebuilds the complete ESM/MCP generation. Review dialogs capture
 the displayed digest, and every rejected decision reconciles cached durable
 state before reporting its error. Desired disk state and current generation
-membership remain separate. Global Studio session streaming state controls the
-optional immediate cancellation choice. See local-plugin design §11.4 for the
+membership remain separate. MCP stop, revoke and remove dialogs always offer
+the immediate cancellation choice for all current and retired turns. See local-plugin design §11.4 for the
 shared cache, exact-digest and keyboard/focus contracts.
 When an administrative cancellation closes SSE before its terminal event is
 delivered, Studio reconciles the current run with one existing Session GET and

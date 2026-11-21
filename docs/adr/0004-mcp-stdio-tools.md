@@ -1,7 +1,7 @@
 # ADR 0004: MCP stdio Tools
 
 - Status: Accepted
-- Owner review: 2026-11-21 已确认推荐设计；5.1a/5.1b 首轮实现与完整验证已通过。
+- Owner review: 2026-11-21 已确认推荐设计；5.1a–5.3 已合入，5.4 Studio 实现、完整检查、独立审查及真实浏览器和 Electron 验收通过；CI 与合入状态见 [PR #82](https://github.com/GitHubxxx17/Weave/pull/82)。
 - Date: 2026-11-21
 - Refines: ADR 0002（Typed Plugin Kernel）和 ADR 0003（Local Plugin Loading and Trust）。
 - 详细设计：`docs/superpowers/specs/2026-11-21-mcp-stdio-design.md`。
@@ -154,9 +154,11 @@ Stage 6。
 实施顺序和验收用例写在 [`2026-11-21-mcp-stdio-design.md`](../superpowers/specs/2026-11-21-mcp-stdio-design.md)：先保持行为不变地提取 ESM source 和 Server 统一协调器，再定义
 独立 client contract 和 fixture server，随后做 `plugin-builtins` 适配、Server
 authority 事件与管理接口、Studio 管理入口。
-每一项从最新 `origin/main` 建独立分支和 PR。5.1a 已合入；5.1b 协议客户端
-首轮实现通过真实 stdio 与独立宿主退出测试及完整 `pnpm check`。工具适配、
-Server authority 管理和 Studio 界面仍按后续独立 PR 交付。
+每一项从最新 `origin/main` 建独立分支和 PR。5.1a–5.3 已通过独立 PR 合入，
+5.4 Studio 的实现和验收已完成，通过 [PR #82](https://github.com/GitHubxxx17/Weave/pull/82)
+交付。完整 `pnpm check` 通过 2,289 项测试，真实浏览器和 Electron 开发进程验证了
+启动信任、工具审批、Generation 切换、关闭及重启恢复。后续扩展另立设计和 PR，
+不扩大本 ADR 的 local stdio Tools 范围。
 
 ## References
 

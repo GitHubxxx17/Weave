@@ -1,10 +1,13 @@
 # Stage 5 — 本地 stdio MCP Tools 设计
 
-状态：用户已于 2026-11-21 确认推荐方案。5.1a–5.2 已合入；5.3 Server 管理正在实现，5.4 Studio 尚未接入。本文规定完整跨包契约。
+状态：用户已于 2026-11-21 确认推荐方案。5.1a–5.3 已合入；5.4 Studio 已实现并完成完整检查、独立审查及真实浏览器和 Electron 验收。5.4 的 CI 与合入状态见 [PR #82](https://github.com/GitHubxxx17/Weave/pull/82)。本文规定完整跨包契约。
 基线：`origin/main` 的 `a0b38b4`（Stage 4.5，PR #76）。
 决策记录：[ADR 0004](../../adr/0004-mcp-stdio-tools.md)。
 实施计划：[5.1a 统一扩展协调器](../plans/2026-11-21-extension-coordinator.md)、
-[5.1b stdio 客户端](../plans/2026-11-21-mcp-stdio-client.md)。
+[5.1b stdio 客户端](../plans/2026-11-21-mcp-stdio-client.md)、
+[5.2 工具适配器](../plans/2026-11-21-mcp-tool-plugin.md)、
+[5.3 Server 管理](../plans/2026-11-21-mcp-server-management.md)、
+[5.4 Studio 管理](../plans/2026-11-21-studio-mcp-management.md)。
 
 产品对标 Codex、Kiro、DeepSeek Harness；参考来源和当前采用原则见
 [Foundation 的 Product references](../../architecture/foundation.md#product-references)。
@@ -480,9 +483,10 @@ MCP 状态从 `/mcp` 获取，当前内核插件仍来自 `/plugins`；面板将
 `ServerHost.commit` 提供同步所有权移交，完整候选提交前复验全部来源；
 来源聚合清理器随发布代保留，最后一个旧回合结束后再释放。
 
-本轮测试使用两个带真实工具贡献的可控来源验证交错变更，并使用真实 ESM
+5.1a 当时的测试使用两个带真实工具贡献的可控来源验证交错变更，并使用真实 ESM
 目录和 Server 启停验证信任、HTTP 投影和持久库关闭顺序。它们未启动 MCP
-服务；协议客户端、连接状态、MCP 配置持久化及 Studio 表单仍按 5.1b–5.4 交付。
+服务；协议客户端、连接状态、MCP 配置持久化及 Studio 表单由后续 5.1b–5.4 实现，
+当前交付状态见本文顶部。
 
 ## 11. 已知边界与后续方向
 
@@ -511,8 +515,8 @@ JSON 属性名遗漏时的语义，内部校验副本对所有数据键及对应
 const/enum 使用一致的单射前缀；公开 schema 与发出的参数保持原样。
 
 固定 SDK 的 ESM/CJS transport 补丁释放父端管道、共享关闭 promise 并通知关闭
-一次；独立宿主测试实际观察退出。此交付尚不提供 Server 启动授权、
-MCP 工具适配或 Studio 管理；后续5.2–5.4 必须经过这些边界后才允许用户启动服务。
+一次；独立宿主测试实际观察退出。5.1b 当时不包含 Server 启动授权、
+MCP 工具适配或 Studio 管理；后续 5.2–5.4 实现了这些启动边界，当前交付状态见本文顶部。
 
 ### 10.3 5.2 工具适配实施契约
 
