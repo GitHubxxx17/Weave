@@ -1,3 +1,4 @@
+import { isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -13,12 +14,12 @@ import {
 import { z } from 'zod';
 
 import { computeDirectoryDigest, type DigestLimits } from './digest.js';
-import { describeError, PluginHostError } from './errors.js';
+import { describeError, ExplicitLocalAuthorityError, PluginHostError } from './errors.js';
 import type { ReadyLocalPlugin } from './discovery.js';
 
 /** Options of {@link loadLocalPlugin}. */
 export interface LoadLocalPluginOptions {
-  /** The digest the user trusted. The directory must still hash to it. */
+  /** The digest the user trusted. The current bytes must still match it. */
   readonly trustedDigest: string;
   /** What the plugin's factory is given. Defaults to a new {@link createPluginSdk}. */
   readonly sdk?: PluginSdk | undefined;
@@ -26,10 +27,22 @@ export interface LoadLocalPluginOptions {
   readonly importModule?: ((specifier: string) => Promise<unknown>) | undefined;
   readonly limits?: Partial<DigestLimits> | undefined;
   readonly signal?: AbortSignal | undefined;
+  /** Managed artifact verification and authority checks. Requires an attempt signal. */
+  readonly explicitChecks?:
+    | {
+        verify(signal: AbortSignal): Promise<Pick<ReadyLocalPlugin, 'entry' | 'digest'>>;
+        assertReadySync(): undefined;
+      }
+    | undefined;
 }
 
 /** The part of a discovered plugin the loader needs. */
 export type LocalPluginSource = Pick<ReadyLocalPlugin, 'id' | 'directory' | 'entry' | 'manifest'>;
+
+const verifiedEntrySchema = z.strictObject({
+  entry: z.string().refine(isAbsolute),
+  digest: z.string().regex(/^[0-9a-f]{64}$/),
+});
 
 const pluginModuleSchema = z.object({
   setup: z.custom<PluginModule['setup']>((value) => typeof value === 'function', {
@@ -69,8 +82,8 @@ function sameManifest(value: unknown, trusted: LocalPluginSource['manifest']): b
  *
  * This runs the plugin's code: `import()` evaluates the entry module, and its
  * factory runs before this returns. Call it only for a plugin whose trust
- * covers the current content, which is why the digest is computed again here,
- * immediately before importing, and compared with the one the user trusted.
+ * covers the current content. The loader verifies the digest just before import
+ * using directory hashing or the managed artifact verifier.
  * Nothing in discovery or trust ever imports a plugin.
  *
  * The module's default export is a {@link PluginFactory}. It is called with the
@@ -90,30 +103,58 @@ export async function loadLocalPlugin(
   options: LoadLocalPluginOptions,
 ): Promise<KernelPlugin> {
   const { id, manifest } = plugin;
+  const { explicitChecks, signal } = options;
   const fail = (code: PluginHostError['code'], message: string, cause?: unknown): PluginHostError =>
     new PluginHostError(code, message, {
       pluginId: id,
       ...(cause === undefined ? {} : { cause }),
     });
-
-  options.signal?.throwIfAborted();
-  const { digest } = await computeDirectoryDigest(plugin.directory, {
-    limits: options.limits,
-    pluginId: id,
-  });
-  options.signal?.throwIfAborted();
-  if (digest !== options.trustedDigest) {
-    throw fail(
+  const changedIdentity = () =>
+    fail(
       'plugin-digest-mismatch',
       `Plugin "${id}" has changed since it was trusted; review it again before it loads`,
     );
+
+  function assertExplicitReady(): void {
+    if (explicitChecks === undefined) return;
+    signal?.throwIfAborted();
+    try {
+      const result: unknown = explicitChecks.assertReadySync();
+      if (result !== undefined) {
+        void Promise.resolve(result).catch(() => undefined);
+        throw new TypeError('Explicit local plugin authority check must return undefined');
+      }
+    } catch (cause: unknown) {
+      throw new ExplicitLocalAuthorityError(cause);
+    }
+    signal?.throwIfAborted();
   }
 
-  const url = new URL(pathToFileURL(plugin.entry).href);
+  signal?.throwIfAborted();
+  let entry = plugin.entry;
+  let digest: string;
+  if (explicitChecks === undefined) {
+    ({ digest } = await computeDirectoryDigest(plugin.directory, {
+      limits: options.limits,
+      pluginId: id,
+    }));
+    signal?.throwIfAborted();
+  } else {
+    if (signal === undefined) throw new TypeError('Explicit local plugin checks require a signal');
+    const result = await explicitChecks.verify(signal);
+    signal.throwIfAborted();
+    const verified = verifiedEntrySchema.safeParse(result);
+    if (!verified.success || verified.data.entry !== entry) throw changedIdentity();
+    ({ entry, digest } = verified.data);
+  }
+  if (digest !== options.trustedDigest) throw changedIdentity();
+
+  const url = pathToFileURL(entry);
   url.searchParams.set('digest', digest);
   const importModule = options.importModule ?? ((specifier: string) => import(specifier));
 
   let moduleNamespace: unknown;
+  assertExplicitReady();
   try {
     moduleNamespace = await importModule(url.href);
   } catch (error: unknown) {
@@ -124,7 +165,7 @@ export async function loadLocalPlugin(
     );
   }
 
-  options.signal?.throwIfAborted();
+  signal?.throwIfAborted();
   const factory =
     typeof moduleNamespace === 'object' && moduleNamespace !== null
       ? (moduleNamespace as { readonly default?: unknown }).default
@@ -133,15 +174,25 @@ export async function loadLocalPlugin(
     throw fail('plugin-invalid-module', `Plugin "${id}" must export a function as its default`);
   }
 
-  let produced: unknown;
-  try {
-    produced = await (factory as PluginFactory)(options.sdk ?? createPluginSdk());
-  } catch (error: unknown) {
-    throw fail(
+  const failFactory = (error: unknown): PluginHostError =>
+    fail(
       'plugin-load-failed',
       `Plugin "${id}" failed in its factory: ${describeError(error)}`,
       error,
     );
+  let sdk: PluginSdk;
+  try {
+    sdk = options.sdk ?? createPluginSdk();
+  } catch (error: unknown) {
+    throw failFactory(error);
+  }
+
+  let produced: unknown;
+  assertExplicitReady();
+  try {
+    produced = await (factory as PluginFactory)(sdk);
+  } catch (error: unknown) {
+    throw failFactory(error);
   }
 
   const parsed = pluginModuleSchema.safeParse(produced);
@@ -163,7 +214,10 @@ export async function loadLocalPlugin(
   const module = produced as PluginModule;
   return definePlugin({
     manifest,
-    setup: (env: PluginEnv) => setup.call(module, env),
+    setup(env: PluginEnv) {
+      assertExplicitReady();
+      return setup.call(module, env);
+    },
     ...(dispose === undefined ? {} : { dispose: () => dispose.call(module) }),
   });
 }

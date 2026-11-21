@@ -1,6 +1,6 @@
 import { type KernelPlugin, type PluginEnv } from '@weave/plugin';
 
-import { PluginHostError } from './errors.js';
+import { ExplicitLocalAuthorityError, PluginHostError } from './errors.js';
 
 /** The resources owned by one loaded plugin instance and assembly attempt. */
 export interface PluginLifecycle {
@@ -15,11 +15,13 @@ export function createPluginLifecycle(
   original: KernelPlugin,
   setupTimeoutMs: number,
   attemptSignal?: AbortSignal,
+  options?: { readonly drainSetupOnDispose?: boolean },
 ): PluginLifecycle {
   const abort = new AbortController();
   const timeout = new Error(`Plugin "${original.manifest.id}" setup exceeded ${setupTimeoutMs}ms`);
   let invalid = false;
   let cleanup: Promise<void> | undefined;
+  let setupSettled: Promise<void> | undefined;
   const cleanupErrors: unknown[] = [];
 
   function invalidate(reason?: unknown): void {
@@ -66,6 +68,7 @@ export function createPluginLifecycle(
       } catch (error: unknown) {
         cleanupErrors.push(error);
       }
+      if (setupSettled !== undefined) await setupSettled;
     });
     return cleanup;
   }
@@ -89,15 +92,34 @@ export function createPluginLifecycle(
       };
       attemptSignal.addEventListener('abort', onAbort, { once: true });
     });
-    const pending = Promise.resolve().then(() => original.setup(guardEnv(env)));
+    let authorityFailure: ExplicitLocalAuthorityError | undefined;
+    const pending = Promise.resolve().then(() => {
+      const guardedEnv = guardEnv(env);
+      try {
+        return original.setup(guardedEnv);
+      } catch (error: unknown) {
+        // A guard can abort the attempt synchronously before throwing its marker.
+        if (options?.drainSetupOnDispose && error instanceof ExplicitLocalAuthorityError) {
+          authorityFailure = error;
+        }
+        throw error;
+      }
+    });
+    if (options?.drainSetupOnDispose) {
+      setupSettled = pending.then(
+        () => undefined,
+        () => undefined,
+      );
+    }
     try {
       // The race observes a late rejection, without awaiting setup after the
       // deadline. The kernel sees rejection now and rolls registrations back.
       await Promise.race([pending, deadline, cancelled]);
     } catch (error: unknown) {
-      invalidate(error);
+      const failure = authorityFailure ?? error;
+      invalidate(failure);
       void dispose();
-      throw error;
+      throw failure;
     } finally {
       clearTimeout(timer);
       if (onAbort !== undefined) attemptSignal?.removeEventListener('abort', onAbort);

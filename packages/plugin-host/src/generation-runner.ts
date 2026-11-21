@@ -11,6 +11,7 @@ export interface RunnerGeneration<R extends GenerationRequest, E, T> {
   readonly id: number;
   readonly runner: GenerationRunner<R, E>;
   readonly resources: T;
+  readonly assertCanStartSync?: (() => undefined) | undefined;
   dispose(): void | Promise<void>;
 }
 
@@ -52,6 +53,7 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
 ): GenerationController<R, E, T> {
   const generations = new Set<GenerationState<R, E, T>>();
   const sessions = new Map<string, Run[]>();
+  const advancingSessions = new Set<string>();
   const disposalErrors: unknown[] = [];
   let current = stateFor(initial);
   let blocked: Error | undefined;
@@ -81,8 +83,25 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
     return state.disposal;
   }
 
+  function startSessionHead(sessionId: string): void {
+    // Synchronous rejection or cancellation can release a head while it is starting.
+    if (advancingSessions.has(sessionId)) return;
+    advancingSessions.add(sessionId);
+    try {
+      while (true) {
+        const head = sessions.get(sessionId)?.[0];
+        if (!head) return;
+        head.start();
+        if (sessions.get(sessionId)?.[0] === head) return;
+      }
+    } finally {
+      advancingSessions.delete(sessionId);
+    }
+  }
+
   class Run implements AsyncIterableIterator<E> {
     private phase: 'idle' | 'queued' | 'running' | 'finished' = 'idle';
+    private guardInProgress = false;
     private readonly abort = new AbortController();
     private readonly buffer: E[] = [];
     private readonly waiting: PendingNext<E>[] = [];
@@ -137,10 +156,11 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
         signal.addEventListener('abort', onAbort, { once: true });
         this.cleanupSignal = () => signal.removeEventListener('abort', onAbort);
       }
-      const queue = sessions.get(this.request.sessionId) ?? [];
+      const sessionId = this.request.sessionId;
+      const queue = sessions.get(sessionId) ?? [];
       queue.push(this);
-      sessions.set(this.request.sessionId, queue);
-      if (queue[0] === this) this.start();
+      sessions.set(sessionId, queue);
+      if (queue[0] === this) startSessionHead(sessionId);
     }
 
     start(): void {
@@ -149,8 +169,43 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
         this.release();
         return;
       }
-      this.phase = 'running';
       const state = current;
+      this.guardInProgress = true;
+      try {
+        const guard = state.generation.assertCanStartSync;
+        if (guard !== undefined) {
+          if (typeof guard !== 'function') {
+            throw new TypeError('Generation start guard must be a function');
+          }
+          const result: unknown = Reflect.apply(guard, state.generation, []);
+          if (result !== undefined) {
+            void Promise.resolve(result).catch(() => undefined);
+            throw new TypeError('Generation start guard must return undefined synchronously');
+          }
+        }
+      } catch (cause: unknown) {
+        const wasQueued = this.phase === 'queued';
+        this.finish(cause, true);
+        if (wasQueued) this.release();
+        return;
+      } finally {
+        this.guardInProgress = false;
+        this.flush();
+      }
+
+      if (this.phase !== 'queued') return;
+      if (closed || blocked) {
+        this.finish(blocked);
+        this.release();
+        return;
+      }
+      if (state !== current) {
+        this.finish(new Error('Current generation changed during start admission'));
+        this.release();
+        return;
+      }
+
+      this.phase = 'running';
       state.active += 1;
       const onAbort = () => this.cancel(state.abort.signal.reason);
       state.abort.signal.addEventListener('abort', onAbort, { once: true });
@@ -268,16 +323,19 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
     }
 
     private release(): void {
-      const queue = sessions.get(this.request.sessionId);
+      const sessionId = this.request.sessionId;
+      const queue = sessions.get(sessionId);
       if (!queue) return;
       const index = queue.indexOf(this);
       if (index < 0) return;
       queue.splice(index, 1);
-      if (queue.length === 0) sessions.delete(this.request.sessionId);
-      else if (index === 0) queue[0]?.start();
+      if (queue.length === 0) sessions.delete(sessionId);
+      else if (index === 0) startSessionHead(sessionId);
     }
 
     private flush(): void {
+      // A guard can synchronously finish this run, then throw before admission settles.
+      if (this.guardInProgress) return;
       while (this.waiting.length > 0) {
         if (!this.returned && this.buffer.length > 0) {
           this.waiting.shift()!.resolve({ done: false, value: this.buffer.shift()! });

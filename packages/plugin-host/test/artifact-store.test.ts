@@ -15,7 +15,12 @@ import path from 'node:path';
 import { afterEach, expect, test, vi } from 'vitest';
 
 import * as host from '../src/index.js';
-import { makeTempDirectory, removeTempDirectories, writePlugin } from './support/fixtures.js';
+import {
+  helloSource,
+  makeTempDirectory,
+  removeTempDirectories,
+  writePlugin,
+} from './support/fixtures.js';
 
 afterEach(removeTempDirectories);
 afterEach(() => vi.restoreAllMocks());
@@ -80,6 +85,19 @@ test('publishes a fixed, data-only copy with the original directory digest', asy
   expect(Object.isFrozen(artifact)).toBe(true);
   expect(Object.isFrozen(artifact.descriptor.manifest.contributes?.commands)).toBe(true);
   await expect(access(executionMarker)).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('returns the validated nested entry at its published path', async () => {
+  const root = await makeTempDirectory();
+  const managedRoot = path.join(root, '.weave-store');
+  const sourceDirectory = await writePlugin(root, 'sample', { entry: 'nested/index.mjs' });
+  const store = host.createPluginArtifactStore({ directory: managedRoot });
+  const artifact = await store.stage({ sourceDirectory });
+
+  expect(artifact.entry).toBe(path.join(artifact.directory, 'nested', 'index.mjs'));
+  expect(await readFile(artifact.entry, 'utf8')).toBe(helloSource);
+  expect((await store.read(artifact.digest)).entry).toBe(artifact.entry);
+  expect((await store.stage({ sourceDirectory })).entry).toBe(artifact.entry);
 });
 
 test('rejects malformed options before creating the managed directory', async () => {

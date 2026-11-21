@@ -13,17 +13,19 @@ import {
 } from './local-plugin-source.js';
 import type { LocalPluginSourceMutation } from './local-source-types.js';
 
-const configuration = localSourceConfiguration.omit({ onAuthorityChange: true }).extend({
-  generations: z.object({
-    runner: z.object({ run: callable }),
-    current: callable,
-    publish: callable,
-    blockNewRuns: callable,
-    abortActiveRuns: callable,
-    dispose: callable,
-  }),
-  assemble: callable,
-});
+const configuration = localSourceConfiguration
+  .omit({ onAuthorityChange: true, explicitChecks: true })
+  .extend({
+    generations: z.object({
+      runner: z.object({ run: callable }),
+      current: callable,
+      publish: callable,
+      blockNewRuns: callable,
+      abortActiveRuns: callable,
+      dispose: callable,
+    }),
+    assemble: callable,
+  });
 
 const mutationOptions = z.strictObject({ immediate: z.boolean().optional() }).optional();
 

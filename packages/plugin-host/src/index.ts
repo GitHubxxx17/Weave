@@ -1,4 +1,4 @@
-export { PluginHostError } from './errors.js';
+export { ExplicitLocalAuthorityError, PluginHostError } from './errors.js';
 export type { PluginHostErrorCode, PluginHostErrorOptions } from './errors.js';
 
 export { createPluginArtifactStore } from './artifact-store.js';
@@ -65,18 +65,27 @@ export type {
 
 export { createPluginHost } from './host.js';
 export { createLocalPluginSource } from './local-plugin-source.js';
+export {
+  eligibleLocalSourceCandidates,
+  localSourceCandidateIdentity,
+} from './explicit-local-selection.js';
 export { projectLocalPluginSnapshot } from './host-state.js';
 export type {
+  ExplicitLocalCandidateChecks,
+  ExplicitLocalSelection,
+  ExplicitLocalSelectionInput,
   LocalPluginSourceController,
   LocalPluginSourceMutation,
   LocalPluginSourceOptions,
   LocalPluginSourceSnapshot,
   LocalSourceAuthorityChange,
   LocalSourceAuthorityReason,
+  LocalSourceCandidate,
   LocalSourceMutationContext,
   LocalSourceProjectionOptions,
   LocalSourceRecheck,
   LocalSourceStamp,
+  ManagedLocalCandidate,
   PreparedLocalPlugin,
   PreparedLocalPluginFailure,
   PreparedLocalPlugins,

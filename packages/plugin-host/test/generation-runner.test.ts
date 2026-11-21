@@ -379,6 +379,328 @@ describe('createGenerationRunner', () => {
   });
 });
 
+describe('generation start admission', () => {
+  it('drains a long queue of guard failures in order and starts the healthy tail', async () => {
+    const finishFirst = gate();
+    const denial = new Error('admission denied');
+    const deniedCount = 4_000;
+    const started: string[] = [];
+    const rejected: number[] = [];
+    let guardCalls = 0;
+    const controller = createGenerationRunner({
+      ...generation(1, (request) => {
+        started.push(request.value);
+        return source(
+          [request.value],
+          request.value === 'first' ? { wait: finishFirst.promise } : undefined,
+        );
+      }),
+      assertCanStartSync(): undefined {
+        guardCalls += 1;
+        if (guardCalls > 1 && guardCalls <= deniedCount + 1) throw denial;
+        return undefined;
+      },
+    });
+    const firstRun = controller.runner.run({ sessionId: 's', value: 'first' });
+    const first = firstRun[Symbol.asyncIterator]();
+    const firstNext = first.next();
+    const expected = Array.from({ length: deniedCount }, (_, index) => index);
+    const outcomes = expected.map((index) => {
+      const deniedRun = controller.runner.run({ sessionId: 's', value: String(index) });
+      return deniedRun[Symbol.asyncIterator]()
+        .next()
+        .then(
+          () => false,
+          (cause: unknown) => {
+            rejected.push(index);
+            return cause === denial;
+          },
+        );
+    });
+    const tail = collect(controller.runner.run({ sessionId: 's', value: 'tail' }));
+
+    try {
+      expect(started).toEqual(['first']);
+      expect(guardCalls).toBe(1);
+      // Await producer cleanup directly so a queue release failure surfaces in this test.
+      const released = first.return!();
+      finishFirst.resolve();
+      await expect(released).resolves.toEqual({ done: true, value: undefined });
+      await expect(firstNext).resolves.toEqual({ done: true, value: undefined });
+      expect(started).toEqual(['first', 'tail']);
+      expect(rejected).toEqual(expected);
+      expect((await Promise.all(outcomes)).every(Boolean)).toBe(true);
+      expect(await tail).toEqual(['tail']);
+    } finally {
+      finishFirst.resolve();
+      await controller.dispose();
+    }
+  });
+
+  it('checks a queued turn at the Session head and releases it when the guard throws', async () => {
+    const finishFirst = gate();
+    const started: string[] = [];
+    let guardCalls = 0;
+    let throwAtStart = false;
+    const controller = createGenerationRunner({
+      ...generation(1, (request) => {
+        started.push(request.value);
+        return source(
+          [request.value],
+          request.value === 'first' ? { wait: finishFirst.promise } : undefined,
+        );
+      }),
+      assertCanStartSync(): undefined {
+        guardCalls += 1;
+        if (throwAtStart) throw undefined;
+        return undefined;
+      },
+    });
+    const first = collect(controller.runner.run({ sessionId: 's', value: 'first' }));
+    const firstGuardCalls = guardCalls;
+    const queuedRun = controller.runner.run({ sessionId: 's', value: 'queued' });
+    const queued = queuedRun[Symbol.asyncIterator]();
+    const next = queued.next();
+    const verdict = next.then(
+      () => ({ failed: false as const }),
+      (cause: unknown) => ({ failed: true as const, cause }),
+    );
+
+    try {
+      expect(started).toEqual(['first']);
+      expect(guardCalls).toBe(firstGuardCalls);
+      throwAtStart = true;
+      finishFirst.resolve();
+      expect(await verdict).toEqual({ failed: true, cause: undefined });
+      expect(started).toEqual(['first']);
+      expect(guardCalls).toBe(2);
+      expect(await first).toEqual(['first']);
+
+      throwAtStart = false;
+      expect(await collect(controller.runner.run({ sessionId: 's', value: 'later' }))).toEqual([
+        'later',
+      ]);
+      expect(started).toEqual(['first', 'later']);
+      expect(guardCalls).toBe(3);
+    } finally {
+      finishFirst.resolve();
+      await first;
+      await controller.dispose();
+    }
+  });
+
+  it.each([false, true])(
+    'settles a queued guard that aborts its request (throws: %s)',
+    async (throws) => {
+      const finishFirst = gate();
+      const abort = new AbortController();
+      const started: string[] = [];
+      let guardCalls = 0;
+      const controller = createGenerationRunner({
+        ...generation(1, (request) => {
+          started.push(request.value);
+          return source(
+            [request.value],
+            request.value === 'first' ? { wait: finishFirst.promise } : undefined,
+          );
+        }),
+        assertCanStartSync(): undefined {
+          if (++guardCalls === 2) {
+            abort.abort();
+            if (throws) throw undefined;
+          }
+          return undefined;
+        },
+      });
+      const first = collect(controller.runner.run({ sessionId: 's', value: 'first' }));
+      const queuedRun = controller.runner.run({
+        sessionId: 's',
+        value: 'cancelled',
+        signal: abort.signal,
+      });
+      const queued = queuedRun[Symbol.asyncIterator]();
+      const verdict = queued.next().then(
+        (result) => ({ result }),
+        (cause: unknown) => ({ cause }),
+      );
+      const later = collect(controller.runner.run({ sessionId: 's', value: 'later' }));
+
+      try {
+        finishFirst.resolve();
+        expect(await verdict).toEqual(throws ? { cause: undefined } : { result: { done: true } });
+        expect(await first).toEqual(['first']);
+        expect(await later).toEqual(['later']);
+        expect(started).toEqual(['first', 'later']);
+      } finally {
+        await controller.dispose();
+      }
+    },
+  );
+
+  it('finishes the head without invoking the runner when the guard disposes the controller', async () => {
+    const started: string[] = [];
+    const disposed: number[] = [];
+    const controller = createGenerationRunner({
+      ...generation(
+        1,
+        (request) => {
+          started.push(request.value);
+          return source([request.value]);
+        },
+        () => disposed.push(1),
+      ),
+      assertCanStartSync(): undefined {
+        void controller.dispose();
+        return undefined;
+      },
+    });
+
+    try {
+      expect(await collect(controller.runner.run({ sessionId: 's', value: 'head' }))).toEqual([]);
+      expect(started).toEqual([]);
+      expect(() => controller.commit(generation(2, () => source([])))).toThrow('disposed');
+    } finally {
+      await controller.dispose();
+    }
+    expect(disposed).toEqual([1]);
+  });
+
+  it('rejects the head with the admission block set by the guard', async () => {
+    const blocked = new Error('admission blocked during start');
+    const started: string[] = [];
+    const controller = createGenerationRunner({
+      ...generation(1, (request) => {
+        started.push(request.value);
+        return source([request.value]);
+      }),
+      assertCanStartSync(): undefined {
+        controller.blockNewRuns(blocked);
+        return undefined;
+      },
+    });
+
+    try {
+      await expect(collect(controller.runner.run({ sessionId: 's', value: 'head' }))).rejects.toBe(
+        blocked,
+      );
+      expect(started).toEqual([]);
+    } finally {
+      await controller.dispose();
+    }
+  });
+
+  it('fails the head when its guard replaces current and checks the new guard on the next head', async () => {
+    const checked: string[] = [];
+    const started: string[] = [];
+    const disposed: number[] = [];
+    let retirement: Promise<void> | undefined;
+    const candidate = {
+      ...generation(2, (request) => {
+        started.push(`new:${request.value}`);
+        return source([request.value]);
+      }),
+      assertCanStartSync(): undefined {
+        checked.push('new');
+        return undefined;
+      },
+    };
+    const controller = createGenerationRunner({
+      ...generation(
+        1,
+        (request) => {
+          started.push(`old:${request.value}`);
+          return source([request.value]);
+        },
+        () => disposed.push(1),
+      ),
+      assertCanStartSync(): undefined {
+        checked.push('old');
+        ({ retirement } = controller.commit(candidate));
+        return undefined;
+      },
+    });
+
+    try {
+      await expect(
+        collect(controller.runner.run({ sessionId: 's', value: 'head' })),
+      ).rejects.toBeInstanceOf(Error);
+      expect(controller.current()).toBe(candidate);
+      expect(checked).toEqual(['old']);
+      expect(started).toEqual([]);
+      await retirement;
+      expect(disposed).toEqual([1]);
+
+      expect(await collect(controller.runner.run({ sessionId: 's', value: 'later' }))).toEqual([
+        'later',
+      ]);
+      expect(checked).toEqual(['old', 'new']);
+      expect(started).toEqual(['new:later']);
+    } finally {
+      await controller.dispose();
+    }
+  });
+
+  it('invokes the guard itself when the function has its own call property', async () => {
+    const failure = new Error('guard rejected admission');
+    const guard = Object.assign(
+      () => {
+        throw failure;
+      },
+      { call: () => undefined },
+    );
+    const controller = createGenerationRunner({
+      ...generation(1, () => source(['unexpected'])),
+      assertCanStartSync: guard,
+    });
+
+    try {
+      await expect(collect(controller.runner.run({ sessionId: 's', value: 'head' }))).rejects.toBe(
+        failure,
+      );
+    } finally {
+      await controller.dispose();
+    }
+  });
+
+  it.each([
+    ['non-callable guard', () => null],
+    ['defined return', () => () => false],
+    ['rejected Promise', () => () => Promise.reject(new Error('rejected Promise'))],
+    [
+      'rejected thenable',
+      (observe: () => void) => () => ({
+        then(_resolve: unknown, reject: (reason: unknown) => void) {
+          observe();
+          reject(new Error('rejected thenable'));
+        },
+      }),
+    ],
+  ] as const)('rejects the head with a %s across the runtime boundary', async (kind, makeGuard) => {
+    const started: string[] = [];
+    let thenObserved = false;
+    const guard: unknown = makeGuard(() => {
+      thenObserved = true;
+    });
+    const controller = createGenerationRunner({
+      ...generation(1, (request) => {
+        started.push(request.value);
+        return source([request.value]);
+      }),
+      assertCanStartSync: guard as RunnerGeneration<Request, Event, unknown>['assertCanStartSync'],
+    });
+
+    try {
+      await expect(
+        collect(controller.runner.run({ sessionId: 's', value: 'invalid' })),
+      ).rejects.toBeInstanceOf(TypeError);
+      expect(started).toEqual([]);
+      if (kind === 'rejected thenable') expect(thenObserved).toBe(true);
+    } finally {
+      await controller.dispose();
+    }
+  });
+});
+
 function gate<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   const promise = new Promise<T>((done) => {

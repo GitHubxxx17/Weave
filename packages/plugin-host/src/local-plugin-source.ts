@@ -3,16 +3,31 @@ import { isDeepStrictEqual } from 'node:util';
 
 import { z } from 'zod';
 
-import { discoverLocalPlugins, type DiscoveryResult, type ReadyLocalPlugin } from './discovery.js';
-import { PluginHostError } from './errors.js';
-import { eligibleLocalPlugins, identity, immutable } from './host-state.js';
-import { loadLocalPlugin } from './loader.js';
+import {
+  finalizeLocalPluginDiscovery,
+  scanLocalPluginDeclarations,
+  type DiscoveryResult,
+  type ReadyLocalPlugin,
+} from './discovery.js';
+import { ExplicitLocalAuthorityError, PluginHostError } from './errors.js';
+import {
+  eligibleLocalSourceCandidates,
+  eligibleManagedLocalCandidates,
+  explicitLocalSelectionInputSchema,
+  localPluginDigestSchema,
+  localPluginIdSchema,
+  localSourceCandidateIdentity,
+} from './explicit-local-selection.js';
+import { immutable } from './host-state.js';
+import { loadLocalPlugin, type LoadLocalPluginOptions } from './loader.js';
 import type {
+  ExplicitLocalSelectionInput,
   LocalPluginSourceController,
   LocalPluginSourceMutation,
   LocalPluginSourceOptions,
   LocalPluginSourceSnapshot,
   LocalSourceAuthorityReason,
+  LocalSourceCandidate,
   LocalSourceMutationContext,
   LocalSourceStamp,
   PreparedLocalPlugin,
@@ -31,8 +46,6 @@ import {
 export const callable = z.custom<(...args: never[]) => unknown>(
   (value) => typeof value === 'function',
 );
-const pluginId = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
-const digest = z.string().regex(/^[0-9a-f]{64}$/);
 const positiveInteger = z.number().int().positive();
 
 export const localSourceConfiguration = z
@@ -69,16 +82,25 @@ export const localSourceConfiguration = z
       .optional(),
     setupTimeoutMs: z.number().finite().positive().optional(),
     importModule: callable.optional(),
+    explicitChecks: z.strictObject({ verify: callable, assertReadySync: callable }).optional(),
     onAuthorityChange: callable.optional(),
   })
   .strict();
 
 const mutation = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('trust'), id: pluginId, digest }),
-  z.strictObject({ kind: z.literal('revoke'), id: pluginId, immediate: z.boolean().optional() }),
+  z.strictObject({
+    kind: z.literal('trust'),
+    id: localPluginIdSchema,
+    digest: localPluginDigestSchema,
+  }),
+  z.strictObject({
+    kind: z.literal('revoke'),
+    id: localPluginIdSchema,
+    immediate: z.boolean().optional(),
+  }),
   z.strictObject({
     kind: z.literal('setEnabled'),
-    id: pluginId,
+    id: localPluginIdSchema,
     enabled: z.boolean(),
     immediate: z.boolean().optional(),
   }),
@@ -122,26 +144,34 @@ export function createLocalPluginSource(
   options: LocalPluginSourceOptions,
 ): LocalPluginSourceController {
   localSourceConfiguration.parse(options);
-  const reservedIds =
-    options.discovery.reservedIds === undefined
-      ? undefined
-      : z.array(pluginId).parse([...options.discovery.reservedIds]);
+  const explicitChecks = options.explicitChecks;
+  const reservedIds = new Set(
+    z.array(localPluginIdSchema).parse([...(options.discovery.reservedIds ?? [])]),
+  );
   const discoveryOptions = {
     ...options.discovery,
     directory: path.resolve(options.discovery.directory),
-    reservedIds,
+  };
+  const emptyDiscovery: DiscoveryResult = {
+    directory: discoveryOptions.directory,
+    exists: false,
+    truncated: false,
+    candidates: [],
   };
   let snapshot: LocalPluginSourceSnapshot = immutable({
-    discovery: {
-      directory: discoveryOptions.directory,
-      exists: false,
-      truncated: false,
-      candidates: [],
-    },
+    discovery: emptyDiscovery,
     plugins: [],
+    managedEligible: [],
     trust: [],
     stamp: { revision: 0, trustSequence: 0 },
   });
+  let declarations: DiscoveryResult | undefined;
+  let explicit: Omit<ExplicitLocalSelectionInput, 'trustEvents'> = {
+    stickyIds: [],
+    selections: [],
+    deniedIds: [],
+  };
+  let stickyIds: ReadonlySet<string> = new Set();
   let events: readonly RecordedPluginTrustEvent[] = [];
   const stopping = new AbortController();
   const preparing = new Set<Promise<PreparedLocalPlugins>>();
@@ -152,17 +182,46 @@ export function createLocalPluginSource(
     stopping.signal.throwIfAborted();
   }
 
-  function update(
-    discovery: DiscoveryResult,
-    reason: LocalSourceAuthorityReason,
-    immediate = false,
-  ): void {
+  function update(reason: LocalSourceAuthorityReason, immediate = false): void {
     const current = snapshot;
     const trust = foldTrust(events);
+    const managedEligible = eligibleManagedLocalCandidates(
+      explicit,
+      declarations,
+      reservedIds,
+      trust,
+    );
+    const manual = finalizeLocalPluginDiscovery(declarations ?? emptyDiscovery, reservedIds);
+    const discovery: DiscoveryResult = {
+      ...manual,
+      candidates: manual.candidates.map((candidate) => {
+        const manifest = candidate.manifest;
+        if (manifest === undefined || !stickyIds.has(manifest.id)) return candidate;
+        return {
+          status: 'invalid',
+          id: manifest.id,
+          directory: candidate.directory,
+          manifest,
+          issue: {
+            code: 'plugin-id-reserved',
+            message: `Plugin id "${manifest.id}" is reserved by a managed plugin`,
+          },
+        };
+      }),
+    };
+
+    const manualIds = new Set(
+      [...current.discovery.candidates, ...discovery.candidates].map(({ id }) => id),
+    );
     const previousTrust = new Map(current.trust.map((record) => [record.pluginId, record]));
     const affectedIds = new Set<string>();
+    let manualTrustChanged = false;
     for (const id of new Set([...previousTrust.keys(), ...trust.keys()])) {
-      if (!isDeepStrictEqual(previousTrust.get(id), trust.get(id))) affectedIds.add(id);
+      if (!isDeepStrictEqual(previousTrust.get(id), trust.get(id))) {
+        affectedIds.add(id);
+        // Keep legacy trust revisions, including diagnostics on visible manual rows.
+        if (!stickyIds.has(id) || manualIds.has(id)) manualTrustChanged = true;
+      }
     }
     const discoveryChanged = !isDeepStrictEqual(discovery, current.discovery);
     if (discoveryChanged) {
@@ -179,16 +238,29 @@ export function createLocalPluginSource(
       }
       for (const removed of previous.values()) affectedIds.add(removed.id);
     }
-    const changed = discoveryChanged || affectedIds.size > 0;
+    const previousManaged = new Map(
+      current.managedEligible.map((candidate) => [candidate.id, candidate]),
+    );
+    const nextManaged = new Map(managedEligible.map((candidate) => [candidate.id, candidate]));
+    let managedChanged = false;
+    for (const id of new Set([...previousManaged.keys(), ...nextManaged.keys()])) {
+      if (!isDeepStrictEqual(previousManaged.get(id), nextManaged.get(id))) {
+        affectedIds.add(id);
+        managedChanged = true;
+      }
+    }
+    const changed = discoveryChanged || manualTrustChanged || managedChanged;
     const trustSequence = events.at(-1)?.sequence ?? 0;
-    if (!changed && trustSequence === current.stamp.trustSequence) return;
-    snapshot = immutable({
-      discovery,
-      trust: [...trust.values()],
-      plugins: resolveLocalPlugins(discovery.candidates, trust),
-      stamp: { revision: current.stamp.revision + Number(changed), trustSequence },
-    });
-    if (changed) {
+    if (changed || trustSequence !== current.stamp.trustSequence) {
+      snapshot = immutable({
+        discovery,
+        trust: [...trust.values()],
+        plugins: resolveLocalPlugins(discovery.candidates, trust),
+        managedEligible,
+        stamp: { revision: current.stamp.revision + Number(changed), trustSequence },
+      });
+    }
+    if (changed || reason === 'explicit-selection') {
       options.onAuthorityChange?.({
         snapshot,
         reason,
@@ -198,10 +270,7 @@ export function createLocalPluginSource(
     }
   }
 
-  async function readTrust(): Promise<void> {
-    ensureOpen();
-    const found = recordedEventsSchema.parse(await options.trustStore.events());
-    ensureOpen();
+  function validateTrustPrefix(found: readonly RecordedPluginTrustEvent[]): void {
     // An append may have observed a high-water mark beyond the last complete read.
     if (
       found.some((event, index) => event.sequence !== index + 1) ||
@@ -209,15 +278,44 @@ export function createLocalPluginSource(
     ) {
       throw badLog();
     }
+  }
+
+  function adoptExplicitSelectionSync(
+    input: ExplicitLocalSelectionInput,
+  ): LocalPluginSourceSnapshot {
+    ensureOpen();
+    const { trustEvents, ...projection } = immutable(
+      explicitLocalSelectionInputSchema.parse(input),
+    );
+    if (
+      explicitChecks === undefined &&
+      projection.selections.some(({ ready }) => ready !== undefined)
+    ) {
+      throw new TypeError('Explicit local ready evidence requires explicit checks');
+    }
+    validateTrustPrefix(trustEvents);
+    events = trustEvents;
+    explicit = Object.freeze(projection);
+    stickyIds = new Set(projection.stickyIds);
+    update('explicit-selection');
+    return snapshot;
+  }
+
+  async function readTrust(): Promise<void> {
+    ensureOpen();
+    const found = recordedEventsSchema.parse(await options.trustStore.events());
+    ensureOpen();
+    validateTrustPrefix(found);
     events = found;
-    update(snapshot.discovery, 'trust-log');
+    update('trust-log');
   }
 
   async function scan(): Promise<LocalPluginSourceSnapshot> {
     ensureOpen();
-    const found = await discoverLocalPlugins(discoveryOptions);
+    const found = await scanLocalPluginDeclarations(discoveryOptions);
     ensureOpen();
-    update(found, 'discovery');
+    declarations = found;
+    update('discovery');
     return snapshot;
   }
 
@@ -238,11 +336,7 @@ export function createLocalPluginSource(
     }
     events = [...events, recorded];
     // Publish the durable fold and any admission change in the same continuation.
-    update(
-      snapshot.discovery,
-      event.kind,
-      immediate && (event.kind === 'revoked' || event.kind === 'disabled'),
-    );
+    update(event.kind, immediate && (event.kind === 'revoked' || event.kind === 'disabled'));
     ensureOpen();
     if (events.length !== sequence) await readTrust();
   }
@@ -271,6 +365,16 @@ export function createLocalPluginSource(
     }
   }
 
+  function requireManualId(id: string): void {
+    if (stickyIds.has(id)) {
+      throw new PluginHostError(
+        'plugin-not-loadable',
+        `Plugin id "${id}" is reserved by a managed plugin`,
+        { pluginId: id },
+      );
+    }
+  }
+
   async function mutate(
     command: LocalPluginSourceMutation,
     context?: LocalSourceMutationContext,
@@ -278,11 +382,13 @@ export function createLocalPluginSource(
     ensureOpen();
     const change = mutation.parse(command);
     const { id } = change;
+    requireManualId(id);
     if (change.kind === 'trust' || (change.kind === 'setEnabled' && change.enabled)) {
       await refresh();
     } else {
       await readTrust();
     }
+    requireManualId(id);
     const trusted = snapshot.trust.find((record) => record.pluginId === id);
     if (change.kind === 'trust') {
       const candidate = ready(id);
@@ -294,15 +400,20 @@ export function createLocalPluginSource(
           digest: change.digest,
           manifest: candidate.manifest,
         });
+        requireManualId(id);
       }
       return snapshot;
     }
     if (change.kind === 'revoke') {
       if (trusted !== undefined) {
         await append({ kind: 'revoked', pluginId: id }, change.immediate);
-        return scan();
+        requireManualId(id);
+        await scan();
+        requireManualId(id);
+        return snapshot;
       }
       await scan();
+      requireManualId(id);
       if (!snapshot.plugins.some((row) => row.id === id) && !context?.hasActive?.(id)) {
         throw notFound(id);
       }
@@ -320,10 +431,38 @@ export function createLocalPluginSource(
         { kind: change.enabled ? 'enabled' : 'disabled', pluginId: id },
         change.immediate,
       );
+      requireManualId(id);
     } else if (!change.enabled && change.immediate) {
       context?.onImmediateRetry?.();
     }
-    return change.enabled ? snapshot : scan();
+    if (!change.enabled) {
+      await scan();
+      requireManualId(id);
+    }
+    return snapshot;
+  }
+
+  function bindExplicitChecks(
+    candidate: LocalSourceCandidate,
+    identity: string,
+  ): LoadLocalPluginOptions['explicitChecks'] {
+    if (candidate.origin === 'manual') return undefined;
+    if (explicitChecks === undefined) throw new ExplicitLocalAuthorityError();
+    return {
+      verify: (signal) => explicitChecks.verify(candidate, signal),
+      assertReadySync() {
+        const result = explicitChecks.assertReadySync(candidate);
+        // Pass misconfigured return values to the loader so it can observe rejections.
+        if (result !== undefined) return result;
+        const current = snapshot.managedEligible.find(
+          (ready) => localSourceCandidateIdentity(ready) === identity,
+        );
+        if (!isDeepStrictEqual(candidate, current)) {
+          throw new Error('Managed local plugin readiness changed');
+        }
+        return undefined;
+      },
+    };
   }
 
   async function prepare(
@@ -340,14 +479,14 @@ export function createLocalPluginSource(
         'Local plugin source changed before preparation',
       );
     }
-    const candidates = eligibleLocalPlugins(cached).filter(
-      (plugin) => !excluded.has(identity(plugin)),
+    const candidates = eligibleLocalSourceCandidates(cached).filter(
+      (candidate) => !excluded.has(localSourceCandidateIdentity(candidate)),
     );
     const items: PreparedLocalPlugin[] = [];
     const failures: PreparedLocalPluginFailure[] = [];
     try {
       for (const candidate of candidates) {
-        const key = identity(candidate);
+        const key = localSourceCandidateIdentity(candidate);
         try {
           const loaded = await loadLocalPlugin(candidate, {
             trustedDigest: candidate.digest,
@@ -355,13 +494,21 @@ export function createLocalPluginSource(
             importModule: options.importModule,
             limits: discoveryOptions.limits,
             signal: preparationSignal,
+            explicitChecks: bindExplicitChecks(candidate, key),
           });
-          const lifecycle = createPluginLifecycle(loaded, options.setupTimeoutMs ?? 10_000, signal);
+          const managed = candidate.origin === 'managed';
+          const lifecycle = createPluginLifecycle(
+            loaded,
+            options.setupTimeoutMs ?? 10_000,
+            managed ? preparationSignal : signal,
+            { drainSetupOnDispose: managed },
+          );
           items.push(
             Object.freeze({
               id: candidate.id,
               digest: candidate.digest,
               identity: key,
+              origin: candidate.origin,
               plugin: lifecycle.plugin,
               normalize: lifecycle.normalize,
               dispose: lifecycle.dispose,
@@ -371,9 +518,18 @@ export function createLocalPluginSource(
             }),
           );
         } catch (error: unknown) {
+          if (error instanceof ExplicitLocalAuthorityError) throw error;
           preparationSignal.throwIfAborted();
           const kind = changedIdentity(error) ? 'identity' : 'load';
-          failures.push(Object.freeze({ id: candidate.id, identity: key, kind, error }));
+          failures.push(
+            Object.freeze({
+              id: candidate.id,
+              identity: key,
+              origin: candidate.origin,
+              kind,
+              error,
+            }),
+          );
           if (kind === 'identity') break;
         }
         preparationSignal.throwIfAborted();
@@ -395,10 +551,14 @@ export function createLocalPluginSource(
 
   return {
     snapshot: () => snapshot,
+    adoptExplicitSelectionSync,
     refresh,
     mutate,
     prepare(stamp, options) {
-      const pending = prepare(stamp, options);
+      // Explicit callbacks can reenter close() before verification yields.
+      const pending = explicitChecks
+        ? Promise.resolve().then(() => prepare(stamp, options))
+        : prepare(stamp, options);
       preparing.add(pending);
       const forget = () => {
         preparing.delete(pending);
@@ -410,7 +570,9 @@ export function createLocalPluginSource(
       signal.throwIfAborted();
       const next = await refresh();
       signal.throwIfAborted();
-      const eligible = new Set(eligibleLocalPlugins(next).map(identity));
+      const eligible = new Set(
+        eligibleLocalSourceCandidates(next).map(localSourceCandidateIdentity),
+      );
       return {
         valid:
           sameStamp(prepared.stamp, next.stamp) &&

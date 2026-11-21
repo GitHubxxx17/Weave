@@ -1,5 +1,19 @@
 # Weave Foundation Architecture
 
+Stage 6.2c.1 adds package support for explicitly selected managed ESM plugins.
+The artifact store returns the validated concrete entry. The shared local source
+combines manual declarations with explicit selections, sticky ID reservations,
+enabled exact trust and a completed manual scan. Managed preparation uses a
+bounded verifier and synchronous authority checks before import, factory and
+setup; its disposal waits for actual setup settlement. The Generation runner
+can check admission at the actual Session queue head before pinning resources
+or invoking Runtime. These callbacks carry no Server, HTTP or SQLite types, and
+the standalone host keeps its manual contract. See the
+[managed source design](../superpowers/specs/2026-11-21-managed-plugin-source-design.md)
+and [package plan](../superpowers/plans/2026-11-21-managed-plugin-source-support.md).
+Server startup, selected-source composition, managed HTTP and Studio installation
+follow in separate slices.
+
 Stage 6.2b adds a Server-private owned artifact-store factory. It binds an exact
 authority UUID/path and artifact root through append-once metadata, then retains
 an exclusive transaction on a separate rollback-journal SQLite connection. Main
