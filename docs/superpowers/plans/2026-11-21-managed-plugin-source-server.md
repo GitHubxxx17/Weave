@@ -409,8 +409,13 @@ through a private `mcpFirstAuthority?: boolean` option.
       Cancel unfinished local preparation that captured the old raw snapshot
       only after both effective snapshots and admission have been published.
       Preserve the authority marker through that cancellation and leave
-      published or retired signals untouched. Test an already-running manual
-      preparation with an import spy and a synchronous abort observer.
+      published or retired signals untouched. The local adapter tracks only
+      pending raw `prepare` calls with private abort controllers. Withdrawal
+      captures that set and returns a cancellation callback; composition runs
+      it after the paired publication. Reentrant later attempts and returned
+      Generation-owned resources are outside that captured set. Test an
+      already-running manual preparation with an import spy and a synchronous
+      abort observer.
 - [ ] At MCP's validated-log boundary, add a private optional
       `onAuthorityFailureSync?: (cause: unknown) => never` hook. Call it on
       read/protocol failure, including fulfilled malformed or rewritten logs
