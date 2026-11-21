@@ -1,5 +1,5 @@
 import { existsSync, mkdtempSync } from 'node:fs';
-import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -134,9 +134,9 @@ describe('managed plugin startup', () => {
     expect(existsSync(pluginsDirectory)).toBe(false);
     const options = { dataDirectory, environment };
     const first = acquire({ ...options, managedPluginStore: allowUnbound });
-    const { authority, owned, rootState, localTrust } = await first.startup;
+    const { authority, owned, registration, localTrust } = await first.startup;
     expect(owned?.binding.storeDirectory).toBe(await realpath(root));
-    expect(rootState.registration?.binding).toEqual(owned?.binding);
+    expect(registration?.binding).toEqual(owned?.binding);
     expect(localTrust).toEqual({ kind: 'authority', store: authority.trust });
     await first.shutdown.stop();
 
@@ -187,7 +187,7 @@ describe('managed plugin startup', () => {
     const { dataDirectory, environment } = fixture();
     const options = { dataDirectory, environment, managedPluginStore: allowUnbound };
     const first = acquire(options);
-    const { rootState } = await first.startup;
+    const { registration } = await first.startup;
     await first.shutdown.stop();
     const wrongDirectory = join(dataDirectory, 'wrong');
     const wrongOptions = { ...options, pluginsDirectory: wrongDirectory };
@@ -201,14 +201,14 @@ describe('managed plugin startup', () => {
       code: 'plugin-store-owner-mismatch',
     });
     expect(existsSync(join(wrongDirectory, '.weave-store'))).toBe(false);
-    expect((await acquire(options).startup).rootState.registration).toEqual(rootState.registration);
+    expect((await acquire(options).startup).registration).toEqual(registration);
   });
 
   it.each(['missing', 'corrupt'] as const)('fails resume with %s owner metadata', async (state) => {
     const { dataDirectory, environment, ownerFile } = fixture();
     const options = { dataDirectory, environment };
     const first = acquire({ ...options, managedPluginStore: allowUnbound });
-    const { rootState } = await first.startup;
+    const { registration } = await first.startup;
     await first.shutdown.stop();
     if (state === 'missing') await rm(ownerFile);
     else await writeFile(ownerFile, 'corrupt owner database');
@@ -219,19 +219,92 @@ describe('managed plugin startup', () => {
     if (state === 'missing') expect(existsSync(ownerFile)).toBe(false);
     else expect(await readFile(ownerFile, 'utf8')).toBe('corrupt owner database');
     const disabled = await acquire({ ...options, pluginsDirectory: false }).startup;
-    expect(disabled.rootState.registration).toEqual(rootState.registration);
+    expect(disabled.registration).toEqual(registration);
   });
 
   it('honors isolated database defaults and leaves an ordinary unbound root unopened', async () => {
     const { dataDirectory, databaseFile, environment, pluginsDirectory } = fixture();
-    const isolated = await acquire({ databaseFile, environment }).startup;
+    const isolatedFile = join(dataDirectory, 'isolated.sqlite');
+    const bound = acquire({
+      databaseFile: isolatedFile,
+      pluginsDirectory: join(dataDirectory, 'isolated-plugins'),
+      environment,
+      managedPluginStore: allowUnbound,
+    });
+    const boundState = await bound.startup;
+    await bound.shutdown.stop();
+    await seedSticky(databaseFile, 'selected');
+
+    const isolated = await acquire({ databaseFile: isolatedFile, environment }).startup;
     const usual = await acquire({ dataDirectory, environment }).startup;
     expect(isolated.localTrust).toBeUndefined();
+    expect(isolated.owned).toBeUndefined();
+    expect(isolated.snapshot.installations).toEqual([]);
+    expect(isolated.registration).toEqual(boundState.registration);
     expect(usual.localTrust).toEqual({ kind: 'authority', store: usual.authority.trust });
-    expect(usual.rootState.registration).toBeNull();
+    expect(usual.snapshot.installations).toMatchObject([{ pluginId: 'notes' }]);
+    expect(usual.registration).toBeNull();
     expect(usual.owned).toBeUndefined();
     expect(existsSync(pluginsDirectory)).toBe(false);
   });
+
+  it.each(['default-unbound', 'disabled', 'clean-override'] as const)(
+    'accepts a database leaf symlink for %s startup',
+    async (mode) => {
+      const { dataDirectory, databaseFile, environment, pluginsDirectory } = fixture();
+      if (mode === 'clean-override') {
+        await createSqlitePluginAuthorityDatabase({ filename: databaseFile }).close();
+      } else {
+        await seedSticky(databaseFile, 'imported');
+      }
+      const alias = join(dataDirectory, 'alias.sqlite');
+      await symlink(databaseFile, alias, 'file');
+
+      const startup = await acquire({
+        dataDirectory,
+        databaseFile: alias,
+        environment,
+        ...(mode === 'disabled' ? { pluginsDirectory: false } : {}),
+        ...(mode === 'clean-override' ? { pluginTrustStore: overrideStore(dataDirectory) } : {}),
+      }).startup;
+      expect(startup.localTrust?.kind).toBe(
+        { 'default-unbound': 'authority', disabled: undefined, 'clean-override': 'override' }[mode],
+      );
+      expect(startup.snapshot.installations.map(({ pluginId }) => pluginId)).toEqual(
+        mode === 'clean-override' ? [] : ['notes'],
+      );
+      expect(startup.registration).toBeNull();
+      expect(startup.owned).toBeUndefined();
+      expect(existsSync(pluginsDirectory)).toBe(false);
+    },
+  );
+
+  it.each(['explicit', 'registered'] as const)(
+    'rejects a database leaf symlink before %s managed acquisition',
+    async (mode) => {
+      const { dataDirectory, databaseFile, environment, pluginsDirectory } = fixture();
+      if (mode === 'registered') {
+        const first = acquire({ dataDirectory, environment, managedPluginStore: allowUnbound });
+        await first.startup;
+        await first.shutdown.stop();
+        await rm(pluginsDirectory, { recursive: true });
+      } else {
+        await createSqlitePluginAuthorityDatabase({ filename: databaseFile }).close();
+      }
+      const alias = join(dataDirectory, 'alias.sqlite');
+      await symlink(databaseFile, alias, 'file');
+
+      await expect(
+        acquire({
+          dataDirectory,
+          databaseFile: alias,
+          environment,
+          ...(mode === 'explicit' ? { managedPluginStore: allowUnbound } : {}),
+        }).startup,
+      ).rejects.toMatchObject({ code: 'plugin-authority-invalid' });
+      expect(existsSync(pluginsDirectory)).toBe(false);
+    },
+  );
 
   it.each([false, undefined])(
     'preserves unregistered selection with ESM override %s',
@@ -249,7 +322,7 @@ describe('managed plugin startup', () => {
       ]);
       expect(startup.localTrust?.kind).toBe(esm === false ? undefined : 'authority');
       expect(startup.owned).toBeUndefined();
-      expect(startup.rootState.registration).toBeNull();
+      expect(startup.registration).toBeNull();
       expect(existsSync(pluginsDirectory)).toBe(false);
     },
   );
@@ -355,7 +428,7 @@ describe('managed plugin startup', () => {
       { ...options, managedPluginStore: allowUnbound },
       {
         afterOwnedRegistration(authority) {
-          vi.spyOn(authority, 'snapshotSync').mockImplementationOnce(() => {
+          vi.spyOn(authority, 'readStartupAuthoritySync').mockImplementationOnce(() => {
             throw cause;
           });
         },
@@ -363,7 +436,7 @@ describe('managed plugin startup', () => {
     );
     await expect(first.startup).rejects.toBe(cause);
     const resumed = await acquire(options).startup;
-    expect(resumed.owned?.binding).toEqual(resumed.rootState.registration?.binding);
+    expect(resumed.owned?.binding).toEqual(resumed.registration?.binding);
     resumed.owned?.assertHeldSync();
   });
 

@@ -10,11 +10,7 @@ import {
 } from './owned-plugin-artifact-store.js';
 import { resolveDatabaseFile, type ResolveDatabaseFileOptions } from './persistence-path.js';
 import { createSqlitePluginAuthorityDatabase } from './plugin-authority-store.js';
-import type {
-  ManagedRootState,
-  PluginAuthorityDatabase,
-  PluginAuthoritySnapshot,
-} from './plugin-authority-types.js';
+import type { PluginAuthorityDatabase } from './plugin-authority-types.js';
 import { resolvePluginsDirectory, type ResolvePluginsDirectoryOptions } from './plugin-path.js';
 import {
   initialBindingSchema,
@@ -75,10 +71,10 @@ interface OverrideTrust {
   readonly readTrustEventsSync: () => readonly RecordedPluginTrustEvent[] | undefined;
 }
 
-interface ManagedPluginStartup {
+type StartupAuthority = ReturnType<PluginAuthorityDatabase['readStartupAuthoritySync']>;
+
+interface ManagedPluginStartup extends StartupAuthority {
   readonly authority: PluginAuthorityDatabase;
-  readonly snapshot: PluginAuthoritySnapshot;
-  readonly rootState: ManagedRootState;
   readonly owned: OwnedPluginArtifactStore | undefined;
   readonly localTrust:
     { readonly kind: 'authority'; readonly store: PluginTrustStore } | OverrideTrust | undefined;
@@ -119,8 +115,8 @@ function createOverrideTrust(store: ClosablePluginTrustStore): OverrideTrust {
   };
 }
 
-function assertOverrideAllowed(state: Pick<ManagedPluginStartup, 'rootState' | 'snapshot'>): void {
-  if (state.rootState.registration !== null || state.snapshot.installations.length > 0) {
+function assertOverrideAllowed({ registration, snapshot }: StartupAuthority): void {
+  if (registration !== null || snapshot.installations.length > 0) {
     throw new TypeError(
       'pluginTrustStore cannot override a registered store or managed plugin history',
     );
@@ -135,11 +131,7 @@ export async function acquireManagedPluginStartup(
   const authority = createSqlitePluginAuthorityDatabase({ filename: databaseFile });
   hooks.registerAuthority(authority);
 
-  function readAuthority() {
-    return { snapshot: authority.snapshotSync(), rootState: authority.readManagedRootStateSync() };
-  }
-
-  const initial = readAuthority();
+  const initial = authority.readStartupAuthoritySync();
   const unowned = { authority, ...initial, owned: undefined };
   if (pluginsDirectory === false) return { ...unowned, localTrust: undefined };
 
@@ -148,19 +140,19 @@ export async function acquireManagedPluginStartup(
     hooks.registerManualTrustStore(pluginTrustStore);
     const localTrust = createOverrideTrust(pluginTrustStore);
     await localTrust.store.events();
-    const fresh = readAuthority();
+    const fresh = authority.readStartupAuthoritySync();
     assertOverrideAllowed(fresh);
     return { ...unowned, ...fresh, localTrust };
   }
 
   const localTrust = { kind: 'authority', store: authority.trust } as const;
-  let { rootState } = initial;
-  if (rootState.registration === null && managedPluginStore === undefined) {
+  if (initial.registration === null && managedPluginStore === undefined) {
     return { ...unowned, localTrust };
   }
 
   const pluginParent = resolve(pluginsDirectory);
   const allowUnbound = managedPluginStore?.initialBinding === 'allow-unbound';
+  let rootState = authority.readManagedRootStateSync();
   if (allowUnbound && rootState.registration === null && rootState.databaseFile !== null) {
     await mkdir(pluginParent, { recursive: true });
     rootState = authority.readManagedRootStateSync();
@@ -176,5 +168,5 @@ export async function acquireManagedPluginStartup(
     onOwnershipLost: hooks.onOwnershipLost,
   });
   hooks.registerOwnedStore(owned);
-  return { authority, ...readAuthority(), owned, localTrust };
+  return { authority, ...authority.readStartupAuthoritySync(), owned, localTrust };
 }

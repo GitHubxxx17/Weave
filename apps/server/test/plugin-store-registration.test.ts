@@ -296,6 +296,27 @@ describe('authority managed root registration', () => {
     expect(rows(file, rootTable)).toEqual([]);
   });
 
+  it('reads detached and frozen durable startup authority through a main-file symlink', async () => {
+    const file = filename();
+    const original = openOwner(file);
+    original.commitSync(importInput('import', 0));
+    const snapshot = original.snapshotSync();
+    const registration = original.registerManagedRootSync(bindingFor(file));
+    await original.close();
+    const alias = join(file, '..', 'leaf-alias.sqlite');
+    symlinkSync(file, alias, 'file');
+    const owner = openOwner(alias);
+
+    const startup = owner.readStartupAuthoritySync();
+    expect(startup).toEqual({ snapshot, registration });
+    expect(startup.snapshot).not.toBe(snapshot);
+    expect(startup.registration).not.toBe(registration);
+    expect(Object.isFrozen(startup)).toBe(true);
+    expect(Object.isFrozen(startup.snapshot.installations[0]?.candidates)).toBe(true);
+    expect(Object.isFrozen(startup.registration?.binding)).toBe(true);
+    expect(() => owner.readManagedRootStateSync()).toThrow(invalid);
+  });
+
   it.each([
     { databaseId: 'invalid' },
     { storeId: 'invalid' },
@@ -407,6 +428,7 @@ describe('managed registry integrity', () => {
     owner.registerManagedRootSync(binding);
     withDatabase(file, (database) => database.exec(sql));
     const corrupt = rows(file, rootTable);
+    expect(() => owner.readStartupAuthoritySync()).toThrow(protocol);
     expect(() => owner.readManagedRootStateSync()).toThrow(protocol);
     expect(() => owner.registerManagedRootSync(binding)).toThrow(protocol);
     await owner.close();
