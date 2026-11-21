@@ -1,6 +1,6 @@
 # Stage 5 — 本地 stdio MCP Tools 设计
 
-状态：用户已于 2026-11-21 确认推荐方案。5.1a 已合入，5.1b 客户端正在验证交付；5.2–5.4 尚未接入。本文规定完整跨包契约。
+状态：用户已于 2026-11-21 确认推荐方案。5.1a/5.1b 已合入；5.2 工具适配正在实现，5.3–5.4 尚未接入。本文规定完整跨包契约。
 基线：`origin/main` 的 `a0b38b4`（Stage 4.5，PR #76）。
 决策记录：[ADR 0004](../../adr/0004-mcp-stdio-tools.md)。
 实施计划：[5.1a 统一扩展协调器](../plans/2026-11-21-extension-coordinator.md)、
@@ -513,3 +513,23 @@ const/enum 使用一致的单射前缀；公开 schema 与发出的参数保持�
 固定 SDK 的 ESM/CJS transport 补丁释放父端管道、共享关闭 promise 并通知关闭
 一次；独立宿主测试实际观察退出。此交付尚不提供 Server 启动授权、
 MCP 工具适配或 Studio 管理；后续5.2–5.4 必须经过这些边界后才允许用户启动服务。
+
+### 10.3 5.2 工具适配实施契约
+
+`plugin-builtins.createMcpPlugin({serverId,label,cwd,connection,redactValues?})`
+接收已授权且由 source 持有的冻结连接，贡献 `mcp-<serverId>`/host:mcp 插件与
+封闭工具清单。插件不负责启动或关闭连接。原名稳定映射、输入 passthrough +
+JSON Schema refinement、全部高风险审批和结果转换按 §6 执行；任何展示文本先
+替换本连接已知非空秘密值。用于协议/注册表匹配的 ID、映射名及原始 JSON Schema
+保持精确语义；必要元数据和第三方内容不能保证任意秘密都被识别。
+
+审批卡通过现有 toolCallId 提供“查看参数”，App 在当前 Session 找到对应
+ToolStep，展开父过程和参数、滚动并聚焦。ToolStep 的定位限于对话区域，
+不与工具侧栏副本产生重复 DOM ID。该通用交互只新增 Studio 组件回调，
+不新增运行时事件、HTTP 字段或审批状态。失败结果复用现有通用 failed 渲染。
+实施计划见[5.2 工具适配](../plans/2026-11-21-mcp-tool-plugin.md)。
+
+Zod4.6.7 的 object passthrough 会省略自有 `__proto__` 字段。适配器外层保留
+原对象引用，内部仍执行规定的 object passthrough 和 JSON Schema refinement，
+但 refinement 检查原始字段，成功后返回原始完整对象；不可把剥离后的副本发送给
+服务。快照同样只借 Zod 检查形状，最终冻结副本保留 schema 全部自有 JSON 字段。

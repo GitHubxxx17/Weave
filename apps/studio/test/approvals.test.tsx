@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -173,6 +173,29 @@ describe('ApprovalPanel', () => {
   it('renders nothing without pending approvals', () => {
     const { container } = render(<ApprovalPanel pending={[]} onDecide={vi.fn()} />);
     expect(container.innerHTML).toBe('');
+  });
+
+  it('opens the exact tool call through its callback', () => {
+    const onInspectToolCall = vi.fn();
+    const approval: ApprovalRequest = {
+      ...pendingWrite,
+      toolCallId: 'mcp-call-2',
+      toolName: 'mcp_docs_search_1234567890abcdef',
+      operation: 'mcp.call_tool',
+      summary: '调用 docs search',
+      inputSummary: { serverId: 'docs', argumentBytes: 24, fields: ['query'] },
+    };
+    render(
+      <ApprovalPanel
+        pending={[approval]}
+        onDecide={vi.fn()}
+        onInspectToolCall={onInspectToolCall}
+      />,
+    );
+
+    const card = screen.getByRole('article', { name: '待审批：调用 docs search' });
+    fireEvent.click(within(card).getByRole('button', { name: '查看参数' }));
+    expect(onInspectToolCall).toHaveBeenCalledWith('mcp-call-2');
   });
 
   it('shows the write summary and forwards approve and reject', async () => {

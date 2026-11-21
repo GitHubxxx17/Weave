@@ -88,7 +88,11 @@ export function ToolStep({
   const label = statusLabel(tool);
 
   return (
-    <details className={`tool-step tool-step-${tool.status}`} open={defaultOpen}>
+    <details
+      className={`tool-step tool-step-${tool.status}`}
+      data-tool-call-id={tool.toolCallId}
+      open={defaultOpen}
+    >
       <summary className="tool-step-heading">
         <ChevronRight className="disclosure-icon" aria-hidden="true" />
         <span className="tool-step-icon" aria-hidden="true">
@@ -111,7 +115,9 @@ export function ToolStep({
       <div className="tool-step-body">
         <div className="tool-step-block">
           <span className="tool-step-label">参数</span>
-          <pre className="tool-step-code">{formatArguments(tool.arguments, parsed)}</pre>
+          <pre className="tool-step-code" data-tool-parameters="" tabIndex={-1}>
+            {formatArguments(tool.arguments, parsed)}
+          </pre>
         </div>
         {tool.result !== undefined && tool.result !== '' ? (
           <div className="tool-step-block">

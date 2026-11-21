@@ -947,3 +947,11 @@ AbortSignal 和同步 stale/closed 通知；返回连接的冻结工具、输入
 受限 schema 通过其公开 AJV provider 校验，不增加第二份 AJV；SDK transport
 关闭补丁及其独立宿主退出回归在包 README 说明。完整策略和预算见
 [Stage 5 设计](../superpowers/specs/2026-11-21-mcp-stdio-design.md)。
+
+### Stage 5.2 MCP 工具适配边界
+
+plugin-builtins 接受 Server 授权后准备的 McpConnection，合成为 host:mcp 的
+封闭 KernelPlugin。setup 只贡献工具；连接的进程与 dispose 仍归 source/Generation。
+MCP 工具使用现有 Zod 输入校验、Approval Broker、策略 Hook 与 Tool Pipeline；
+错误通过带稳定 code 的直接 cause 被 Runner 写为 failed，模型能继续修正参数。
+Studio 审批卡按已有 toolCallId 定位现有参数详情，不形成第二套审批或结果流。

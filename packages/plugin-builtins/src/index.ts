@@ -6,3 +6,6 @@ export { createProviderRegistryPlugin, providerRegistryPlugin } from './provider
 export type { ProviderRegistryPluginOptions } from './provider-registry.js';
 export { createToolRegistryPlugin, toolRegistryPlugin } from './tool-registry.js';
 export type { ToolRegistryPluginOptions } from './tool-registry.js';
+export { createMcpPlugin } from './mcp-plugin.js';
+export type { McpPluginOptions } from './mcp-plugin.js';
+export { McpToolError } from './mcp-result.js';

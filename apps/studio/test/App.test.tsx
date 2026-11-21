@@ -1572,6 +1572,131 @@ describe('Studio Agent Chat', () => {
     ).toBeTruthy();
   });
 
+  it('shows an MCP tool error as a failed step while the model completes its reply', async () => {
+    const name = 'mcp_docs_search_1234567890abcdef';
+    const content = `Tool "${name}" failed (tool-execution-failed). mcp-tool-error: query rejected`;
+    streamAgentRunMock.mockImplementation(async (_request, handlers) => {
+      handlers.onEvent({
+        type: 'tool-call',
+        toolCall: { id: 'mcp-failed', name, arguments: '{"query":"missing"}' },
+      });
+      handlers.onEvent({
+        type: 'tool-result',
+        result: { toolCallId: 'mcp-failed', name, content, truncated: false },
+        status: 'failed',
+        errorCode: 'tool-execution-failed',
+      });
+      handlers.onEvent({ type: 'text-delta', text: '我会修正查询' });
+      handlers.onEvent({ type: 'completed', turnId: 'turn-mcp-failed' });
+    });
+    await renderApp();
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '查询文档' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+
+    expect(await screen.findByText('我会修正查询')).toBeTruthy();
+    const step = screen.getByText(name).closest('.tool-step') as HTMLDetailsElement;
+    expect(step.classList.contains('tool-step-failed')).toBe(true);
+    expect(within(step).getByTitle('失败')).toBeTruthy();
+    expect(within(step).getByText(content)).toBeTruthy();
+    fireEvent.click(screen.getByRole('tab', { name: '工具' }));
+    expect(
+      within(screen.getByRole('region', { name: '工具调用' })).getByTitle('失败'),
+    ).toBeTruthy();
+  });
+
+  it('locates and focuses the approved call parameters through both collapsed detail levels', async () => {
+    const name = 'mcp_docs_search_1234567890abcdef';
+    const workspaceFetch = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith('/approvals/stream')) {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                new TextEncoder().encode(
+                  `event: approval.snapshot\ndata: ${JSON.stringify({
+                    approvals: [
+                      {
+                        approvalId: 'mcp-approval',
+                        toolCallId: 'call-2',
+                        toolName: name,
+                        operation: 'mcp.call_tool',
+                        summary: '查询第二个目标',
+                        risk: 'high',
+                        inputSummary: { serverId: 'docs', argumentBytes: 32, fields: ['query'] },
+                        sessionId: sessionIds.local,
+                        status: 'pending',
+                        createdAt: '2026-11-21T08:00:00.000Z',
+                      },
+                    ],
+                  })}\n\n`,
+                ),
+              );
+            },
+          }),
+          { headers: { 'content-type': 'text/event-stream' } },
+        );
+      }
+      return workspaceFetch(input, init);
+    });
+    streamAgentRunMock.mockImplementation(async (_request, handlers) => {
+      for (const [id, query] of [
+        ['call-1', 'first private query'],
+        ['call-2', 'second private query'],
+      ]) {
+        handlers.onEvent({
+          type: 'tool-call',
+          toolCall: { id: id!, name, arguments: JSON.stringify({ query }) },
+        });
+      }
+      handlers.onEvent({ type: 'completed', turnId: 'turn-inspect' });
+    });
+    const previousScroll = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    try {
+      await renderApp();
+      fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '比较两个查询' } });
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      const approval = await screen.findByRole('article', { name: '待审批：查询第二个目标' });
+      const process = screen.getByRole('group', { name: '本轮过程' }) as HTMLDetailsElement;
+      fireEvent.click(within(process).getByText('2 次工具调用'));
+      await waitFor(() => expect(process.open).toBe(false));
+      const steps = Array.from(process.querySelectorAll<HTMLDetailsElement>('.tool-step'));
+      expect(steps).toHaveLength(2);
+      expect(steps.every((step) => !step.open)).toBe(true);
+      expect(approval.textContent).not.toContain('second private query');
+
+      fireEvent.click(within(approval).getByRole('button', { name: '查看参数' }));
+
+      await waitFor(() => expect(process.open).toBe(true));
+      expect(steps[0]!.open).toBe(false);
+      expect(steps[1]!.open).toBe(true);
+      const parameters = steps[1]!.querySelector<HTMLElement>('.tool-step-code')!;
+      expect(parameters.textContent).toContain('second private query');
+      expect(parameters.textContent).not.toContain('first private query');
+      expect(document.activeElement).toBe(parameters);
+      expect(scrollIntoView.mock.contexts).toContain(parameters);
+
+      fireEvent.click(screen.getByRole('tab', { name: '工具' }));
+      const panel = screen.getByRole('region', { name: '工具调用' });
+      expect(
+        Array.from(panel.querySelectorAll<HTMLDetailsElement>('.tool-step')).every(
+          (step) => !step.open,
+        ),
+      ).toBe(true);
+      const ids = Array.from(document.querySelectorAll('[id]'), (element) => element.id);
+      expect(new Set(ids).size).toBe(ids.length);
+    } finally {
+      if (previousScroll)
+        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', previousScroll);
+      else Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView');
+    }
+  });
+
   it('keeps conversation and activity panel as independent scroll regions', async () => {
     await renderApp();
 
