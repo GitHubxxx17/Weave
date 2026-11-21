@@ -351,8 +351,8 @@ pnpm --filter @weave/server typecheck
 
 ### 3b. Read selected evidence and verify a joint Generation
 
-**Owns** `apps/server/src/{managed-plugin-composition,local-plugin-host,local-extension-source,extension-types,extension-coordinator}.ts`,
-`apps/server/test/{managed-plugin-composition,managed-plugin-integration,extension-coordinator}.test.ts`,
+**Owns** `apps/server/src/{managed-plugin-composition,local-plugin-host,local-extension-source,extension-types,extension-coordinator,mcp-source}.ts`,
+`apps/server/test/{managed-plugin-composition,managed-plugin-integration,extension-coordinator,mcp-source}.test.ts`,
 and `apps/server/test/support/managed-plugin-composition-fixture.ts`.
 
 **Consumes** the 3a batch, observer buffer and MCP install/denial hooks,
@@ -406,6 +406,19 @@ through a private `mcpFirstAuthority?: boolean` option.
       snapshot with a changed stamp and affected identities filtered out,
       including displaced manual members. Use that same snapshot for future
       reads. Apply MCP denial in the same batch and preserve private causes.
+      Cancel unfinished local preparation that captured the old raw snapshot
+      only after both effective snapshots and admission have been published.
+      Preserve the authority marker through that cancellation and leave
+      published or retired signals untouched. Test an already-running manual
+      preparation with an import spy and a synchronous abort observer.
+- [ ] At MCP's validated-log boundary, add a private optional
+      `onAuthorityFailureSync?: (cause: unknown) => never` hook. Call it on
+      read/protocol failure, including fulfilled malformed or rewritten logs
+      during facade refresh and mutation-result installation, before the
+      source can return without withdrawal. Ordinary request conflicts do not
+      enter this hook. Bind the combined composition to its existing authority
+      invalidation; standalone MCP preserves the original failure. Test both
+      facade paths with a published managed Generation and blocked admission.
 - [ ] Reuse one bounded `owned.read(digest, { signal })` verifier for runtime
       evidence. Compare the returned digest, descriptor manifest ID, files,
       bytes and canonical manifest to the durable candidate and build

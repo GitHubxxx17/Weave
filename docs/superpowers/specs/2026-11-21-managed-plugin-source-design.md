@@ -336,6 +336,19 @@ Reviewed precommit evidence for a managed command precedes its separate
 runtime readback. A removed MCP declaration releases its claim for future
 Generations, and a retired Generation keeps pinned resources until drain.
 
+A failed local adoption also invalidates local preparation that was already
+using the old raw package snapshot. Publish both final effective source
+snapshots and the resulting admission block before synchronously cancelling
+that unfinished work. Preserve the authority marker as its rejection, and do
+not invalidate published or retired resource signals. A new prepare-entry
+check alone does not protect a candidate captured before an await.
+
+MCP owns validation at the actual log installation boundary, including its
+facade's initial refresh and mutation result. Route read or malformed/rewritten
+prefix failures at that boundary to the composition's authority withdrawal,
+including when the store fulfilled with invalid data. Preserve the original
+cause in the marker. Ordinary request conflicts keep their existing handling.
+
 New MCP configuration rejects every sticky ID. Finish awaited request
 preparation and existing manual ID checks first, then read and adopt sticky
 authority and check that administration is open at store dispatch, after the
