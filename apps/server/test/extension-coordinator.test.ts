@@ -713,9 +713,7 @@ describe('Server extension coordination', () => {
         closeProviderSettingsStore() {
           calls.push('provider');
         },
-        closeManualTrustStore() {
-          calls.push('manual-trust');
-        },
+        closeManualTrustStore() {},
         closeMcpAuthorityStore() {
           calls.push('mcp');
         },
