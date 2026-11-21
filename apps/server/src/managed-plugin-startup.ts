@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import type { PluginTrustStore, RecordedPluginTrustEvent } from '@weave/plugin-host';
 import { z } from 'zod';
 import { serverHostVersion } from './host-version.js';
+import { assertManualPluginIdSync } from './local-extension-source.js';
 import type { ClosablePluginTrustStore } from './local-plugin-host.js';
 import {
   openOwnedPluginArtifactStore,
@@ -80,7 +81,10 @@ interface ManagedPluginStartup extends StartupAuthority {
     { readonly kind: 'authority'; readonly store: PluginTrustStore } | OverrideTrust | undefined;
 }
 
-function createOverrideTrust(store: ClosablePluginTrustStore): OverrideTrust {
+function createOverrideTrust(
+  store: ClosablePluginTrustStore,
+  readAuthoritySync: PluginAuthorityDatabase['snapshotSync'],
+): OverrideTrust {
   let prefix: readonly RecordedPluginTrustEvent[] | undefined;
   let observedSequence = 0;
   return {
@@ -98,6 +102,7 @@ function createOverrideTrust(store: ClosablePluginTrustStore): OverrideTrust {
         return found;
       },
       async append(event) {
+        assertManualPluginIdSync(readAuthoritySync, event.pluginId);
         const recorded = await store.append(event);
         if (prefix?.length === observedSequence && recorded.sequence === observedSequence + 1) {
           prefix = [...prefix, structuredClone(recorded)];
@@ -138,7 +143,7 @@ export async function acquireManagedPluginStartup(
   if (pluginTrustStore !== undefined) {
     assertOverrideAllowed(initial);
     hooks.registerManualTrustStore(pluginTrustStore);
-    const localTrust = createOverrideTrust(pluginTrustStore);
+    const localTrust = createOverrideTrust(pluginTrustStore, authority.snapshotSync);
     await localTrust.store.events();
     const fresh = authority.readStartupAuthoritySync();
     assertOverrideAllowed(fresh);

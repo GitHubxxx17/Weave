@@ -399,14 +399,25 @@ describe('local plugin startup integration', () => {
           'server-tool-host',
           'empty-host',
         ]) {
-          expect(localRecord(snapshot, id)).toMatchObject({
+          expect(records(snapshot).filter((row) => row.id === id)).toEqual([
+            expect.objectContaining({ origin: id === 'empty-host' ? 'registered' : 'builtin' }),
+          ]);
+          expect(server.pluginHost?.snapshot().plugins.find((row) => row.id === id)).toMatchObject({
             state: 'invalid',
             error: { code: 'plugin-id-reserved' },
           });
         }
-        await mutate(server, '/plugins/bad-factory/trust', { digest: bad.digest });
+        const failed = await mutate(server, '/plugins/bad-factory/trust', { digest: bad.digest });
+        const factoryIssue = {
+          code: 'plugin-load-failed',
+          message: 'Plugin "bad-factory" failed in its factory: broken factory',
+        };
+        expect(failed.result).toMatchObject({
+          failed: [{ id: 'bad-factory', error: factoryIssue }],
+        });
         expect(localRecord(await json(server, '/plugins'), 'bad-factory')).toMatchObject({
           state: 'failed',
+          error: factoryIssue,
         });
         await mutate(server, '/plugins/local-command/trust', { digest: good.digest });
         expect(localRecord(await json(server, '/plugins'))).toMatchObject({ state: 'loaded' });

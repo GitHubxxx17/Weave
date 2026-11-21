@@ -3,14 +3,86 @@ import { join } from 'node:path';
 import type { connectMcp } from '@weave/mcp-client';
 import * as pluginHost from '@weave/plugin-host';
 import { describe, expect, it, vi } from 'vitest';
+import { createApp } from '../src/app.js';
+import { serverHostVersion } from '../src/host-version.js';
+import { startServer } from '../src/main.js';
+import { mcpMutationResultSchema } from '../src/mcp-management-types.js';
+import { openOwnedPluginArtifactStore } from '../src/owned-plugin-artifact-store.js';
+import { createSqlitePluginAuthorityDatabase } from '../src/plugin-authority-store.js';
+import {
+  commandListResponseSchema,
+  pluginListResponseSchema,
+  pluginMutationResponseSchema,
+} from '../src/plugin-catalog.js';
 import { PluginStoreOwnershipError } from '../src/plugin-store-ownership-types.js';
+import { createSqlitePluginTrustStore } from '../src/plugin-trust-store.js';
 import {
   createServerAgentRunner,
   getServerSessionStore,
+  listServerCommands,
   listServerPlugins,
 } from '../src/runtime.js';
-import { createRealManagedCompositionFixture } from './support/managed-plugin-composition-fixture.js';
-import { decisionInput } from './support/plugin-authority-fixtures.js';
+import {
+  createRealManagedCompositionFixture,
+  runFixtureTools,
+} from './support/managed-plugin-composition-fixture.js';
+import { activateInput, decisionInput, importInput } from './support/plugin-authority-fixtures.js';
+
+type Fixture = Awaited<ReturnType<typeof createRealManagedCompositionFixture>>;
+type Composed = ReturnType<Fixture['compose']>;
+
+function assertJointCatalog(
+  list: ReturnType<typeof pluginListResponseSchema.parse>,
+  commands: ReturnType<typeof commandListResponseSchema.parse>,
+  manualDirectory: string,
+  managedDigest: string,
+) {
+  expect(list.local?.generation.plugins.map(({ id }) => id)).toEqual(['manual-echo']);
+  const managed = list.plugins.filter(({ id }) => id === 'managed-echo');
+  expect(managed).toEqual([
+    expect.objectContaining({
+      origin: 'kernel',
+      provides: expect.objectContaining({ tools: ['managed_echo'] }),
+    }),
+  ]);
+  expect(managed[0]?.local).toBeUndefined();
+  expect(JSON.stringify(list)).not.toContain(managedDigest);
+  const remote = list.plugins.find(({ id }) => id === 'mcp-remote')!;
+  expect(remote).toMatchObject({ origin: 'kernel', host: 'mcp' });
+  expect(remote.local).toBeUndefined();
+  expect(list.plugins.find(({ id }) => id === 'manual-echo')).toMatchObject({
+    origin: 'local',
+    local: { directory: manualDirectory },
+    provides: { tools: ['manual_echo'], commands: ['manual-echo'] },
+  });
+  expect(commands.commands).toContainEqual(
+    expect.objectContaining({ name: 'manual-echo', pluginId: 'manual-echo' }),
+  );
+  return remote;
+}
+
+function catalogApp(f: Fixture, host: Composed) {
+  return createApp(f.runtime, {
+    pluginCatalog: () => listServerPlugins(f.runtime),
+    commandCatalog: () => listServerCommands(f.runtime),
+    generationSnapshot: host.coordinator.generationSnapshot,
+    pluginManager: host.pluginHost,
+    mcpManager: host.mcpManager,
+  });
+}
+
+function post(body: unknown): RequestInit {
+  return {
+    method: 'POST',
+    headers: { Host: '127.0.0.1', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  };
+}
+
+const stickyTrustIssue = {
+  code: 'plugin-trust-invalid',
+  message: 'Managed plugin trust requires the combined managed API',
+};
 
 function ownershipLoss() {
   return new PluginStoreOwnershipError('plugin-store-ownership-lost', 'Private lease failure');
@@ -31,6 +103,402 @@ function echoConnection(
 }
 
 describe('joint managed, manual and MCP Generation', () => {
+  it('serves cached manual-only local membership and published kernel rows', async () => {
+    const f = await createRealManagedCompositionFixture();
+    try {
+      const managed = await f.seedManaged('managed-echo', 'managed result');
+      const manual = await f.seedManual('manual-echo', 'manual result');
+      await f.seedMcp('remote');
+      const trustReads = vi.spyOn(f.authority.trust, 'events');
+      const host = f.compose();
+      await host.coordinator.reload();
+      const app = catalogApp(f, host);
+      const reads = [f.readOwned, f.readAuthoritySync, f.readMcp, f.assertHeldSync, trustReads];
+      const counts = reads.map((read) => read.mock.calls.length);
+      expect(counts.every((count) => count > 0)).toBe(true);
+      const launches = await readFile(f.launchLog, 'utf8');
+      const list = pluginListResponseSchema.parse(await (await app.request('/plugins')).json());
+
+      const commands = commandListResponseSchema.parse(
+        await (await app.request('/commands')).json(),
+      );
+      assertJointCatalog(list, commands, manual.directory, managed.digest);
+      await f.seedManual('new-on-disk', 'not scanned', false);
+      expect(await (await app.request('/plugins')).json()).toEqual(list);
+      expect(await (await app.request('/commands')).json()).toEqual(commands);
+      expect(reads.map((read) => read.mock.calls.length)).toEqual(counts);
+      expect(await readFile(f.launchLog, 'utf8')).toBe(launches);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it('keeps a sticky collision diagnostic free of managed trust before any same-ID publication', async () => {
+    const f = await createRealManagedCompositionFixture();
+    try {
+      const managed = await f.seedManaged('notes', 'managed result');
+      const manual = await f.seedManual('notes', 'different manual result', false);
+      expect(manual.digest).not.toBe(managed.digest);
+      const host = f.compose();
+      await host.coordinator.reload();
+      const response = await catalogApp(f, host).request('/plugins');
+      const list = pluginListResponseSchema.parse(await response.json());
+      const row = list.plugins.find(({ id }) => id === 'notes');
+      expect(row).toMatchObject({
+        origin: 'local',
+        state: 'invalid',
+        error: {
+          code: 'plugin-id-reserved',
+          message: 'Plugin id "notes" is reserved by a managed plugin',
+        },
+        local: { directory: manual.directory, manifest: manual.manifest, enabled: false },
+      });
+      expect(row?.local?.trusted).toBeUndefined();
+      expect(JSON.stringify(list)).not.toContain(managed.digest);
+      expect(f.authority.snapshotSync().trustEvents).toContainEqual(
+        expect.objectContaining({ pluginId: 'notes', digest: managed.digest }),
+      );
+    } finally {
+      await f.close();
+    }
+  });
+
+  it('rejects every legacy trust mutation for a freshly uninstalled sticky ID', async () => {
+    const f = await createRealManagedCompositionFixture();
+    try {
+      const manual = await f.seedManual('notes', 'manual result');
+      const host = f.compose();
+      await host.coordinator.reload();
+      await f.seedManaged('notes', 'managed result');
+      f.authority.commitSync(
+        decisionInput('uninstall', 'remove-notes', f.authority.snapshotSync()),
+      );
+      const before = f.authority.snapshotSync();
+      const app = catalogApp(f, host);
+      for (const [path, request] of [
+        ['trust', post({ digest: manual.digest })],
+        ['enable', post({})],
+        ['disable?immediate=true', post({})],
+        ['trust?immediate=true', { ...post({}), method: 'DELETE' }],
+      ] as const) {
+        const response = await app.request('/plugins/notes/' + path, request);
+        expect({ status: response.status, body: await response.json() }).toEqual({
+          status: 400,
+          body: { error: stickyTrustIssue },
+        });
+      }
+      expect(f.authority.snapshotSync()).toEqual(before);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it.each(['idempotent-trust', 'immediate-retry', 'cached-rejection'] as const)(
+    'checks current sticky authority during %s after the initial dispatch',
+    async (phase) => {
+      const f = await createRealManagedCompositionFixture();
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let mutation: Promise<unknown> | undefined;
+      try {
+        const manual = await f.seedManual('notes', 'manual result', phase !== 'immediate-retry');
+        // Hold the old trust prefix for the in-flight package read.
+        const read = vi.fn(f.authority.trust.events);
+        const host = f.compose({
+          localTrustStore: { events: read, append: f.authority.trust.append },
+        });
+        await host.coordinator.reload();
+        const retry = vi.spyOn(host.coordinator, 'retryImmediateRevocation');
+        read.mockImplementationOnce(async () => {
+          const before = await f.authority.trust.events();
+          entered.resolve();
+          await release.promise;
+          return before;
+        });
+        mutation = (
+          phase === 'immediate-retry'
+            ? host.pluginHost!.revoke('notes', { immediate: true })
+            : host.pluginHost!.trust('notes', manual.digest)
+        ).catch((failure: unknown) => failure);
+        await Promise.race([
+          entered.promise,
+          mutation.then(() => {
+            throw new Error('Expected gated manual trust read');
+          }),
+        ]);
+        f.authority.commitSync(
+          importInput('sticky-during-read', f.authority.snapshotSync().heads.installSequence),
+        );
+        if (phase === 'cached-rejection') host.managed!.adoptLatestAuthoritySync();
+        release.resolve();
+        expect(await mutation).toBeInstanceOf(Error);
+        expect(await mutation).toMatchObject(stickyTrustIssue);
+        expect(retry).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await mutation;
+        await f.close();
+      }
+    },
+  );
+
+  it('checks the main authority synchronously before dispatching an override append', async () => {
+    const f = await createRealManagedCompositionFixture();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const databaseFile = join(f.root, 'unbound.sqlite');
+    const override = createSqlitePluginTrustStore({ filename: join(f.root, 'override.sqlite') });
+    const events = vi.spyOn(override, 'events');
+    const append = vi.spyOn(override, 'append');
+    const authority = createSqlitePluginAuthorityDatabase({ filename: databaseFile });
+    let server: Awaited<ReturnType<typeof startServer>> | undefined;
+    let response: Promise<Response> | undefined;
+    try {
+      const previous = await f.seedManual('other', 'override prefix', false);
+      await override.append({
+        kind: 'trusted',
+        pluginId: 'other',
+        digest: previous.digest,
+        manifest: previous.manifest,
+      });
+      const manual = await f.seedManual('notes', 'manual result', false);
+      server = await startServer(0, {
+        databaseFile,
+        pluginsDirectory: f.pluginsDirectory,
+        environment: {},
+        pluginTrustStore: override,
+      });
+      const prior = await override.events();
+      append.mockClear();
+      events.mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+        return prior;
+      });
+      const base = `http://127.0.0.1:${server.port}`;
+      response = fetch(base + '/plugins/notes/trust', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ digest: manual.digest }),
+      });
+      await Promise.race([
+        entered.promise,
+        response.then(() => {
+          throw new Error('Expected gated override read');
+        }),
+      ]);
+      authority.commitSync(
+        importInput('sticky-at-override', authority.snapshotSync().heads.installSequence),
+      );
+      release.resolve();
+      const result = await response;
+      expect({ status: result.status, body: await result.json() }).toEqual({
+        status: 400,
+        body: { error: stickyTrustIssue },
+      });
+      expect(append).not.toHaveBeenCalled();
+      expect(await override.events()).toEqual(prior);
+      expect(authority.snapshotSync().trustEvents).toEqual([]);
+      const list = pluginListResponseSchema.parse(await (await fetch(base + '/plugins')).json());
+      expect(list.local?.trustSequence).toBe(1);
+      expect(list.plugins.find(({ id }) => id === 'other')).toMatchObject({
+        origin: 'local',
+        state: 'loaded',
+      });
+    } finally {
+      release.resolve();
+      await Promise.allSettled([response]);
+      await server?.stop();
+      await override.close();
+      await authority.close();
+      await f.close();
+    }
+  });
+
+  it.each(['import', 'commit'] as const)(
+    'keeps the private managed %s exception out of catalog and reload JSON',
+    async (phase) => {
+      const f = await createRealManagedCompositionFixture();
+      const payload = join(f.root, 'private-managed-payload', phase, 'payload.txt');
+      const original = new Error(payload);
+      const createSource = pluginHost.createLocalPluginSource;
+      let failImport = false;
+      const inject = vi
+        .spyOn(pluginHost, 'createLocalPluginSource')
+        .mockImplementationOnce((options) =>
+          createSource({
+            ...options,
+            async importModule(url) {
+              if (failImport && url.includes(staged.digest)) throw original;
+              return import(url);
+            },
+          }),
+        );
+      const commit = vi.spyOn(f.runtime.serverHost, 'commit');
+      let staged: Awaited<ReturnType<Fixture['seedManaged']>>;
+      try {
+        staged = await f.seedManaged('notes', 'managed result', false);
+        await f.seedManual('manual-echo', 'manual result');
+        await f.seedMcp('remote');
+        const host = f.compose();
+        await host.coordinator.reload();
+        if (phase === 'import') failImport = true;
+        else
+          commit.mockImplementation(() => {
+            throw original;
+          });
+        const input = activateInput('private-failure', f.authority.snapshotSync(), {
+          pluginId: 'notes',
+          digest: staged.digest,
+          manifest: staged.descriptor.manifest,
+          files: staged.files,
+          bytes: staged.bytes,
+        });
+        if (input.request.command.kind !== 'activate') throw new Error('Expected activation');
+        const application = await host.applyManagedSelection!({
+          ...input.request,
+          command: input.request.command,
+        });
+        if (application.kind !== 'committed') throw new Error('Expected committed activation');
+        expect(application.application.status).toBe('failed');
+        expect(
+          phase === 'import'
+            ? (application.application.cause as Error).cause
+            : application.application.cause,
+        ).toBe(original);
+        const app = catalogApp(f, host);
+        const sequence = host.mcpManager!.snapshot().authoritySequence;
+        const pluginResponse = await app.request('/plugins/reload', post({}));
+        const catalogResponse = await app.request('/plugins');
+        const mcpResponse = await app.request('/mcp/reload', post({ expectedSequence: sequence }));
+        expect([pluginResponse.status, catalogResponse.status, mcpResponse.status]).toEqual([
+          200, 200, 200,
+        ]);
+        const serialized = await Promise.all([
+          pluginResponse.text(),
+          catalogResponse.text(),
+          mcpResponse.text(),
+        ]);
+        const projected = host.coordinator.snapshot();
+        const plugin = pluginMutationResponseSchema.parse(JSON.parse(serialized[0]!));
+        const catalog = pluginListResponseSchema.parse(JSON.parse(serialized[1]!));
+        const mcp = mcpMutationResultSchema.parse(JSON.parse(serialized[2]!));
+        expect(serialized.join('\n')).not.toContain(payload);
+        expect(serialized.join('\n')).not.toContain('"notes"');
+        expect(plugin.result.failed).toEqual([]);
+        expect(mcp.result.failed).toEqual([]);
+        expect(mcp.result.applied).toBe(false);
+        expect(mcp.result.decisionSequence).toBe(sequence);
+        expect(mcp.servers).toEqual(host.mcpManager!.snapshot().servers);
+        if (phase === 'import') {
+          expect(projected.failed).toMatchObject([
+            {
+              pluginId: 'notes',
+              origin: 'managed',
+              error: { code: 'plugin-load-failed', message: 'Managed plugin preparation failed' },
+            },
+          ]);
+          expect(plugin.result.error).toBeUndefined();
+        } else {
+          const safe = {
+            code: 'plugin-reload-failed',
+            message: 'Extension generation could not be published',
+          };
+          expect(plugin.result.error).toEqual(safe);
+          expect(catalog.local?.error).toEqual(safe);
+          expect(mcp.result.error).toEqual(safe);
+        }
+      } finally {
+        commit.mockRestore();
+        inject.mockRestore();
+        await f.close();
+      }
+    },
+  );
+
+  it('loads the registered selection through live startup and an option-less managed restart', async () => {
+    const f = await createRealManagedCompositionFixture();
+    let first: Awaited<ReturnType<typeof startServer>> | undefined;
+    let restarted: typeof first;
+    try {
+      const registration = f.authority.readStartupAuthoritySync().registration!;
+      const selected = await f.seedManaged('managed-echo', 'selected result');
+      const unusedMarker = join(f.root, 'unselected-imported');
+      await f.seedManaged('managed-echo', 'unused result', false, unusedMarker);
+      const manual = await f.seedManual('manual-echo', 'manual result');
+      await f.seedMcp('remote');
+      await f.closeResources();
+      const options = {
+        databaseFile: f.databaseFile,
+        pluginsDirectory: f.pluginsDirectory,
+        environment: {},
+      };
+      first = await startServer(0, {
+        ...options,
+        managedPluginStore: { initialBinding: 'require-bound' },
+      });
+      async function observe(server: Awaited<ReturnType<typeof startServer>>) {
+        const base = `http://127.0.0.1:${server.port}`;
+        const list = pluginListResponseSchema.parse(await (await fetch(base + '/plugins')).json());
+        const commands = commandListResponseSchema.parse(
+          await (await fetch(base + '/commands')).json(),
+        );
+        const remote = assertJointCatalog(list, commands, manual.directory, selected.digest);
+        const launches = await readFile(f.launchLog, 'utf8');
+        expect(await (await fetch(base + '/plugins')).json()).toEqual(list);
+        expect(await (await fetch(base + '/commands')).json()).toEqual(commands);
+        expect(await readFile(f.launchLog, 'utf8')).toBe(launches);
+        const stableRunner = await createServerAgentRunner(server.runtime);
+        expect(server.pluginHost?.runner).toBe(stableRunner);
+        const events = await runFixtureTools(server.runtime, stableRunner, [
+          'managed_echo',
+          'manual_echo',
+          remote.provides.tools[0]!,
+        ]);
+        const results = events
+          .filter(({ type }) => type === 'tool-result')
+          .map((event) => JSON.stringify(event));
+        expect(results).toEqual([
+          expect.stringContaining('selected result'),
+          expect.stringContaining('manual result'),
+          expect.stringContaining('done'),
+        ]);
+        expect(await f.exists(unusedMarker)).toBe(false);
+      }
+      await observe(first);
+      expect(first.pluginHost?.dispose).toBe(first.stop);
+      await first.pluginHost!.dispose();
+      restarted = await startServer(0, options);
+      await observe(restarted);
+      await restarted.stop();
+      const authority = createSqlitePluginAuthorityDatabase({ filename: f.databaseFile });
+      try {
+        expect(authority.readStartupAuthoritySync().registration).toEqual(registration);
+        const owned = await openOwnedPluginArtifactStore({
+          authority,
+          directory: registration.binding.storeDirectory,
+          initialBinding: 'require-bound',
+          hostVersion: serverHostVersion,
+          onOwnershipLost: () => undefined,
+        });
+        try {
+          expect(owned.binding).toEqual(registration.binding);
+        } finally {
+          await owned.close();
+        }
+      } finally {
+        await authority.close();
+      }
+    } finally {
+      try {
+        await restarted?.stop();
+        await first?.stop();
+      } finally {
+        await f.close();
+      }
+    }
+  });
+
   it('runs all three tools on the stable runner and never reads the unselected digest', async () => {
     const f = await createRealManagedCompositionFixture();
     try {

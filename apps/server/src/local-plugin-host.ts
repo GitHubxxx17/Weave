@@ -8,7 +8,7 @@ import {
   type ServerRuntime,
 } from './runtime.js';
 import { createExtensionCoordinator } from './extension-coordinator.js';
-import { createLocalExtensionSource } from './local-extension-source.js';
+import { assertManualPluginIdSync, createLocalExtensionSource } from './local-extension-source.js';
 import { createMcpExtensionSource } from './mcp-source.js';
 import type { McpAuthorityStore } from './mcp-authority-store.js';
 import type { connectMcp } from '@weave/mcp-client';
@@ -113,11 +113,12 @@ export function createServerExtensionCoordinator(
   const buffer = createManagedAuthorityObserverBuffer((changes) =>
     coordinator.observeAuthorityBatchSync(changes),
   );
+  const managedOptions = options.managed;
   const managed =
-    options.managed === undefined
+    managedOptions === undefined
       ? undefined
       : createManagedPluginComposition(
-          options.managed,
+          managedOptions,
           buffer,
           () => ({ local, mcp }),
           () => coordinator.blockManagedOwnershipLossSync(),
@@ -137,7 +138,15 @@ export function createServerExtensionCoordinator(
               ? {}
               : { explicitChecks: managed!.explicitChecks }),
           },
-          managed,
+          managed === undefined || managedOptions === undefined
+            ? undefined
+            : {
+                refreshSelectedEvidence: managed.refreshSelectedEvidence,
+                invalidateAuthoritySync: managed.invalidateAuthoritySync,
+                assertManualIdSync: (id) =>
+                  assertManualPluginIdSync(managedOptions.readAuthoritySync, id),
+                usesUnifiedTrust: managedOptions.readLocalTrustEventsSync === undefined,
+              },
         );
   const mcp: ReturnType<typeof createMcpExtensionSource> | undefined =
     options.mcp === undefined

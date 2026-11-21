@@ -325,7 +325,7 @@ describe('Server extension coordination', () => {
     }
   });
 
-  it('uses the original publication exception for attribution after rendering its normalized issue', async () => {
+  it('preserves the original publication exception and renders a fixed managed issue', async () => {
     const local = new FixtureSource('local-esm');
     local.origin = 'managed';
     const original = new Error('Original publication exception');
@@ -359,8 +359,8 @@ describe('Server extension coordination', () => {
         },
       ]);
       expect(result.outcome.attributedFailures?.[0]?.cause).toBe(original);
-      expect(f.coordinator.snapshot().failed.map(({ error }) => error.message)).toEqual([
-        normalized.message,
+      expect(f.coordinator.snapshot().failed.map(({ error }) => error)).toEqual([
+        { code: 'plugin-load-failed', message: 'Managed plugin preparation failed' },
       ]);
     } finally {
       await f.close();
@@ -575,7 +575,7 @@ describe('Server extension coordination', () => {
         expect.objectContaining({
           pluginId: 'local-esm',
           origin: 'managed',
-          error: { code: 'plugin-registration-conflict', message: 'Provider conflict' },
+          error: { code: 'plugin-load-failed', message: 'Managed plugin preparation failed' },
         }),
       ]);
     } finally {

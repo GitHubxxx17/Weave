@@ -24,6 +24,8 @@ import {
   type ExtensionSourceSnapshot,
 } from './extension-types.js';
 import type { ServerLocalPluginHost } from './local-plugin-host.js';
+import type { PluginAuthorityDatabase } from './plugin-authority-types.js';
+import { PluginTrustStoreError } from './plugin-trust-sqlite.js';
 
 export const localExtensionSourceId = 'local-esm';
 const sourceId = localExtensionSourceId;
@@ -32,6 +34,20 @@ const mutationOptions = z.strictObject({ immediate: z.boolean().optional() }).op
 interface ManagedLocalSourceOptions {
   readonly refreshSelectedEvidence: (signal: AbortSignal) => Promise<void>;
   readonly invalidateAuthoritySync: (cause: unknown) => never;
+  readonly assertManualIdSync: (id: string) => void;
+  readonly usesUnifiedTrust: boolean;
+}
+
+export function assertManualPluginIdSync(
+  readAuthoritySync: PluginAuthorityDatabase['snapshotSync'],
+  id: string,
+): void {
+  if (readAuthoritySync().installations.some(({ pluginId }) => pluginId === id)) {
+    throw new PluginTrustStoreError(
+      'plugin-trust-invalid',
+      'Managed plugin trust requires the combined managed API',
+    );
+  }
 }
 
 interface WithdrawnSelection {
@@ -49,6 +65,7 @@ export function createLocalExtensionSource(
   let effective: ExtensionSourceSnapshot | undefined;
   let rawStamp: LocalSourceStamp | undefined;
   let withdrawn: WithdrawnSelection | undefined;
+  let stickyIds: ReadonlySet<string> = new Set();
   let adopting = false;
   const pendingRawPreparations = new Set<AbortController>();
   const reservedIds = new Set(options.discovery.reservedIds);
@@ -96,6 +113,7 @@ export function createLocalExtensionSource(
     adopting = true;
     try {
       source.adoptExplicitSelectionSync(input);
+      stickyIds = new Set(input.stickyIds);
       withdrawn = undefined;
     } finally {
       adopting = false;
@@ -108,16 +126,17 @@ export function createLocalExtensionSource(
   }
 
   function withdrawExplicitSelectionSync(
-    stickyIds: ReadonlySet<string>,
+    sticky: ReadonlySet<string>,
     trustSequence?: number,
     failure?: ExplicitLocalAuthorityError,
   ): () => void {
     const before = effective;
     const policyChanged =
       withdrawn === undefined ||
-      !isDeepStrictEqual(withdrawn.stickyIds, stickyIds) ||
+      !isDeepStrictEqual(withdrawn.stickyIds, sticky) ||
       (withdrawn.failure === undefined) !== (failure === undefined);
-    withdrawn = { stickyIds, trustSequence, failure };
+    stickyIds = sticky;
+    withdrawn = { stickyIds: sticky, trustSequence, failure };
     const pending = [...pendingRawPreparations];
     const reason = failure ?? new ExplicitLocalAuthorityError();
     const current = updateEffective(source.snapshot(), policyChanged);
@@ -313,18 +332,29 @@ export function createLocalExtensionSource(
         const current = source.snapshot();
         const failures = new Map(
           state.failed
-            .filter((item) => item.sourceId === sourceId)
+            .filter((item) => item.sourceId === sourceId && item.origin === 'manual')
             .map((item) => [item.identity, item.error]),
         );
         if (state.error !== undefined) {
-          for (const item of snapshot().eligible) {
-            if (!failures.has(item.identity)) failures.set(item.identity, state.error);
+          for (const item of effectiveCandidates(current)) {
+            if (item.origin !== 'manual') continue;
+            const identity = localSourceCandidateIdentity(item);
+            if (!failures.has(identity)) failures.set(identity, state.error);
           }
         }
-        return projectLocalPluginSnapshot(current, {
+        const manual =
+          managed?.usesUnifiedTrust && stickyIds.size > 0
+            ? {
+                ...current,
+                plugins: current.plugins.map((row) =>
+                  stickyIds.has(row.id) ? { ...row, trusted: undefined } : row,
+                ),
+              }
+            : current;
+        return projectLocalPluginSnapshot(manual, {
           generation: state.generation.id,
           active: state.members
-            .filter((member) => member.sourceId === sourceId)
+            .filter((member) => member.sourceId === sourceId && member.origin === 'manual')
             .map((member) => {
               const digest = (JSON.parse(member.identity) as [string, string])[1];
               return { id: member.pluginId, digest, manifest: member.manifest };
@@ -338,12 +368,18 @@ export function createLocalExtensionSource(
       function reloadResult(
         result: Awaited<ReturnType<ExtensionCoordinator['reload']>>,
       ): ReloadResult {
-        const eligible = new Set(snapshot().eligible.map((item) => item.identity));
+        const eligible = new Set(
+          effectiveCandidates(source.snapshot())
+            .filter((item) => item.origin === 'manual')
+            .map(localSourceCandidateIdentity),
+        );
         return {
           generation: result.generation.id,
           unchanged: result.unchanged,
-          failed: result.failed.flatMap(({ sourceId: owner, pluginId, identity, error }) =>
-            owner === sourceId && eligible.has(identity) ? [{ id: pluginId, error }] : [],
+          failed: result.failed.flatMap(({ sourceId: owner, pluginId, identity, origin, error }) =>
+            owner === sourceId && origin === 'manual' && eligible.has(identity)
+              ? [{ id: pluginId, error }]
+              : [],
           ),
           ...(result.error === undefined ? {} : { error: result.error }),
           snapshot: project(result),
@@ -354,12 +390,24 @@ export function createLocalExtensionSource(
         return coordinator
           .mutate(
             sourceId,
-            () => {
+            async () => {
               const change = command();
-              return source.mutate(change, {
-                hasActive: (pluginId) => coordinator.hasActive(sourceId, pluginId),
-                onImmediateRetry: () => coordinator.retryImmediateRevocation(sourceId, change.id),
-              });
+              managed?.assertManualIdSync(change.id);
+              try {
+                await source.mutate(change, {
+                  hasActive: (pluginId) => coordinator.hasActive(sourceId, pluginId, 'manual'),
+                  onImmediateRetry() {
+                    managed?.assertManualIdSync(change.id);
+                    coordinator.retryImmediateRevocation(sourceId, change.id, 'manual');
+                  },
+                });
+              } catch (cause: unknown) {
+                if (cause instanceof PluginHostError && cause.code === 'plugin-not-loadable') {
+                  managed?.assertManualIdSync(change.id);
+                }
+                throw cause;
+              }
+              managed?.assertManualIdSync(change.id);
             },
             { force: true },
           )

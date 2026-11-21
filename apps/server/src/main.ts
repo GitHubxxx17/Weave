@@ -235,6 +235,9 @@ export async function startServer(
       managed: {
         initialAuthority: startup.snapshot,
         readAuthoritySync: startup.authority.snapshotSync,
+        ...(startup.owned === undefined
+          ? {}
+          : { executionStore: startup.owned, selectionAuthority: startup.authority }),
         ...(localTrust?.kind === 'override'
           ? { readLocalTrustEventsSync: localTrust.readTrustEventsSync }
           : {}),

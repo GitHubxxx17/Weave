@@ -393,15 +393,15 @@ describe('projectPluginCatalog', () => {
     expect(projected[0]?.provides.tools).toEqual([]);
   });
 
-  it('keeps duplicate invalid directories distinct while preserving a reserved builtin row', () => {
+  it('keeps published base rows and the first surviving manual row for each ID', () => {
     const issue = { code: 'plugin-duplicate-id', message: 'Duplicate plugin id' };
     const projected = projectPluginCatalog(
       [
         {
-          id: 'reserved',
-          name: 'Builtin',
+          id: 'selected',
+          name: 'Published plugin',
           version: '1.0.0',
-          origin: 'builtin',
+          origin: 'kernel',
           state: 'loaded',
           host: 'in-process',
           capabilities: ['tool'],
@@ -423,28 +423,39 @@ describe('projectPluginCatalog', () => {
         trustSequence: 0,
         plugins: [
           {
-            id: 'reserved',
+            id: 'selected',
             state: 'invalid',
-            candidate: { id: 'reserved', directory: '/plugins/first', status: 'invalid', issue },
+            candidate: {
+              id: 'selected',
+              directory: '/plugins/collision',
+              status: 'invalid',
+              issue,
+            },
             trusted: undefined,
           },
           {
-            id: 'reserved',
+            id: 'duplicate',
             state: 'invalid',
-            candidate: { id: 'reserved', directory: '/plugins/second', status: 'invalid', issue },
+            candidate: { id: 'duplicate', directory: '/plugins/first', status: 'invalid', issue },
+            trusted: undefined,
+          },
+          {
+            id: 'duplicate',
+            state: 'invalid',
+            candidate: { id: 'duplicate', directory: '/plugins/second', status: 'invalid', issue },
             trusted: undefined,
           },
         ],
         generation: { id: 1, plugins: [], acceptingRuns: true },
       },
     );
-    expect(projected.map((row) => [row.origin, row.local?.directory, row.provides.tools])).toEqual([
-      ['builtin', undefined, ['host-tool']],
-      ['local', '/plugins/first', []],
-      ['local', '/plugins/second', []],
+    expect(
+      projected.map((row) => [row.id, row.origin, row.local?.directory, row.provides.tools]),
+    ).toEqual([
+      ['selected', 'kernel', undefined, ['host-tool']],
+      ['duplicate', 'local', '/plugins/first', []],
     ]);
     expect(projected.slice(1).map((row) => row.error)).toEqual([
-      { code: 'plugin-duplicate-id', message: 'Duplicate plugin id' },
       { code: 'plugin-duplicate-id', message: 'Duplicate plugin id' },
     ]);
   });

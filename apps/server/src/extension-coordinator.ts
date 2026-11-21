@@ -94,7 +94,7 @@ export interface ExtensionCoordinator {
     sourceId: string,
     operation: (context: ExtensionMutationContext) => Promise<ManagedMutationStep<Replay, Saved>>,
   ): Promise<ManagedMutationCompletion<Replay, Saved>>;
-  hasActive(sourceId: string, pluginId: string): boolean;
+  hasActive(sourceId: string, pluginId: string, origin?: ExtensionIdentity['origin']): boolean;
   retryImmediateRevocation(
     sourceId: string,
     pluginId: string,
@@ -177,6 +177,11 @@ function issueOf(error: unknown): LocalPluginIssue {
     message: error instanceof Error ? error.message : String(error),
   };
 }
+
+export const extensionPublicationIssue = Object.freeze({
+  code: 'plugin-reload-failed',
+  message: 'Extension generation could not be published',
+} satisfies LocalPluginIssue);
 
 function disposed() {
   return new PluginHostError('plugin-host-disposed', 'The plugin host is disposed');
@@ -551,7 +556,16 @@ export function createExtensionCoordinator(
           ...originOf(item),
           cause: original.cause,
         });
-      failures.push({ sourceId, pluginId, identity, ...originOf(item), error: issueOf(reason) });
+      failures.push({
+        sourceId,
+        pluginId,
+        identity,
+        ...originOf(item),
+        error:
+          item.origin === 'managed'
+            ? { code: 'plugin-load-failed', message: 'Managed plugin preparation failed' }
+            : issueOf(reason),
+      });
     }
 
     type OwnedItem = { sourceId: string; item: PreparedExtensionItem };
@@ -816,9 +830,13 @@ export function createExtensionCoordinator(
       const marker = authorityMarker(reason);
       if (closed && marker !== undefined) throw reason;
       ensureOpen();
-      if (reason instanceof ExtensionPreparationError) readingAuthority = false;
+      const resourceUnavailable = reason instanceof ExtensionPreparationError;
+      if (resourceUnavailable) readingAuthority = false;
       failed = [...failures];
-      error = { code: 'plugin-reload-failed', message: issueOf(marker ?? reason).message };
+      error =
+        resourceUnavailable && managedAuthority === undefined
+          ? { code: 'plugin-reload-failed', message: new ExtensionPreparationError().message }
+          : extensionPublicationIssue;
       if (marker !== undefined || readingAuthority) throw reason;
       return result(false);
     }

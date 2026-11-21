@@ -139,10 +139,17 @@ export function projectPluginCatalog(
 ): PluginListItem[] {
   const active = new Map(snapshot.generation.plugins.map((plugin) => [plugin.id, plugin]));
   const actual = new Map(catalog.map((plugin) => [plugin.id, plugin]));
+  const seen = new Set<string>();
+  function first(id: string): boolean {
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  }
   const nonLocal = catalog
-    .filter((plugin) => plugin.origin !== 'local' && !active.has(plugin.id))
+    .filter((plugin) => plugin.origin !== 'local' && !active.has(plugin.id) && first(plugin.id))
     .map((plugin) => pluginListItemSchema.parse({ ...plugin, state: 'loaded' }));
-  const local = snapshot.plugins.map((record) => {
+  const localRecords = snapshot.plugins.filter((record) => first(record.id));
+  const local = localRecords.map((record) => {
     const { candidate, trusted } = record;
     const manifest = candidate.manifest;
     const digest = candidate.status === 'ready' ? candidate.digest : undefined;

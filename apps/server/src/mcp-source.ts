@@ -17,7 +17,7 @@ import {
   resolveMcpEnvironment,
   type McpServerConfig,
 } from './mcp-environment.js';
-import type { ExtensionCoordinator } from './extension-coordinator.js';
+import { extensionPublicationIssue, type ExtensionCoordinator } from './extension-coordinator.js';
 import { ExtensionPreparationError } from './extension-types.js';
 import type {
   ExtensionAuthorityObserver,
@@ -606,27 +606,32 @@ export function createMcpExtensionSource(options: McpExtensionSourceOptions): {
           { force: true },
         );
         const view = project();
-        const ownFailures = result.failed.map((failure) => ({
-          id: failure.sourceId === sourceId ? failure.pluginId.slice(4) : failure.pluginId,
-          error: {
-            code: failure.error.code,
-            message: 'An extension could not be loaded into the generation.',
-          },
-        }));
+        const failures = result.failed
+          .filter((failure) => failure.origin !== 'managed')
+          .map((failure) => ({
+            id: failure.sourceId === sourceId ? failure.pluginId.slice(4) : failure.pluginId,
+            error: {
+              code: failure.error.code,
+              message: 'An extension could not be loaded into the generation.',
+            },
+          }));
         return {
           ...view,
           result: {
             decisionSequence,
-            applied: result.error === undefined && ownFailures.length === 0,
+            applied: result.error === undefined && result.failed.length === 0,
             unchanged: result.unchanged,
-            failed: ownFailures,
+            failed: failures,
             ...(result.error === undefined
               ? {}
               : {
-                  error: {
-                    code: 'plugin-reload-failed',
-                    message: 'Extension generation could not be rebuilt.',
-                  },
+                  error:
+                    result.error.message === extensionPublicationIssue.message
+                      ? extensionPublicationIssue
+                      : {
+                          code: 'plugin-reload-failed',
+                          message: 'Extension generation could not be rebuilt.',
+                        },
                 }),
           },
         };

@@ -24,6 +24,7 @@ import {
   activateInput,
   artifact,
   decisionInput,
+  digestA,
   importInput,
 } from './support/plugin-authority-fixtures.js';
 
@@ -171,7 +172,7 @@ describe('managed plugin startup', () => {
     expect(existsSync(root)).toBe(false);
   });
 
-  it('opens the registered store without dispatching a selected artifact read', async () => {
+  it('checks the selected digest but leaves a missing managed artifact unpublished', async () => {
     const { dataDirectory, databaseFile, environment } = fixture();
     const options = { dataDirectory, environment };
     const first = acquire({ ...options, managedPluginStore: allowUnbound });
@@ -189,7 +190,8 @@ describe('managed plugin startup', () => {
     });
     const server = await startLive(options);
     expect(server.pluginHost?.dispose).toBe(server.stop);
-    expect(reads).not.toHaveBeenCalled();
+    expect(reads).toHaveBeenCalled();
+    expect(new Set(reads.mock.calls.map(([digest]) => digest))).toEqual(new Set([digestA]));
     expect(server.runtime.serverHost.controller()?.current().resources.plugins).not.toContainEqual(
       expect.objectContaining({ id: 'notes' }),
     );

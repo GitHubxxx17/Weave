@@ -34,6 +34,7 @@ import {
   createServerRuntime,
   disposeServerPlugins,
   getServerSessionStore,
+  type ServerRuntime,
 } from '../../src/runtime.js';
 import { activateInput, importInput } from './plugin-authority-fixtures.js';
 
@@ -108,6 +109,39 @@ export function createManagedPluginCompositionFixture() {
   };
 }
 
+export async function runFixtureTools(
+  runtime: ServerRuntime,
+  runner: Awaited<ReturnType<typeof createServerAgentRunner>>,
+  tool: string | readonly string[],
+  sessionId = 'managed-composition',
+) {
+  const store = getServerSessionStore(runtime);
+  if (!(await store.read(sessionId)).length) {
+    await store.append(sessionId, [{ type: 'session.created', payload: { title: sessionId } }]);
+  }
+  const events = [];
+  for await (const event of runner.run({
+    sessionId,
+    provider: 'mock',
+    model: 'test',
+    permissionMode: 'yolo',
+    userMessage: {
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text: (typeof tool === 'string' ? [tool] : tool)
+            .map((name) => `/tool ${name} {}`)
+            .join('\n'),
+        },
+      ],
+    },
+  })) {
+    events.push(event);
+  }
+  return events;
+}
+
 export async function createRealManagedCompositionFixture(
   options: { readonly onKernelSetup?: () => void | Promise<void> } = {},
 ) {
@@ -153,6 +187,22 @@ export async function createRealManagedCompositionFixture(
   const readMcp = vi.fn(mcpStore.read);
   const assertHeldSync = vi.fn(owned.assertHeldSync);
   let sequence = 0;
+  let closing: Promise<void> | undefined;
+
+  function closeResources() {
+    closing ??= (async () => {
+      try {
+        await extensions?.coordinator.dispose();
+      } finally {
+        await disposeServerPlugins(runtime);
+        await runtime.stop();
+        await owned.close();
+        await mcpStore.close();
+        await authority.close();
+      }
+    })();
+    return closing;
+  }
 
   async function writePlugin(
     directory: string,
@@ -160,6 +210,7 @@ export async function createRealManagedCompositionFixture(
     text: string,
     marker?: string,
     relativePayload = false,
+    command?: string,
   ) {
     const tool = id.replaceAll('-', '_');
     const manifest: PluginManifest = {
@@ -167,8 +218,8 @@ export async function createRealManagedCompositionFixture(
       name: id,
       version: '1.0.0',
       apiVersion: '1.0.0',
-      capabilities: ['tool'],
-      contributes: { tools: [tool] },
+      capabilities: command === undefined ? ['tool'] : ['tool', 'command'],
+      contributes: { tools: [tool], ...(command === undefined ? {} : { commands: [command] }) },
       permissions: [],
     };
     await mkdir(directory, { recursive: true });
@@ -187,6 +238,14 @@ export async function createRealManagedCompositionFixture(
           parameters: { type: 'object' }, inputSchema: sdk.z.object({}),
           execute: async () => ${relativePayload ? `readFile(new URL('./payload.txt', import.meta.url), 'utf8')` : JSON.stringify(text)}
         }));
+        ${
+          command === undefined
+            ? ''
+            : `
+        env.contribute(sdk.commandsExtensionPoint, (commands) => commands.addCommand({
+          name: ${JSON.stringify(command)}, title: ${JSON.stringify(id)}, prompt: 'Run the fixture command'
+        }));`
+        }
       } });`,
     );
     return manifest;
@@ -216,6 +275,7 @@ export async function createRealManagedCompositionFixture(
   return {
     root,
     databaseFile,
+    pluginsDirectory,
     authority,
     owned,
     mcpStore,
@@ -245,7 +305,7 @@ export async function createRealManagedCompositionFixture(
     },
     async seedManual(id: string, text: string, trusted = true, marker?: string) {
       const directory = join(pluginsDirectory, id);
-      const manifest = await writePlugin(directory, id, text, marker);
+      const manifest = await writePlugin(directory, id, text, marker, false, id);
       const { digest } = await computeDirectoryDigest(directory);
       if (trusted)
         await authority.trust.append({ kind: 'trusted', pluginId: id, digest, manifest });
@@ -337,31 +397,8 @@ export async function createRealManagedCompositionFixture(
       extensions.adoptInitialAuthoritySync?.();
       return extensions;
     },
-    async runTool(tool: string | readonly string[], sessionId = 'managed-composition') {
-      const store = getServerSessionStore(runtime);
-      if (!(await store.read(sessionId)).length) {
-        await store.append(sessionId, [{ type: 'session.created', payload: { title: sessionId } }]);
-      }
-      const events = [];
-      for await (const event of runner.run({
-        sessionId,
-        provider: 'mock',
-        model: 'test',
-        permissionMode: 'yolo',
-        userMessage: {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: (typeof tool === 'string' ? [tool] : tool)
-                .map((name) => `/tool ${name} {}`)
-                .join('\n'),
-            },
-          ],
-        },
-      }))
-        events.push(event);
-      return events;
+    runTool(tool: string | readonly string[], sessionId?: string) {
+      return runFixtureTools(runtime, runner, tool, sessionId);
     },
     async exists(path: string) {
       return access(path).then(
@@ -369,15 +406,11 @@ export async function createRealManagedCompositionFixture(
         () => false,
       );
     },
+    closeResources,
     async close() {
       try {
-        await extensions?.coordinator.dispose();
+        await closeResources();
       } finally {
-        await disposeServerPlugins(runtime);
-        await runtime.stop();
-        await owned.close();
-        await mcpStore.close();
-        await authority.close();
         await rm(root, { recursive: true, force: true });
       }
     },
