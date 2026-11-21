@@ -89,12 +89,17 @@ the kernel exists.
 
 ### Trust tiers
 
-| Tier             | Host                          | Enabled                           | May do                                       |
-| ---------------- | ----------------------------- | --------------------------------- | -------------------------------------------- |
-| core (protected) | in-process                    | ships with Weave, cannot disable  | maintains the invariants above               |
-| builtin          | in-process                    | default on, can disable/replace   | use every extension point                    |
-| trusted          | in-process                    | user confirms "trust this plugin" | like builtin, cannot replace core            |
-| sandboxed        | MCP / subprocess (later WASM) | user confirms permission manifest | only granted capabilities, all calls proxied |
+| Tier             | Host                   | Enabled                            | May do                                                 |
+| ---------------- | ---------------------- | ---------------------------------- | ------------------------------------------------------ |
+| core (protected) | in-process             | ships with Weave, cannot disable   | maintains the invariants above                         |
+| builtin          | in-process             | default on, can disable/replace    | use every extension point                              |
+| trusted          | in-process             | user confirms "trust this plugin"  | like builtin, cannot replace core                      |
+| external process | local MCP / subprocess | user confirms launch configuration | normal OS user privileges; host tool calls are proxied |
+
+ADR 0004 refines the original sandbox tier: local stdio MCP does not provide an
+OS sandbox. Permission declarations, tool approval and roots cannot constrain a
+child process's direct filesystem or network access. An actual sandbox requires
+a separately designed isolation mechanism.
 
 A project's `.weave/plugins.json` can only enable/disable already-installed
 plugins; loading project-bundled plugin code requires trusting the workspace
@@ -170,7 +175,8 @@ Staged delivery, one branch and PR per stage, from latest `main` each time:
 - **Stage 4 — local plugins** from `~/.weave/plugins/` with workspace trust;
   reload from the next turn. ADR 0003 refines this stage: the plugin directory is
   `<data directory>/plugins/`, and trust is bound to the plugin's content.
-- **Stage 5 — MCP** as sandboxed plugins.
+- **Stage 5 — MCP** as external-process tools. ADR 0004 specifies local stdio,
+  launch trust and shared Tool Pipeline integration without an OS sandbox claim.
 - **Stage 6 (M5, later)** — plugin directory, installer, marketplace, subprocess
   hosting and permission proxy.
 

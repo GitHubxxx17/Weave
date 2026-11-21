@@ -506,6 +506,22 @@ cancellation state machine.
 
 ## Layer Boundaries
 
+Stage 5 MCP is currently a proposed design, not implemented functionality.
+[ADR 0004](../adr/0004-mcp-stdio-tools.md) and the
+[stdio design](../superpowers/specs/2026-11-21-mcp-stdio-design.md) define the
+contracts before implementation: an independent `@weave/mcp-client` leaf package,
+a `plugin-builtins` ToolDefinition adapter, and one Server coordinator for the
+complete ESM + MCP generation. `plugin-host` remains independent of Runtime and
+MCP; Studio remains HTTP-only. The existing standalone PluginHost facade stays
+available, while Server administration moves to the sole coordinator.
+
+Local stdio processes run with normal OS user privileges. Launch configuration
+trust is separate from ESM directory-content trust, and neither a filtered
+environment nor tool approval provides an OS sandbox. All MCP tools use the
+shared Pipeline with explicit high-risk approval metadata. These proposed
+contracts take effect through the separately reviewed Stage 5 implementation
+PRs; the implemented Stage 4 behavior described below is the current baseline.
+
 ```text
                          ┌── @weave/llm ──┐
 @weave/protocol ──────────┤                ├── @weave/runtime -> @weave/plugin -> @weave/server -> @weave/desktop
