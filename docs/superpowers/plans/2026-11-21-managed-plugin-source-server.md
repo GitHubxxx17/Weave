@@ -45,7 +45,7 @@ with the authority and ownership designs referenced there.
 
 This topic uses the Stage 6.2c.1 package exports for explicit source snapshots, candidate identity and origin, verification and its authority marker, lifecycle drain, and the Generation start hook.
 
-`plugin-authority-store.ts`, `plugin-authority-types.ts`, `plugin-authority-data.ts`, `mcp-authority-store.ts`, `owned-plugin-artifact-store.ts`, `server-host.ts`, `runtime.ts`, and `agent-kernel.ts` supply existing contracts and ordinarily need no implementation changes. `agent-kernel.ts` already describes managed ESM and MCP contributions as `kernel`. Keep `AppOptions`, route shapes and Zod response schemas compatible by redacting before projection.
+`plugin-authority-data.ts`, `mcp-authority-store.ts`, `owned-plugin-artifact-store.ts`, `server-host.ts`, `runtime.ts`, and `agent-kernel.ts` supply existing contracts and ordinarily need no implementation changes. `agent-kernel.ts` already describes managed ESM and MCP contributions as `kernel`. Keep `AppOptions`, route shapes and Zod response schemas compatible by redacting before projection.
 
 ## Task 1. Establish the owned shutdown and consumer-drain contract
 
@@ -199,15 +199,15 @@ Observe failures for first-bind parent, registered path, override or retry behav
 command for GREEN and run Server typecheck before independent review.
 
 ```sh
-pnpm exec vitest run apps/server/test/managed-plugin-startup.test.ts apps/server/test/health.test.ts apps/server/test/plugin-path.test.ts apps/server/test/owned-plugin-artifact-store.test.ts
+pnpm exec vitest run apps/server/test/managed-plugin-startup.test.ts apps/server/test/plugin-store-registration.test.ts apps/server/test/health.test.ts apps/server/test/plugin-path.test.ts apps/server/test/owned-plugin-artifact-store.test.ts
 pnpm --filter @weave/server typecheck
 ```
 
-**Files:** `apps/server/src/managed-plugin-startup.ts` and
-`apps/server/test/managed-plugin-startup.test.ts`. Task 3 wires this
-module into `main.ts` and the local facade.
+**Files:** `apps/server/src/{managed-plugin-startup,plugin-authority-store,plugin-authority-types}.ts`
+and `apps/server/test/{managed-plugin-startup,plugin-store-registration}.test.ts`.
+Task 3 wires the startup module into `main.ts` and the local facade.
 
-**Consumes:** Task 1's shared shutdown and owned drain contracts, `createSqlitePluginAuthorityDatabase({ filename })`, `readManagedRootStateSync()`, `snapshotSync()`, `openOwnedPluginArtifactStore`, `resolveDatabaseFile`, `resolvePluginsDirectory`, and baseline membership from `runtime.serverHost.controller().current().resources.plugins`.
+**Consumes:** Task 1's shared shutdown and owned drain contracts, `createSqlitePluginAuthorityDatabase({ filename })`, `readAuthoritySnapshotTx`, `readManagedRootRegistrationTx`, strict `readManagedRootStateSync()`, `openOwnedPluginArtifactStore`, `resolveDatabaseFile`, `resolvePluginsDirectory`, and baseline membership from `runtime.serverHost.controller().current().resources.plugins`.
 
 **Produces:** A private authority and store acquisition module and its
 strict managed startup options schema. Task 3 exposes the schema through
@@ -220,7 +220,22 @@ the coordinator. Embedded manual composition retains its own trust store.
       ESM or `pluginTrustStore`. Use the database file and plugin directory
       resolved by the existing path policy. The helper opens authority
       even with ESM disabled, so Task 3 can use sticky history in MCP.
-- [ ] In normal ESM startup, read both `snapshotSync()` and `readManagedRootStateSync()` before deciding which trust store to use. Borrow `authority.trust` by default. A clean custom override supplies the sole manual trust facet and is closed once by Server. In this case the local source must keep its override events rather than adopting the main DB's unrelated trust prefix. Reject that override immediately when registration or any `installations` exist. An unregistered DB without an option can carry sticky or selected data and still leaves the artifact root unopened.
+- [ ] Add the Server-private `PluginAuthorityDatabase.readStartupAuthoritySync()`
+      from the design. In one `transaction('BEGIN', ...)`, use
+      `readAuthoritySnapshotTx(database)` and
+      `readManagedRootRegistrationTx(database, identity)` and pass their
+      combined result to `detachAndFreeze`. This read validates durable state
+      independently of filesystem eligibility. Keep strict root-state and
+      registration checks on the acquisition path.
+- [ ] Use the new decision read for ESM-disabled, override and unbound startup.
+      Borrow `authority.trust` by default. A clean custom override supplies the
+      sole manual trust facet and is closed once by Server. Reject the override
+      when registration or any `installations` exist, and repeat the decision
+      read after awaiting override events. An unregistered database without an
+      option may carry sticky or selected data and leaves the artifact root
+      unopened. Return the startup snapshot and its durable `registration`
+      from the private helper. If the acquisition arm needs a strict root
+      state, keep it local to that arm.
 - [ ] After baseline `createServerAgentRunner`, pass baseline IDs and `serverHostVersion` through the owned factory. Resolve the configured plugin directory with `path.resolve` as manual discovery does, then join `.weave-store` and let the factory canonicalize checked paths. The missing plugin parent may be created recursively only when the latest validated state is unregistered and the caller explicitly asked for `allow-unbound`. Registered startup always uses `require-bound`, even with explicit `allow-unbound`, and neither it nor unregistered `require-bound` can create the parent or root. Attach the ownership-loss observer before acquisition and register the returned wrapper immediately with Task 1's shared cleanup path. Read/adopt fresh authority after acquisition, which awaits filesystem/lease work.
 - [ ] Use real temp databases through the private acquisition module. Assert
       explicit first binding with the default `plugins` parent absent,
@@ -233,6 +248,14 @@ the coordinator. Embedded manual composition retains its own trust store.
       no root creation for ordinary unbound startup. Test acquisition and
       real lease release with the Task 1 cleanup tracker. Task 3 covers the
       live HTTP startup and failed-listen paths.
+- [ ] In `plugin-store-registration.test.ts`, read startup authority through
+      a database main-file symlink and assert the result is detached and
+      frozen. Verify registration is validated and malformed durable
+      registration still fails. Assert strict root state still rejects the
+      same symlink. In `managed-plugin-startup.test.ts` use a main-file symlink
+      for default-unbound, disabled ESM and clean override startup and assert
+      no artifact root creation. With that symlink, explicit acquisition and
+      registered ESM auto-resume still reject before artifact creation.
 
 **Ordering.** Task 1's cleanup tracker owns each acquired resource immediately,
 ahead of the next await. Verify acquisition and retention through the private

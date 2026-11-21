@@ -244,7 +244,27 @@ Add a Zod-validated
 Resolve the configured plugin directory as the manual scanner does, including
 relative paths, then join `.weave-store`. With ESM enabled,
 default Server startup opens one `PluginAuthorityDatabase` and borrows its
-`.trust` facet. If the validated database is registered, auto-resume with
+`.trust` facet. Add this Server-private decision read:
+
+```ts
+readStartupAuthoritySync(): {
+  readonly snapshot: PluginAuthoritySnapshot;
+  readonly registration: ManagedRootRegistration | null;
+};
+```
+
+Run `readAuthoritySnapshotTx` and `readManagedRootRegistrationTx` in one
+`BEGIN` read transaction and return the validated, detached and frozen
+snapshot and registration. Validate the durable registration schema and
+database identity. Use this read for override, sticky history, ESM-disabled
+and default-unbound startup decisions. Legacy database paths, including
+SQLite-openable main-file symlinks, remain usable on those paths.
+Apply strict filesystem eligibility checks via `readManagedRootStateSync()`
+when attempting acquisition, including registered ESM auto-resume and
+explicit managed mode. Registration and the owner factory continue using
+the existing strict path checks.
+
+If the validated database is registered, auto-resume with
 `require-bound` at the exact configured root, including when explicit options
 request `allow-unbound`. With no registration and no explicit option, read
 sticky and selection history, create no artifact root and permit no managed
@@ -258,7 +278,7 @@ with the synchronous loss observer registered and baseline reserved IDs known.
 
 Reject explicit managed mode if local ESM is disabled or a legacy
 `pluginTrustStore` override is supplied. In normal `startServer` with ESM
-enabled, inspect validated root state and authority even for a custom override
+enabled, inspect validated registration and authority even for a custom override
 and reject the override when registration exists or any sticky history is
 present, including imported-only and uninstalled IDs. A clean override's
 Server-owned adapter forwards and retains its raw trust events for source
