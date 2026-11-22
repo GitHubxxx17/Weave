@@ -292,6 +292,81 @@ describe('complete catalog observations', () => {
       '/plugins/managed',
     ]);
   });
+
+  it.each(['available', 'missing'] as const)(
+    'replaces a legacy ESM write seed with a real GET whose generation is %s',
+    async (freshGeneration) => {
+      let written = false;
+      const receipt = { generation: 7, unchanged: false, failed: [] };
+      const { fetch } = installFetch((path) => {
+        if (path === '/plugins/manual/trust') {
+          written = true;
+          return json({ plugins: [], local, result: receipt });
+        }
+        if (path === '/plugins' && (!written || freshGeneration === 'missing'))
+          return json({ plugins: [], local });
+        if (path === '/mcp' && !written) return disabledMcp();
+        if (path === '/plugins/managed' && !written)
+          return new Response('404 Not Found', { status: 404 });
+        return undefined;
+      });
+      const store = createPluginCatalogStore();
+      await store.ensureLoaded();
+      const original = store.getSnapshot();
+      fetch.mockClear();
+      await store.trust('manual', secondDigest);
+      expect(fetch.mock.calls.map(([path, init]) => [path, init.method])).toEqual([
+        ['/plugins/manual/trust', 'POST'],
+        ['/mcp', 'GET'],
+        ['/plugins/managed', 'GET'],
+        ['/plugins', 'GET'],
+        ['/mcp', 'GET'],
+        ['/plugins/managed', 'GET'],
+      ]);
+      const state = store.getSnapshot();
+      expect(state.lastResult).toEqual(receipt);
+      if (freshGeneration === 'available') {
+        expect(state).toMatchObject({
+          catalog: { generation },
+          mcp: { generation },
+          managed: { kind: 'enabled', catalog: { generation } },
+          consistency: { kind: 'ready' },
+          sharedManagementBlocked: false,
+        });
+      } else {
+        expect(state.catalog).toBe(original.catalog);
+        expect(state.managed).toBe(original.managed);
+        expect(state).toMatchObject({
+          error: { code: 'catalog-invalid-generation' },
+          consistency: { kind: 'unavailable', reason: 'protocol' },
+          sharedManagementBlocked: true,
+        });
+      }
+    },
+  );
+
+  it.each(['/plugins', '/mcp'])(
+    'classifies a 503 from %s using HTTP status even when its code matches local lag',
+    async (failedPath) => {
+      let fail = false;
+      const code = 'catalog-managed-authority-lag';
+      installFetch((path) => (fail && path === failedPath ? error(503, code) : undefined));
+      const store = createPluginCatalogStore();
+      await store.ensureLoaded();
+      const original = store.getSnapshot();
+      fail = true;
+      await expect(store.refresh()).rejects.toMatchObject({ code, status: 503 });
+      const state = store.getSnapshot();
+      expect(state.catalog).toBe(original.catalog);
+      expect(state.mcp).toBe(original.mcp);
+      expect(state.managed).toBe(original.managed);
+      expect(state).toMatchObject({
+        error: { code, status: 503 },
+        consistency: { kind: 'unavailable', reason: 'protocol' },
+        canRecoverManagedLag: false,
+      });
+    },
+  );
 });
 
 describe('managed request recovery', () => {

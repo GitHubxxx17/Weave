@@ -154,10 +154,15 @@ function toManagedError(reason: unknown): PluginApiError {
     ? error
     : new PluginApiError(error.code, error.message, error.status);
 }
+class ManagedAuthorityLagError extends PluginApiError {
+  constructor() {
+    super('catalog-managed-authority-lag', '受管插件目录正在等待同步', 0);
+  }
+}
 function unavailable(error: CatalogApiError): CatalogConsistency {
   if (error.code === 'catalog-generation-mismatch')
     return { kind: 'unavailable', reason: 'generation-mismatch' };
-  if (error.code === 'catalog-managed-authority-lag')
+  if (error instanceof ManagedAuthorityLagError)
     return { kind: 'unavailable', reason: 'managed-authority-lag' };
   return { kind: 'unavailable', reason: error.status === 0 ? 'network' : 'protocol' };
 }
@@ -295,6 +300,7 @@ export function createPluginCatalogStore(): PluginCatalogStore {
       if (group.mcp.kind === 'disabled' && group.managed.kind !== 'enabled')
         return { kind: 'ready', group };
       if (generation === undefined) {
+        if (initialSeed.catalog !== undefined) continue;
         throw new PluginApiError(
           'catalog-invalid-generation',
           '插件目录缺少版本信息，请重新读取目录',
@@ -347,7 +353,7 @@ export function createPluginCatalogStore(): PluginCatalogStore {
         const { kind, group } = await readGroup(seed);
         if (kind === 'lag') {
           lastLag = group;
-          throw new PluginApiError('catalog-managed-authority-lag', '受管插件目录正在等待同步', 0);
+          throw new ManagedAuthorityLagError();
         }
         install(group, alreadyInvalidated);
       })
