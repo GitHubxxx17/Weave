@@ -29,6 +29,7 @@ export interface CommandPicker {
   setActiveIndex(index: number): void;
   /** Puts a command into the composer. */
   select(command: SlashCommand): void;
+  close(): void;
   /** Handles a key while the picker is open; returns whether it took the key. */
   handleKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>): boolean;
   /** The text to send for a draft: a known `/command arguments` is expanded. */
@@ -131,6 +132,7 @@ export function useCommandPicker(options: CommandPickerOptions): CommandPicker {
 
   return {
     open,
+    close: () => setDismissedDraft(draft),
     items,
     activeIndex: active,
     setActiveIndex,

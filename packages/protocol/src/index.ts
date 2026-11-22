@@ -2,6 +2,13 @@ export { contentPartSchema } from './content.js';
 export type { ContentPart } from './content.js';
 
 export {
+  fileReferenceSchema,
+  fileReferencesSchema,
+  fileAttachmentSummarySchema,
+} from './file-context.js';
+export type { FileReference, FileAttachmentSummary } from './file-context.js';
+
+export {
   assistantMessageSchema,
   messageSchema,
   systemMessageSchema,

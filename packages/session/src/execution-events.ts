@@ -1,6 +1,12 @@
-import { contentPartSchema, skillRefsSchema, turnRequestMetadataSchema } from '@weave/protocol';
+import {
+  contentPartSchema,
+  fileReferencesSchema,
+  skillRefsSchema,
+  turnRequestMetadataSchema,
+} from '@weave/protocol';
 import { z } from 'zod';
 import type { SessionEvent } from './events.js';
+import { capturedFileContextSchema } from './file-context.js';
 
 const identifierSchema = z.string().min(1).max(240);
 const strictContentSchema = z.discriminatedUnion('type', [
@@ -23,6 +29,7 @@ export const agentExecutionInputSchema = turnRequestMetadataSchema
       .object({ role: z.literal('user'), content: z.array(strictContentSchema).readonly() })
       .strict(),
     skills: skillRefsSchema.optional(),
+    files: fileReferencesSchema.optional(),
   })
   .strict()
   .refine(isJson, 'Execution input must contain only JSON values');
@@ -38,8 +45,20 @@ export const executionAcceptedPayloadSchema = z
     input: agentExecutionInputSchema,
     dispatch: z.literal('queued').optional(),
     runInput: agentExecutionInputSchema.optional(),
+    fileContext: capturedFileContextSchema.optional(),
   })
   .strict()
+  .refine(({ input, fileContext, dispatch, runInput }) => {
+    if (input.files === undefined)
+      return fileContext === undefined && runInput?.files === undefined;
+    return (
+      dispatch === 'queued' &&
+      runInput !== undefined &&
+      fileContext !== undefined &&
+      input.files.length === fileContext.files.length &&
+      input.files.every((file, index) => file.path === fileContext.files[index]?.path)
+    );
+  }, 'File references require a matching captured batch and queued effective input')
   .refine(({ dispatch, input, runInput }) => {
     if (dispatch !== 'queued') return true;
     if (runInput === undefined || runInput.useProviderDefaults !== false) return false;
@@ -99,12 +118,16 @@ export type SessionExecution = z.infer<typeof executionAcceptedPayloadSchema> & 
   readonly reason?: string;
 };
 
-export type SessionExecutionMetadata = Omit<SessionExecution, 'input' | 'runInput'> & {
+export type SessionExecutionMetadata = Omit<
+  SessionExecution,
+  'input' | 'runInput' | 'fileContext'
+> & {
   readonly preview: string;
   readonly provider: string;
   readonly model: string;
   readonly imageCount: number;
   readonly skillCount: number;
+  readonly fileCount: number;
 };
 export interface SessionExecutionQueue {
   readonly revision: number;
@@ -225,8 +248,8 @@ export function projectAgentExecutionQueue(events: readonly SessionEvent[]): Ses
     }
     return result;
   };
-  const executions = projection.executions.map(({ input, runInput: _runInput, ...metadata }) => {
-    void _runInput;
+  const executions: SessionExecutionMetadata[] = projection.executions.map((execution) => {
+    const { input } = execution;
     let preview = '';
     let imageCount = 0;
     for (const part of input.userMessage.content) {
@@ -235,12 +258,25 @@ export function projectAgentExecutionQueue(events: readonly SessionEvent[]): Ses
         preview = bounded(preview + (preview === '' ? '' : '\n') + part.text);
     }
     return {
-      ...metadata,
+      executionId: execution.executionId,
+      requestId: execution.requestId,
+      requestDigest: execution.requestDigest,
+      turnId: execution.turnId,
+      userMessageId: execution.userMessageId,
+      sessionId: execution.sessionId,
+      createdAt: execution.createdAt,
+      status: execution.status,
+      ...(execution.dispatch === undefined ? {} : { dispatch: execution.dispatch }),
+      ...(execution.durableThroughSequence === undefined
+        ? {}
+        : { durableThroughSequence: execution.durableThroughSequence }),
+      ...(execution.reason === undefined ? {} : { reason: execution.reason }),
       preview,
       provider: bounded(input.provider),
       model: bounded(input.model),
       imageCount,
       skillCount: input.skills?.length ?? 0,
+      fileCount: input.files?.length ?? 0,
     };
   });
   return {

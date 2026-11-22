@@ -2,7 +2,9 @@ import {
   agentExecutionInputSchema,
   type AgentExecutionInput,
   type SessionEventStore,
+  type CapturedFileContext,
 } from '@weave/session';
+import { fileAttachmentSummarySchema, type FileReference } from '@weave/protocol';
 import { z } from 'zod';
 import { agentRuntimeEventSchema, type AgentRunner } from './agent-types.js';
 
@@ -66,6 +68,7 @@ export const agentExecutionSnapshotSchema = agentExecutionSummarySchema
   .extend({
     input: agentExecutionInputSchema,
     effectiveSettings: agentExecutionEffectiveSettingsSchema.optional(),
+    fileAttachments: z.array(fileAttachmentSummarySchema).min(1).max(8).readonly().optional(),
     events: z.array(agentRuntimeEventSchema).readonly(),
   })
   .strict();
@@ -101,6 +104,7 @@ export const agentExecutionQueueEntrySchema = agentExecutionSummarySchema
     model: boundedLabelSchema,
     imageCount: z.number().int().nonnegative().safe(),
     skillCount: z.number().int().nonnegative().max(32),
+    fileCount: z.number().int().nonnegative().max(8),
   })
   .strict();
 export type AgentExecutionQueueEntry = z.infer<typeof agentExecutionQueueEntrySchema>;
@@ -191,7 +195,18 @@ export interface AgentExecutionServiceOptions {
     sessionId: string,
     input: AgentExecutionInput,
   ) => Promise<AgentExecutionInput>;
+  readonly captureFiles?: CaptureFiles;
 }
+
+export interface CaptureFilesOptions {
+  readonly signal: AbortSignal;
+}
+/** Core host authority: external requests provide refs only, never this bundle. */
+export type CaptureFiles = (
+  sessionId: string,
+  files: readonly FileReference[],
+  options: CaptureFilesOptions,
+) => Promise<CapturedFileContext>;
 
 export type AgentExecutionErrorCode =
   | 'execution-not-found'
@@ -205,6 +220,12 @@ export type AgentExecutionErrorCode =
   | 'execution-output-limit'
   | 'execution-admission-uncertain'
   | 'execution-persistence-error'
+  | 'execution-file-too-large'
+  | 'execution-file-unavailable'
+  | 'execution-file-invalid-utf8'
+  | 'execution-file-changed'
+  | 'execution-file-capture-timeout'
+  | 'execution-file-capture-failed'
   | 'execution-invalid-input';
 export class AgentExecutionError extends Error {
   readonly code: AgentExecutionErrorCode;

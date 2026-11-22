@@ -32,6 +32,8 @@ export type {
   AgentExecutionSubscription,
   AgentExecutionService,
   AgentExecutionServiceOptions,
+  CaptureFiles,
+  CaptureFilesOptions,
   AgentExecutionErrorCode,
 } from './agent-execution-types.js';
 export type {
@@ -157,6 +159,7 @@ export type {
   WorkspaceFileSnapshotHook,
 } from './workspace-file-types.js';
 export { createWorkspaceFileTools } from './workspace-file-tools.js';
+export { captureWorkspaceFiles } from './workspace-file-capture.js';
 export { restoreFileSnapshot } from './file-undo.js';
 export type { RestorableFileSnapshot, RestoreFileOutcome } from './file-undo.js';
 export {

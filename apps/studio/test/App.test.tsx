@@ -2324,6 +2324,7 @@ describe('Studio Agent Chat', () => {
             model: 'demo',
             imageCount: 0,
             skillCount: 0,
+            fileCount: 0,
           },
         ],
       }),
@@ -2960,6 +2961,7 @@ describe('Studio Agent Chat', () => {
               model: 'weave-local-demo',
               imageCount: 1,
               skillCount: 1,
+              fileCount: 0,
             },
           ],
           scheduler: 'ready',
@@ -2987,7 +2989,9 @@ describe('Studio Agent Chat', () => {
     expect((screen.getByLabelText('发送消息') as HTMLTextAreaElement).value).toBe(
       'typed while fetching\n\ncopied queue text',
     );
-    expect(screen.getByText('已复制到草稿，原消息仍在队列中。')).toBeTruthy();
+    expect(
+      screen.getByText('已复制到草稿，原消息仍在队列中。再次发送会读取当前项目文件。'),
+    ).toBeTruthy();
     streamAgentRunMock.mockImplementationOnce(async (request, handlers) => {
       const { sessionId, ...input } = request;
       handlers.onReceipt?.({
@@ -4902,4 +4906,354 @@ describe('provisional composer App sends', () => {
     expect(screen.getByAltText('newer.png')).toBeTruthy();
     await act(async () => stream.resolve());
   });
+});
+
+describe('explicit project file context', () => {
+  function fileRoutes(): void {
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input, init) => {
+      const path = String(input);
+      if (path.startsWith('/projects?') || path === '/projects') {
+        const payload = await (await base(input, init)).json();
+        return Response.json({
+          ...payload,
+          projects: payload.projects.map((p: Record<string, unknown>) => ({
+            ...p,
+            folderPath: '/test/project',
+          })),
+        });
+      }
+      if (path.endsWith('/tree'))
+        return Response.json({
+          files: ['a.ts', 'b.ts', ...Array.from({ length: 8 }, (_, i) => `extra-${i}.ts`)],
+          source: 'walk',
+          truncated: false,
+        });
+      if (path.includes('/file?'))
+        return Response.json({
+          path: 'a.ts',
+          content: 'current value',
+          bytes: 13,
+          truncated: false,
+        });
+      return base(input, init);
+    });
+  }
+  it('selects an explicit chip with Enter, sends file-only refs and preserves a newer draft file on receipt', async () => {
+    fileRoutes();
+    let receipt!: AgentStreamHandlers;
+    let finish!: () => void;
+    streamAgentRunMock.mockImplementation((_request, handlers) => {
+      receipt = handlers;
+      return new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+    });
+    await renderApp();
+    const input = screen.getByLabelText('发送消息');
+    fireEvent.change(input, { target: { value: '@a' } });
+    await screen.findByRole('option', { name: 'a.ts' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(streamAgentRunMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: '移除文件 a.ts' })).toBeTruthy();
+    expect((input as HTMLTextAreaElement).value).toBe('');
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(streamAgentRunMock).toHaveBeenCalledTimes(1));
+    expect(streamAgentRunMock.mock.calls[0]?.[0]).toMatchObject({
+      userMessage: { content: [] },
+      files: [{ path: 'a.ts' }],
+    });
+    fireEvent.change(input, { target: { value: '@b' } });
+    fireEvent.click(await screen.findByRole('option', { name: 'b.ts' }));
+    act(() => {
+      receipt.onAccepted?.();
+      finish();
+    });
+    expect(screen.getByRole('button', { name: '移除文件 b.ts' })).toBeTruthy();
+  });
+  it('keeps definite capture rejections editable with file chips intact', async () => {
+    fileRoutes();
+    streamAgentRunMock.mockRejectedValueOnce(
+      new AgentStreamError('execution-file-capture-timeout', '文件读取超时，请重试'),
+    );
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: '添加项目文件' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'a.ts' }));
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await screen.findByText('文件读取超时，请重试。草稿已保留。');
+    expect(screen.getByRole('button', { name: '移除文件 a.ts' })).toBeTruthy();
+    expect((screen.getByRole('button', { name: '发送' }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    expect(streamAgentRunMock).toHaveBeenCalledTimes(1);
+  });
+  it('keeps a toolbar menu open when focus selection fires and avoids IME submission', async () => {
+    fileRoutes();
+    await renderApp();
+    const input = screen.getByLabelText('发送消息');
+    fireEvent.click(screen.getByRole('button', { name: '添加项目文件' }));
+    fireEvent.select(input);
+    await screen.findByRole('option', { name: 'a.ts' });
+    fireEvent.compositionStart(input);
+    fireEvent.change(input, { target: { value: '@b' } });
+    fireEvent.select(input);
+    expect(screen.queryByRole('listbox', { name: '项目文件候选' })).toBeNull();
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true, keyCode: 229 });
+    expect(streamAgentRunMock).not.toHaveBeenCalled();
+    fireEvent.compositionEnd(input);
+    await screen.findByRole('option', { name: 'b.ts' });
+    fireEvent.keyDown(input, { key: 'Tab' });
+    expect(screen.getByRole('button', { name: '移除文件 b.ts' })).toBeTruthy();
+    expect(streamAgentRunMock).not.toHaveBeenCalled();
+  });
+  it('keeps Skill, slash and project file menus mutually exclusive', async () => {
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === '/commands')
+        return Response.json({
+          commands: [
+            { name: 'recap', title: '回顾进展', prompt: '回顾 $ARGUMENTS', pluginId: 'recap-kit' },
+          ],
+        });
+      if (/\/sessions\/[^/]+\/skills$/.test(String(input))) return Response.json(skillCatalog());
+      return base(input, init);
+    });
+    fileRoutes();
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: '选择技能' }));
+    await screen.findByRole('dialog', { name: '技能' });
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '/' } });
+    await screen.findByRole('listbox', { name: '斜杠命令' });
+    expect(screen.queryByRole('dialog', { name: '技能' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '添加项目文件' }));
+    await screen.findByRole('listbox', { name: '项目文件候选' });
+    expect(screen.queryByRole('listbox', { name: '斜杠命令' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '选择技能' }));
+    await screen.findByRole('dialog', { name: '技能' });
+    expect(screen.queryByRole('listbox', { name: '项目文件候选' })).toBeNull();
+  });
+  it('invalidates @ token offsets after quoting a reply into the draft', async () => {
+    fileRoutes();
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === `/sessions/${sessionIds.local}`)
+        return Response.json(
+          sessionDetail(sessionIds.local, '本地 Agent 演示', [
+            {
+              role: 'user',
+              turnId: 'earlier',
+              content: [{ type: 'text', text: 'earlier question' }],
+            },
+            {
+              role: 'assistant',
+              turnId: 'earlier',
+              content: [{ type: 'text', text: 'quoted reply' }],
+            },
+            { role: 'user', turnId: 'later', content: [{ type: 'text', text: 'later question' }] },
+            {
+              role: 'assistant',
+              turnId: 'later',
+              content: [{ type: 'text', text: 'later reply' }],
+            },
+          ]),
+        );
+      return base(input, init);
+    });
+    await renderApp();
+    await screen.findByText('quoted reply');
+    const input = screen.getByLabelText('发送消息');
+    fireEvent.change(input, { target: { value: '@a' } });
+    await screen.findByRole('option', { name: 'a.ts' });
+    fireEvent.click(screen.getByRole('button', { name: '引用' }));
+    expect((input as HTMLTextAreaElement).value).toBe('> quoted reply\n\n@a');
+    expect(screen.queryByRole('option', { name: 'a.ts' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '移除文件 a.ts' })).toBeNull();
+  });
+  it('shares one logical ref between @ selection and the file viewer add action', async () => {
+    fileRoutes();
+    await renderApp();
+    const input = screen.getByLabelText('发送消息');
+    fireEvent.change(input, { target: { value: '@a' } });
+    await screen.findByRole('option', { name: 'a.ts' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.click(screen.getByRole('tab', { name: '文件' }));
+    fireEvent.click(await screen.findByRole('treeitem', { name: 'a.ts' }));
+    expect(
+      ((await screen.findByRole('button', { name: '已添加 a.ts' })) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(screen.getAllByRole('button', { name: '移除文件 a.ts' })).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: '移除文件 a.ts' }));
+    fireEvent.click(screen.getByRole('button', { name: '添加到消息 a.ts' }));
+    expect(screen.getAllByRole('button', { name: '移除文件 a.ts' })).toHaveLength(1);
+  });
+  it('sends ordinary @path text without adding any logical file ref', async () => {
+    fileRoutes();
+    streamAgentRunMock.mockResolvedValue(undefined);
+    await renderApp();
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '@a.ts' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(streamAgentRunMock).toHaveBeenCalledOnce());
+    expect(streamAgentRunMock.mock.calls[0]?.[0].files).toBeUndefined();
+    expect(streamAgentRunMock.mock.calls[0]?.[0].userMessage.content).toEqual([
+      { type: 'text', text: '@a.ts' },
+    ]);
+  });
+  it.each(['append', 'replace', 'overflow', 'replace-open-token'])(
+    'copies queued refs with %s semantics and keeps the original queued message',
+    async (choice) => {
+      fileRoutes();
+      const base = fetchMock.getMockImplementation()!;
+      const replacingToken = choice === 'replace-open-token';
+      const refs =
+        choice === 'overflow'
+          ? Array.from({ length: 8 }, (_, i) => ({ path: `extra-${i}.ts` }))
+          : [{ path: 'b.ts' }, { path: 'a.ts' }];
+      const summary = {
+        executionId: 'files-q',
+        requestId: 'files-r',
+        sessionId: sessionIds.local,
+        turnId: 'files-t',
+        userMessageId: 'files-u',
+        createdAt: '2026-11-23T00:00:00Z',
+        status: 'queued',
+        cursor: 'epoch:files-q:0',
+      };
+      fetchMock.mockImplementation(async (input, init) => {
+        const path = String(input);
+        if (path.endsWith('/executions/queue'))
+          return Response.json({
+            sessionId: sessionIds.local,
+            revision: 1,
+            cursor: `epoch:${sessionIds.local}:1`,
+            active: null,
+            queued: [
+              {
+                ...summary,
+                preview: 'queued files',
+                provider: 'mock',
+                model: 'm',
+                imageCount: 0,
+                skillCount: 0,
+                fileCount: refs.length,
+              },
+            ],
+            scheduler: 'ready',
+            limits: { sessionQueued: 10, globalQueued: 100 },
+          });
+        if (path.endsWith('/executions/files-q'))
+          return Response.json({
+            ...summary,
+            input: {
+              userMessage: {
+                role: 'user',
+                content: replacingToken ? [{ type: 'text', text: 'queued message' }] : [],
+              },
+              provider: 'mock',
+              model: 'm',
+              permissionMode: 'ask',
+              files: refs,
+            },
+            events: [],
+          });
+        return base(input, init);
+      });
+      await renderApp();
+      fireEvent.click(screen.getByRole('button', { name: '添加项目文件' }));
+      await screen.findByRole('option', { name: 'a.ts' });
+      fireEvent.click(screen.getByRole('option', { name: 'a.ts' }));
+      expect(screen.getByRole('button', { name: '移除文件 a.ts' })).toBeTruthy();
+      if (replacingToken) {
+        fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '@a' } });
+        await screen.findByRole('option', { name: 'a.ts' });
+      }
+      fireEvent.click(await screen.findByRole('button', { name: '复制第 1 条消息到草稿' }));
+      const dialog = await screen.findByRole('dialog', { name: '复制队列消息' });
+      fireEvent.click(
+        within(dialog).getByRole('button', {
+          name: choice === 'replace' || replacingToken ? '替换草稿' : '追加到草稿',
+        }),
+      );
+      const draft = screen.getByLabelText('待发送文件');
+      const paths = within(draft)
+        .getAllByRole('button')
+        .map((button) => button.getAttribute('aria-label'));
+      expect(paths).toEqual(
+        choice === 'replace' || replacingToken
+          ? ['移除文件 b.ts', '移除文件 a.ts']
+          : choice === 'overflow'
+            ? ['移除文件 a.ts']
+            : ['移除文件 a.ts', '移除文件 b.ts'],
+      );
+      expect(
+        screen.getByText(
+          choice === 'overflow'
+            ? '最多添加 8 个文件，请先移除文件后再复制。'
+            : '已复制到草稿，原消息仍在队列中。再次发送会读取当前项目文件。',
+        ),
+      ).toBeTruthy();
+      if (replacingToken) {
+        expect((screen.getByLabelText('发送消息') as HTMLTextAreaElement).value).toBe(
+          'queued message',
+        );
+        expect(screen.queryByRole('listbox', { name: '项目文件候选' })).toBeNull();
+      }
+      expect(screen.getByRole('button', { name: '复制第 1 条消息到草稿' })).toBeTruthy();
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/cancel'))).toBe(false);
+    },
+  );
+  it.each(['failed', 'cancelled'])(
+    'reconstructs ordered refs for a refreshed %s file-only Turn',
+    async (status) => {
+      const base = fetchMock.getMockImplementation()!;
+      const summaries = ['b.ts', 'a.ts'].map((path) => ({
+        path,
+        encoding: 'utf-8',
+        byteLength: 6,
+        sha256: 'a'.repeat(64),
+      }));
+      fetchMock.mockImplementation(async (input, init) => {
+        if (String(input) === `/sessions/${sessionIds.local}`)
+          return Response.json({
+            ...sessionDetail(sessionIds.local, '本地 Agent 演示', [
+              { role: 'user', turnId: 'files-history', content: [], fileAttachments: summaries },
+              {
+                role: 'assistant',
+                turnId: 'files-history',
+                content: [{ type: 'text', text: '原回答' }],
+              },
+            ]),
+            turns: [
+              {
+                turnId: 'files-history',
+                userMessageId: `${sessionIds.local}-message-1`,
+                status,
+                startedAt: '2026-11-23T00:00:00Z',
+                request: {
+                  provider: 'mock',
+                  model: 'original-model',
+                  useProviderDefaults: false,
+                  permissionMode: 'ask',
+                },
+              },
+            ],
+          });
+        return base(input, init);
+      });
+      streamAgentRunMock.mockResolvedValue(undefined);
+      await renderApp();
+      expect(await screen.findByLabelText('发送时快照')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: '重试' }));
+      await waitFor(() => expect(streamAgentRunMock).toHaveBeenCalledTimes(1));
+      expect(streamAgentRunMock.mock.calls[0]?.[0]).toMatchObject({
+        userMessage: { content: [] },
+        files: [{ path: 'b.ts' }, { path: 'a.ts' }],
+      });
+      expect(JSON.stringify(streamAgentRunMock.mock.calls[0]?.[0])).not.toContain('sha256');
+      const firstRequestId = streamAgentRunMock.mock.calls[0]?.[2]?.requestId;
+      expect(firstRequestId).toBeTruthy();
+      fireEvent.click(screen.getAllByRole('button', { name: '重试' })[0]!);
+      await waitFor(() => expect(streamAgentRunMock).toHaveBeenCalledTimes(2));
+      expect(streamAgentRunMock.mock.calls[1]?.[2]?.requestId).not.toBe(firstRequestId);
+    },
+  );
 });

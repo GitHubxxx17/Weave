@@ -117,6 +117,9 @@ export function executionTurnView(snapshot: AgentExecutionSnapshot): {
         turnId: snapshot.turnId,
         occurredAt: snapshot.createdAt,
         content: [...snapshot.input.userMessage.content],
+        ...(snapshot.fileAttachments === undefined
+          ? {}
+          : { fileAttachments: snapshot.fileAttachments }),
       },
       {
         role: 'assistant',

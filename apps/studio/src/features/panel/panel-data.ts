@@ -40,6 +40,9 @@ export interface PanelContext {
   readonly errorMessage: string | null;
   readonly formatTime: (occurredAt: string) => string;
   readonly onSetFolder: () => void;
+  readonly onAddFile?: ((path: string) => void) | undefined;
+  readonly selectedFiles?: readonly string[] | undefined;
+  readonly fileOwnerKey?: string | undefined;
   readonly onJumpToMessage: (messageId: string) => void;
 }
 

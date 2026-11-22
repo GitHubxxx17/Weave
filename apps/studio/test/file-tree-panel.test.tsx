@@ -214,3 +214,32 @@ describe('FileTreePanel', () => {
     expect(screen.queryByTestId('file-diff-view')).toBeNull();
   });
 });
+
+it('adds the selected file from its viewer header and disables already selected refs', async () => {
+  mocks.fetchFileTree.mockResolvedValue({ files: ['a.ts'], source: 'walk', truncated: false });
+  mocks.fetchFileContent.mockResolvedValue({
+    path: 'a.ts',
+    content: 'value',
+    bytes: 5,
+    truncated: false,
+  });
+  const onAddFile = vi.fn();
+  const { rerender } = render(
+    <FileTreePanel projectId="p1" onSetFolder={vi.fn()} onAddFile={onAddFile} selectedFiles={[]} />,
+  );
+  fireEvent.click(await screen.findByRole('treeitem', { name: 'a.ts' }));
+  fireEvent.click(await screen.findByRole('button', { name: '添加到消息 a.ts' }));
+  expect(onAddFile).toHaveBeenCalledWith('a.ts');
+  rerender(
+    <FileTreePanel
+      projectId="p1"
+      onSetFolder={vi.fn()}
+      onAddFile={onAddFile}
+      selectedFiles={['a.ts']}
+    />,
+  );
+  expect((screen.getByRole('button', { name: '已添加 a.ts' }) as HTMLButtonElement).disabled).toBe(
+    true,
+  );
+  expect(document.querySelector('button button')).toBeNull();
+});

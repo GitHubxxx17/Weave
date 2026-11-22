@@ -6,10 +6,17 @@ import {
   type AgentPlan,
   type ContextBreakdown,
   type Message,
+  type FileAttachmentSummary,
   type TokenUsage,
 } from '@weave/protocol';
 import type { ToolCall } from '@weave/protocol';
 import { sessionEventSchema, type SessionEvent } from './events.js';
+import {
+  applyFileContextEvent,
+  createFileContextProjectionState,
+  type FileContextMessageBinding,
+  type FileContextProjectionState,
+} from './file-context-state.js';
 
 /**
  * Stable error categories for invalid Session event sequences.
@@ -40,6 +47,7 @@ export interface SessionMessage {
   readonly occurredAt: string;
   /** Explicit user Turn, or legacy Turn inferred when the message was created. */
   readonly turnId?: string | undefined;
+  readonly fileAttachments?: readonly FileAttachmentSummary[] | undefined;
 }
 
 /**
@@ -167,6 +175,7 @@ export interface ProjectionState {
   turns: MutableTurn[];
   turnById: Map<string, MutableTurn>;
   activeTurnId: string | undefined;
+  fileContexts: FileContextProjectionState;
   lastSequence: number;
 }
 
@@ -194,6 +203,7 @@ export function createProjectionState(): ProjectionState {
     turns: [],
     turnById: new Map<string, MutableTurn>(),
     activeTurnId: undefined,
+    fileContexts: createFileContextProjectionState(),
     lastSequence: 0,
   };
 }
@@ -227,6 +237,21 @@ export function applyEvent(state: ProjectionState, event: SessionEvent): void {
   }
   if (event.sequence !== state.lastSequence + 1) {
     throw invalidOrder('Session event sequences must be continuous and increasing');
+  }
+
+  let fileBinding: FileContextMessageBinding | undefined;
+  try {
+    if (
+      event.type === 'execution.accepted' &&
+      event.payload.fileContext !== undefined &&
+      (state.messageIds.has(event.payload.userMessageId) ||
+        state.turnById.has(event.payload.turnId))
+    ) {
+      throw invalidOrder('Captured execution must be accepted before its message and Turn');
+    }
+    fileBinding = applyFileContextEvent(state.fileContexts, event);
+  } catch (error) {
+    throw invalidOrder(error instanceof Error ? error.message : 'Invalid captured message binding');
   }
 
   if (event.type === 'session.created') {
@@ -289,7 +314,11 @@ export function applyEvent(state: ProjectionState, event: SessionEvent): void {
       ) {
         throw missingReference('Turn user message must reference an unassigned user message');
       }
-      state.messages[index] = { ...message, turnId: turn.turnId };
+      state.messages[index] = {
+        ...message,
+        turnId: turn.turnId,
+        ...(fileBinding === undefined ? {} : { fileAttachments: fileBinding.summaries }),
+      };
       state.boundUserMessageIds.add(message.messageId);
       turn.userMessageId = message.messageId;
     }
@@ -471,7 +500,12 @@ export function snapshotProjection(state: ProjectionState): SessionProjection {
     title: state.title,
     archivedAt: state.archivedAt,
     deletedAt: state.deletedAt,
-    messages: state.messages.map((message) => ({ ...message })),
+    messages: state.messages.map((message) => ({
+      ...message,
+      ...(message.fileAttachments === undefined
+        ? {}
+        : { fileAttachments: structuredClone(message.fileAttachments) }),
+    })),
     turns: state.turns.map((turn) => ({
       turnId: turn.turnId,
       ...(turn.userMessageId === undefined ? {} : { userMessageId: turn.userMessageId }),

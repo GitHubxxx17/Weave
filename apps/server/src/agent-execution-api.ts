@@ -37,11 +37,17 @@ function errorResponse(context: Context, error: unknown): Response {
                 'execution-queue-conflict',
                 'execution-not-queued',
                 'execution-not-active',
+                'execution-file-changed',
               ].includes(error.code)
             ? 409
-            : error.code === 'execution-output-limit'
+            : error.code === 'execution-output-limit' || error.code === 'execution-file-too-large'
               ? 413
-              : 503;
+              : error.code === 'execution-file-unavailable' ||
+                  error.code === 'execution-file-invalid-utf8'
+                ? 422
+                : error.code === 'execution-file-capture-failed'
+                  ? 500
+                  : 503;
     return context.json({ error: { code: error.code, message: error.message } }, status);
   }
   if (error instanceof SessionServiceError) {

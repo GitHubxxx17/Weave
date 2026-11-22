@@ -37,11 +37,19 @@ const errorSchema = z.object({
   error: z.object({ code: z.string(), message: z.string() }),
 });
 
-async function requestJson<T>(url: string, schema: z.ZodType<T>): Promise<T> {
+async function requestJson<T>(
+  url: string,
+  schema: z.ZodType<T>,
+  options?: { readonly signal?: AbortSignal },
+): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(url, { method: 'GET' });
-  } catch {
+    response = await fetch(url, {
+      method: 'GET',
+      ...(options?.signal === undefined ? {} : { signal: options.signal }),
+    });
+  } catch (cause) {
+    if (options?.signal?.aborted) throw cause;
     throw new FileTreeApiError('file-tree-network', '无法连接到本地服务', 0);
   }
   const payload: unknown = await response.json().catch(() => undefined);
@@ -61,10 +69,14 @@ async function requestJson<T>(url: string, schema: z.ZodType<T>): Promise<T> {
 }
 
 /** Fetches the project's file listing for the tree. */
-export function fetchFileTree(projectId: string): Promise<FileTreeListing> {
+export function fetchFileTree(
+  projectId: string,
+  options?: { readonly signal?: AbortSignal },
+): Promise<FileTreeListing> {
   return requestJson(
     runtimeApiUrl(`/projects/${encodeURIComponent(projectId)}/tree`),
     listingSchema,
+    options,
   );
 }
 

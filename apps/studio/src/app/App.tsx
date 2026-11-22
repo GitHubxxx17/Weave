@@ -1,3 +1,10 @@
+import { useFilePicker } from '../features/file-context/use-file-picker.js';
+import { FilePicker } from '../features/file-context/file-picker.js';
+import {
+  DraftFileAttachments,
+  FileAttachmentSummaries,
+} from '../features/file-context/file-attachments.js';
+import type { FileAttachmentSummary } from '../features/file-context/file-context-types.js';
 import {
   ChangeEvent,
   type ClipboardEvent as ReactClipboardEvent,
@@ -161,6 +168,7 @@ type ChatMessage = {
   readonly submission?: AgentSubmissionSnapshot | undefined;
   readonly originalUserMessage?: AgentRunRequestInput['userMessage'] | undefined;
   readonly selectedSkills?: readonly SkillSummary[] | undefined;
+  readonly fileAttachments?: readonly FileAttachmentSummary[] | undefined;
   /** Images attached to a user message, base64-encoded. */
   readonly images?: readonly { readonly mediaType: string; readonly data: string }[] | undefined;
   /** Turn that produced an assistant reply; live runs use a temporary id. */
@@ -687,6 +695,7 @@ function toChatMessages(
         tools: [],
         occurredAt: message.occurredAt ?? '',
         images: messageImages(message),
+        fileAttachments: message.fileAttachments,
         originalUserMessage: {
           role: 'user',
           content: message.content.filter(
@@ -939,6 +948,7 @@ function StudioApp(): ReactElement {
     }
   }, [activeSessionId]);
   const messageInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const composerIsComposing = useRef(false);
   const directoryInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const activeProject = projects.find((project) => project.id === activeProjectId);
@@ -965,6 +975,28 @@ function StudioApp(): ReactElement {
     activeSessionId,
     `${activeProjectId}:${activeProject?.folderPath ?? ''}`,
   );
+  useEffect(() => {
+    if (commandPicker.open) sessionSkills.close();
+  }, [commandPicker.open]);
+  const latestSessionSkills = useRef(sessionSkills);
+  latestSessionSkills.current = sessionSkills;
+  const filePicker = useFilePicker({
+    owner: composerDraft.owner,
+    inputRef: messageInputRef,
+    text: messageInput,
+    setText: setMessageInput,
+    projectId: activeProjectId,
+    rootKey: activeProject?.folderPath ?? '',
+    disabled: commandPicker.open || sessionSkills.open,
+    onSelect: (path, owner) => {
+      const result = composerDraft.addFile(owner, path);
+      if (result === 'full') setNotice('最多添加 8 个文件，请先移除文件。');
+      return result;
+    },
+  });
+  useEffect(() => {
+    if (composerDraft.rootChanged) setNotice('项目文件夹已变化，请重新添加文件');
+  }, [composerDraft.rootChanged]);
   const selectedProvider =
     providerSettings.providers.find((provider) => provider.id === selectedProviderId) ??
     providerSettings.providers[0];
@@ -1007,6 +1039,9 @@ function StudioApp(): ReactElement {
       userMessage: message.originalUserMessage ?? { role: 'user', content: [] },
       ...turn.request,
       skills: (turn.skills?.requested ?? []).map(skillRef),
+      ...(message.fileAttachments === undefined
+        ? {}
+        : { files: message.fileAttachments.map(({ path }) => ({ path })) }),
     };
   }
 
@@ -2085,6 +2120,7 @@ function StudioApp(): ReactElement {
       retry === undefined
         ? pendingImages
         : retry.userMessage.content.filter((part) => part.type === 'image');
+    const files = retry === undefined ? composerDraft.draft.files : (retry.files ?? []);
     const selectedSkills = retry === undefined ? [...sessionSkills.draft.selected] : [];
     const selectedRevision = sessionSkills.draft.revision;
     const selectedSessionId = activeSessionId;
@@ -2119,7 +2155,7 @@ function StudioApp(): ReactElement {
             reasoningEffort,
             permissionMode,
           };
-    if ((text === '' && images.length === 0) || admitting[activeSessionId]) {
+    if ((text === '' && images.length === 0 && files.length === 0) || admitting[activeSessionId]) {
       return;
     }
 
@@ -2157,6 +2193,7 @@ function StudioApp(): ReactElement {
         },
         ...settings,
         skills: selectedSessionId === sessionId ? selectedSkills.map(skillRef) : [],
+        ...(files.length === 0 ? {} : { files }),
       },
     );
 
@@ -2387,6 +2424,27 @@ function StudioApp(): ReactElement {
             : '待执行队列已变化，请确认后重新发送。草稿已保留。',
         );
         void queueController.refresh(projectId, sessionId).catch(() => undefined);
+        return;
+      }
+      if (error instanceof AgentStreamError && error.code.startsWith('execution-file-')) {
+        updateSessionMessages(projectId, sessionId, (current) =>
+          current.filter((message) => message.turnId !== liveTurnId),
+        );
+        updateSessionTurns(projectId, sessionId, (current) =>
+          current.filter((turn) => turn.turnId !== liveTurnId),
+        );
+        if (!queuedAdmission) setSessionRunState(sessionId, idleRunState);
+        const messages: Record<string, string> = {
+          'execution-file-too-large': '文件超出大小限制，请移除过大的文件后重新发送。草稿已保留。',
+          'execution-file-unavailable':
+            '无法读取所选文件，请确认项目文件夹并重新添加文件。草稿已保留。',
+          'execution-file-invalid-utf8':
+            '所选文件不是有效的 UTF-8 文本，请移除该文件后重新发送。草稿已保留。',
+          'execution-file-changed': '读取时项目文件已变化，请确认文件后重新发送。草稿已保留。',
+          'execution-file-capture-timeout': '文件读取超时，请重试。草稿已保留。',
+          'execution-file-capture-failed': '无法读取所选文件，请确认文件后重新发送。草稿已保留。',
+        };
+        setNotice(messages[error.code] ?? '文件读取失败，请重新添加文件后发送。草稿已保留。');
         return;
       }
       if (error instanceof DOMException && error.name === 'AbortError') {
@@ -3094,7 +3152,13 @@ function StudioApp(): ReactElement {
       const snapshot = await getAgentExecution(owner.owner.sessionId, executionId);
       if (!composerDraft.isOwnerCurrent(owner.owner)) return;
       const current = composerDraft.read();
-      if (current.text !== '' || current.images.length > 0) setCopyRequest({ snapshot, owner });
+      if (
+        current.text !== '' ||
+        current.images.length > 0 ||
+        current.files.length > 0 ||
+        latestSessionSkills.current.draft.selected.length > 0
+      )
+        setCopyRequest({ snapshot, owner });
       else applyQueuedCopy(snapshot, owner, false);
     } catch {
       setNotice('无法复制该消息，请刷新队列后重试。');
@@ -3106,6 +3170,20 @@ function StudioApp(): ReactElement {
     append: boolean,
   ): void {
     if (!composerDraft.isOwnerCurrent(owner.owner)) {
+      setCopyRequest(null);
+      return;
+    }
+    const current = composerDraft.read();
+    const filePaths = new Set<string>();
+    const files = [...(append ? current.files : []), ...(snapshot.input.files ?? [])].filter(
+      ({ path }) => {
+        if (filePaths.has(path)) return false;
+        filePaths.add(path);
+        return true;
+      },
+    );
+    if (files.length > 8) {
+      setNotice('最多添加 8 个文件，请先移除文件后再复制。');
       setCopyRequest(null);
       return;
     }
@@ -3121,6 +3199,7 @@ function StudioApp(): ReactElement {
         mediaType: part.mediaType,
         data: part.data,
       }));
+    composerDraft.setFiles(files);
     setMessageInput((current) => (append && current !== '' ? `${current}\n\n${text}` : text));
     setPendingImages((current) => (append ? [...current, ...images] : images));
     setSelectedProviderId(snapshot.input.provider);
@@ -3132,10 +3211,10 @@ function StudioApp(): ReactElement {
       ...snapshot.effectiveSettings,
     };
     composerDraft.setSampling({ provider, model, useProviderDefaults, temperature, maxTokens });
-    sessionSkills.restore(snapshot.input.skills ?? [], append);
+    latestSessionSkills.current.restore(snapshot.input.skills ?? [], append);
     composerDraft.markLiteral();
     setCopyRequest(null);
-    setNotice('已复制到草稿，原消息仍在队列中。');
+    setNotice('已复制到草稿，原消息仍在队列中。再次发送会读取当前项目文件。');
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>): void {
@@ -3144,10 +3223,16 @@ function StudioApp(): ReactElement {
   }
 
   function handleMessageKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>): void {
+    if (filePicker.handleKeyDown(event)) return;
     if (commandPicker.handleKeyDown(event)) {
       return;
     }
-    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) {
+    if (
+      event.key !== 'Enter' ||
+      event.shiftKey ||
+      event.nativeEvent.isComposing ||
+      event.keyCode === 229
+    ) {
       return;
     }
 
@@ -3768,6 +3853,7 @@ function StudioApp(): ReactElement {
                         </details>
                       ) : null}
                       <div className="message">
+                        <FileAttachmentSummaries files={message.fileAttachments} />
                         {message.role === 'assistant' && message.text !== '' ? (
                           <MarkdownMessage text={message.text} />
                         ) : message.text !== '' || message.role === 'assistant' ? (
@@ -3882,7 +3968,7 @@ function StudioApp(): ReactElement {
             onInspectToolCall={inspectToolCall}
           />
           <div className="composer-box">
-            {sessionSkills.open && activeSessionId !== '' ? (
+            {sessionSkills.open && !commandPicker.open && activeSessionId !== '' ? (
               <SkillPicker
                 key={`${activeSessionId}:${activeProject?.folderPath ?? ''}`}
                 sessionId={activeSessionId}
@@ -3895,6 +3981,7 @@ function StudioApp(): ReactElement {
                 onClose={sessionSkills.close}
               />
             ) : null}
+            <FilePicker picker={filePicker} />
             {commandPicker.open ? (
               <CommandPickerList
                 commands={commandPicker.items}
@@ -3912,10 +3999,46 @@ function StudioApp(): ReactElement {
               rows={2}
               ref={messageInputRef}
               value={messageInput}
-              onChange={(event) => setMessageInput(event.target.value)}
+              onChange={(event) => {
+                setMessageInput(event.target.value);
+                if (!composerIsComposing.current && !(event.nativeEvent as InputEvent).isComposing)
+                  filePicker.updateSelection(
+                    event.target.value,
+                    event.target.selectionStart,
+                    event.target.selectionEnd,
+                  );
+              }}
+              onSelect={(event) =>
+                !composerIsComposing.current &&
+                filePicker.updateSelection(
+                  event.currentTarget.value,
+                  event.currentTarget.selectionStart,
+                  event.currentTarget.selectionEnd,
+                )
+              }
+              onCompositionStart={() => {
+                composerIsComposing.current = true;
+                filePicker.close();
+              }}
+              onCompositionEnd={(event) => {
+                composerIsComposing.current = false;
+                filePicker.updateSelection(
+                  event.currentTarget.value,
+                  event.currentTarget.selectionStart,
+                  event.currentTarget.selectionEnd,
+                );
+              }}
               onKeyDown={handleMessageKeyDown}
               onPaste={handleComposerPaste}
               placeholder="给 Agent 分配一个任务…"
+              {...(filePicker.open && !filePicker.buttonMode
+                ? {
+                    'aria-controls': filePicker.listId,
+                    ...(filePicker.items.length === 0
+                      ? {}
+                      : { 'aria-activedescendant': filePicker.optionId(filePicker.activeIndex) }),
+                  }
+                : {})}
               {...(commandPicker.open
                 ? {
                     'aria-controls': commandPickerListId,
@@ -3930,6 +4053,10 @@ function StudioApp(): ReactElement {
                 已准备文本，请检查并点击发送
               </p>
             ) : null}
+            <DraftFileAttachments
+              files={composerDraft.draft.files}
+              onRemove={composerDraft.removeFile}
+            />
             {pendingImages.length > 0 ? (
               <div className="composer-attachments" aria-label="待发送图片">
                 {pendingImages.map((image) => (
@@ -3991,7 +4118,12 @@ function StudioApp(): ReactElement {
                   title={activeSessionId === '' ? '请先新建会话以选择技能' : '为本轮选择技能'}
                   disabled={activeSessionId === ''}
                   aria-expanded={sessionSkills.open}
-                  onClick={sessionSkills.open ? sessionSkills.close : sessionSkills.show}
+                  onClick={() => {
+                    filePicker.close();
+                    commandPicker.close();
+                    if (sessionSkills.open) sessionSkills.close();
+                    else sessionSkills.show();
+                  }}
                 >
                   <Sparkles aria-hidden="true" />
                 </button>
@@ -4077,6 +4209,18 @@ function StudioApp(): ReactElement {
                     </div>
                   ) : null}
                 </div>
+                <button
+                  className="composer-tool-button"
+                  type="button"
+                  aria-label="添加项目文件"
+                  onClick={() => {
+                    commandPicker.close();
+                    sessionSkills.close();
+                    filePicker.openFromButton();
+                  }}
+                >
+                  <Files aria-hidden="true" />
+                </button>
                 <button
                   className="composer-tool-button"
                   type="button"
@@ -4249,7 +4393,9 @@ function StudioApp(): ReactElement {
                   type="submit"
                   disabled={
                     admitting[activeSessionId] ||
-                    (messageInput.trim() === '' && pendingImages.length === 0)
+                    (messageInput.trim() === '' &&
+                      pendingImages.length === 0 &&
+                      composerDraft.draft.files.length === 0)
                   }
                   aria-label={
                     status === 'streaming' || (activeQueue?.queued.length ?? 0) > 0
@@ -4596,6 +4742,12 @@ function StudioApp(): ReactElement {
         onResize={setPanelWidth}
         onCollapse={() => setIsActivityPanelOpen(false)}
         context={{
+          fileOwnerKey: JSON.stringify(composerDraft.owner),
+          selectedFiles: composerDraft.draft.files.map(({ path }) => path),
+          onAddFile: ((owner) => (path: string) => {
+            const result = composerDraft.addFile(owner, path);
+            if (result === 'full') setNotice('最多添加 8 个文件，请先移除文件。');
+          })(composerDraft.owner),
           statusKey: status,
           projectId: activeProjectId,
           statusLabel: activeRunState.stopping

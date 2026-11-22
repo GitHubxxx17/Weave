@@ -66,7 +66,12 @@ export async function requestExecutionJson<T>(
       response.status >= 500 &&
       !(
         parsed.success &&
-        ['execution-closed', 'execution-persistence-error'].includes(parsed.data.error.code)
+        [
+          'execution-closed',
+          'execution-persistence-error',
+          'execution-file-capture-timeout',
+          'execution-file-capture-failed',
+        ].includes(parsed.data.error.code)
       )
     )
       throw new TypeError(error.message, { cause: error });

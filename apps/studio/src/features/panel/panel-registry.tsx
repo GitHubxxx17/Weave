@@ -80,7 +80,13 @@ export const panelDescriptors: readonly PanelDescriptor[] = [
     keepAlive: false,
     multi: false,
     render: (context) => (
-      <FileTreePanel projectId={context.projectId} onSetFolder={context.onSetFolder} />
+      <FileTreePanel
+        key={context.fileOwnerKey}
+        projectId={context.projectId}
+        onSetFolder={context.onSetFolder}
+        onAddFile={context.onAddFile}
+        selectedFiles={context.selectedFiles}
+      />
     ),
   },
   {

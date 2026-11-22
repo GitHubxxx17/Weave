@@ -35,6 +35,7 @@ const view = (sessionId = 's', sequence = 4): AgentExecutionQueueSnapshot => ({
     model: 'm',
     imageCount: 0,
     skillCount: 0,
+    fileCount: 0,
   })),
   scheduler: 'ready',
   limits: { sessionQueued: 10, globalQueued: 100 },

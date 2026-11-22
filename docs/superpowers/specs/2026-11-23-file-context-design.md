@@ -74,7 +74,7 @@ interface CapturedFileContext {
 }
 ```
 
-Logical `AgentExecutionInput.files?: readonly FileReference[]` 为 strict object 数组，出现时长度 1–8；没有文件一律省略，拒绝空数组。每个 path 长度 1–1024 个 JavaScript UTF-16 code units（Zod string.max 的确定语义），不允许 NUL、Unicode Cc/Cf/Cs/Zl/Zp（控制/不可打印/孤立 surrogate/行分隔）、反斜杠/冒号、开头 `/`、空段、`.`、`..`，拒绝 Windows/UNC/URI 形式。保留合法空格、大小写、Unicode 和 `%` 原文；不 trim、不 URL decode、不 lowercase、不做 Unicode 归一化。paths 精确重复拒绝，顺序属于逻辑请求身份。
+Logical `AgentExecutionInput.files?: readonly FileReference[]` 为 strict object 数组，出现时长度 1–8；没有文件一律省略，拒绝空数组。每个 path 长度 1–1024 个 JavaScript UTF-16 code units（额外用 `path.length` refinement 校验；当前 Zod string.max 按码点计数），不允许 NUL、Unicode Cc/Cf/Cs/Zl/Zp（控制/不可打印/孤立 surrogate/行分隔）、反斜杠/冒号、开头 `/`、空段、`.`、`..`，拒绝 Windows/UNC/URI 形式。保留合法空格、大小写、Unicode 和 `%` 原文；不 trim、不 URL decode、不 lowercase、不做 Unicode 归一化。paths 精确重复拒绝，顺序属于逻辑请求身份。
 
 `execution.accepted` 顶层新增可选 `fileContext`，只在带 `files` 时存在。新 files acceptance 同时要求 dispatch:queued 和 runInput（legacy optional 只用于无 files 的旧事实）；与输入 refs 精确一一对应（数量、路径、顺序），`files` 存在但 capture 缺失或额外 capture 均无效。旧无 files/capture 日志保持可读。保留已有 `input`/`runInput` 的采样 invariant：只有 effective sampling 可不同，refs 在两者中相同，正文不进入任一 input。digest 使用原逻辑 input 的 canonical JSON，包含有序 refs，排除 capture 内容/哈希/root/生成身份/effective defaults。
 
@@ -144,7 +144,7 @@ Runtime 导出 `captureWorkspaceFiles(root, refs, {signal}):Promise<Omit<Capture
 
 AgentRunner 不从 HTTP 接受 captured text。Execution Service 从 accepted.input/runInput 启动现有 Runner；`AgentRunRequest.files` 只是 logical refs。guard 位于 `turnAdmission` 所包裹的 `startTurn` 内，使用该 callback 的同一次初始 `sessionStore.read` 得到的 `storedEvents` 及其投影，在任何新的 message/Turn append 之前完成校验；不另做可能过时的 preflight read。
 
-只要 request 包含 `files`，**或** internal `executionIdentity.executionId` 在这些 facts 中对应带 `fileContext` 的 acceptance，就必须同时满足以下条件，否则拒绝 `agent-invalid-input`：
+只要 request 包含 `files`，**或** internal `executionIdentity` 的 executionId、turnId、userMessageId 任一字段在这些 facts 中关联带 `fileContext` 的 acceptance，就必须同时满足以下条件，否则拒绝 `agent-invalid-input`：
 
 1. 存在对应的 acceptance 和 capture；请求的 executionId/turnId/userMessageId 与 accepted 身份逐项完全相同。
 2. 同一 events 投影出的 durable phase 是 claimed。当前 queue schema 中 `SessionExecution.status === 'accepted'` 表示已 claim，不能把存在 `execution.accepted` fact 当成已经 claim；`dispatch:'queued'` 且尚无 claim 的 queued，以及所有 terminal 状态均拒绝，不新增名为 claimed 的持久化 status。
