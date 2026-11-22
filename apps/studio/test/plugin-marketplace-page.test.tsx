@@ -45,6 +45,26 @@ const official = {
   tags: ['工具'],
   version: '1.0.0',
 };
+// Discovery DTO fixture only; no release identity is registered in production.
+const officialGithub = {
+  ...community,
+  category: 'official',
+  name: '官方 Skills 示例',
+  publisher: 'Weave',
+  releases: [
+    {
+      manifest: { ...declarativeManifest, version: '2.0.0' },
+      source: { ...source, commit: 'c'.repeat(40) },
+      compatibility: 'incompatible',
+    },
+    {
+      manifest: { ...declarativeManifest, version: '1.1.0' },
+      source: { ...source, commit: 'b'.repeat(40) },
+      compatibility: 'compatible',
+    },
+    { manifest: declarativeManifest, source, compatibility: 'compatible' },
+  ],
+};
 const catalog = {
   schemaVersion: 1,
   hostVersion: '0.0.0',
@@ -64,6 +84,7 @@ function setup(
     discovery?: unknown;
     preview?: () => Response | Promise<Response>;
     history?: typeof managedCatalog;
+    managed?: () => Response;
   } = {},
 ) {
   const fetch = vi.fn((input: RequestInfo | URL, init: RequestInit) => {
@@ -85,7 +106,9 @@ function setup(
         }),
       );
     if (path === '/plugins/managed')
-      return Promise.resolve(Response.json(options.history ?? { ...managedCatalog, plugins: [] }));
+      return Promise.resolve(
+        options.managed?.() ?? Response.json(options.history ?? { ...managedCatalog, plugins: [] }),
+      );
     if (path === '/mcp')
       return Promise.resolve(
         Response.json({ authoritySequence: 2, generation: managedGeneration, servers: [] }),
@@ -135,6 +158,128 @@ afterEach(() => {
 });
 
 describe('plugin marketplace page', () => {
+  it('hands an official GitHub version to the same explicit preview and import review', async () => {
+    const indexSource = {
+      id: 'team',
+      name: '团队镜像目录',
+      url: 'https://example.com/index.json',
+    };
+    const network = setup({
+      discovery: { ...catalog, indexSource, entries: [official, officialGithub] },
+      history: managedCatalog,
+      preview: () =>
+        Response.json({
+          ...preview,
+          candidate: { ...preview.candidate, manifest: declarativeManifest },
+        }),
+    });
+    const card = await screen.findByRole('button', { name: '查看 官方 Skills 示例' });
+    expect(within(card).getByText('Weave 维护')).toBeDefined();
+    expect(within(card).getByText(/需要安装/)).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: '官方' }));
+    fireEvent.click(card);
+    const detail = within(screen.getByRole('region', { name: '官方 Skills 示例详情' }));
+    expect(detail.getByText('Weave 维护')).toBeDefined();
+    expect(detail.getByText('需要安装')).toBeDefined();
+    expect(detail.queryByText('已随 Weave 提供')).toBeNull();
+    expect(detail.getByText(indexSource.name)).toBeDefined();
+    expect(detail.getByText(indexSource.url)).toBeDefined();
+    expect(detail.getByText('当前选择：v2.0.0')).toBeDefined();
+    expect(detail.getByText('实际发布：v1.0.0')).toBeDefined();
+    expect(detail.getByRole<HTMLSelectElement>('combobox', { name: '插件版本' }).value).toBe(
+      '1.1.0',
+    );
+    fireEvent.change(detail.getByRole('combobox', { name: '插件版本' }), {
+      target: { value: '1.0.0' },
+    });
+    await waitFor(() =>
+      expect(detail.getByRole<HTMLButtonElement>('button', { name: '准备安装' }).disabled).toBe(
+        false,
+      ),
+    );
+    expect(detail.getByText(source.commit)).toBeDefined();
+    fireEvent.click(detail.getByRole('button', { name: '准备安装' }));
+    const repository = await screen.findByRole<HTMLInputElement>('textbox', {
+      name: 'GitHub 仓库地址',
+    });
+    expect(repository.value).toBe(source.repository);
+    expect(screen.getByRole<HTMLInputElement>('textbox', { name: '完整提交 SHA' }).value).toBe(
+      source.commit,
+    );
+    expect(screen.getByText(/市场发布者：Weave/)).toBeDefined();
+    expect(network.writes()).toHaveLength(0);
+    await waitFor(() =>
+      expect(screen.getByRole<HTMLButtonElement>('button', { name: '预览插件' }).disabled).toBe(
+        false,
+      ),
+    );
+    fireEvent.click(screen.getByRole('button', { name: '预览插件' }));
+    const dialog = within(await screen.findByRole('dialog'));
+    expect(dialog.getByText('Skills 文本包')).toBeDefined();
+    expect(dialog.getByText(source.commit)).toBeDefined();
+    expect(dialog.getByText('导入会保存候选版本。激活与授信需要单独确认。')).toBeDefined();
+    expect(dialog.getByRole('button', { name: '确认导入' })).toBeDefined();
+    expect(network.writes()).toHaveLength(1);
+    expect(JSON.parse(String(network.writes()[0]?.[1].body))).toEqual(source);
+  });
+
+  it('keeps builtins bundled without entering installation', async () => {
+    const network = setup();
+    const card = await screen.findByRole('button', { name: '查看 工具注册' });
+    expect(within(card).getByText('已内置')).toBeDefined();
+    fireEvent.click(card);
+    const detail = within(screen.getByRole('region', { name: '工具注册详情' }));
+    expect(detail.getByText('已随 Weave 提供')).toBeDefined();
+    expect(detail.queryByRole('button', { name: '准备安装' })).toBeNull();
+    expect(detail.queryByRole('combobox', { name: '插件版本' })).toBeNull();
+    expect(network.writes()).toHaveLength(0);
+  });
+
+  it('keeps Weave-named community content outside the official filter', async () => {
+    setup({
+      discovery: { ...catalog, entries: [{ ...community, publisher: 'Weave' }] },
+    });
+    await screen.findByRole('button', { name: '查看 社区示例工具' });
+    fireEvent.click(screen.getByRole('button', { name: '官方' }));
+    expect(screen.queryByRole('button', { name: '查看 社区示例工具' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '社区' }));
+    expect(screen.getByRole('button', { name: '查看 社区示例工具' })).toBeDefined();
+  });
+
+  it('disables official GitHub acquisition for an incompatible selected release', async () => {
+    const network = setup({ discovery: { ...catalog, entries: [officialGithub] } });
+    fireEvent.click(await screen.findByRole('button', { name: '查看 官方 Skills 示例' }));
+    fireEvent.change(screen.getByRole('combobox', { name: '插件版本' }), {
+      target: { value: '2.0.0' },
+    });
+    expect(screen.getByText('与当前 Weave 不兼容')).toBeDefined();
+    const install = screen.getByRole<HTMLButtonElement>('button', { name: '准备安装' });
+    expect(install.disabled).toBe(true);
+    fireEvent.click(install);
+    expect(screen.getByRole('tab', { name: '发现插件' }).getAttribute('aria-selected')).toBe(
+      'true',
+    );
+    expect(network.writes()).toHaveLength(0);
+  });
+
+  it('disables official GitHub acquisition when managed installation is disabled', async () => {
+    const network = setup({
+      discovery: { ...catalog, entries: [officialGithub] },
+      managed: () =>
+        Response.json(
+          { error: { code: 'plugin-installer-disabled', message: 'Disabled' } },
+          { status: 404 },
+        ),
+    });
+    fireEvent.click(await screen.findByRole('button', { name: '查看 官方 Skills 示例' }));
+    await waitFor(() => expect(network.store.getSnapshot().managed?.kind).toBe('disabled'));
+    expect(screen.getByText('当前服务的受管插件安装不可用。')).toBeDefined();
+    const install = screen.getByRole<HTMLButtonElement>('button', { name: '准备安装' });
+    expect(install.disabled).toBe(true);
+    fireEvent.click(install);
+    expect(network.writes()).toHaveLength(0);
+  });
+
   it('browses official and community entries with search and version compatibility without writes', async () => {
     const network = setup();
     await screen.findByRole('button', { name: '查看 工具注册' });
@@ -335,16 +480,18 @@ describe('plugin marketplace page', () => {
   });
 
   it.each(['unconfigured', 'unavailable'])(
-    'shows a truthful community %s state and keeps Installed available',
+    'shows a truthful selected-index %s state in every filter and keeps Installed available',
     async (communityStatus) => {
       const network = setup({ discovery: { ...catalog, communityStatus, entries: [official] } });
       await screen.findByRole('button', { name: '查看 工具注册' });
-      fireEvent.click(screen.getByRole('button', { name: '社区' }));
-      expect(
-        screen.getByText(
-          communityStatus === 'unconfigured' ? '尚未配置社区插件目录' : '社区插件目录暂不可用',
-        ),
-      ).toBeDefined();
+      for (const category of ['全部', '官方', '社区']) {
+        fireEvent.click(screen.getByRole('button', { name: category }));
+        expect(
+          screen.getByText(
+            communityStatus === 'unconfigured' ? '尚未配置插件索引目录' : '插件索引目录暂不可用',
+          ),
+        ).toBeDefined();
+      }
       fireEvent.click(screen.getByRole('tab', { name: '已安装' }));
       await waitFor(() => expect(screen.getByRole('region', { name: '插件' })).toBeDefined());
       expect(network.writes()).toHaveLength(0);

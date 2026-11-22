@@ -1,5 +1,14 @@
 # Weave Foundation Architecture
 
+Weave-maintained Skills ship as self-contained schema-2 instruction data. Server
+assigns official discovery attribution only to code-owned exact GitHub source and
+full manifest identities; operator index metadata grants no maintainership or
+privilege. Studio mirrors that category but routes installable GitHub releases
+through normal preview/import/review/activation. Distributed official IDs are
+protected only in index admission, not globally reserved from installation. The
+[official Skills design](../superpowers/specs/2026-11-22-official-skills-design.md)
+records these cross-app contracts before implementation.
+
 Declarative custom panels add governed closed JSON in Plugin, immutable current-only
 binding and durable-prefix projection in Server, and independent HTTP validation
 and native rendering in Studio. Marketplace stays in left navigation; stable
@@ -45,7 +54,7 @@ execution and approval stay under existing Runtime policy. The [usage guide](../
 progressive resources, durable provenance and exact retries. The
 [text-package guide](../learning/2026-11-22-declarative-skill-packages.md) covers
 no-entry distribution; the developer CLI is the independent leaf described above,
-and custom panels follow separately. Current verified Codex, Harness and Kimi
+and custom panels use the governed SDK described above. Current verified Codex, Harness and Kimi
 references and official-content choices are recorded in the
 [reference audit](../learning/2026-11-22-official-plugin-references.md).
 
@@ -712,7 +721,7 @@ Stage 6.5's [marketplace contract](../superpowers/specs/2026-11-22-plugin-market
 adds a read-only Server static discovery index and a dedicated Studio page in the
 left navigation. Catalog discovery uses the existing reviewed GitHub importer;
 it has no trust or execution authority. The right panel remains for runtime
-activity and future separately governed custom plugin panels. Marketplace
+activity and governed custom plugin panels. Marketplace
 navigation preserves App-owned management state, chat and live panel instances.
 
 Weave benchmarks Codex, Kiro and DeepSeek Harness across product behavior,

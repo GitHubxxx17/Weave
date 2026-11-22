@@ -81,7 +81,7 @@ function MarketplaceDetail({
         ) : (
           <Users aria-hidden="true" />
         )}
-        {entry.category === 'official' ? '官方' : '社区'}
+        {entry.category === 'official' ? (entry.kind === 'github' ? 'Weave 维护' : '官方') : '社区'}
       </span>
       <h3>{entry.name}</h3>
       <p className="marketplace-detail-id">{entry.id}</p>
@@ -125,6 +125,7 @@ function MarketplaceDetail({
         </div>
       ) : (
         <>
+          {entry.category === 'official' ? <p className="marketplace-help">需要安装</p> : null}
           <label className="marketplace-version">
             插件版本
             <select
@@ -338,17 +339,17 @@ export function PluginMarketplacePage({
               className={`marketplace-layout${selected === undefined ? '' : ' marketplace-layout-detail'}`}
             >
               <div className="marketplace-results">
-                {category !== 'official' && catalog?.communityStatus !== 'ready' ? (
+                {catalog?.communityStatus !== 'ready' ? (
                   <div className="marketplace-catalog-note" role="status">
-                    <Users aria-hidden="true" />
+                    <Box aria-hidden="true" />
                     <div>
                       <strong>
                         {catalog?.communityStatus === 'unavailable'
-                          ? '社区插件目录暂不可用'
-                          : '尚未配置社区插件目录'}
+                          ? '插件索引目录暂不可用'
+                          : '尚未配置插件索引目录'}
                       </strong>
                       <p>
-                        开发者发布的插件收录后会显示在这里。你也可以在“已安装”中从 GitHub
+                        可用的索引条目会显示在这里。你也可以在“已安装”中从 GitHub
                         或本地目录添加插件。
                       </p>
                     </div>
@@ -385,7 +386,11 @@ export function PluginMarketplacePage({
                             ) : (
                               <Users aria-hidden="true" />
                             )}
-                            {entry.category === 'official' ? '官方' : '社区'}
+                            {entry.category === 'official'
+                              ? entry.kind === 'github'
+                                ? 'Weave 维护'
+                                : '官方'
+                              : '社区'}
                           </span>
                         </span>
                         <strong>{entry.name}</strong>
@@ -398,7 +403,10 @@ export function PluginMarketplacePage({
                               已内置
                             </span>
                           ) : (
-                            <span>{entry.releases.length} 个版本</span>
+                            <span>
+                              {entry.category === 'official' ? '需要安装 · ' : ''}
+                              {entry.releases.length} 个版本
+                            </span>
                           )}
                           <span>{entry.tags.slice(0, 2).join(' · ')}</span>
                         </span>

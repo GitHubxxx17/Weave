@@ -1,27 +1,21 @@
 import { assertEngineSupported, pluginApiVersion, type PluginManifest } from '@weave/plugin';
-import { githubPluginSourceSchema } from '@weave/plugin-host';
 import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { z } from 'zod';
 import type { PluginListItem } from './plugin-catalog.js';
 import { artifactManifestSchema, pluginIdSchema } from './plugin-authority-types.js';
+import {
+  assertOfficialMarketplaceEntry,
+  marketplaceGithubSourceSchema as source,
+  reservedMarketplacePluginIds,
+} from './official-marketplace-releases.js';
+export { reservedMarketplacePluginIds } from './official-marketplace-releases.js';
 
 const text = z.string().trim().min(1).max(300);
 const description = z.string().trim().min(1).max(2000);
 const tags = z.array(z.string().trim().min(1).max(40)).max(10);
 const version = z.string().regex(/^\d+\.\d+\.\d+$/);
-const source = githubPluginSourceSchema.extend({
-  repository: z
-    .string()
-    .max(400)
-    .refine((value) => value === value.toLowerCase())
-    .pipe(githubPluginSourceSchema.shape.repository),
-  subdirectory: z
-    .string()
-    .max(2048)
-    .refine((value) => githubPluginSourceSchema.shape.subdirectory.safeParse(value).success),
-});
 const release = z.strictObject({ manifest: artifactManifestSchema, source });
 const fields = {
   id: pluginIdSchema.max(200),
@@ -30,14 +24,6 @@ const fields = {
   publisher: text,
   tags,
 };
-export const reservedMarketplacePluginIds = [
-  'tool-registry',
-  'provider-registry',
-  'event-registry',
-  'host-services',
-  'server-tool-host',
-] as const;
-
 export const marketplaceCommunityPluginSchema = z
   .strictObject({ ...fields, releases: z.array(release).min(1).max(20) })
   .superRefine((plugin, context) => {
@@ -47,6 +33,11 @@ export const marketplaceCommunityPluginSchema = z
         context.addIssue({ code: 'custom', message: 'Conflicting marketplace release identity' });
       }
       versions.add(item.manifest.version);
+    }
+    try {
+      assertOfficialMarketplaceEntry(plugin);
+    } catch {
+      context.addIssue({ code: 'custom', message: 'Unrecognized official marketplace release' });
     }
   });
 
@@ -75,15 +66,20 @@ const builtinEntry = z.strictObject({
   publisher: z.literal('Weave'),
   version,
 });
-const githubEntry = z.strictObject({
-  ...fields,
-  kind: z.literal('github'),
-  category: z.literal('community'),
-  releases: z
-    .array(release.extend({ compatibility: z.enum(['compatible', 'incompatible']) }))
-    .min(1)
-    .max(20),
-});
+const githubEntry = z
+  .strictObject({
+    ...fields,
+    kind: z.literal('github'),
+    category: z.enum(['official', 'community']),
+    releases: z
+      .array(release.extend({ compatibility: z.enum(['compatible', 'incompatible']) }))
+      .min(1)
+      .max(20),
+  })
+  .refine((entry) => entry.category !== 'official' || entry.publisher === 'Weave', {
+    message: 'Official marketplace entries require the Weave publisher',
+    path: ['publisher'],
+  });
 export const pluginMarketplaceResponseSchema = z.strictObject({
   schemaVersion: z.literal(1),
   hostVersion: version,
@@ -207,6 +203,12 @@ export function projectPluginMarketplace(
   plugins: readonly PluginListItem[],
   hostVersion: string,
 ): PluginMarketplaceResponse {
+  // Revalidate typed/direct callers as well as loader snapshots. Protected
+  // unknown releases must never be downgraded or partially projected.
+  const admitted = pluginMarketplaceIndexSchema.parse({
+    schemaVersion: 1,
+    plugins: catalog.plugins,
+  });
   const builtins = official.flatMap((item) => {
     const actual = plugins.find((plugin) => plugin.id === item.id && plugin.origin === 'builtin');
     return actual === undefined
@@ -227,14 +229,18 @@ export function projectPluginMarketplace(
     communityStatus: catalog.communityStatus,
     entries: [
       ...builtins,
-      ...catalog.plugins.map((plugin) => ({
-        ...plugin,
-        kind: 'github',
-        category: 'community',
-        releases: [...plugin.releases]
-          .sort((a, b) => compareVersions(a.manifest.version, b.manifest.version))
-          .map((item) => ({ ...item, compatibility: compatible(item.manifest, hostVersion) })),
-      })),
+      ...admitted.plugins.map((plugin) => {
+        const classification = assertOfficialMarketplaceEntry(plugin);
+        return {
+          ...plugin,
+          ...(classification.category === 'official' ? classification.display : {}),
+          kind: 'github',
+          category: classification.category,
+          releases: [...plugin.releases]
+            .sort((a, b) => compareVersions(a.manifest.version, b.manifest.version))
+            .map((item) => ({ ...item, compatibility: compatible(item.manifest, hostVersion) })),
+        };
+      }),
     ],
   });
 }

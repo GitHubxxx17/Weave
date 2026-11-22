@@ -373,3 +373,11 @@ claim that Codex, Kiro, Harness or Kimi expose this exact panel SDK. Weave choos
 closed host-rendered JSON and prepare-only native forms, with no arbitrary
 renderer code or inherited sandbox guarantee. Exact choices and upstream commit
 evidence are retained in the [panel design](../superpowers/specs/2026-11-22-plugin-panels-design.md).
+
+## 首批 Weave 原创内容落地
+
+四项使用与开发 Skill 位于 `plugins/official/weave-official-skills/`。固定产品
+契约依据包括已合并 Panel SDK `e7dd7ca80dfa71d46fa73b5a5b6dffbb1ae8ad49`；
+资源自包含，示例使用真实 SDK/CLI，内容没有复制上游 Skill 文本。
+市场官方身份采用宿主固定完整发行元组，不能从目录收录或 publisher 自述推断。
+真实包验证、场景审阅与固定 SHA 发行状态见[使用说明](2026-11-22-official-skills.md)。

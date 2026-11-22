@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 2,
+  "kind": "skills",
+  "manifest": {
+    "id": "my-review-skills",
+    "name": "My Review Skills",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "host": "declarative",
+    "capabilities": ["skill"],
+    "contributes": {
+      "skills": ["review-change"]
+    },
+    "permissions": []
+  }
+}

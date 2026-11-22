@@ -112,9 +112,11 @@ discovery and managed admission still enforce engine compatibility. The same val
 artifact storage and marketplace entry generation. The actual managed lifecycle
 continues to verify authority around preparation and Generation publication.
 
-Developer scaffolding/build/pack commands and custom right-side panels follow as
-separate topics. The main marketplace stays on the left; declarative Skill
-packages do not become panel providers or executable plugins automatically.
+The [repository-local developer CLI](2026-11-22-plugin-developer-cli.md) provides
+`plugin:create --template skills`, validation, build and pack commands. Trusted
+ESM plugins can also use the [declarative right-panel SDK](2026-11-22-plugin-panels.md).
+The main marketplace stays on the left; schema-2 Skill packages remain text data
+and do not become panel providers or executable plugins automatically.
 
 ## Verification for this release
 

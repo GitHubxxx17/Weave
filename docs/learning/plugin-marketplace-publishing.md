@@ -2,10 +2,12 @@
 
 Weave separates plugin code, discovery indexes and user installation. Developers
 keep their plugin in their own GitHub repository. This repository maintains the
-community collection in `marketplace/submissions/` and generates
+reviewed collection in `marketplace/submissions/` and generates
 `marketplace/index.json`. Studio's built-in Weave source reads the packaged copy.
-The collection starts empty: the built-in official runtime entries do not imply
-that any third-party plugin has been published or reviewed.
+The collection initially starts empty; built-in runtime entries do not imply
+third-party publication. Installable Weave-maintained entries use the same fixed
+source flow plus the [host-owned exact official release policy](2026-11-22-official-skills.md).
+Indexes cannot set category, and publisher text never grants maintainership.
 
 This implements the static-index principle from [DeepSeek Harness at
 `d98f5d6`](https://github.com/deepseek-ai/deepseek-harness/blob/d98f5d68519215da48f3002da2cb9c9d2068d81d/apps/plugin-market-generator/README.zh.md).

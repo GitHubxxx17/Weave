@@ -134,31 +134,49 @@ describe('marketplace index sources', () => {
     ).toEqual(['/plugins/marketplace/sources/add', '/plugins/marketplace/refresh']);
   });
 
-  it('keeps cached entries after a failed refresh and attributes the stale source', async () => {
+  it('keeps official GitHub entries after a failed refresh and attributes their custom stale source', async () => {
+    let unavailable = false;
     const fetch = setup((path) => {
       if (path === '/plugins/marketplace/sources')
         return Response.json(sourceEnvelope([builtin, { ...team, status: 'ready' }]));
-      if (path === '/plugins/marketplace?sourceId=team')
-        return Response.json(catalog('team', '缓存工具'));
-      if (path === '/plugins/marketplace/refresh')
+      if (path === '/plugins/marketplace?sourceId=team') {
+        const value = catalog('team', '缓存工具');
+        return Response.json({
+          ...value,
+          communityStatus: unavailable ? 'unavailable' : 'ready',
+          entries: value.entries.map((entry) => ({
+            ...entry,
+            category: 'official',
+            publisher: 'Weave',
+          })),
+        });
+      }
+      if (path === '/plugins/marketplace/refresh') {
+        unavailable = true;
         return Response.json(
           sourceEnvelope([
             builtin,
             { ...team, status: 'unavailable', stale: true, errorCode: 'network' },
           ]),
         );
+      }
       return undefined;
     });
     fireEvent.change(await screen.findByRole('combobox', { name: '插件索引源' }), {
       target: { value: 'team' },
     });
+    fireEvent.click(screen.getByRole('button', { name: '官方' }));
     fireEvent.click(await screen.findByRole('button', { name: '查看 缓存工具' }));
     expect(
       within(screen.getByRole('region', { name: '缓存工具详情' })).getByText(team.url),
     ).toBeDefined();
     fireEvent.click(screen.getByRole('button', { name: '刷新市场' }));
     expect(await screen.findByText(/正在显示上次成功读取的目录/)).toBeDefined();
+    expect(await screen.findByText('插件索引目录暂不可用')).toBeDefined();
     expect(screen.getByRole('button', { name: '查看 缓存工具' })).toBeDefined();
+    expect(
+      within(screen.getByRole('region', { name: '缓存工具详情' })).getByText(team.url),
+    ).toBeDefined();
     expect(fetch.mock.calls.filter(([, init]) => init.method !== 'GET')).toHaveLength(1);
   });
 
