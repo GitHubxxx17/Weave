@@ -119,6 +119,15 @@ export function createOfficialMarketplacePolicy(input: unknown) {
 // before acquiring/generating its submission; never substitute a placeholder pin.
 const officialMarketplacePolicy = createOfficialMarketplacePolicy([
   {
+    id: 'weave-web',
+    name: 'Weave 联网',
+    description: '搜索公开网页与读取有来源的有限文本；搜索使用单独配置的 Tavily。',
+    publisher: 'Weave',
+    tags: ['Weave', '联网', '搜索'],
+    // Content must merge before a real immutable GitHub release can be registered.
+    releases: [],
+  },
+  {
     id: 'weave-official-skills',
     name: 'Weave 官方技能',
     description: 'Weave 维护的使用指南、插件开发、技能创作与 MCP 配置技能。',

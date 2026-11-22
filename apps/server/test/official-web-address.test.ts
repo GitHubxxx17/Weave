@@ -1,0 +1,167 @@
+import { describe, expect, it } from 'vitest';
+import { isPublicAddress } from '../../../plugins/official/weave-web-source/src/address-policy.js';
+import { parsePublicHttpsUrl } from '../../../plugins/official/weave-web-source/src/url-policy.js';
+
+describe('official web public addresses', () => {
+  it.each([
+    '0.0.0.0',
+    '0.255.255.255',
+    '10.0.0.0',
+    '10.255.255.255',
+    '100.64.0.0',
+    '100.127.255.255',
+    '127.0.0.0',
+    '127.255.255.255',
+    '169.254.0.0',
+    '169.254.255.255',
+    '172.16.0.0',
+    '172.31.255.255',
+    '192.0.0.0',
+    '192.0.0.255',
+    '192.0.2.0',
+    '192.0.2.255',
+    '192.88.99.0',
+    '192.88.99.255',
+    '192.168.0.0',
+    '192.168.255.255',
+    '198.18.0.0',
+    '198.19.255.255',
+    '198.51.100.0',
+    '198.51.100.255',
+    '203.0.113.0',
+    '203.0.113.255',
+    '224.0.0.0',
+    '239.255.255.255',
+    '240.0.0.0',
+    '255.255.255.255',
+    '::',
+    '::1',
+    '::127.0.0.1',
+    '::ffff:93.184.216.34',
+    '::ffff:5db8:d822',
+    '64:ff9b::5db8:d822',
+    '64:ff9b:1::1',
+    'fc00::1',
+    'fdff::1',
+    'fe80::1',
+    'fec0::1',
+    'ff02::1',
+    '2001::',
+    '2001:1ff:ffff:ffff:ffff:ffff:ffff:ffff',
+    '2001:db8::',
+    '2001:db8:ffff:ffff:ffff:ffff:ffff:ffff',
+    '2002::',
+    '2002:ffff:ffff:ffff:ffff:ffff:ffff:ffff',
+    '3fff::',
+    '3fff:fff:ffff:ffff:ffff:ffff:ffff:ffff',
+    '4000::',
+    'fe80::1%lo0',
+    '127.1',
+    '0x7f000001',
+    '999.1.1.1',
+    'garbage',
+    '',
+  ])('blocks %s', (address) => expect(isPublicAddress(address)).toBe(false));
+
+  it.each([
+    '1.0.0.0',
+    '9.255.255.255',
+    '11.0.0.0',
+    '100.63.255.255',
+    '100.128.0.0',
+    '126.255.255.255',
+    '128.0.0.0',
+    '169.253.255.255',
+    '169.255.0.0',
+    '172.15.255.255',
+    '172.32.0.0',
+    '191.255.255.255',
+    '192.0.1.0',
+    '192.0.3.0',
+    '192.88.98.255',
+    '192.88.100.0',
+    '192.167.255.255',
+    '192.169.0.0',
+    '198.17.255.255',
+    '198.20.0.0',
+    '198.51.99.255',
+    '198.51.101.0',
+    '203.0.112.255',
+    '203.0.114.0',
+    '223.255.255.255',
+    '93.184.216.34',
+    '2000::',
+    '2000:ffff:ffff:ffff:ffff:ffff:ffff:ffff',
+    '2001:200::',
+    '2001:db7:ffff:ffff:ffff:ffff:ffff:ffff',
+    '2001:db9::',
+    '2003::',
+    '2606:4700:4700::1111',
+    '3ffe:ffff:ffff:ffff:ffff:ffff:ffff:ffff',
+    '3fff:1000::',
+  ])('allows %s under the explicit conservative policy', (address) =>
+    expect(isPublicAddress(address)).toBe(true),
+  );
+});
+
+describe('official web public URL policy', () => {
+  it.each([
+    '',
+    ' https://example.com/',
+    'https://example.com/ ',
+    'https://example.com/\n',
+    'https://example.com/\tfoo',
+    'https://example.com/\\foo',
+    'http://example.com/',
+    'https://u:p@example.com/',
+    'https://@example.com/',
+    'https://:@example.com/',
+    'https:@example.com/',
+    'https:/@example.com/',
+    'https:////@example.com/',
+    'https:example.com/',
+    'https:/example.com/',
+    'https:////example.com/',
+    'https://example.com/#x',
+    'https://example.com/#',
+    'https://example.com:8443/',
+    'https://localhost/',
+    'https://x.localhost/',
+    'https://x.local/',
+    'https://x.internal/',
+    'https://x.home.arpa/',
+    'https://one/',
+    'https://example..com/',
+    'https://example.com../',
+    'https://-bad.example/',
+    'https://127.1/',
+    'https://2130706433/',
+    'https://0177.0.0.1/',
+    'https://0x7f000001/',
+    'https://[::1]/',
+    'https://[::ffff:93.184.216.34]/',
+    'https://[2001:db8::1]/',
+    'https://example.com/' + 'a'.repeat(2029),
+    'https://example.com/' + '中'.repeat(900),
+    'https://example.com/\uD800',
+  ])('rejects %s before any I/O', (url) =>
+    expect(() => parsePublicHttpsUrl(url)).toThrowError(
+      expect.objectContaining({ code: 'web-url-blocked' }),
+    ),
+  );
+
+  it('normalizes scheme, host, default port and one trailing root dot', () => {
+    expect(parsePublicHttpsUrl('HTTPS://EXAMPLE.COM.:443/a?q=1').href).toBe(
+      'https://example.com/a?q=1',
+    );
+    expect(parsePublicHttpsUrl('https://例子.中国/a').hostname).toBe('xn--fsqu00a.xn--fiqs8s');
+  });
+
+  it('allows public literals and exact canonical length', () => {
+    expect(parsePublicHttpsUrl('https://93.184.216.34/').hostname).toBe('93.184.216.34');
+    expect(parsePublicHttpsUrl('https://[2606:4700:4700::1111]/').hostname).toBe(
+      '[2606:4700:4700::1111]',
+    );
+    expect(parsePublicHttpsUrl('https://example.com/' + 'a'.repeat(2028)).href).toHaveLength(2048);
+  });
+});

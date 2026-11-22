@@ -4,3 +4,6 @@ pnpm-lock.yaml
 
 # Generated deterministically; marketplace:check validates its exact bytes.
 marketplace/index.json
+
+# Actual CLI bundle bytes; web-plugin:verify compares a deterministic rebuild.
+plugins/official/weave-web/index.mjs
