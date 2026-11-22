@@ -1,5 +1,6 @@
 import type { LlmClient, LlmProviderDescriptor } from '@weave/llm';
 import {
+  llmRequestSchema,
   streamEventSchema,
   type ContextBreakdown,
   type FinishReason,
@@ -20,7 +21,12 @@ import {
   type LlmCall,
   type LlmMiddleware,
 } from './agent-types.js';
-import { buildModelContext, type ContextBudget } from './context/build-context.js';
+import {
+  buildModelContext,
+  usableContextTokens,
+  type ContextBudget,
+} from './context/build-context.js';
+import { estimateMessageTokens, estimateToolsTokens } from './context/token-estimate.js';
 import { parsePlanFromToolCall } from './update-plan-tool.js';
 import {
   ToolExecutionError,
@@ -54,17 +60,64 @@ function middlewareStream(
   llm: LlmClient,
   request: LlmRequest,
   signal: AbortSignal,
+  budget: ContextBudget,
 ): AsyncIterable<StreamEvent> {
   return {
     async *[Symbol.asyncIterator]() {
       const next = (call: LlmCall): AsyncIterable<StreamEvent> => {
-        if (call.request.provider !== request.provider || call.request.model !== request.model) {
+        const checked = llmRequestSchema.safeParse(call.request);
+        if (!checked.success) {
+          throw new AgentRunError(
+            'agent-stream-protocol',
+            'An LLM middleware supplied an invalid request',
+            { cause: checked.error },
+          );
+        }
+        // Provider streams may defer reading until after middleware returns.
+        // Isolate every nested value before estimating the request they consume.
+        let providerRequest: LlmRequest;
+        try {
+          const { tools, temperature, maxTokens, reasoningEffort, ...required } = structuredClone(
+            checked.data,
+          );
+          providerRequest = {
+            ...required,
+            ...(tools === undefined ? {} : { tools }),
+            ...(temperature === undefined ? {} : { temperature }),
+            ...(maxTokens === undefined ? {} : { maxTokens }),
+            ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+          };
+        } catch (error) {
+          throw new AgentRunError(
+            'agent-stream-protocol',
+            'An LLM middleware supplied request data that cannot be snapshotted',
+            { cause: error },
+          );
+        }
+        if (
+          providerRequest.provider !== request.provider ||
+          providerRequest.model !== request.model
+        ) {
           throw new AgentRunError(
             'agent-stream-protocol',
             'An LLM middleware may not change the provider or model of a request',
           );
         }
-        return llm.stream(call.request, { signal: AbortSignal.any([signal, call.signal]) });
+        const sentTokens = providerRequest.messages.reduce(
+          (total, message) => total + estimateMessageTokens(message),
+          estimateToolsTokens(providerRequest.tools),
+        );
+        const usable = usableContextTokens({
+          ...budget,
+          reserveOutputTokens: providerRequest.maxTokens ?? budget.reserveOutputTokens,
+        });
+        if (!(sentTokens <= usable)) {
+          throw new AgentRunError(
+            'agent-context-overflow',
+            'The middleware request exceeds the selected model context window',
+          );
+        }
+        return llm.stream(providerRequest, { signal: AbortSignal.any([signal, call.signal]) });
       };
       const events = await middleware({ request, signal }, next);
       for await (const event of events) {
@@ -619,11 +672,24 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
             let finishReason: FinishReason | undefined;
             let toolCalls = new Map<string, ToolCallState>();
             const budget = resolveContextBudget(options, descriptor, effectiveMaxTokens);
+            const resultsByTurn = new Map(
+              projectedSession.turns.map((turn) => [
+                turn.turnId,
+                new Map(turn.toolResults.map((result) => [result.toolCallId, result.status])),
+              ]),
+            );
+            const toolResultStatuses = new Map<Message, 'completed' | 'failed'>();
+            for (const { message, turnId } of projectedSession.messages) {
+              if (message.role !== 'tool' || turnId === undefined) continue;
+              const status = resultsByTurn.get(turnId)?.get(message.toolCallId);
+              if (status !== undefined) toolResultStatuses.set(message, status);
+            }
             const built = buildModelContext({
               system: systemMessages,
               history: messages,
               tools,
               budget,
+              toolResultStatuses,
               maxToolResultTokens:
                 options.context?.maxToolResultTokens ?? defaultAgentMaxToolResultTokens,
             });
@@ -668,7 +734,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
                 const stream =
                   options.llmMiddleware === undefined
                     ? llm.stream(llmRequest, { signal })
-                    : middlewareStream(options.llmMiddleware, llm, llmRequest, signal);
+                    : middlewareStream(options.llmMiddleware, llm, llmRequest, signal, budget);
                 for await (const event of stream) {
                   if (finishSeen) {
                     throw new AgentRunError(

@@ -6,7 +6,8 @@ const messageOverheadTokens = 4;
 /**
  * Flat estimate for one image part. Real image token cost depends on the
  * provider and the resolution tiling, which this heuristic does not model; a
- * deliberately high constant keeps the budget on the safe side of the window.
+ * fixed heuristic makes image content visible to the estimate. It does not
+ * guarantee the provider's actual token count.
  */
 const imageOverheadTokens = 1024;
 
@@ -15,8 +16,7 @@ const imageOverheadTokens = 1024;
  *
  * CJK and other full-width characters are counted as ~1 token each; other
  * characters (ASCII letters, digits, punctuation, code) as ~0.25. The result
- * is rounded up. It is deliberately a slight over-estimate so the budget stays
- * on the safe side of the real context window.
+ * is rounded up. This is a request-budget heuristic, not a provider tokenizer.
  */
 export function estimateTokens(text: string): number {
   if (text === '') {
@@ -47,11 +47,12 @@ function isWideCharacter(char: string): boolean {
   );
 }
 
-/** Estimated tokens for one message, including role framing and tool calls. */
+/** Estimated sent tokens, excluding reasoning and including images and framing. */
 export function estimateMessageTokens(message: Message): number {
   let total = messageOverheadTokens;
   for (const part of message.content) {
-    total += part.type === 'image' ? imageOverheadTokens : estimateTokens(part.text);
+    if (part.type === 'image') total += imageOverheadTokens;
+    else if (part.type === 'text') total += estimateTokens(part.text);
   }
   if (message.role === 'assistant' && message.toolCalls !== undefined) {
     for (const call of message.toolCalls) {
