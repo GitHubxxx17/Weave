@@ -1,5 +1,16 @@
 # Weave Foundation Architecture
 
+The installable official `weave-web` plugin contributes protected read-only
+`web_search` and `web_fetch` tools through the existing SDK and shared Tool Pipeline.
+It owns only its explicitly selected Tavily environment configuration and a bounded
+public-HTTPS adapter with DNS address validation/pinning, cancellation and complete
+source URLs. Trusted ESM remains in-process; `network:request` is a review declaration,
+not a sandbox. Strict TypeScript author source is rebuilt by the existing CLI into
+a byte-verified single ESM artifact; ordinary import, review, activation and
+Generation retention apply. No Runtime/Session/HTTP/SDK boundary is expanded.
+Contracts precede implementation in the
+[web plugin design](../superpowers/specs/2026-11-23-web-plugin-design.md).
+
 Safe turn file undo replaces direct snapshot overwrite with complete before/write
 evidence, root identity and current-content checks. Session owns append-only
 capture, write-outcome and per-file undo-operation facts; Runtime owns shared-root
@@ -784,6 +795,16 @@ cancellation state machine.
 ## Layer Boundaries
 
 ### Product references
+
+On 2026-11-23 the web plugin checked Tavily's official Search endpoint documentation,
+Codex `a0995c2b2b68248960c69cb812b5f4898dac7e4c` external search output, Harness
+`4b399c39a6d1479cd84ca591b4d7c88e24d38a96` web-fetch policy/search provider, Kiro
+built-in tools/permissions, IANA address registries and Node 24 HTTPS documentation.
+Weave adopts distinct search/read tools, untrusted external text, explicit source
+URLs and bounded same-origin redirects; its DNS pinning and conservative HTTPS443
+policy are its own tested constraints, without another product's sandbox guarantees.
+The [web design reference audit](../superpowers/specs/2026-11-23-web-plugin-design.md)
+records exact sources, unavailable reads and live-provider validation limits.
 
 On 2026-11-23, project file context checked Codex
 [`a0995c2b2b68248960c69cb812b5f4898dac7e4c`](https://github.com/openai/codex/tree/a0995c2b2b68248960c69cb812b5f4898dac7e4c),
