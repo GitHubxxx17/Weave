@@ -151,7 +151,8 @@ type ManagedMutationStep<Replay, Saved> =
 
 type ManagedApplicationFailureKind = 'adoption' | 'preparation' | 'publication';
 // The coordinator retains the existing attributed failure shape
-// (sourceId, pluginId, identity, optional origin, and cause).
+// (sourceId, pluginId, identity, optional origin, cause), plus failureKind:
+// preparation for prepare/assembly, publication for host commit failures.
 type ManagedMutationOutcome =
   | { kind: 'not-required' }
   | { kind: 'completed'; attributedFailures?: readonly ManagedAttributedFailure[] }
