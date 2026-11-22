@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { constants, type BigIntStats } from 'node:fs';
+import { constants, type BigIntStats, type Dirent } from 'node:fs';
 import fs, { type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -75,6 +75,7 @@ async function assertUnchanged(file: PayloadEntry): Promise<void> {
 async function listPayload(
   directory: string,
   signal: AbortSignal | undefined,
+  reviewed: boolean,
 ): Promise<{
   readonly files: PayloadEntry[];
   readonly directories: PayloadEntry[];
@@ -87,9 +88,9 @@ async function listPayload(
   const walk = async (parent: PayloadEntry, depth: number): Promise<void> => {
     signal?.throwIfAborted();
     await assertUnchanged(parent);
-    for await (const entry of await fs.opendir(parent.absolutePath)) {
+    const visit = async (entry: Dirent): Promise<void> => {
       signal?.throwIfAborted();
-      if (ignoredNames.has(entry.name)) continue;
+      if (ignoredNames.has(entry.name)) return;
       entries += 1;
       if (entries > maxEntries) throw tooLarge(`${maxEntries} filesystem entries`);
       const relativePath = parent.relativePath
@@ -123,6 +124,22 @@ async function listPayload(
           'Plugin payloads may contain only regular files and real directories',
         );
       }
+    };
+    const handle = await fs.opendir(parent.absolutePath);
+    if (reviewed) {
+      // The native iterator closes implicitly, hiding which operation failed.
+      await usingPayloadHandle(
+        handle,
+        async (dir) => {
+          for (let entry = await dir.read(); entry !== null; entry = await dir.read()) {
+            await visit(entry);
+          }
+        },
+        reviewed,
+        'directory',
+      );
+    } else {
+      for await (const entry of handle) await visit(entry);
     }
     await assertUnchanged(parent);
   };
@@ -140,10 +157,11 @@ async function listPayload(
   return { files, directories: [root, ...directories] };
 }
 
-async function usingFile<T>(
-  handle: FileHandle,
-  use: (handle: FileHandle) => Promise<T>,
+async function usingPayloadHandle<H extends { close(): Promise<void> }, T>(
+  handle: H,
+  use: (handle: H) => Promise<T>,
   reviewed: boolean,
+  kind: 'file' | 'directory' = 'file',
 ): Promise<T> {
   let result: T;
   try {
@@ -152,9 +170,13 @@ async function usingFile<T>(
     try {
       await handle.close();
     } catch (cleanup: unknown) {
-      throw new PluginArtifactError('plugin-artifact-io', 'Closing a plugin payload file failed', {
-        cause: new AggregateError([error, cleanup]),
-      });
+      throw new PluginArtifactError(
+        'plugin-artifact-io',
+        `Closing a plugin payload ${kind} failed`,
+        {
+          cause: new AggregateError([error, cleanup]),
+        },
+      );
     }
     throw error;
   }
@@ -162,7 +184,7 @@ async function usingFile<T>(
     await handle.close();
   } catch (error: unknown) {
     if (!reviewed) throw error;
-    throw new PluginArtifactError('plugin-artifact-io', 'Closing a plugin payload file failed', {
+    throw new PluginArtifactError('plugin-artifact-io', `Closing a plugin payload ${kind} failed`, {
       cause: error,
     });
   }
@@ -221,7 +243,9 @@ export async function checkPayload(
   }
 
   signal?.throwIfAborted();
-  const { files, directories } = await observeSource(() => listPayload(directory, signal));
+  const { files, directories } = await observeSource(() =>
+    listPayload(directory, signal, reviewed),
+  );
   if (destination !== undefined) {
     for (const entry of directories.slice(1)) {
       signal?.throwIfAborted();
@@ -236,7 +260,7 @@ export async function checkPayload(
   for (const entry of files) {
     signal?.throwIfAborted();
     const handle = await observeSource(() => openSource(entry, signal));
-    const measured = await usingFile(
+    const measured = await usingPayloadHandle(
       handle,
       async (input) => {
         const stat = () => observeSource(() => input.stat({ bigint: true }));
@@ -268,7 +292,7 @@ export async function checkPayload(
         const size =
           destination === undefined
             ? await stream()
-            : await usingFile(
+            : await usingPayloadHandle(
                 await fs.open(path.join(destination, entry.relativePath), 'wx', 0o600),
                 stream,
                 reviewed,

@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { Dir } from 'node:fs';
 import fs, {
   access,
   mkdir,
@@ -416,6 +417,91 @@ test.each(['source', 'published object'])(
     expect(await readdir(path.join(managedRoot, 'artifacts'))).toEqual(
       existing ? [existing.digest] : [],
     );
+  },
+);
+
+function failDirectoryClose(
+  shouldFail: (directory: string) => boolean,
+  cause: NodeJS.ErrnoException,
+) {
+  const close = Dir.prototype.close;
+  vi.spyOn(Dir.prototype, 'close').mockImplementation(function (
+    this: Dir,
+    callback?: Parameters<Dir['close']>[0],
+  ) {
+    // Node binds the callback overload inside the native directory iterator.
+    const fail = shouldFail(this.path);
+    if (callback !== undefined) {
+      return close.call(this, (error) => callback(error ?? (fail ? cause : null)));
+    }
+    return new Promise<void>((resolve, reject) => {
+      close.call(this, (error) => {
+        if (error !== null) reject(error);
+        else if (fail) reject(cause);
+        else resolve();
+      });
+    });
+  });
+}
+
+test.each([
+  ['source', 'ENOENT'],
+  ['source during copy', 'ENOTDIR'],
+  ['published object', 'ELOOP'],
+])('preserves directory close %s failure with errno %s', async (target, code) => {
+  const { managedRoot, sourceDirectory } = await fixture();
+  const store = host.createPluginArtifactStore({ directory: managedRoot });
+  const expectedSource = await store.preview({ sourceDirectory });
+  const existing =
+    target === 'published object' ? await store.stage({ sourceDirectory }) : undefined;
+  const directory = existing?.directory ?? sourceDirectory;
+  const cause = Object.assign(new Error('directory close failed'), { code });
+  let closes = 0;
+  failDirectoryClose(
+    (candidate) =>
+      candidate === directory && ++closes === (target === 'source during copy' ? 2 : 1),
+    cause,
+  );
+
+  await expect(store.stage({ sourceDirectory, expectedSource })).rejects.toMatchObject({
+    code: 'plugin-artifact-io',
+    cause,
+  });
+  expect(await readdir(path.join(managedRoot, 'staging'))).toEqual([]);
+  expect(await readdir(path.join(managedRoot, 'artifacts'))).toEqual(
+    existing ? [existing.digest] : [],
+  );
+});
+
+test.each(['filesystem failure', 'caller cancellation'])(
+  'preserves reviewed directory %s together with failed cleanup',
+  async (failure) => {
+    const { managedRoot, sourceDirectory } = await fixture();
+    const store = host.createPluginArtifactStore({ directory: managedRoot });
+    const expectedSource = await store.preview({ sourceDirectory });
+    const caller = new AbortController();
+    const primary =
+      failure === 'caller cancellation'
+        ? 'operation cancelled while traversing'
+        : Object.assign(new Error('directory entry check failed'), { code: 'EIO' });
+    const cleanup = Object.assign(new Error('directory close failed'), { code: 'ENOENT' });
+    failDirectoryClose((directory) => directory === sourceDirectory, cleanup);
+    const lstat = fs.lstat;
+    vi.spyOn(fs, 'lstat').mockImplementation((file, options) => {
+      if (file === path.join(sourceDirectory, 'index.mjs')) {
+        if (failure === 'caller cancellation') caller.abort(primary);
+        throw primary;
+      }
+      return lstat(file, options);
+    });
+
+    await expect(
+      store.stage({ sourceDirectory, expectedSource, signal: caller.signal }),
+    ).rejects.toMatchObject({
+      code: 'plugin-artifact-io',
+      cause: { errors: [primary, cleanup] },
+    });
+    await expectNoPublication(managedRoot);
   },
 );
 
