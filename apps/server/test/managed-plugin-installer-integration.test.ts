@@ -10,6 +10,7 @@ import {
   type ImportPreviewResponse,
   type ManagedMutationResponse,
 } from '../src/managed-plugin-catalog.js';
+import * as managedPluginInstaller from '../src/managed-plugin-installer.js';
 import { createSqliteMcpAuthorityStore } from '../src/mcp-authority-store.js';
 import { mcpMutationResultSchema } from '../src/mcp-management-types.js';
 import {
@@ -685,9 +686,38 @@ describe('owned managed installer over HTTP', () => {
     async (order) => {
       const f = await fixture();
       const mcpReader = createSqliteMcpAuthorityStore({ filename: f.databaseFile });
-      cleanups.push(() => mcpReader.close());
+      const mcpStore = createSqliteMcpAuthorityStore({ filename: f.databaseFile });
+      cleanups.push(
+        () => mcpReader.close(),
+        () => mcpStore.close(),
+      );
+      const mcpWrite = gate();
+      const importQueued = Promise.withResolvers<void>();
+      let lookup: MockInstance<PluginAuthorityDatabase['lookupSync']> | undefined;
+      if (order === 'mcp-first') {
+        const mutate = mcpStore.mutate;
+        vi.spyOn(mcpStore, 'mutate').mockImplementationOnce(async (command, options) => {
+          expect(command.kind).toBe('create');
+          await mcpWrite.hold();
+          return mutate(command, options);
+        });
+        const createInstaller = managedPluginInstaller.createManagedPluginInstaller;
+        vi.spyOn(managedPluginInstaller, 'createManagedPluginInstaller').mockImplementationOnce(
+          (options) => {
+            lookup = vi.spyOn(options.authority, 'lookupSync');
+            const installer = createInstaller(options);
+            const runImport = installer.import;
+            vi.spyOn(installer, 'import').mockImplementationOnce((...args) => {
+              const result = runImport(...args);
+              importQueued.resolve();
+              return result;
+            });
+            return installer;
+          },
+        );
+      }
       const connect = vi.fn<NonNullable<StartServerOptions['mcpConnect']>>();
-      const running = await f.startUnbound({ mcpConnect: connect });
+      const running = await f.startUnbound({ mcpAuthorityStore: mcpStore, mcpConnect: connect });
       const config = await createFixtureMcpConfig('notes', f.root, f.launchLog);
       const source = await f.source('mcp-notes');
       const request = importBody('import-versus-mcp', await f.preview(source.directory));
@@ -697,14 +727,24 @@ describe('owned managed installer over HTTP', () => {
       let configuring: Promise<unknown> | undefined;
       try {
         if (order === 'mcp-first') {
-          const result = mcpMutationResultSchema.parse(await f.http('/mcp/servers', configure));
+          const before = f.snapshot().heads;
+          configuring = pending(f.http('/mcp/servers', configure));
+          await within(mcpWrite.entered, 'MCP configure to hold its ticket before SQLite writes');
+          importing = pending(f.http(importPath, request, 409));
+          await within(importQueued.promise, 'installer import queued behind MCP configure');
+          expect((await mcpReader.read()).sequence).toBe(0);
+          expect(f.snapshot().heads).toEqual(before);
+          expect(lookup).not.toHaveBeenCalled();
+          mcpWrite.release();
+
+          const result = mcpMutationResultSchema.parse(await configuring);
           expect(result.servers).toMatchObject([{ state: 'untrusted', enabled: false }]);
-          expectIssue(
-            await f.http(`${managed}/import`, request, 409),
-            'plugin-managed-id-conflict',
-          );
+          expectIssue(await importing, 'plugin-managed-id-conflict');
+          expect(f.snapshot().heads).toEqual(before);
           expect(f.authority().lookupSync(importRequest(request))).toEqual({ kind: 'absent' });
-          expect((await mcpReader.read()).records).toMatchObject([
+          const savedMcp = await mcpReader.read();
+          expect(savedMcp.sequence).toBe(1);
+          expect(savedMcp.records).toMatchObject([
             {
               config,
               removed: false,
@@ -741,6 +781,7 @@ describe('owned managed installer over HTTP', () => {
         expect(connect).not.toHaveBeenCalled();
         await expect(fs.access(f.launchLog)).rejects.toMatchObject({ code: 'ENOENT' });
       } finally {
+        mcpWrite.release();
         stage.release();
         await Promise.allSettled([importing, configuring]);
       }
@@ -1124,14 +1165,19 @@ describe('owned managed installer over HTTP', () => {
       typeof import('../src/owned-plugin-artifact-store.js')
     >('../src/owned-plugin-artifact-store.js');
     const assertLeaseHeld = async () => {
-      await expect(
+      const [attempt] = await Promise.allSettled([
         contenders.openOwnedPluginArtifactStore({
           authority: f.authority(),
           directory: f.storeDirectory,
           initialBinding: 'require-bound',
           onOwnershipLost: () => undefined,
         }),
-      ).rejects.toMatchObject({ code: 'plugin-store-busy' });
+      ]);
+      if (attempt.status === 'fulfilled') {
+        await attempt.value.close();
+        expect.fail('The contender acquired the lease while shutdown still owned it');
+      }
+      expect(attempt.reason).toMatchObject({ code: 'plugin-store-busy' });
     };
     const originalRead = mcpStore.read;
     const read = vi.spyOn(mcpStore, 'read').mockImplementationOnce(async (options) => {
