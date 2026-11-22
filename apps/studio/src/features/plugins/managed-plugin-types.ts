@@ -134,17 +134,26 @@ export type ManagedHeads = z.infer<typeof headsSchema>;
 export const managedIssueSchema = z
   .strictObject({ code: z.string(), message: z.string() })
   .readonly();
+const generationBlockSchema = z
+  .strictObject({
+    code: z.literal('plugin-generation-blocked'),
+    message: z.literal('New runs are blocked pending a compliant Generation.'),
+  })
+  .readonly();
 const generationSchema = z
   .strictObject({
     id: positiveSequenceSchema,
     acceptingRuns: z.boolean(),
-    blocked: managedIssueSchema.optional(),
+    blocked: generationBlockSchema.optional(),
   })
   .readonly();
 export const managedCatalogSchema = z
   .strictObject({
     heads: headsSchema,
-    plugins: z.array(pluginSchema).readonly(),
+    plugins: z
+      .array(pluginSchema)
+      .refine((plugins) => new Set(plugins.map(({ pluginId }) => pluginId)).size === plugins.length)
+      .readonly(),
     generation: generationSchema,
   })
   .readonly();
@@ -183,6 +192,22 @@ const decisionSchema = z
     trustEventSequence: positiveSequenceSchema.nullable(),
   })
   .readonly();
+const applicationIssueSchema = z
+  .discriminatedUnion('code', [
+    z.strictObject({
+      code: z.literal('plugin-managed-adoption-failed'),
+      message: z.literal('Managed plugin authority could not be applied.'),
+    }),
+    z.strictObject({
+      code: z.literal('plugin-load-failed'),
+      message: z.literal('Managed plugin preparation failed'),
+    }),
+    z.strictObject({
+      code: z.literal('plugin-reload-failed'),
+      message: z.literal('Managed plugin Generation publication failed.'),
+    }),
+  ])
+  .readonly();
 const applicationFields = { generation: generationSchema, active: activeSchema.nullable() };
 export const managedMutationResponseSchema = z
   .discriminatedUnion('kind', [
@@ -194,7 +219,7 @@ export const managedMutationResponseSchema = z
           z.strictObject({ status: z.enum(['not-required', 'applied']), ...applicationFields }),
           z.strictObject({
             status: z.literal('failed'),
-            issue: managedIssueSchema,
+            issue: applicationIssueSchema,
             ...applicationFields,
           }),
         ])

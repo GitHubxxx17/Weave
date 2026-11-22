@@ -71,6 +71,23 @@ function committed(target: ManagedMutationResponse['decision']['target'] = impor
   } satisfies ManagedMutationResponse;
 }
 
+const duplicatePluginCatalog = {
+  ...managedCatalog,
+  plugins: [managedPlugin, { ...managedPlugin, active: null }],
+};
+const generationBlock = {
+  code: 'plugin-generation-blocked',
+  message: 'New runs are blocked pending a compliant Generation.',
+};
+const adoptionIssue = {
+  code: 'plugin-managed-adoption-failed',
+  message: 'Managed plugin authority could not be applied.',
+};
+const preparationIssue = {
+  code: 'plugin-load-failed',
+  message: 'Managed plugin preparation failed',
+};
+
 afterEach(() => {
   vi.unstubAllGlobals();
   Reflect.deleteProperty(window, 'weaveDesktop');
@@ -247,6 +264,15 @@ describe('managed catalog observations', () => {
     });
   });
 
+  it('accepts the public Generation block pair', async () => {
+    const catalog = {
+      ...managedCatalog,
+      generation: { ...managedGeneration, acceptingRuns: false, blocked: generationBlock },
+    };
+    respond(json(catalog));
+    await expect(fetchManagedCatalog()).resolves.toEqual({ kind: 'enabled', catalog });
+  });
+
   it('recognizes the explicit disabled status and code', async () => {
     respond(json({ error: { code: 'plugin-installer-disabled', message: 'Unavailable' } }, 404));
     await expect(fetchManagedCatalog()).resolves.toEqual({ kind: 'disabled' });
@@ -282,6 +308,7 @@ describe('managed catalog observations', () => {
 
   it.each([
     ['missing generation', { heads: emptyCatalog.heads, plugins: [] }],
+    ['duplicate plugin IDs with different active membership', duplicatePluginCatalog],
     [
       'unsafe head',
       {
@@ -367,9 +394,76 @@ describe('managed catalog observations', () => {
       status: 200,
     });
   });
+
+  it.each([
+    ['unknown code', { ...generationBlock, code: 'unexpected-issue' }],
+    [
+      'private message',
+      { ...generationBlock, message: 'Synthetic diagnostic for /private/example' },
+    ],
+  ])('rejects a Generation block pair with an invalid %s', async (_name, blocked) => {
+    respond(
+      json({
+        ...managedCatalog,
+        generation: { ...managedGeneration, acceptingRuns: false, blocked },
+      }),
+    );
+    await expect(fetchManagedCatalog()).rejects.toMatchObject({
+      code: 'plugin-invalid-response',
+      status: 200,
+    });
+  });
 });
 
 describe('managed receipt decoding', () => {
+  it.each([
+    { ...committed(), current: duplicatePluginCatalog },
+    {
+      kind: 'replayed',
+      decision: managedDecision(importTarget),
+      application: { status: 'unknown' },
+      current: duplicatePluginCatalog,
+    },
+  ])('rejects a $kind receipt with duplicate IDs in its current catalog', async (receipt) => {
+    respond(json(receipt));
+    await expect(
+      sendManagedRequest(prepareManagedRequest(importReview, requestId)),
+    ).rejects.toMatchObject({
+      code: 'plugin-invalid-response',
+      status: 200,
+    });
+  });
+
+  it.each([adoptionIssue, preparationIssue])(
+    'accepts the public application issue $code',
+    async (issue) => {
+      const receipt = committed();
+      const response = {
+        ...receipt,
+        application: { ...receipt.application, status: 'failed', issue },
+      };
+      respond(json(response));
+      await expect(
+        sendManagedRequest(prepareManagedRequest(importReview, requestId)),
+      ).resolves.toEqual(response);
+    },
+  );
+
+  it.each([
+    ['unknown code', { ...adoptionIssue, code: 'unexpected-issue' }],
+    ['private message', { ...adoptionIssue, message: 'Synthetic diagnostic for /private/example' }],
+    ['message for a different code', { ...adoptionIssue, message: preparationIssue.message }],
+  ])('rejects an application failure pair with an invalid %s', async (_name, issue) => {
+    const receipt = committed();
+    respond(json({ ...receipt, application: { ...receipt.application, status: 'failed', issue } }));
+    await expect(
+      sendManagedRequest(prepareManagedRequest(importReview, requestId)),
+    ).rejects.toMatchObject({
+      code: 'plugin-invalid-response',
+      status: 200,
+    });
+  });
+
   it('retains the actual older active version after a committed uninstall', async () => {
     const receipt = committed({ kind: 'uninstall', digest: secondDigest, immediate: true });
     const uninstalled = { ...managedPlugin, selection: null, trust: null };
