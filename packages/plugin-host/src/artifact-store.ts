@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import { assertHostVersion } from '@weave/plugin';
 import { z } from 'zod';
@@ -13,8 +14,12 @@ import {
   sourceChanged,
 } from './artifact-copy.js';
 import {
+  artifactDigestSchema,
+  artifactDirectorySchema,
   PluginArtifactError,
+  pluginArtifactSourceIdentitySchema,
   type PluginArtifact,
+  type PluginArtifactSourceIdentity,
   type PluginArtifactStore,
   type PluginArtifactStoreOptions,
 } from './artifact-types.js';
@@ -23,19 +28,22 @@ import { incompatibility, resolveEntry } from './discovery.js';
 import { PluginHostError } from './errors.js';
 import { HostQueue } from './host-queue.js';
 
-const absoluteDirectory = z
-  .string()
-  .refine((value) => path.isAbsolute(value) && !value.includes('\0'));
 const storeOptionsSchema = z.strictObject({
-  directory: absoluteDirectory,
+  directory: artifactDirectorySchema,
   hostVersion: z.string().optional(),
   reservedIds: z.array(z.string().min(1)).optional(),
 });
 const signal = z.instanceof(AbortSignal).optional();
-const stageOptionsSchema = z.strictObject({ sourceDirectory: absoluteDirectory, signal });
+const previewOptionsSchema = z.strictObject({ sourceDirectory: artifactDirectorySchema, signal });
+const stageOptionsSchema = previewOptionsSchema.extend({
+  expectedSource: pluginArtifactSourceIdentitySchema.optional(),
+});
 const readOptionsSchema = z.strictObject({ signal });
-const digestSchema = z.string().regex(/^[0-9a-f]{64}$/);
 const maxPublishedArtifacts = 64;
+
+type StoreResult =
+  | { readonly kind: 'artifact'; readonly value: PluginArtifact }
+  | { readonly kind: 'preview'; readonly value: PluginArtifactSourceIdentity };
 
 function parse<T>(schema: z.ZodType<T>, value: unknown, description: string): T {
   const checked = schema.safeParse(value);
@@ -47,14 +55,18 @@ function parse<T>(schema: z.ZodType<T>, value: unknown, description: string): T 
   return checked.data;
 }
 
+async function assertRealDirectory(directory: string): Promise<void> {
+  if (!(await fs.lstat(directory)).isDirectory()) {
+    throw new PluginArtifactError(
+      'plugin-artifact-unsupported-file',
+      'The plugin source and managed directories must be real directories',
+    );
+  }
+}
+
 async function directoryExists(directory: string): Promise<boolean> {
   try {
-    if (!(await fs.lstat(directory)).isDirectory()) {
-      throw new PluginArtifactError(
-        'plugin-artifact-unsupported-file',
-        'The plugin source and managed directories must be real directories',
-      );
-    }
+    await assertRealDirectory(directory);
     return true;
   } catch (error: unknown) {
     if (hasCode(error, 'ENOENT')) return false;
@@ -102,17 +114,22 @@ function contains(parent: string, candidate: string): boolean {
   return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
-async function ensureDirectory(directory: string, recursive = false): Promise<void> {
+async function ensureDirectory(
+  directory: string,
+  recursive: boolean,
+  reviewed: boolean,
+): Promise<void> {
   if (await directoryExists(directory)) return;
   await fs.mkdir(directory, { mode: 0o700, recursive });
-  if (!(await directoryExists(directory))) throw sourceChanged();
+  if (reviewed) await assertRealDirectory(directory);
+  else if (!(await directoryExists(directory))) throw sourceChanged();
 }
 
 async function assertCapacity(artifacts: string, abort: AbortSignal | undefined): Promise<void> {
   let count = 0;
   for await (const entry of await fs.opendir(artifacts)) {
     abort?.throwIfAborted();
-    if (!entry.isDirectory() || !digestSchema.safeParse(entry.name).success) {
+    if (!entry.isDirectory() || !artifactDigestSchema.safeParse(entry.name).success) {
       throw new PluginArtifactError(
         'plugin-artifact-conflict',
         'The artifact directory contains an unexpected entry',
@@ -155,6 +172,79 @@ async function withSourceDisappearance<T>(
   }
 }
 
+function isInvalidSource(error: unknown): boolean {
+  return (
+    error instanceof PluginArtifactError &&
+    (error.code === 'plugin-artifact-invalid' ||
+      error.code === 'plugin-artifact-unsupported-file' ||
+      error.code === 'plugin-artifact-too-large')
+  );
+}
+
+async function withReviewedSourceErrors<T>(
+  abort: AbortSignal | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (error: unknown) {
+    if (
+      !isAbort(error, abort) &&
+      (isInvalidSource(error) || hasCode(error, 'ENOENT', 'ENOTDIR', 'ELOOP'))
+    ) {
+      throw sourceChanged(error);
+    }
+    throw error;
+  }
+}
+
+async function normalizeSource(
+  source: string,
+  abort: AbortSignal | undefined,
+  reviewed: boolean,
+): Promise<string> {
+  if (reviewed) {
+    return withReviewedSourceErrors(abort, async () => {
+      await assertRealDirectory(source);
+      return fs.realpath(source);
+    });
+  }
+  if (!(await directoryExists(source))) {
+    throw new PluginArtifactError(
+      'plugin-artifact-invalid',
+      'The plugin source directory is missing',
+    );
+  }
+  return withSourceDisappearance(abort, () => fs.realpath(source));
+}
+
+function assertNoOverlap(root: string, sourceDirectory: string): void {
+  if (contains(root, sourceDirectory) || contains(sourceDirectory, root)) {
+    throw new PluginArtifactError(
+      'plugin-artifact-invalid',
+      'The plugin source and managed store overlap',
+    );
+  }
+}
+
+function sameMeasurement(
+  actual: Pick<PluginArtifact, 'digest' | 'files' | 'bytes'>,
+  expected: PluginArtifactSourceIdentity,
+): boolean {
+  return (
+    actual.digest === expected.digest &&
+    actual.files === expected.files &&
+    actual.bytes === expected.bytes
+  );
+}
+
+function matchesReview(actual: PluginArtifact, expected: PluginArtifactSourceIdentity): boolean {
+  return (
+    sameMeasurement(actual, expected) &&
+    isDeepStrictEqual(actual.descriptor.manifest, expected.manifest)
+  );
+}
+
 async function withArtifactErrors<T>(
   abort: AbortSignal | undefined,
   run: () => Promise<T>,
@@ -191,13 +281,16 @@ export function createPluginArtifactStore(
   }
   const directory = path.resolve(config.directory);
   const reservedIds = new Set(config.reservedIds);
-  const queue = new HostQueue<PluginArtifact>();
+  const queue = new HostQueue<StoreResult>();
 
   async function validatePayload(
     payload: string,
     abort: AbortSignal | undefined,
+    reviewed = false,
   ): Promise<PluginArtifact> {
-    const { digest, bytes, files, descriptorText, paths } = await checkPayload(payload, abort);
+    const { digest, bytes, files, descriptorText, paths } = await checkPayload(payload, abort, {
+      reviewed,
+    });
     if (descriptorText === undefined) {
       throw new PluginArtifactError('plugin-artifact-invalid', 'The plugin descriptor is missing');
     }
@@ -247,52 +340,97 @@ export function createPluginArtifactStore(
     object: string,
     digest: string,
     abort: AbortSignal | undefined,
+    reviewed = false,
   ): Promise<PluginArtifact> {
+    const corrupt = (cause: unknown) =>
+      new PluginArtifactError(
+        'plugin-artifact-corrupt',
+        'The published plugin artifact failed integrity validation',
+        { cause },
+      );
     try {
-      if (!(await directoryExists(object))) throw new Error('The artifact object is missing');
-      const artifact = await validatePayload(path.join(object, 'payload'), abort);
-      if (artifact.digest !== digest) throw new Error('The payload digest does not match its name');
+      if (!(await directoryExists(object))) {
+        throw corrupt(new Error('The artifact object is missing'));
+      }
+      const artifact = await validatePayload(path.join(object, 'payload'), abort, reviewed);
+      if (artifact.digest !== digest) {
+        throw corrupt(new Error('The payload digest does not match its name'));
+      }
       return artifact;
     } catch (error: unknown) {
       if (isAbort(error, abort)) throw error;
-      if (!(error instanceof PluginArtifactError) && hasCode(error, 'EACCES', 'EPERM', 'EIO'))
+      if (error instanceof PluginArtifactError) {
+        if (error.code === 'plugin-artifact-corrupt') throw error;
+        if (reviewed && error.code === 'plugin-artifact-io') throw error;
+      } else if (
+        reviewed
+          ? !hasCode(error, 'ENOENT', 'ENOTDIR', 'ELOOP')
+          : hasCode(error, 'EACCES', 'EPERM', 'EIO')
+      ) {
         throw error;
-      throw new PluginArtifactError(
-        'plugin-artifact-corrupt',
-        'The published plugin artifact failed integrity validation',
-        {
-          cause: error,
-        },
-      );
+      }
+      throw corrupt(error);
     }
   }
 
-  async function stage(source: string, abort: AbortSignal | undefined): Promise<PluginArtifact> {
-    if (!(await directoryExists(source))) {
-      throw new PluginArtifactError(
-        'plugin-artifact-invalid',
-        'The plugin source directory is missing',
-      );
-    }
-    const sourceDirectory = await withSourceDisappearance(abort, () => fs.realpath(source));
+  async function preview(
+    source: string,
+    abort: AbortSignal | undefined,
+  ): Promise<PluginArtifactSourceIdentity> {
+    const sourceDirectory = await normalizeSource(source, abort, false);
+    assertNoOverlap(await normalizeStore(directory), sourceDirectory);
+    const { digest, descriptor, files, bytes } = await validatePayload(sourceDirectory, abort);
+    return freezeTree({ sourceDirectory, digest, manifest: descriptor.manifest, files, bytes });
+  }
+
+  async function stage(
+    source: string,
+    abort: AbortSignal | undefined,
+    expected: PluginArtifactSourceIdentity | undefined,
+  ): Promise<PluginArtifact> {
+    const reviewed = expected !== undefined;
+    const sourceDirectory = await normalizeSource(source, abort, reviewed);
+    if (reviewed && sourceDirectory !== expected.sourceDirectory) throw sourceChanged();
     const root = await normalizeStore(directory);
-    if (contains(root, sourceDirectory) || contains(sourceDirectory, root)) {
-      throw new PluginArtifactError(
-        'plugin-artifact-invalid',
-        'The plugin source and managed store overlap',
-      );
-    }
+    assertNoOverlap(root, sourceDirectory);
     const staging = path.join(root, 'staging');
     const artifacts = path.join(root, 'artifacts');
     abort?.throwIfAborted();
-    await ensureDirectory(root, true);
-    await ensureDirectory(artifacts);
-    await ensureDirectory(staging);
+    await ensureDirectory(root, true, reviewed);
+    await ensureDirectory(artifacts, false, reviewed);
+    await ensureDirectory(staging, false, reviewed);
     await recoverStaging(staging, abort);
-    const before = await withSourceDisappearance(abort, () => checkPayload(sourceDirectory, abort));
+    let digest: string;
+    if (reviewed) {
+      const before = await withReviewedSourceErrors(abort, () =>
+        validatePayload(sourceDirectory, abort, true),
+      );
+      if (!matchesReview(before, expected)) throw sourceChanged();
+      digest = before.digest;
+    } else {
+      ({ digest } = await withSourceDisappearance(abort, () =>
+        checkPayload(sourceDirectory, abort),
+      ));
+    }
 
     const operation = path.join(staging, randomUUID());
     const payload = path.join(operation, 'payload');
+    async function validateStaged(): Promise<PluginArtifact> {
+      try {
+        return await validatePayload(payload, abort, reviewed);
+      } catch (error: unknown) {
+        if (
+          reviewed &&
+          !isAbort(error, abort) &&
+          hasCode(error, 'plugin-artifact-source-changed')
+        ) {
+          throw new PluginArtifactError('plugin-artifact-corrupt', 'The staged payload changed', {
+            cause: error,
+          });
+        }
+        throw error;
+      }
+    }
     abort?.throwIfAborted();
     await fs.mkdir(operation, { mode: 0o700 });
     let published = false;
@@ -300,35 +438,51 @@ export function createPluginArtifactStore(
     try {
       await fs.mkdir(payload, { mode: 0o700 });
       try {
-        const copied = await checkPayload(sourceDirectory, abort, payload);
-        const after = await checkPayload(sourceDirectory, abort);
-        if (copied.digest !== before.digest || after.digest !== before.digest)
-          throw sourceChanged();
-      } catch (error: unknown) {
-        if (isAbort(error, abort)) throw error;
-        if (
-          hasCode(error, 'ENOENT', 'ENOTDIR') ||
-          (error instanceof PluginArtifactError &&
-            [
-              'plugin-artifact-invalid',
-              'plugin-artifact-unsupported-file',
-              'plugin-artifact-too-large',
-            ].includes(error.code))
-        )
-          throw sourceChanged(error);
-        throw error;
-      }
-      const artifact = await validatePayload(payload, abort);
-      if (artifact.digest !== before.digest) throw sourceChanged();
-      const object = path.join(artifacts, artifact.digest);
-      let existing: PluginArtifact | undefined;
-      try {
-        if (await directoryExists(object)) {
-          existing = await validatePublished(object, artifact.digest, abort);
+        const copied = await checkPayload(sourceDirectory, abort, {
+          destination: payload,
+          reviewed,
+        });
+        if (reviewed) {
+          if (!sameMeasurement(copied, expected)) throw sourceChanged();
+        } else {
+          const after = await checkPayload(sourceDirectory, abort);
+          if (copied.digest !== digest || after.digest !== digest) throw sourceChanged();
         }
       } catch (error: unknown) {
         if (isAbort(error, abort)) throw error;
-        if (error instanceof PluginArtifactError) {
+        if (isInvalidSource(error) || (!reviewed && hasCode(error, 'ENOENT', 'ENOTDIR')))
+          throw sourceChanged(error);
+        throw error;
+      }
+      const artifact = await validateStaged();
+      if (reviewed) {
+        if (!matchesReview(artifact, expected)) {
+          throw new PluginArtifactError(
+            'plugin-artifact-corrupt',
+            'The staged payload changed after copying',
+          );
+        }
+      } else if (artifact.digest !== digest) {
+        throw sourceChanged();
+      }
+      const object = path.join(artifacts, digest);
+      let existing: PluginArtifact | undefined;
+      try {
+        if (await directoryExists(object)) {
+          existing = await validatePublished(object, digest, abort, reviewed);
+          if (reviewed && !matchesReview(existing, expected)) {
+            throw new PluginArtifactError(
+              'plugin-artifact-corrupt',
+              'The published artifact does not match the review',
+            );
+          }
+        }
+      } catch (error: unknown) {
+        if (isAbort(error, abort)) throw error;
+        if (
+          error instanceof PluginArtifactError &&
+          (!reviewed || error.code !== 'plugin-artifact-io')
+        ) {
           throw new PluginArtifactError(
             'plugin-artifact-conflict',
             'The digest already belongs to an invalid artifact',
@@ -339,12 +493,11 @@ export function createPluginArtifactStore(
         }
         throw error;
       }
-      if (existing !== undefined) {
-        result = existing;
-      } else {
+      let finalArtifact = artifact;
+      if (existing === undefined) {
         await assertCapacity(artifacts, abort);
-        const finalArtifact = await validatePayload(payload, abort);
-        if (finalArtifact.digest !== artifact.digest) {
+        finalArtifact = await validateStaged();
+        if (reviewed ? !matchesReview(finalArtifact, expected) : finalArtifact.digest !== digest) {
           throw new PluginArtifactError(
             'plugin-artifact-corrupt',
             'The staged payload changed before publication',
@@ -356,6 +509,21 @@ export function createPluginArtifactStore(
             'The artifact path was occupied before publication',
           );
         }
+      }
+      if (reviewed) {
+        // Keep the last source observation next to the reuse or rename boundary.
+        const after = await withReviewedSourceErrors(abort, () =>
+          validatePayload(sourceDirectory, abort, true),
+        );
+        const currentSource = await normalizeSource(source, abort, true);
+        if (currentSource !== expected.sourceDirectory || !matchesReview(after, expected)) {
+          throw sourceChanged();
+        }
+        abort?.throwIfAborted();
+      }
+      if (existing !== undefined) {
+        result = existing;
+      } else {
         abort?.throwIfAborted();
         try {
           await fs.rename(operation, object);
@@ -396,35 +564,61 @@ export function createPluginArtifactStore(
     return result;
   }
 
+  async function enqueueArtifact(
+    abort: AbortSignal | undefined,
+    run: () => Promise<PluginArtifact>,
+  ): Promise<PluginArtifact> {
+    const result = await queue.enqueue(false, async () => ({
+      kind: 'artifact',
+      value: await withArtifactErrors(abort, run),
+    }));
+    if (result.kind !== 'artifact') throw new Error('Unexpected plugin artifact queue result');
+    return result.value;
+  }
+
   return {
+    async preview(input) {
+      const { sourceDirectory, signal: abort } = parse(
+        previewOptionsSchema,
+        input,
+        'plugin artifact preview options',
+      );
+      abort?.throwIfAborted();
+      const result = await queue.enqueue(false, async () => ({
+        kind: 'preview',
+        value: await withArtifactErrors(abort, () => preview(path.resolve(sourceDirectory), abort)),
+      }));
+      if (result.kind !== 'preview') throw new Error('Unexpected plugin artifact queue result');
+      return result.value;
+    },
     async stage(input) {
-      const options = parse(stageOptionsSchema, input, 'plugin artifact stage options');
-      options.signal?.throwIfAborted();
-      return queue.enqueue(false, () =>
-        withArtifactErrors(options.signal, () =>
-          stage(path.resolve(options.sourceDirectory), options.signal),
-        ),
+      const {
+        sourceDirectory,
+        signal: abort,
+        expectedSource,
+      } = parse(stageOptionsSchema, input, 'plugin artifact stage options');
+      abort?.throwIfAborted();
+      return enqueueArtifact(abort, () =>
+        stage(path.resolve(sourceDirectory), abort, expectedSource),
       );
     },
     async read(input, options = {}) {
-      const digest = parse(digestSchema, input, 'plugin artifact digest');
+      const digest = parse(artifactDigestSchema, input, 'plugin artifact digest');
       const { signal: abort } = parse(readOptionsSchema, options, 'plugin artifact read options');
       abort?.throwIfAborted();
-      return queue.enqueue(false, () =>
-        withArtifactErrors(abort, async () => {
-          const root = await normalizeStore(directory);
-          const artifacts = path.join(root, 'artifacts');
-          const object = path.join(artifacts, digest);
-          if (!(await directoryExists(artifacts)) || !(await entryExists(object))) {
-            abort?.throwIfAborted();
-            throw new PluginArtifactError(
-              'plugin-artifact-not-found',
-              'The plugin artifact was not found',
-            );
-          }
-          return validatePublished(object, digest, abort);
-        }),
-      );
+      return enqueueArtifact(abort, async () => {
+        const root = await normalizeStore(directory);
+        const artifacts = path.join(root, 'artifacts');
+        const object = path.join(artifacts, digest);
+        if (!(await directoryExists(artifacts)) || !(await entryExists(object))) {
+          abort?.throwIfAborted();
+          throw new PluginArtifactError(
+            'plugin-artifact-not-found',
+            'The plugin artifact was not found',
+          );
+        }
+        return validatePublished(object, digest, abort);
+      });
     },
   };
 }

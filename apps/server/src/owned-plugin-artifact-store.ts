@@ -3,7 +3,7 @@ import { assertHostVersion } from '@weave/plugin';
 import {
   createPluginArtifactStore,
   PluginArtifactError,
-  type PluginArtifact,
+  pluginArtifactSourceIdentitySchema,
   type PluginArtifactStore,
 } from '@weave/plugin-host';
 import { z } from 'zod';
@@ -57,9 +57,12 @@ const openOptionsSchema = z.strictObject({
   ),
 });
 const callerSignalSchema = z.instanceof(AbortSignal).optional();
-const stageOptionsSchema = z.strictObject({
+const previewOptionsSchema = z.strictObject({
   sourceDirectory: absoluteStorePathSchema,
   signal: callerSignalSchema,
+});
+const stageOptionsSchema = previewOptionsSchema.extend({
+  expectedSource: pluginArtifactSourceIdentitySchema.optional(),
 });
 const readOptionsSchema = z.strictObject({ signal: callerSignalSchema });
 const digestSchema = z.string().regex(/^[0-9a-f]{64}$/);
@@ -205,10 +208,10 @@ function guardArtifactStore(
     if (state !== 'active') throw closedError();
   }
 
-  async function dispatch(
+  async function dispatch<T>(
     callerSignal: AbortSignal | undefined,
-    run: (signal: AbortSignal) => Promise<PluginArtifact>,
-  ): Promise<PluginArtifact> {
+    run: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
     assertHeldSync();
     const lossSignal = ownershipLossAbort.signal;
     const signal =
@@ -221,9 +224,9 @@ function guardArtifactStore(
     });
     pending.add(ticket);
     try {
-      let artifact: PluginArtifact;
+      let result: T;
       try {
-        artifact = await run(signal);
+        result = await run(signal);
       } catch (operation: unknown) {
         try {
           assertHeldSync();
@@ -244,7 +247,7 @@ function guardArtifactStore(
         throw operation;
       }
       assertHeldSync();
-      return artifact;
+      return result;
     } finally {
       pending.delete(ticket);
       complete();
@@ -291,14 +294,25 @@ function guardArtifactStore(
   return {
     binding: lease.binding,
     assertHeldSync,
-    async stage(input) {
+    async preview(input) {
       assertAccepting();
       const { sourceDirectory, signal } = parseArtifactInput(
+        previewOptionsSchema,
+        input,
+        'Invalid plugin artifact preview options',
+      );
+      return dispatch(signal, (effective) => store.preview({ sourceDirectory, signal: effective }));
+    },
+    async stage(input) {
+      assertAccepting();
+      const { sourceDirectory, signal, expectedSource } = parseArtifactInput(
         stageOptionsSchema,
         input,
         'Invalid plugin artifact stage options',
       );
-      return dispatch(signal, (effective) => store.stage({ sourceDirectory, signal: effective }));
+      return dispatch(signal, (effective) =>
+        store.stage({ sourceDirectory, signal: effective, expectedSource }),
+      );
     },
     async read(input, options = {}) {
       assertAccepting();

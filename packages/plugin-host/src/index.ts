@@ -2,12 +2,14 @@ export { ExplicitLocalAuthorityError, PluginHostError } from './errors.js';
 export type { PluginHostErrorCode, PluginHostErrorOptions } from './errors.js';
 
 export { createPluginArtifactStore } from './artifact-store.js';
-export { PluginArtifactError } from './artifact-types.js';
+export { PluginArtifactError, pluginArtifactSourceIdentitySchema } from './artifact-types.js';
 export type {
   PluginArtifact,
   PluginArtifactErrorCode,
+  PluginArtifactSourceIdentity,
   PluginArtifactStore,
   PluginArtifactStoreOptions,
+  PreviewPluginArtifactOptions,
   ReadPluginArtifactOptions,
   StagePluginArtifactOptions,
 } from './artifact-types.js';
