@@ -82,13 +82,17 @@ export async function handlePickDirectory(
   studioOrigin: string,
   ...pickerArgs: unknown[]
 ): Promise<PickedDirectory | null> {
-  let senderOrigin: string | undefined;
-  try {
-    senderOrigin = new URL(event.senderFrame?.url ?? '').origin;
-  } catch {
-    senderOrigin = undefined;
+  const senderFrame = event.senderFrame;
+  if (senderFrame?.origin !== studioOrigin) {
+    return null;
   }
-  if (senderOrigin !== studioOrigin) {
+  let senderUrlOrigin: string | undefined;
+  try {
+    senderUrlOrigin = new URL(senderFrame.url).origin;
+  } catch {
+    senderUrlOrigin = undefined;
+  }
+  if (senderUrlOrigin !== studioOrigin) {
     return null;
   }
   const parsed = pickerArgsSchema.safeParse(pickerArgs);

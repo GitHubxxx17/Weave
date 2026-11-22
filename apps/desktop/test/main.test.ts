@@ -234,12 +234,14 @@ describe('desktop main process', () => {
 });
 
 describe('desktop folder picker IPC', () => {
+  const trustedFrame = { url: 'http://127.0.0.1:5173/', origin: 'http://127.0.0.1:5173' };
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  function invokeEvent(url: string) {
-    return { senderFrame: { url }, sender: {} } as never;
+  function invokeEvent(senderFrame: { url: string; origin?: string } | null) {
+    return { senderFrame, sender: {} } as never;
   }
 
   it.each([{ args: [] }, { args: ['project'] }])(
@@ -251,7 +253,7 @@ describe('desktop folder picker IPC', () => {
       });
 
       await expect(
-        handlePickDirectory(invokeEvent('http://127.0.0.1:5173/'), config.studioOrigin, ...args),
+        handlePickDirectory(invokeEvent(trustedFrame), config.studioOrigin, ...args),
       ).resolves.toEqual({ path: '/Users/mi/projects/demo', name: 'demo' });
       expect(mocks.dialog.showOpenDialog).toHaveBeenCalledWith({
         title: '选择项目文件夹',
@@ -265,11 +267,7 @@ describe('desktop folder picker IPC', () => {
     mocks.dialog.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [root] });
 
     await expect(
-      handlePickDirectory(
-        invokeEvent('http://127.0.0.1:5173/'),
-        config.studioOrigin,
-        'plugin-import',
-      ),
+      handlePickDirectory(invokeEvent(trustedFrame), config.studioOrigin, 'plugin-import'),
     ).resolves.toEqual({ path: root, name: root });
     expect(mocks.dialog.showOpenDialog).toHaveBeenCalledWith({
       title: '选择已打包的插件文件夹',
@@ -281,25 +279,38 @@ describe('desktop folder picker IPC', () => {
     mocks.dialog.showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
 
     await expect(
-      handlePickDirectory(
-        invokeEvent('http://127.0.0.1:5173/'),
-        config.studioOrigin,
-        'plugin-import',
-      ),
+      handlePickDirectory(invokeEvent(trustedFrame), config.studioOrigin, 'plugin-import'),
     ).resolves.toBeNull();
   });
 
-  it('ignores requests from an untrusted origin without opening a dialog', async () => {
+  it('ignores requests with an untrusted or invalid frame URL without opening a dialog', async () => {
     await expect(
       handlePickDirectory(
-        invokeEvent('https://evil.example/'),
+        invokeEvent({ ...trustedFrame, url: 'https://evil.example/' }),
         config.studioOrigin,
         'plugin-import',
       ),
     ).resolves.toBeNull();
-    await expect(handlePickDirectory(invokeEvent('not a url'), config.studioOrigin)).resolves.toBe(
-      null,
-    );
+    await expect(
+      handlePickDirectory(invokeEvent({ ...trustedFrame, url: 'not a url' }), config.studioOrigin),
+    ).resolves.toBeNull();
+    expect(mocks.dialog.showOpenDialog).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { frame: { ...trustedFrame, origin: 'null' }, reason: 'an opaque origin' },
+    { frame: { ...trustedFrame, origin: 'http://127.0.0.1:5174' }, reason: 'a different origin' },
+    { frame: { url: trustedFrame.url }, reason: 'a missing origin' },
+    { frame: null, reason: 'a missing frame' },
+  ])('rejects $reason without opening a dialog', async ({ frame }) => {
+    mocks.dialog.showOpenDialog.mockResolvedValue({
+      canceled: false,
+      filePaths: ['/Users/mi/projects/demo'],
+    });
+
+    await expect(
+      handlePickDirectory(invokeEvent(frame), config.studioOrigin, 'plugin-import'),
+    ).resolves.toBeNull();
     expect(mocks.dialog.showOpenDialog).not.toHaveBeenCalled();
   });
 
@@ -315,7 +326,7 @@ describe('desktop folder picker IPC', () => {
     });
 
     await expect(
-      handlePickDirectory(invokeEvent('http://127.0.0.1:5173/'), config.studioOrigin, ...args),
+      handlePickDirectory(invokeEvent(trustedFrame), config.studioOrigin, ...args),
     ).resolves.toBeNull();
     expect(mocks.dialog.showOpenDialog).not.toHaveBeenCalled();
   });
