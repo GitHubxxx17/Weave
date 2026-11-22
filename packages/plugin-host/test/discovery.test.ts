@@ -97,6 +97,28 @@ describe('inspectLocalPluginDeclarationClaims', () => {
     await expect(inspect(root)).resolves.toEqual({ pluginIds: [], complete: false });
   });
 
+  it('reports a failed listing as incomplete when a descendant disappears but the root exists', async () => {
+    const root = await makeTempDirectory();
+    await writePlugin(root, 'unobserved');
+    const child = path.join(root, 'disappeared');
+    const failure = Object.assign(new Error(`Cannot stat ${child}`), {
+      code: 'ENOENT',
+      syscall: 'lstat',
+      path: child,
+    });
+    // Node resolves unknown Dirent types with lstat and rejects the entire listing on failure.
+    vi.spyOn(fs, 'readdir').mockRejectedValueOnce(failure).mockRejectedValueOnce(failure);
+
+    await expect(inspectLocalPluginDeclarationClaims({ directory: root })).resolves.toEqual({
+      pluginIds: [],
+      complete: false,
+    });
+    await expect(discover(root)).rejects.toMatchObject({
+      code: 'plugin-unreadable',
+      cause: failure,
+    });
+  });
+
   it('retains the claims observed inside the candidate cap', async () => {
     const root = await makeTempDirectory();
     await mkdir(path.join(root, 'a-empty'));
@@ -187,6 +209,42 @@ describe('inspectLocalPluginDeclarationClaims', () => {
     await expect(inspectLocalPluginDeclarationClaims({ directory: root })).resolves.toEqual({
       pluginIds: [],
       complete: true,
+    });
+  });
+
+  it('keeps an oversized descriptor diagnostic when the handle also fails to close', async () => {
+    const root = await makeTempDirectory();
+    await writePlugin(root, 'a-known');
+    const file = path.join(await writePlugin(root, 'growing'), descriptorFileName);
+    const original = await fs.readFile(file, 'utf8');
+    const cleanup = Object.assign(new Error('close failed'), { code: 'EIO' });
+    const open = fs.open;
+    vi.spyOn(fs, 'open').mockImplementation(async (target, flags, mode) => {
+      const handle = await open(target, flags, mode);
+      if (target === file) {
+        const close = handle.close.bind(handle);
+        await fs.appendFile(file, ' '.repeat(maxDescriptorBytes));
+        vi.spyOn(handle, 'close').mockImplementation(async () => {
+          await close();
+          throw cleanup;
+        });
+      }
+      return handle;
+    });
+
+    const result = await discover(root);
+    expect(result.candidates[1]).toMatchObject({
+      id: 'growing',
+      status: 'invalid',
+      issue: {
+        code: 'plugin-invalid-descriptor',
+        message: 'weave-plugin.json is larger than 64 KB',
+      },
+    });
+    await writeFile(file, original);
+    await expect(inspectLocalPluginDeclarationClaims({ directory: root })).resolves.toEqual({
+      pluginIds: ['a-known'],
+      complete: false,
     });
   });
 

@@ -119,6 +119,18 @@ function issueOf(error: unknown): LocalPluginIssue {
   return { code: 'plugin-unreadable', message: describeError(error) };
 }
 
+async function isRootMissing(root: string, signal?: AbortSignal): Promise<boolean> {
+  signal?.throwIfAborted();
+  try {
+    await fs.stat(root);
+    return false;
+  } catch (error: unknown) {
+    return hasCode(error, 'ENOENT');
+  } finally {
+    signal?.throwIfAborted();
+  }
+}
+
 /** Whether `target`, followed through any links, is a directory. */
 async function pointsToDirectory(target: string, signal?: AbortSignal): Promise<boolean> {
   signal?.throwIfAborted();
@@ -145,6 +157,18 @@ function oversizedDescriptor(): PluginHostError {
     'plugin-invalid-descriptor',
     `${descriptorFileName} is larger than ${String(maxDescriptorBytes / 1024)} KB`,
   );
+}
+
+/** A cleanup failure makes the observation incomplete even with a known descriptor issue. */
+class DescriptorCleanupError extends PluginHostError {
+  constructor(primary: { readonly error: unknown } | undefined, cleanup: unknown) {
+    const error = primary?.error;
+    const issue = error instanceof PluginHostError ? error : undefined;
+    super(issue?.code ?? 'plugin-unreadable', describeError(primary ? error : cleanup), {
+      pluginId: issue?.pluginId,
+      cause: primary ? new AggregateError([error, cleanup]) : cleanup,
+    });
+  }
 }
 
 async function readDescriptorText(
@@ -187,12 +211,7 @@ async function readDescriptorText(
   } finally {
     await handle.close().catch((cleanup: unknown) => {
       signal?.throwIfAborted();
-      const cause = readFailure ? new AggregateError([readFailure.error, cleanup]) : cleanup;
-      throw new PluginHostError(
-        'plugin-unreadable',
-        describeError(readFailure ? readFailure.error : cleanup),
-        { cause },
-      );
+      throw new DescriptorCleanupError(readFailure, cleanup);
     });
   }
 }
@@ -421,7 +440,9 @@ async function observeLocalPluginDeclarations(
     entries = await fs.readdir(root, { withFileTypes: true });
   } catch (error: unknown) {
     signal?.throwIfAborted();
-    const missing = hasCode(error, 'ENOENT');
+    // Dirent conversion may report ENOENT for a child that vanished during listing.
+    const missing = hasCode(error, 'ENOENT') && (await isRootMissing(root, signal));
+    signal?.throwIfAborted();
     return {
       directory: root,
       exists: false,
@@ -489,7 +510,11 @@ async function observeLocalPluginDeclarations(
       if (text !== undefined) observations.push({ directory, descriptor: parseDescriptor(text) });
     } catch (error: unknown) {
       signal?.throwIfAborted();
-      if (!(error instanceof PluginHostError) || error.code !== 'plugin-invalid-descriptor') {
+      if (
+        !(error instanceof PluginHostError) ||
+        error.code !== 'plugin-invalid-descriptor' ||
+        error instanceof DescriptorCleanupError
+      ) {
         complete = false;
       }
       observations.push(invalidCandidate(name, directory, error));

@@ -1,9 +1,10 @@
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { commandsExtensionPoint, createPluginKernel, type PluginCommand } from '@weave/plugin';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 
 import {
   createLocalPluginSource,
@@ -203,6 +204,37 @@ it('withdraws managed readiness before rethrowing an ordinary root failure and r
     expect((await source.refresh()).managedEligible).toEqual(before.managedEligible);
     expect(source.mayReadManagedSync(id)).toBe(true);
   } finally {
+    await source.close();
+  }
+});
+
+it('withdraws managed readiness and retains manual rows after a listing fails on a child', async () => {
+  const { directory, source, input } = await fixture();
+  await writePlugin(directory, 'manual');
+  await source.refresh();
+  const before = source.adoptExplicitSelectionSync(input);
+  expect(before.managedEligible).toMatchObject([{ id }]);
+
+  const failure = Object.assign(new Error('Directory entry disappeared'), {
+    code: 'ENOENT',
+    syscall: 'lstat',
+    path: path.join(directory, 'disappeared'),
+  });
+  const read = vi.spyOn(fs, 'readdir').mockRejectedValueOnce(failure);
+  try {
+    await expect(source.refresh()).rejects.toMatchObject({
+      code: 'plugin-unreadable',
+      cause: failure,
+    });
+    expect(source.snapshot()).toEqual({
+      ...before,
+      managedEligible: [],
+      stamp: { ...before.stamp, revision: before.stamp.revision + 1 },
+    });
+    expect(source.mayReadManagedSync(id)).toBe(false);
+    expect((await source.refresh()).managedEligible).toEqual(before.managedEligible);
+  } finally {
+    read.mockRestore();
     await source.close();
   }
 });
