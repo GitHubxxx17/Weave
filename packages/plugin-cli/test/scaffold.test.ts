@@ -140,12 +140,14 @@ describe('createPluginProject', () => {
     await writeFile(path.join(directory, 'README.md'), 'Unrelated existing work');
 
     await expect(
-      createPluginProject({ template: 'tool', id: 'new-work', directory }),
+      createPluginProject({ template: 'skills', id: 'new-work', directory }),
     ).rejects.toMatchObject({ code: 'plugin-cli-output-conflict' });
     expect(await readFile(path.join(directory, 'README.md'), 'utf8')).toBe(
       'Unrelated existing work',
     );
-    await expect(stat(path.join(directory, 'src'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(path.join(directory, 'skills/new-work'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
   });
 
   test.each([

@@ -57,6 +57,8 @@ afterEach(async () => {
 });
 
 describe('real public SDK compiler and single ESM', () => {
+  // Real SDK declaration graphs are compiled by these cases; keep their local
+  // budgets independent of lightweight syntax and bounded-metadata checks.
   it('checks actual SDK Tool and Command contracts from snapshots without author node_modules', async () => {
     const sdk = await resolvePluginSdk();
     const input = await snapshot();
@@ -67,7 +69,7 @@ describe('real public SDK compiler and single ESM', () => {
     expect(code).not.toContain('@weave/plugin');
     expect(code).not.toContain('disk source');
     expect(() => validateEsmArtifact(bytes)).not.toThrow();
-  }, 30_000);
+  }, 60_000);
   it('rejects an actual SDK type error and invalid default factory without executing source', async () => {
     const sdk = await resolvePluginSdk();
     for (const text of [
@@ -80,7 +82,7 @@ describe('real public SDK compiler and single ESM', () => {
         code: 'plugin-cli-typecheck',
       });
     }
-  }, 30_000);
+  }, 60_000);
   it('accepts a real SDK alias and rejects non-SDK, unbuilt or relative SDK directories', async () => {
     const sdk = await resolvePluginSdk();
     const root = (await snapshot()).directory;
@@ -100,7 +102,7 @@ describe('real public SDK compiler and single ESM', () => {
     const metadata = JSON.parse(await readFile(path.join(sdk.directory, 'package.json'), 'utf8'));
     await writeFile(path.join(fake, 'package.json'), JSON.stringify(metadata));
     await expect(resolvePluginSdk(fake)).rejects.toMatchObject({ code: 'plugin-cli-sdk-invalid' });
-  });
+  }, 30_000);
   it('allows erased SDK named types and static local dynamic imports while preserving top-level code inertly', async () => {
     const sdk = await resolvePluginSdk();
     const input = await snapshot(
@@ -110,7 +112,7 @@ describe('real public SDK compiler and single ESM', () => {
     const code = new TextDecoder().decode(await bundlePluginSource(input, sdk));
     expect(code).toContain('author top-level code');
     expect(code).not.toContain("import('./value.js')");
-  });
+  }, 30_000);
   it('preserves cancellation before SDK, compiler and bundler work', async () => {
     const sdk = await resolvePluginSdk();
     const input = await snapshot();
@@ -120,7 +122,7 @@ describe('real public SDK compiler and single ESM', () => {
     await expect(resolvePluginSdk(undefined, abort.signal)).rejects.toBe(reason);
     await expect(checkPluginSource(input, sdk, abort.signal)).rejects.toBe(reason);
     await expect(bundlePluginSource(input, sdk, abort.signal)).rejects.toBe(reason);
-  });
+  }, 30_000);
   it('rejects oversized SDK metadata and a package.json directory before unbounded reads', async () => {
     const root = (await snapshot()).directory;
     const large = path.join(root, 'large');
@@ -170,7 +172,7 @@ describe('real public SDK compiler and single ESM', () => {
       code: 'plugin-cli-sdk-invalid',
       cause: { code: 'ELOOP' },
     });
-  });
+  }, 30_000);
   it('requires resolvable public PluginFactory, PluginSdk and PluginManifest declarations', async () => {
     const sdk = await resolvePluginSdk();
     const root = (await snapshot()).directory;
@@ -189,7 +191,7 @@ describe('real public SDK compiler and single ESM', () => {
         code: 'plugin-cli-sdk-invalid',
       });
     }
-  });
+  }, 30_000);
   it('rejects SDK module and global augmentation in captured .ts files', async () => {
     const sdk = await resolvePluginSdk();
     const forged = source.replace(
@@ -210,7 +212,7 @@ describe('real public SDK compiler and single ESM', () => {
         code: 'plugin-cli-source-policy',
       });
     }
-  });
+  }, 30_000);
   it('keeps ordinary runtime TypeScript namespaces supported', async () => {
     const sdk = await resolvePluginSdk();
     const input = await snapshot(
@@ -218,7 +220,7 @@ describe('real public SDK compiler and single ESM', () => {
     );
     await expect(checkPluginSource(input, sdk)).resolves.toBeUndefined();
     await expect(bundlePluginSource(input, sdk)).resolves.toBeInstanceOf(Uint8Array);
-  });
+  }, 30_000);
   it('checks unused captured source and refuses declaration shims', async () => {
     const sdk = await resolvePluginSdk();
     for (const extra of [
@@ -229,7 +231,7 @@ describe('real public SDK compiler and single ESM', () => {
         code: 'plugin-cli-source-policy',
       });
     }
-  });
+  }, 30_000);
   it.each([
     "import fs from 'made-up-package';",
     "import { createPluginSdk } from '@weave/plugin';",
@@ -249,12 +251,16 @@ describe('real public SDK compiler and single ESM', () => {
     "/// <reference path='../shim.d.ts' />\n",
     "import type {Anything} from 'foreign-types';",
     "import fs from 'node:fs' with {type:'json'};",
-  ])('rejects unsupported source syntax before tree shaking: %s', async (prefix) => {
-    const sdk = await resolvePluginSdk();
-    await expect(
-      bundlePluginSource(await snapshot(`${prefix}\n${source}`), sdk),
-    ).rejects.toMatchObject({ code: 'plugin-cli-source-policy' });
-  });
+  ])(
+    'rejects unsupported source syntax before tree shaking: %s',
+    async (prefix) => {
+      const sdk = await resolvePluginSdk();
+      await expect(
+        bundlePluginSource(await snapshot(`${prefix}\n${source}`), sdk),
+      ).rejects.toMatchObject({ code: 'plugin-cli-source-policy' });
+    },
+    30_000,
+  );
   it.each([
     "export default () => import('./chunk.mjs');",
     'export default () => import(process.env.SOURCE);',

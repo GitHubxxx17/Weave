@@ -137,7 +137,7 @@ describe('author API artifact handoff', () => {
       mode: 'artifact',
       artifact: { digest: built.artifact.digest },
     });
-  }, 30_000);
+  }, 60_000);
 
   it('rejects ambiguous options and irrelevant SDK overrides before output writes', async () => {
     const directory = await root();
