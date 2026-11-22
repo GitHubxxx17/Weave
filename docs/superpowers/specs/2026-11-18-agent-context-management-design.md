@@ -33,11 +33,12 @@ Weave 是 append-only 事件日志 + 投影。**压缩只作用于"这一次发�
 
 ### 4.1 `@weave/runtime`：token 估算（新 `context/token-estimate.ts`）
 
-纯函数，无依赖，近似且偏保守：
+纯函数，无依赖，使用统一启发式估算；这是估算预算保证，不是厂商真实 token 上限保证：
 
 - `estimateTokens(text: string): number`：CJK/全角字符≈1，其它≈0.25，向上取整。
-- `estimateMessageTokens(message: Message): number`：各内容块 + 角色框架开销（≈4）
-  + 工具调用 arguments。
+- `estimateMessageTokens(message: Message): number`：实际发送的 text/image 内容块 +
+  角色框架开销（≈4）+ 工具调用 arguments。reasoning 不回传、不计费；每张图片暂按
+  1024 估算，图片真实成本仍取决于 Provider 与分辨率。
 - `estimateToolsTokens(tools): number`：工具定义 JSON 的估算。
 
 ### 4.2 `@weave/runtime`：保真压缩构建器（新 `context/build-context.ts`）
@@ -64,7 +65,7 @@ interface ContextBreakdown {
 interface BuildContextResult {
   readonly messages: readonly Message[];   // 实际发送（已保真压缩）
   readonly breakdown: ContextBreakdown;
-  readonly overflow: boolean;              // 固定成本或单条即超预算
+  readonly overflow: boolean;              // 最终候选估算超过可用预算
 }
 function buildModelContext(input: {
   readonly system: readonly Message[];
@@ -72,6 +73,7 @@ function buildModelContext(input: {
   readonly tools: readonly ToolDefinition[] | undefined;
   readonly budget: ContextBudget;
   readonly maxToolResultTokens: number;          // 单条结果上限（头尾截断阈值）
+  readonly toolResultStatuses?: ReadonlyMap<Message, 'completed' | 'failed'>; // 当前 history 对象中的工具结果事实
 }): BuildContextResult;
 ```
 
@@ -80,19 +82,28 @@ function buildModelContext(input: {
 > 复杂度。`maxToolResultTokens` 默认 8000（约等于 Pipeline 32KB ASCII 上限的 token 数），
 > 使正常结果不被压缩器二次截断，仅超大结果头尾截断。
 
-**算法**
-1. 预算 `available = windowTokens*(1-margin) - reserveOutputTokens - est(system) - est(tools)`。
-2. **A 档固定保留**：当前轮消息（`turnId === currentTurnId` 及其后，即本轮 user +
-   本轮已产生的 assistant/tool）；历史中的 user 消息；失败的 tool 结果（含错误）。
-3. 历史**从新到旧按轮/组**纳入原文，预算足够就原样放；**assistant(toolCalls) 与其
-   tool 结果成组纳入或成组骨架化**，不产生悬空配对。
-4. 预算不足以放某组原文时，对该组做 **B 档骨架化**：
-   - 工具调用 → `name + 目标路径(若有) + 成/败`；
-   - 工具结果 → 指代行（工具名、路径、字节数、成/败）；失败结果保留错误文本（A 档）；
-   - 助手正文 → 保留首尾各若干字符 + `…`；助手 reasoning 历史本就不回传（PR #34）。
-   骨架化结果作为一条合成 `system`/`user` 提示块注入（标注"[已压缩的更早上下文]"）。
-5. 纳入原文的工具结果若超 `maxToolResultTokens`，头尾截断 + `…省略 N 字节…`（durable 不变）。
-6. 统计 `breakdown`，设 `overflow`（当 available ≤ 0 或当前轮固定成本已超）。
+**算法（2026-11-23 预算边界修订）**
+
+1. 可用总预算 `usable = floor(floor(windowTokens)*(1-margin)) - reserveOutputTokens`。
+   `est(system) + est(tools) + est(最终 messages)` 与该预算比较，包含全部 framing、
+   图片、骨架、压缩说明和截断说明；分类之和必须等于 `sentTokens`。
+2. 去掉不回传的 reasoning。当前轮除成功工具结果的显式单条截断外保持原文；所有
+   user 消息保留完整 content（含图片），所有失败 tool 结果保留完整错误文本。
+   不通过截断/丢弃 A 档内容来声称候选已保真地适配预算。
+   Runner 按投影消息所属 turnId 与该轮 durable toolResults.status 生成工具状态映射，
+   每步重建，使用消息引用避免不同轮复用 toolCallId 时串联状态。已知状态是权威
+   事实；无 metadata 或无匹配工具事实的消息保守识别 failed/error/rejected 文本以兼容。
+3. 先构造完整候选。成功工具结果超过 `maxToolResultTokens` 时，按同一估算器搜索
+   能放下的首尾文本与 `…省略 N 字符…`；该阈值计算说明本身，但不含角色 framing。
+   若阈值小到放不下说明和两端，则保留原文，由总预算决定是否溢出。失败结果不截断。
+4. 完整候选不适配时，旧历史以工具调用与连续配对结果为整组构造骨架候选；用户
+   消息和不能安全骨架化的孤立消息仍原样保留。骨架按组显示 name、目标路径、
+   成败、recall id，失败文本全文；助手正文保留预算内首尾。骨架比原文更贵时使用原文。
+   合成提示块明确标注压缩信息，标记成本先计入最小候选，再从新到旧按预算恢复整组
+   原文；不得在预算计算完后无条件追加骨架。
+5. 对最终实际构造的候选统一重新统计 `breakdown`。当 `sentTokens > usable` 时
+   `overflow = true`；否则才允许 Runner 调用 LLM。放不下完整用户、错误信息或最小
+   骨架时直接失败，保留可诊断的候选和统计，不生成 L3 摘要、不自动重试。
 
 骨架化与截断均为确定性字符串变换，可脱离 Provider 单测。
 
@@ -118,6 +129,15 @@ function buildModelContext(input: {
 - `overflow === true`，或厂商返回 `context-overflow`（llm 已分类）→ 抛
   `AgentRunError('agent-context-overflow', …)`（新增错误码），前端显示"上下文超出
   模型窗口"。本期不自动压缩重试（属 PR-C）。
+- 中间件可能改写 messages/tools/maxTokens；其 `next` 到真实 `llm.stream` 前还须
+  以 `llmRequestSchema` 校验完整改写请求，并取得独立的深快照；不能快照的数据或
+  非法字段（包括负数、非有限 maxTokens）以 `agent-stream-protocol` 拒绝且不调用
+  Provider。估算与惰性 Provider stream 消费同一份快照，覆盖嵌套 content、toolCalls
+  和工具参数，防止中间件在 `next` 返回后继续修改原对象。随后以同一估算器复核。
+  可用预算使用已固定 Provider 的窗口与 margin，
+  并优先取改写后的 maxTokens 作为输出预留；缺省沿用该轮已解析的 Provider/Runner
+  预留。超限抛同一溢出错误且不调用模型，不追加压缩或重试。`context` breakdown
+  继续表示 builder 候选估算，不假称为中间件改写后的请求或厂商真实用量。
 
 ### 4.5 `@weave/session`：事件与投影
 

@@ -1,6 +1,6 @@
 import type { ContextBreakdown, ContextCategoryBreakdown, Message } from '@weave/protocol';
 import type { ToolDefinition } from '@weave/protocol';
-import { estimateTokens, estimateToolsTokens } from './token-estimate.js';
+import { estimateMessageTokens, estimateTokens, estimateToolsTokens } from './token-estimate.js';
 
 /** Budget inputs for assembling one model request's send window. */
 export interface ContextBudget {
@@ -10,6 +10,12 @@ export interface ContextBudget {
   readonly reserveOutputTokens: number;
   /** Safety margin as a fraction of the window (e.g. 0.05). */
   readonly marginRatio: number;
+}
+
+/** Total estimated input budget after output reserve and the safety margin. */
+export function usableContextTokens(budget: ContextBudget): number {
+  const windowTokens = Math.max(0, Math.floor(budget.windowTokens));
+  return Math.floor(windowTokens * (1 - budget.marginRatio)) - budget.reserveOutputTokens;
 }
 
 export interface BuildContextInput {
@@ -22,17 +28,18 @@ export interface BuildContextInput {
   readonly budget: ContextBudget;
   /** A single tool result above this many tokens is head/tail truncated. */
   readonly maxToolResultTokens: number;
+  /** Known durable statuses keyed by the exact history message objects. */
+  readonly toolResultStatuses?: ReadonlyMap<Message, 'completed' | 'failed'>;
 }
 
 export interface BuildContextResult {
   /** Messages to send (system excluded; caller prepends system). */
   readonly messages: readonly Message[];
   readonly breakdown: ContextBreakdown;
-  /** The mandatory part (system + tools + current turn) does not fit. */
+  /** The final faithful candidate exceeds the usable estimated request budget. */
   readonly overflow: boolean;
 }
 
-const messageOverheadTokens = 4;
 const skeletonMarker =
   '[以下为更早对话的压缩摘要，关键信息已保留；完整原文可用 recall 工具按 toolCallId 或 path 取回]';
 
@@ -42,17 +49,6 @@ function textOf(message: Message): string {
     .filter((part) => part.type === 'text')
     .map((part) => part.text)
     .join('');
-}
-
-/** Estimated tokens a message costs when sent (text + tool calls, no reasoning). */
-function messageTokens(message: Message): number {
-  let total = messageOverheadTokens + estimateTokens(textOf(message));
-  if (message.role === 'assistant' && message.toolCalls !== undefined) {
-    for (const call of message.toolCalls) {
-      total += estimateTokens(call.name) + estimateTokens(call.arguments) + messageOverheadTokens;
-    }
-  }
-  return total;
 }
 
 /**
@@ -78,39 +74,47 @@ function toolCallPath(argumentsText: string): string | undefined {
   return undefined;
 }
 
-/** Head/tail truncation of a long string to roughly `maxTokens`, keeping both ends. */
+/** Bound both retained ends and the omission notice with the same estimator. */
 function truncateToTokens(text: string, maxTokens: number): { text: string; truncated: boolean } {
-  if (estimateTokens(text) <= maxTokens) {
-    return { text, truncated: false };
-  }
-  // Rough char budget; ASCII ~4 chars/token, CJK ~1. Use 3 as a safe middle.
-  const charBudget = Math.max(200, maxTokens * 3);
-  const head = Math.floor(charBudget * 0.6);
-  const tail = charBudget - head;
-  const omitted = text.length - head - tail;
-  if (omitted <= 0) {
-    return { text, truncated: false };
-  }
-  return {
-    text: `${text.slice(0, head)}\n…省略 ${omitted} 字符…\n${text.slice(text.length - tail)}`,
-    truncated: true,
+  if (estimateTokens(text) <= maxTokens) return { text, truncated: false };
+  const characters = Array.from(text);
+  const render = (retained: number): string => {
+    const head = Math.min(retained - 1, Math.ceil(retained * 0.6));
+    const tail = retained - head;
+    return `${characters.slice(0, head).join('')}\n…省略 ${characters.length - retained} 字符…\n${characters.slice(characters.length - tail).join('')}`;
   };
+  // If the notice and at least one character at each end cannot fit, retain
+  // the original; the whole-request gate must fail rather than hide content.
+  if (characters.length < 3 || estimateTokens(render(2)) > maxTokens) {
+    return { text, truncated: false };
+  }
+  let low = 2;
+  let high = characters.length - 1;
+  let best = render(2);
+  while (low <= high) {
+    const retained = Math.floor((low + high) / 2);
+    const candidate = render(retained);
+    if (estimateTokens(candidate) <= maxTokens) {
+      best = candidate;
+      low = retained + 1;
+    } else {
+      high = retained - 1;
+    }
+  }
+  return { text: best, truncated: true };
 }
 
-/** Returns a copy of a tool message whose content is truncated when oversized. */
-function truncateToolMessage(
-  message: Extract<Message, { role: 'tool' }>,
-  maxTokens: number,
-): { message: Message; truncated: boolean } {
-  const original = textOf(message);
-  const { text, truncated } = truncateToTokens(original, maxTokens);
-  if (!truncated) {
-    return { message, truncated: false };
-  }
-  return {
-    message: { ...message, content: [{ type: 'text', text }] },
-    truncated: true,
-  };
+function withoutReasoning(message: Message): Message {
+  return { ...message, content: message.content.filter((part) => part.type !== 'reasoning') };
+}
+
+/** Never replace images or protected failure text with a text-only result. */
+function truncateToolMessage(message: Message, maxTokens: number): Message {
+  if (message.content.some((part) => part.type !== 'text')) return message;
+  const result = truncateToTokens(textOf(message), maxTokens);
+  return result.truncated
+    ? { ...message, content: [{ type: 'text', text: result.text }] }
+    : message;
 }
 
 type Group =
@@ -132,7 +136,16 @@ function groupHistory(history: readonly Message[]): Group[] {
         messages.push(history[index]!);
         index += 1;
       }
-      groups.push({ kind: 'tool-cycle', messages });
+      const callIds = new Set(message.toolCalls?.map((call) => call.id));
+      const resultIds = messages
+        .slice(1)
+        .map((result) => (result.role === 'tool' ? result.toolCallId : ''));
+      const paired =
+        callIds.size === message.toolCalls?.length &&
+        resultIds.length === callIds.size &&
+        new Set(resultIds).size === resultIds.length &&
+        resultIds.every((id) => callIds.has(id));
+      groups.push({ kind: paired ? 'tool-cycle' : 'orphan', messages });
     } else if (message.role === 'user') {
       groups.push({ kind: 'user', messages: [message] });
       index += 1;
@@ -147,50 +160,36 @@ function groupHistory(history: readonly Message[]): Group[] {
   return groups;
 }
 
-/** Deterministic, fidelity-preserving skeleton for compressed older groups. */
-function renderSkeleton(groups: readonly Group[]): string {
-  const lines: string[] = [skeletonMarker];
-  for (const group of groups) {
-    if (group.kind === 'user') {
-      lines.push(`用户：${textOf(group.messages[0]!)}`);
-      continue;
-    }
-    if (group.kind === 'assistant-text') {
-      const { text } = truncateToTokens(textOf(group.messages[0]!), 60);
-      lines.push(`助手：${text}`);
-      continue;
-    }
-    // tool-cycle / orphan: keep what each tool call did and whether it failed.
-    const assistant = group.messages.find(
-      (message): message is Extract<Message, { role: 'assistant' }> => message.role === 'assistant',
-    );
-    const resultByCallId = new Map<string, string>();
-    for (const message of group.messages) {
-      if (message.role === 'tool') {
-        resultByCallId.set(message.toolCallId, textOf(message));
-      }
-    }
-    for (const call of assistant?.toolCalls ?? []) {
+/** Text-only older groups can be replaced together, never individual results. */
+function renderSkeleton(group: Group, failedMessages: ReadonlySet<Message>): Message | undefined {
+  if (
+    group.kind === 'user' ||
+    group.kind === 'orphan' ||
+    group.messages.some((message) => message.content.some((part) => part.type !== 'text'))
+  ) {
+    return undefined;
+  }
+  const lines: string[] = [];
+  const assistant = group.messages[0]!;
+  if (group.kind === 'tool-cycle' && assistant.role === 'assistant') {
+    for (const call of assistant.toolCalls ?? []) {
+      const result = group.messages.find(
+        (message) => message.role === 'tool' && message.toolCallId === call.id,
+      );
       const path = toolCallPath(call.arguments);
-      const result = resultByCallId.get(call.id);
-      const failed = result !== undefined && /failed|error|rejected/i.test(result);
-      const location = path === undefined ? '' : ` ${path}`;
-      const head = `· ${call.name}${location}`;
-      if (result === undefined) {
-        lines.push(`${head}（无结果）`);
-      } else if (failed) {
-        // Failed results keep their full error text (fidelity tier A).
-        lines.push(`${head} ✗ ${truncateToTokens(result, 80).text}`);
-      } else {
-        // Successful bodies are omitted but recallable by id (or path).
-        lines.push(`${head} ✓ ${result.length}字符 [recall id=${call.id}]`);
-      }
-    }
-    if (assistant !== undefined && textOf(assistant) !== '') {
-      lines.push(`助手：${truncateToTokens(textOf(assistant), 60).text}`);
+      const head = `· ${call.name}${path === undefined ? '' : ` ${path}`}`;
+      if (result === undefined) return undefined;
+      lines.push(
+        failedMessages.has(result)
+          ? `${head} ✗ ${textOf(result)} [recall id=${call.id}]`
+          : `${head} ✓ ${textOf(result).length}字符 [recall id=${call.id}]`,
+      );
     }
   }
-  return lines.join('\n');
+  const text = textOf(assistant);
+  if (text !== '') lines.push(`助手：${truncateToTokens(text, 60).text}`);
+  if (lines.length === 0) return undefined;
+  return { role: 'user', content: [{ type: 'text', text: lines.join('\n') }] };
 }
 
 /** Mutable working copy of the category tally, frozen into the result. */
@@ -211,24 +210,45 @@ function zeroCategories(): MutableCategories {
 
 /**
  * Builds the send window for one model request with fidelity-preserving,
- * deterministic compression (no model call). Keeps system, the current turn,
- * all user messages, and failed tool results in full; fits recent history
+ * deterministic compression (no model call). Keeps system, all user content,
+ * and failed tool results in full; only successful current tool results can
+ * use the explicit head/tail threshold. Fits recent history
  * within the token budget; skeletonizes older groups (preserving tool
  * names/paths/outcomes and errors) instead of dropping them. Full originals
  * remain in the Session event log and can be recalled.
  */
 export function buildModelContext(input: BuildContextInput): BuildContextResult {
   const categories = zeroCategories();
-  const { budget, tools, history, system, maxToolResultTokens } = input;
+  const { budget, tools, system, maxToolResultTokens } = input;
+  const failedMessages = new Set<Message>();
+  const history = input.history.map((original) => {
+    const message = withoutReasoning(original);
+    const status = input.toolResultStatuses?.get(original);
+    if (
+      original.role === 'tool' &&
+      (status === undefined ? /failed|error|rejected/i.test(textOf(original)) : status === 'failed')
+    ) {
+      failedMessages.add(message);
+    }
+    return message;
+  });
+  let truncated = false;
+  const fullMessage = (message: Message): Message => {
+    const result =
+      message.role === 'tool' && !failedMessages.has(message)
+        ? truncateToolMessage(message, maxToolResultTokens)
+        : message;
+    truncated = truncated || result !== message;
+    return result;
+  };
+  const tokens = (messages: readonly Message[]): number =>
+    messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
 
-  categories.system = system.reduce((sum, message) => sum + messageTokens(message), 0);
+  categories.system = tokens(system);
   categories.tools = estimateToolsTokens(tools);
-
+  const fixedTokens = categories.system + categories.tools;
   const windowTokens = Math.max(0, Math.floor(budget.windowTokens));
-  const usable = Math.floor(windowTokens * (1 - budget.marginRatio)) - budget.reserveOutputTokens;
-  const available = usable - categories.system - categories.tools;
-
-  // Pin the current turn: the last user message onward.
+  const usable = usableContextTokens(budget);
   let pinStart = history.length;
   for (let index = history.length - 1; index >= 0; index -= 1) {
     if (history[index]!.role === 'user') {
@@ -236,89 +256,83 @@ export function buildModelContext(input: BuildContextInput): BuildContextResult 
       break;
     }
   }
-  const pinned = history.slice(pinStart);
-  const older = history.slice(0, pinStart);
-
-  let trimmed = false;
-  const accountFull = (message: Message): Message => {
-    if (message.role === 'tool') {
-      const result = truncateToolMessage(message, maxToolResultTokens);
-      trimmed = trimmed || result.truncated;
-      categories.toolResults += messageTokens(result.message);
-      return result.message;
-    }
-    if (message.role === 'user') {
-      categories.userMessages += messageTokens(message);
-      return message;
-    }
-    if (message.role === 'assistant') {
-      categories.assistantText += messageOverheadTokens + estimateTokens(textOf(message));
-      for (const call of message.toolCalls ?? []) {
-        categories.toolCalls +=
-          estimateTokens(call.name) + estimateTokens(call.arguments) + messageOverheadTokens;
-      }
-      return message;
-    }
-    categories.toolResults += messageTokens(message);
-    return message;
-  };
-
-  const pinnedTokens = pinned.reduce((sum, message) => sum + messageTokens(message), 0);
-  const overflow = available <= 0 || pinnedTokens > available;
-
-  // Fit older groups newest-first within the remaining budget.
-  const groups = groupHistory(older);
-  let remaining = Math.max(0, available - pinnedTokens);
-  const keepFromIndex = (() => {
-    let index = groups.length;
-    for (let i = groups.length - 1; i >= 0; i -= 1) {
-      const cost = groups[i]!.messages.reduce((sum, message) => sum + messageTokens(message), 0);
-      if (cost <= remaining) {
-        remaining -= cost;
-        index = i;
-      } else {
-        break;
+  const pinned = history.slice(pinStart).map(fullMessage);
+  const groups = groupHistory(history.slice(0, pinStart)).map((group) => {
+    const full = group.messages.map(fullMessage);
+    const skeleton = renderSkeleton(group, failedMessages);
+    const fullTokens = tokens(full);
+    const skeletonTokens = skeleton === undefined ? fullTokens : estimateMessageTokens(skeleton);
+    return { full, fullTokens, skeleton, skeletonTokens, compressed: false };
+  });
+  const marker: Message = { role: 'user', content: [{ type: 'text', text: skeletonMarker }] };
+  const markerTokens = estimateMessageTokens(marker);
+  let total =
+    fixedTokens + tokens(pinned) + groups.reduce((sum, group) => sum + group.fullTokens, 0);
+  if (total > usable) {
+    // Reserve the complete minimum candidate, including the global marker,
+    // before spending any remaining budget on recent full groups.
+    let compressedCount = 0;
+    for (const group of groups) {
+      if (group.skeleton !== undefined && group.skeletonTokens < group.fullTokens) {
+        group.compressed = true;
+        compressedCount += 1;
+        total += group.skeletonTokens - group.fullTokens;
       }
     }
-    return index;
-  })();
-
-  const compressed = groups.slice(0, keepFromIndex);
-  const kept = groups.slice(keepFromIndex);
+    if (compressedCount > 0) total += markerTokens;
+    for (let index = groups.length - 1; index >= 0; index -= 1) {
+      const group = groups[index]!;
+      if (!group.compressed) continue;
+      const restoredTotal =
+        total +
+        group.fullTokens -
+        group.skeletonTokens -
+        (compressedCount === 1 ? markerTokens : 0);
+      if (restoredTotal <= usable) {
+        group.compressed = false;
+        compressedCount -= 1;
+        total = restoredTotal;
+      }
+    }
+  }
 
   const messages: Message[] = [];
-  if (compressed.length > 0) {
-    trimmed = true;
-    const skeletonText = renderSkeleton(compressed);
-    categories.skeleton = messageOverheadTokens + estimateTokens(skeletonText);
-    messages.push({ role: 'user', content: [{ type: 'text', text: skeletonText }] });
+  const skeletonMessages = new Set<Message>();
+  if (groups.some((group) => group.compressed)) {
+    messages.push(marker);
+    skeletonMessages.add(marker);
   }
-  for (const group of kept) {
-    for (const message of group.messages) {
-      messages.push(accountFull(message));
+  for (const group of groups) {
+    if (group.compressed && group.skeleton !== undefined) {
+      messages.push(group.skeleton);
+      skeletonMessages.add(group.skeleton);
+    } else messages.push(...group.full);
+  }
+  messages.push(...pinned);
+
+  for (const message of messages) {
+    const cost = estimateMessageTokens(message);
+    if (skeletonMessages.has(message)) categories.skeleton += cost;
+    else if (message.role === 'user') categories.userMessages += cost;
+    else if (message.role === 'system') categories.system += cost;
+    else if (message.role === 'tool') categories.toolResults += cost;
+    else {
+      const textCost = estimateMessageTokens({ ...message, toolCalls: [] });
+      categories.assistantText += textCost;
+      categories.toolCalls += cost - textCost;
     }
   }
-  for (const message of pinned) {
-    messages.push(accountFull(message));
-  }
-
-  const sentTokens =
-    categories.system +
-    categories.tools +
-    categories.userMessages +
-    categories.assistantText +
-    categories.assistantReasoning +
-    categories.toolCalls +
-    categories.toolResults +
-    categories.skeleton;
-
-  const breakdown: ContextBreakdown = {
-    windowTokens,
-    sentTokens,
-    ratio: windowTokens === 0 ? 0 : Math.min(1, sentTokens / windowTokens),
-    trimmed,
-    categories,
+  const sentTokens = fixedTokens + tokens(messages);
+  const trimmed = groups.some((group) => group.compressed) || truncated;
+  return {
+    messages,
+    breakdown: {
+      windowTokens,
+      sentTokens,
+      ratio: windowTokens === 0 ? 0 : Math.min(1, sentTokens / windowTokens),
+      trimmed,
+      categories,
+    },
+    overflow: !(sentTokens <= usable),
   };
-
-  return { messages, breakdown, overflow };
 }

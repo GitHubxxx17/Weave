@@ -54,6 +54,18 @@ describe('estimateMessageTokens', () => {
     expect(estimateMessageTokens(message)).toBe(9);
   });
 
+  it('counts an image and excludes reasoning that is not sent', () => {
+    const message: Message = {
+      role: 'user',
+      content: [
+        { type: 'image', mediaType: 'image/png', data: 'aGVsbG8=' },
+        { type: 'reasoning', text: '隐'.repeat(5000) },
+      ],
+    };
+
+    expect(estimateMessageTokens(message)).toBe(1028);
+  });
+
   it('accounts for assistant tool calls with their own framing', () => {
     const withCall: Message = {
       role: 'assistant',
