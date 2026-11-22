@@ -11,6 +11,7 @@ import { createPluginCatalogStore } from '../src/features/plugins/plugin-catalog
 import { PluginsPanel } from '../src/features/plugins/plugins-panel.js';
 import type { PluginListItem } from '../src/features/plugins/plugin-types.js';
 import { disabledManagedCatalog } from './support/disabled-managed-catalog.js';
+import { managedCatalog, managedPreview } from './support/managed-plugin-fixtures.js';
 import type {
   McpManagementSnapshot,
   McpServerConfig,
@@ -116,6 +117,50 @@ afterEach(() => {
 });
 
 describe('MCP management panel', () => {
+  it.each([
+    ['编辑配置', '保存配置'],
+    ['移除', '确认移除'],
+  ])(
+    'blocks an open %s confirmation after an unresolved managed write and a ready GET',
+    async (action, confirm) => {
+      const { store, fetchMock } = setup([server()]);
+      const requests = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === '/plugins/managed' && init?.method === 'GET')
+          return Promise.resolve(json({ ...managedCatalog, generation }));
+        if (String(input) === '/plugins/managed/import')
+          return Promise.resolve(json({ error: { code: 'lost', message: 'lost' } }, 503));
+        return fetchMock(input, init);
+      });
+      vi.stubGlobal('fetch', requests);
+      await act(async () => {
+        await store.refresh();
+      });
+      await screen.findByText(config.label, { selector: '.plugin-name' });
+      fireEvent.click(within(openRow()).getByRole('button', { name: action }));
+      const button = screen.getByRole<HTMLButtonElement>('button', { name: confirm });
+      if (action === '编辑配置')
+        fireEvent.change(screen.getByLabelText('显示名称'), { target: { value: 'Edited echo' } });
+      expect(button.disabled).toBe(false);
+      await act(async () => {
+        await store.submitManaged({
+          kind: 'import',
+          preview: {
+            ...managedPreview,
+            expectedInstallSequence: managedCatalog.heads.installSequence,
+          },
+        });
+        await store.refresh();
+      });
+      expect(store.getSnapshot().consistency.kind).toBe('ready');
+      expect(button.disabled).toBe(true);
+      fireEvent.click(button);
+      expect(
+        requests.mock.calls
+          .filter(([, init]) => init?.method !== 'GET')
+          .map(([input]) => String(input)),
+      ).toEqual(['/plugins/managed/import']);
+    },
+  );
   it('uses MCP health with independent stale state and joins registry contributions only once', async () => {
     setup(
       [

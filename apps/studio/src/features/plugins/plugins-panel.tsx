@@ -3,6 +3,7 @@ import { Puzzle, RotateCw } from 'lucide-react';
 
 import { usePluginCatalogState, usePluginCatalogStore } from './plugin-catalog-context.js';
 import { McpPanel } from '../mcp/mcp-panel.js';
+import { ManagedPluginsSection, managedPublishedKernel } from './managed-plugins-section.js';
 import { PluginDecisionDialog } from './plugin-decision-dialog.js';
 import { createPluginReview, type PluginReview } from './plugin-review.js';
 import { PluginTrustDialog } from './plugin-trust-dialog.js';
@@ -350,13 +351,26 @@ export function PluginsPanel({
   readonly hasRunningSessions: boolean;
 }): ReactElement {
   const store = usePluginCatalogStore();
-  const { catalog, mcp, consistency, initialLoading, pendingOperation, error, lastResult } =
-    usePluginCatalogState();
+  const {
+    catalog,
+    mcp,
+    managed,
+    managedUnresolved,
+    sharedManagementBlocked,
+    consistency,
+    initialLoading,
+    pendingOperation,
+    error,
+    lastResult,
+  } = usePluginCatalogState();
   const [dialog, setDialog] = useState<PanelDialog | null>(null);
   const regionRef = useRef<HTMLDivElement>(null);
   const busy = initialLoading || pendingOperation !== undefined;
-  const actionsBlocked = busy || consistency.kind !== 'ready';
-  const ordinaryPlugins = catalog?.plugins.filter((plugin) => plugin.host !== 'mcp') ?? [];
+  const ordinaryPlugins =
+    catalog?.plugins.filter(
+      (plugin) => plugin.host !== 'mcp' && !managedPublishedKernel(plugin, managed),
+    ) ?? [];
+  const hasManagedRows = managed?.kind === 'enabled' && managed.catalog.plugins.length > 0;
   const hasMcpRows =
     (mcp?.servers.length ?? 0) > 0 ||
     catalog?.plugins.some((plugin) => plugin.host === 'mcp') === true;
@@ -391,7 +405,11 @@ export function PluginsPanel({
             className="icon-button"
             aria-label="刷新插件列表"
             title="全量重新发现并加载扩展"
-            disabled={busy}
+            disabled={
+              busy ||
+              managedUnresolved !== undefined ||
+              (consistency.kind === 'ready' && sharedManagementBlocked)
+            }
             onClick={() => {
               void (consistency.kind === 'ready' ? store.reload() : store.refresh()).catch(
                 () => undefined,
@@ -455,7 +473,7 @@ export function PluginsPanel({
             <Issue issue={issue} />
           </div>
         ))}
-        {catalog !== undefined && ordinaryPlugins.length === 0 && !hasMcpRows ? (
+        {catalog !== undefined && ordinaryPlugins.length === 0 && !hasMcpRows && !hasManagedRows ? (
           <div className="activity-empty">
             <span className="activity-empty-icon" aria-hidden="true">
               <Puzzle aria-hidden="true" />
@@ -482,7 +500,7 @@ export function PluginsPanel({
                       key={JSON.stringify([plugin.origin, plugin.id, plugin.local?.directory])}
                       plugin={plugin}
                       manageable={local !== undefined && canManage(plugin, idCounts)}
-                      busy={actionsBlocked}
+                      busy={sharedManagementBlocked}
                       onReview={(item) => {
                         const review = createPluginReview(item);
                         if (review !== undefined) setDialog({ kind: 'review', review });
@@ -497,6 +515,7 @@ export function PluginsPanel({
               </div>
             ))}
       </section>
+      <ManagedPluginsSection getFallbackFocus={getFallbackFocus} />
       <McpPanel hasRunningSessions={hasRunningSessions} getFallbackFocus={getFallbackFocus} />
       {local === undefined ? (
         catalog === undefined ? null : (
@@ -539,7 +558,7 @@ export function PluginsPanel({
       {dialog?.kind === 'review' ? (
         <PluginTrustDialog
           review={dialog.review}
-          busy={actionsBlocked}
+          busy={sharedManagementBlocked}
           onCancel={() => setDialog(null)}
           onTrust={(review) => store.trust(review.id, review.digest)}
           getFallbackFocus={getFallbackFocus}
@@ -550,7 +569,7 @@ export function PluginsPanel({
           plugin={dialog.plugin}
           action={dialog.kind}
           hasRunningSessions={hasRunningSessions}
-          busy={actionsBlocked}
+          busy={sharedManagementBlocked}
           onCancel={() => setDialog(null)}
           onConfirm={(immediate) =>
             dialog.kind === 'disable'

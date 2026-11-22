@@ -22,8 +22,11 @@ interface WeaveDesktopBridge {
   readonly serverUrl: string;
   /** How the desktop window draws its title bar; absent in older shells. */
   readonly windowChrome?: 'hidden-inset' | 'native';
+  readonly pluginDirectoryPicker?: true;
   /** Opens the system folder dialog; null when the user cancels. Desktop only. */
-  readonly pickDirectory?: () => Promise<{ readonly path: string; readonly name: string } | null>;
+  readonly pickDirectory?: (
+    purpose?: 'project' | 'plugin-import',
+  ) => Promise<{ readonly path: string; readonly name: string } | null>;
   /** User-driven terminal; absent in browser mode and older shells. */
   readonly terminal?: WeaveTerminalBridge;
 }
