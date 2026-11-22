@@ -95,7 +95,11 @@ describe('declarative Skill packages', () => {
     await kernel.seal();
     expect(importModule).not.toHaveBeenCalled();
     const collected: AttributedSkillContribution[] = [];
-    kernel.extensions.collect(skillsExtensionPoint, { addSkill: (skill) => collected.push(skill) });
+    kernel.extensions.collect(skillsExtensionPoint, {
+      addSkill: (skill) => {
+        collected.push(skill);
+      },
+    });
     expect(collected).toMatchObject([{ pluginId: manifest.id, name: 'review' }]);
     await kernel.dispose();
   });
@@ -276,7 +280,11 @@ describe('declarative Skill packages', () => {
     await kernel.register(loaded);
     await kernel.seal();
     const collected: AttributedSkillContribution[] = [];
-    kernel.extensions.collect(skillsExtensionPoint, { addSkill: (skill) => collected.push(skill) });
+    kernel.extensions.collect(skillsExtensionPoint, {
+      addSkill: (skill) => {
+        collected.push(skill);
+      },
+    });
     expect(collected[0]?.resources?.['references/check.md']).toBe('Check the tests.');
     await kernel.dispose();
   });
@@ -345,7 +353,11 @@ describe('declarative Skill packages', () => {
     allowed = false;
     abort.abort();
     const collected: AttributedSkillContribution[] = [];
-    kernel.extensions.collect(skillsExtensionPoint, { addSkill: (skill) => collected.push(skill) });
+    kernel.extensions.collect(skillsExtensionPoint, {
+      addSkill: (skill) => {
+        collected.push(skill);
+      },
+    });
     expect(collected).toMatchObject([{ pluginId: manifest.id, name: 'review' }]);
     await kernel.dispose();
   });

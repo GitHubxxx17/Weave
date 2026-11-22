@@ -1,5 +1,6 @@
 import {
   createPluginEventRegistry,
+  createPluginEventReader,
   definePlugin,
   eventsExtensionPoint,
   pluginEventsRef,
@@ -21,6 +22,8 @@ export interface EventRegistryPluginOptions {
  * point: it provides the plugin event registry and, at resolve time (after the
  * kernel is sealed), defines every event other plugins contributed. Defining a
  * type twice is rejected, so a host gives each kernel its own registry.
+ * Plugin consumers receive a reader without definition or implementation access;
+ * host resolution keeps the full registry and its lifecycle.
  */
 export function createEventRegistryPlugin(options: EventRegistryPluginOptions = {}): KernelPlugin {
   return definePlugin({
@@ -40,6 +43,7 @@ export function createEventRegistryPlugin(options: EventRegistryPluginOptions = 
           });
           return registry;
         },
+        forConsumer: (registry) => createPluginEventReader(registry),
       });
     },
   });

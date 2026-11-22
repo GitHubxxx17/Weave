@@ -12,6 +12,7 @@ import { type PluginManifest } from '../src/manifest.js';
 import { PluginError } from '../src/plugin-errors.js';
 import {
   createPluginEventRegistry,
+  createPluginEventReader,
   createPluginSessionStore,
   type PluginEventDefinition,
   type PluginEventProjection,
@@ -74,8 +75,11 @@ describe('plugin event registry', () => {
     registry.define(first);
     registry.define(second);
 
-    expect(registry.list()).toEqual([first, second]);
-    expect(registry.get('notes/note-removed')).toBe(second);
+    expect(registry.list()).toEqual([
+      { type: first.type, hasProjection: false },
+      { type: second.type, hasProjection: false },
+    ]);
+    expect(registry.get('notes/note-removed')).toEqual({ type: second.type, hasProjection: false });
     expect(registry.get('notes/missing')).toBeUndefined();
   });
 
@@ -263,7 +267,7 @@ describe('plugin session store', () => {
       },
     };
     return {
-      facade: createPluginSessionStore(store, registry),
+      facade: createPluginSessionStore(store, registry, 'notes'),
       appended,
       reads,
       closedCount: () => closed,
@@ -508,5 +512,174 @@ describe('env.defineEvent', () => {
     });
 
     expect(registry.list()).toEqual([]);
+  });
+});
+
+describe('plugin event owner boundaries', () => {
+  function recording() {
+    const written: unknown[] = [];
+    const store: SessionEventStore = {
+      append: async (_id, events) => {
+        written.push(...events);
+        return [];
+      },
+      read: async () => [],
+      close: async () => undefined,
+    };
+    return { store, written };
+  }
+
+  it('requires a valid owner instead of offering an unbound writer', () => {
+    const { store } = recording();
+    const registry = createPluginEventRegistry();
+    expect(() => createPluginSessionStore(store, registry, undefined as never)).toThrow();
+    expect(() => createPluginSessionStore(store, registry, 'first/other')).toThrow();
+  });
+
+  it('rejects every foreign type before invoking any schema in the batch', async () => {
+    const { store, written } = recording();
+    let validations = 0;
+    const registry = createPluginEventRegistry();
+    const schema = z.object({ text: z.string() }).transform((value) => {
+      validations++;
+      return value;
+    });
+    registry.define({ type: 'notes/report', schema });
+    registry.define({ type: 'other/report', schema });
+    const writer = createPluginSessionStore(store, registry, 'notes');
+    await expect(
+      writer.append('s', [
+        { type: 'notes/report', payload: { text: 'own' } },
+        { type: 'other/report', payload: { text: 'foreign' } },
+      ] as NewSessionEvent[]),
+    ).rejects.toMatchObject({ pluginId: 'notes' });
+    expect(validations).toBe(0);
+    expect(written).toEqual([]);
+  });
+
+  it('rejects a parser that relabels a valid own event after parsing', async () => {
+    const { store, written } = recording();
+    const registry = createPluginEventRegistry();
+    registry.define(definition('notes/report'));
+    const writer = createPluginSessionStore(
+      store,
+      { ...registry, parse: (event) => ({ ...registry.parse(event), type: 'other/report' }) },
+      'notes',
+    );
+    await expect(
+      writer.append('s', [{ type: 'notes/report', payload: { text: 'own' } }] as NewSessionEvent[]),
+    ).rejects.toMatchObject({ pluginId: 'notes' });
+    expect(written).toEqual([]);
+  });
+
+  it('captures all input types before a schema can mutate later event objects', async () => {
+    const { store, written } = recording();
+    const registry = createPluginEventRegistry();
+    const events = [
+      { type: 'notes/report', payload: { text: 'first' } },
+      { type: 'notes/report', payload: { text: 'second' } },
+    ] as NewSessionEvent[];
+    registry.define({
+      type: 'notes/report',
+      schema: noteSchema.transform((value) => {
+        Object.assign(events[1]!, { type: 'other/report' });
+        return value;
+      }),
+    });
+    await createPluginSessionStore(store, registry, 'notes').append('s', events);
+    expect(written).toEqual([
+      { type: 'notes/report', payload: { text: 'first' } },
+      { type: 'notes/report', payload: { text: 'second' } },
+    ]);
+  });
+
+  it('retains stable definitions while exposing only frozen reader metadata', () => {
+    const registry = createPluginEventRegistry();
+    const original = definition('notes/report', {
+      project: notesProjection as PluginEventDefinition['project'],
+    });
+    registry.define(original);
+    const reader = createPluginEventReader(registry);
+    expect(Object.keys(reader).sort()).toEqual(['get', 'list', 'parse', 'project']);
+    expect(Object.isFrozen(reader)).toBe(true);
+    const info = reader.get('notes/report')!;
+    expect(info).toEqual({ type: 'notes/report', hasProjection: true });
+    expect(Object.isFrozen(info)).toBe(true);
+    expect(Object.isFrozen(reader.list())).toBe(true);
+    expect('schema' in info).toBe(false);
+    expect('project' in info).toBe(false);
+    expect(registry.get('notes/report')).toEqual(info);
+    Object.assign(original, {
+      type: 'other/report',
+      schema: z.object({ changed: z.boolean() }),
+      project: undefined,
+    });
+    expect(reader.parse({ type: 'notes/report', payload: { text: 'same' } })).toEqual({
+      type: 'notes/report',
+      payload: { text: 'same' },
+    });
+    expect(
+      reader.project<NotesState>('notes/report', [stored('notes/report', { text: 'same' }, 1)]),
+    ).toEqual({ texts: ['same'], lastSequence: 1 });
+  });
+
+  it('copies projection callback structure instead of keeping its mutable author object', () => {
+    const registry = createPluginEventRegistry();
+    const projection = { initial: () => 0, apply: (state: number) => state + 1 };
+    registry.define({
+      type: 'notes/report',
+      schema: noteSchema,
+      project: projection as PluginEventDefinition['project'],
+    });
+    Object.assign(projection, { initial: () => 100, apply: () => 999 });
+    expect(registry.project('notes/report', [stored('notes/report', { text: 'same' }, 1)])).toBe(1);
+  });
+});
+
+describe('stable parsing identity', () => {
+  it('rejects a parser that mutates its input type while returning the same relabelled event', async () => {
+    const registry = createPluginEventRegistry();
+    registry.define(definition('notes/report'));
+    let writes = 0;
+    const store: SessionEventStore = {
+      append: async () => {
+        writes++;
+        return [];
+      },
+      read: async () => [],
+      close: async () => undefined,
+    };
+    const writer = createPluginSessionStore(
+      store,
+      {
+        ...registry,
+        parse: (event) => {
+          Object.assign(event, { type: 'notes/changed' });
+          return { type: 'notes/changed', payload: { text: 'own' } };
+        },
+      },
+      'notes',
+    );
+    await expect(
+      writer.append('s', [{ type: 'notes/report', payload: { text: 'own' } }] as NewSessionEvent[]),
+    ).rejects.toMatchObject({ pluginId: 'notes' });
+    expect(writes).toBe(0);
+  });
+
+  it('captures a definition type getter once and returns that stable key', () => {
+    const registry = createPluginEventRegistry();
+    let reads = 0;
+    const entry = {
+      get type() {
+        return ++reads === 1 ? 'notes/report' : 'other/report';
+      },
+      schema: noteSchema,
+    } as PluginEventDefinition;
+    registry.define(entry);
+    expect(reads).toBe(1);
+    expect(registry.parse({ type: 'notes/report', payload: { text: 'own' } }).type).toBe(
+      'notes/report',
+    );
+    expect(registry.list()).toEqual([{ type: 'notes/report', hasProjection: false }]);
   });
 });

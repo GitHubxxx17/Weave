@@ -1,7 +1,7 @@
 import type { PluginEventType, SessionEvent, SessionEventStore } from '@weave/runtime';
 import type { z } from 'zod';
 import { pluginEventNamePattern, pluginEventTypePattern } from './event-type.js';
-import { PluginError } from './plugin-errors.js';
+import { attributePluginError, PluginError } from './plugin-errors.js';
 
 /**
  * Plugin-owned Session events.
@@ -82,13 +82,17 @@ export interface ProjectedPluginEventHandle<
   project(events: readonly SessionEvent[]): S;
 }
 
-/** The plugin events a host accepts. */
-export interface PluginEventRegistry {
-  /** Registers an event type. Throws when it is malformed or already taken. */
-  define(definition: PluginEventDefinition): void;
-  get(type: string): PluginEventDefinition | undefined;
+/** Public metadata never exposes a schema or projection implementation. */
+export interface PluginEventInfo {
+  readonly type: PluginEventType;
+  readonly hasProjection: boolean;
+}
+
+/** The event operations a plugin may observe without changing registrations. */
+export interface PluginEventReader {
+  get(type: string): PluginEventInfo | undefined;
   /** The registered events in registration order. */
-  list(): readonly PluginEventDefinition[];
+  list(): readonly PluginEventInfo[];
   /**
    * Checks an event a plugin wants to append and returns what to store: the
    * type, and the payload as the schema produced it, in the JSON form a Store
@@ -104,6 +108,38 @@ export interface PluginEventRegistry {
    * it wants to keep seeing.
    */
   project<S = unknown>(type: string, events: readonly SessionEvent[]): S;
+}
+
+/** The complete host-owned registry; only its owner may define events. */
+export interface PluginEventRegistry extends PluginEventReader {
+  define(definition: PluginEventDefinition): void;
+}
+
+function metadata(definition: PluginEventDefinition): PluginEventInfo {
+  return Object.freeze({ type: definition.type, hasProjection: definition.project !== undefined });
+}
+
+/** A frozen, closed view with no registration or implementation references. */
+export function createPluginEventReader(reader: PluginEventReader): PluginEventReader {
+  const { get, list, parse, project } = reader;
+  return Object.freeze({
+    get: (type: string) => {
+      const info = get.call(reader, type);
+      return info === undefined
+        ? undefined
+        : Object.freeze({ type: info.type, hasProjection: info.hasProjection });
+    },
+    list: () =>
+      Object.freeze(
+        list
+          .call(reader)
+          .map((info) => Object.freeze({ type: info.type, hasProjection: info.hasProjection })),
+      ),
+    parse: (event: { readonly type: string; readonly payload: unknown }) =>
+      parse.call(reader, event),
+    project: <S>(type: string, events: readonly SessionEvent[]): S =>
+      project.call(reader, type, events) as S,
+  });
 }
 
 function issueSummary(error: z.ZodError): string {
@@ -154,33 +190,50 @@ export function createPluginEventRegistry(): PluginEventRegistry {
 
   return {
     define(definition) {
-      if (!pluginEventTypePattern.test(definition.type)) {
+      const type = definition.type;
+      if (!pluginEventTypePattern.test(type)) {
         throw new PluginError(
           'plugin-event-invalid',
-          `Event type "${definition.type}" must look like <pluginId>/<name>, lowercase and hyphen-separated`,
+          `Event type "${type}" must look like <pluginId>/<name>, lowercase and hyphen-separated`,
         );
       }
-      if (definitions.has(definition.type)) {
+      if (definitions.has(type)) {
         throw new PluginError(
           'plugin-registration-conflict',
-          `Event "${definition.type}" conflicts with an existing registration`,
+          `Event "${type}" conflicts with an existing registration`,
         );
       }
-      definitions.set(definition.type, definition);
+      const projection = definition.project;
+      definitions.set(
+        type,
+        Object.freeze({
+          type,
+          schema: definition.schema,
+          ...(projection === undefined
+            ? {}
+            : {
+                project: Object.freeze({ initial: projection.initial, apply: projection.apply }),
+              }),
+        }),
+      );
     },
 
-    get: (type) => definitions.get(type),
+    get: (type) => {
+      const definition = definitions.get(type);
+      return definition === undefined ? undefined : metadata(definition);
+    },
 
-    list: () => [...definitions.values()],
+    list: () => Object.freeze([...definitions.values()].map(metadata)),
 
     parse(event) {
-      const definition = definitions.get(event.type);
+      const type = event.type;
+      const definition = definitions.get(type);
       if (definition === undefined) {
         throw new PluginError(
           'plugin-event-unknown',
-          pluginEventTypePattern.test(event.type)
-            ? `Event "${event.type}" is not registered by any plugin`
-            : `"${event.type}" is not a plugin event; plugins append only their own events, named <pluginId>/<name>`,
+          pluginEventTypePattern.test(type)
+            ? `Event "${type}" is not registered by any plugin`
+            : `"${type}" is not a plugin event; plugins append only their own events, named <pluginId>/<name>`,
         );
       }
       const parsed = definition.schema.safeParse(event.payload);
@@ -226,16 +279,54 @@ export function createPluginEventRegistry(): PluginEventRegistry {
 export function createPluginSessionStore(
   store: SessionEventStore,
   events: PluginEventRegistry,
+  pluginId: string,
 ): SessionEventStore {
-  return {
-    append: async (sessionId, newEvents) =>
-      store.append(
-        sessionId,
-        newEvents.map((event) => events.parse(event)),
-      ),
-    read: (sessionId, options) => store.read(sessionId, options),
+  if (typeof pluginId !== 'string' || !pluginEventNamePattern.test(pluginId)) {
+    throw new PluginError('plugin-event-invalid', 'A plugin Session writer requires a valid owner');
+  }
+  const { append, read } = store;
+  const parse = events.parse;
+  const assertOwner = (type: string): void => {
+    if (!pluginEventTypePattern.test(type)) {
+      throw new PluginError('plugin-event-unknown', `"${type}" is not a plugin event`, {
+        pluginId,
+      });
+    }
+    if (!type.startsWith(`${pluginId}/`)) {
+      throw new PluginError(
+        'plugin-event-invalid',
+        `Plugin "${pluginId}" cannot append event "${type}"`,
+        { pluginId },
+      );
+    }
+  };
+  const view: SessionEventStore = {
+    append: async (sessionId, newEvents) => {
+      const captured = newEvents.map((event) => ({ type: event.type, payload: event.payload }));
+      for (const event of captured) assertOwner(event.type);
+      const parsed = captured.map((event) => {
+        const type = event.type;
+        try {
+          const result = parse.call(events, event);
+          const parsedType = result.type;
+          assertOwner(parsedType);
+          if (parsedType !== type)
+            throw new PluginError(
+              'plugin-event-invalid',
+              `Plugin "${pluginId}" event identity changed during parsing`,
+              { pluginId },
+            );
+          return { type: parsedType, payload: result.payload };
+        } catch (error: unknown) {
+          throw attributePluginError(error, pluginId, `Plugin "${pluginId}" event was rejected`);
+        }
+      });
+      return append.call(store, sessionId, parsed);
+    },
+    read: (sessionId, options) => read.call(store, sessionId, options),
     close: () => Promise.resolve(),
   };
+  return Object.freeze(view);
 }
 
 /**

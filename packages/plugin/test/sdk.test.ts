@@ -121,7 +121,9 @@ describe('createPluginSdk', () => {
     );
     const names: string[] = [];
     kernel.extensions.collect(seams.commandsExtensionPoint, {
-      addCommand: (command) => names.push(command.name),
+      addCommand: (command) => {
+        names.push(command.name);
+      },
     });
 
     expect(names).toEqual(['hello']);

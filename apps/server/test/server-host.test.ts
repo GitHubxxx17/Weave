@@ -321,7 +321,10 @@ describe('Server host', () => {
         ).rejects.toMatchObject({ code: 'plugin-event-invalid' });
         await expect(
           store.append('session-1', [{ type: 'other/entry-added', payload: { text: 'x' } }]),
-        ).rejects.toMatchObject({ code: 'plugin-event-unknown' });
+        ).rejects.toMatchObject({ code: 'plugin-event-invalid', pluginId: 'journal' });
+        await expect(
+          store.append('session-1', [{ type: 'journal/unknown', payload: { text: 'x' } }]),
+        ).rejects.toMatchObject({ code: 'plugin-event-unknown', pluginId: 'journal' });
 
         expect(await getServerSessionStore(runtime).read('session-1')).toEqual([]);
       } finally {

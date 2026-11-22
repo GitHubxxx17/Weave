@@ -134,10 +134,16 @@ describe('declarative Skill contributions', () => {
     await kernel.seal();
     const received: AttributedSkillContribution[] = [];
     kernel.extensions.collect(skillsExtensionPoint, {
-      addSkill: (skill) => received.push(attributedSkillContributionSchema.parse(skill)),
+      addSkill: (skill) => {
+        received.push(attributedSkillContributionSchema.parse(skill));
+      },
     });
     const frozen: unknown[] = [];
-    kernel.extensions.collect(skillsExtensionPoint, { addSkill: (skill) => frozen.push(skill) });
+    kernel.extensions.collect(skillsExtensionPoint, {
+      addSkill: (skill) => {
+        frozen.push(skill);
+      },
+    });
     mutable.resources['a.txt'] = 'changed';
     mutable.invocation.model = true;
     expect(received[0]).toMatchObject({
@@ -201,7 +207,9 @@ describe('declarative Skill contributions', () => {
     await another.seal();
     const owners: string[] = [];
     another.extensions.collect(skillsExtensionPoint, {
-      addSkill: (skill) => owners.push(attributedSkillContributionSchema.parse(skill).pluginId),
+      addSkill: (skill) => {
+        owners.push(attributedSkillContributionSchema.parse(skill).pluginId);
+      },
     });
     expect(owners).toEqual(['first', 'second']);
     await another.dispose();

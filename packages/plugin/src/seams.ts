@@ -15,7 +15,7 @@ import { pluginCommandSchema, type PluginCommand } from './commands.js';
 import { defineExtensionPoint, type ExtensionPoint } from './extension-point.js';
 import { defineHook, type Hook, type PolicyVote } from './hook.js';
 import { PluginError } from './plugin-errors.js';
-import type { PluginEventDefinition, PluginEventRegistry } from './plugin-events.js';
+import type { PluginEventDefinition, PluginEventReader } from './plugin-events.js';
 import { defineServiceRef, type ServiceRef } from './service.js';
 import { skillContributionSchema, type SkillsExtensionApi } from './skills.js';
 
@@ -58,7 +58,7 @@ export const toolRegistryRef: ServiceRef<ToolRegistry> = defineServiceRef({
 });
 
 /** The plugin events the host accepts; plugin projections read through it. */
-export const pluginEventsRef: ServiceRef<PluginEventRegistry> = defineServiceRef({
+export const pluginEventsRef: ServiceRef<PluginEventReader> = defineServiceRef({
   id: 'weave.session.plugin-events',
 });
 
@@ -76,7 +76,7 @@ export const agentRunnerRef: ServiceRef<AgentRunner> = defineServiceRef({
 
 /** Contributor API for the `weave.tools` extension point. */
 export interface ToolsExtensionApi {
-  addTool<TInput, TOutput>(tool: ToolDefinition<TInput, TOutput>): void;
+  addTool<TInput, TOutput>(tool: ToolDefinition<TInput, TOutput>): void | false;
 }
 
 /** Tools are contributed here; the Tool Registry owner collects them. */
@@ -87,8 +87,19 @@ export const toolsExtensionPoint: ExtensionPoint<ToolsExtensionApi> = defineExte
     key: 'tools',
     guard: (api, check) => ({
       addTool(tool) {
-        check(tool.name);
-        api.addTool(tool);
+        const { name, description, parameters, inputSchema, readOnly, approval, execute, ...rest } =
+          tool;
+        const captured = Object.freeze({
+          ...rest,
+          name,
+          description,
+          parameters,
+          inputSchema,
+          readOnly,
+          approval,
+          execute,
+        });
+        return check(name, () => api.addTool(captured));
       },
     }),
   },
@@ -96,7 +107,7 @@ export const toolsExtensionPoint: ExtensionPoint<ToolsExtensionApi> = defineExte
 
 /** Contributor API for the `weave.llm.providers` extension point. */
 export interface LlmProvidersExtensionApi {
-  addProvider(registration: LlmProviderRegistration): void;
+  addProvider(registration: LlmProviderRegistration): void | false;
 }
 
 /** LLM providers are contributed here; the provider registry owner collects them. */
@@ -108,8 +119,35 @@ export const llmProvidersExtensionPoint: ExtensionPoint<LlmProvidersExtensionApi
       key: 'providers',
       guard: (api, check) => ({
         addProvider(registration) {
-          check(registration.id);
-          api.addProvider(registration);
+          const {
+            id,
+            label,
+            type,
+            client,
+            defaultModel,
+            contextWindowTokens,
+            temperature,
+            maxTokens,
+            ...rest
+          } = registration;
+          if (typeof id !== 'string' || id.trim() === '' || id !== id.trim()) {
+            throw new PluginError(
+              'plugin-invalid-definition',
+              'Provider IDs must be nonblank and have no surrounding whitespace',
+            );
+          }
+          const captured = Object.freeze({
+            ...rest,
+            id,
+            label,
+            type,
+            client,
+            ...(defaultModel === undefined ? {} : { defaultModel }),
+            ...(contextWindowTokens === undefined ? {} : { contextWindowTokens }),
+            ...(temperature === undefined ? {} : { temperature }),
+            ...(maxTokens === undefined ? {} : { maxTokens }),
+          });
+          return check(id, () => api.addProvider(captured));
         },
       }),
     },
@@ -130,7 +168,7 @@ export interface PromptSection {
 
 /** Contributor API for the `weave.prompt.sections` extension point. */
 export interface PromptSectionsExtensionApi {
-  addSection(section: PromptSection): void;
+  addSection(section: PromptSection): void | false;
 }
 
 /** System-prompt sections are contributed here; `prompt-core` owns assembly. */
@@ -142,11 +180,11 @@ export const promptSectionsExtensionPoint: ExtensionPoint<PromptSectionsExtensio
       key: 'promptSections',
       guard: (api, check, pluginId) => ({
         addSection(section) {
-          check(section.id);
+          const { id, order, text } = section;
           // A copy that names its contributor: the owner can tell whose text it
           // applies, and a later change to the contributor's own object cannot
           // change what the owner holds.
-          api.addSection(Object.freeze({ ...section, pluginId }));
+          return check(id, () => api.addSection(Object.freeze({ id, order, text, pluginId })));
         },
       }),
     },
@@ -154,7 +192,7 @@ export const promptSectionsExtensionPoint: ExtensionPoint<PromptSectionsExtensio
 
 /** Contributor API for the `weave.session.events` extension point. */
 export interface SessionEventsExtensionApi {
-  addEvent(definition: PluginEventDefinition): void;
+  addEvent(definition: PluginEventDefinition): void | false;
 }
 
 /**
@@ -170,15 +208,22 @@ export const eventsExtensionPoint: ExtensionPoint<SessionEventsExtensionApi> = d
       key: 'events',
       guard: (api, check, pluginId) => ({
         addEvent(definition) {
-          if (!definition.type.startsWith(`${pluginId}/`)) {
+          const { type, schema, project } = definition;
+          if (!type.startsWith(`${pluginId}/`)) {
             throw new PluginError(
               'plugin-event-invalid',
-              `Plugin "${pluginId}" cannot define event "${definition.type}": its events must start with "${pluginId}/"`,
+              `Plugin "${pluginId}" cannot define event "${type}": its events must start with "${pluginId}/"`,
               { pluginId },
             );
           }
-          check(definition.type);
-          api.addEvent(definition);
+          const captured = Object.freeze({
+            type,
+            schema,
+            ...(project === undefined
+              ? {}
+              : { project: Object.freeze({ initial: project.initial, apply: project.apply }) }),
+          });
+          return check(type, () => api.addEvent(captured));
         },
       }),
     },
@@ -187,7 +232,7 @@ export const eventsExtensionPoint: ExtensionPoint<SessionEventsExtensionApi> = d
 
 /** Contributor API for the `weave.commands` extension point. */
 export interface CommandsExtensionApi {
-  addCommand(command: PluginCommand): void;
+  addCommand(command: PluginCommand): void | false;
 }
 
 /**
@@ -213,8 +258,7 @@ export const commandsExtensionPoint: ExtensionPoint<CommandsExtensionApi> = defi
             { cause: parsed.error, pluginId },
           );
         }
-        check(parsed.data.name);
-        api.addCommand(Object.freeze(parsed.data));
+        return check(parsed.data.name, () => api.addCommand(Object.freeze(parsed.data)));
       },
     }),
   },
@@ -238,18 +282,19 @@ export const skillsExtensionPoint: ExtensionPoint<SkillsExtensionApi> = defineEx
             { cause: parsed.error, pluginId },
           );
         }
-        check(parsed.data.name);
-        api.addSkill(
-          Object.freeze({
-            ...parsed.data,
-            pluginId,
-            ...(parsed.data.invocation === undefined
-              ? {}
-              : { invocation: Object.freeze(parsed.data.invocation) }),
-            ...(parsed.data.resources === undefined
-              ? {}
-              : { resources: Object.freeze(parsed.data.resources) }),
-          }),
+        return check(parsed.data.name, () =>
+          api.addSkill(
+            Object.freeze({
+              ...parsed.data,
+              pluginId,
+              ...(parsed.data.invocation === undefined
+                ? {}
+                : { invocation: Object.freeze(parsed.data.invocation) }),
+              ...(parsed.data.resources === undefined
+                ? {}
+                : { resources: Object.freeze(parsed.data.resources) }),
+            }),
+          ),
         );
       },
     }),

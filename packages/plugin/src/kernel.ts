@@ -102,6 +102,15 @@ export interface PluginKernelOptions {
   readonly hostVersion?: string | undefined;
 }
 
+/** Manifest parsing detached every container; freeze only that host-owned copy. */
+function freezeManifest<T>(value: T): T {
+  if (value !== null && typeof value === 'object') {
+    for (const child of Object.values(value)) freezeManifest(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
 /** Creates an empty plugin kernel. */
 export function createPluginKernel(options: PluginKernelOptions = {}): PluginKernel {
   const expectedApiVersion = options.apiVersion ?? pluginApiVersion;
@@ -130,7 +139,7 @@ export function createPluginKernel(options: PluginKernelOptions = {}): PluginKer
         cause: parsedManifest.error,
       });
     }
-    const manifest = parsedManifest.data;
+    const manifest = freezeManifest(parsedManifest.data);
     if (manifest.apiVersion !== expectedApiVersion) {
       throw new PluginError(
         'plugin-api-version-unsupported',
@@ -173,6 +182,9 @@ export function createPluginKernel(options: PluginKernelOptions = {}): PluginKer
       if (error instanceof PluginError) {
         // A plugin error the plugin's own code raised, such as a bad event name,
         // still belongs to this plugin.
+        if (error.pluginId !== undefined && error.pluginId !== manifest.id) {
+          throw new PluginError(error.code, error.message, { cause: error, pluginId: manifest.id });
+        }
         throw attributePluginError(error, manifest.id, `Plugin "${manifest.id}" setup failed`);
       }
       throw new PluginError('plugin-setup-failed', `Plugin "${manifest.id}" setup failed`, {
@@ -213,7 +225,7 @@ export function createPluginKernel(options: PluginKernelOptions = {}): PluginKer
       generationId += 1;
     }
     const root = container.rootScope();
-    const pluginIds = Object.freeze(order.map((entry) => entry.plugin.manifest.id));
+    const pluginIds = Object.freeze(order.map((entry) => entry.manifest.id));
     return {
       id: generationId,
       pluginIds,
@@ -234,11 +246,10 @@ export function createPluginKernel(options: PluginKernelOptions = {}): PluginKer
         await entry.plugin.dispose?.();
       } catch (error: unknown) {
         errors.push(
-          new PluginError(
-            'plugin-dispose-failed',
-            `Plugin "${entry.plugin.manifest.id}" dispose failed`,
-            { cause: error, pluginId: entry.plugin.manifest.id },
-          ),
+          new PluginError('plugin-dispose-failed', `Plugin "${entry.manifest.id}" dispose failed`, {
+            cause: error,
+            pluginId: entry.manifest.id,
+          }),
         );
       }
       for (let d = entry.disposers.length - 1; d >= 0; d -= 1) {

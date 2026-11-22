@@ -468,7 +468,9 @@ it('detaches input, preserves equivalent stamps, and rechecks activation identit
     await kernel.seal();
     const commands: PluginCommand[] = [];
     kernel.extensions.collect(commandsExtensionPoint, {
-      addCommand: (command) => commands.push(command),
+      addCommand: (command) => {
+        commands.push(command);
+      },
     });
     expect(commands.map((command) => command.name)).toEqual(['hello']);
     expect((await source.recheck(prepared, signal)).valid).toBe(true);

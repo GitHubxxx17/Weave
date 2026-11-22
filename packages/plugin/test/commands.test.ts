@@ -102,7 +102,9 @@ describe('weave.commands extension point', () => {
     await kernel.seal();
     const commands: PluginCommand[] = [];
     kernel.extensions.collect(commandsExtensionPoint, {
-      addCommand: (command) => commands.push(command),
+      addCommand: (command) => {
+        commands.push(command);
+      },
     });
     return { kernel, commands };
   }
@@ -160,7 +162,9 @@ describe('weave.commands extension point', () => {
     expect(
       pluginError(() =>
         kernel.extensions.collect(commandsExtensionPoint, {
-          addCommand: (command) => commands.push(command),
+          addCommand: (command) => {
+            commands.push(command);
+          },
         }),
       ),
     ).toMatchObject({ code: 'plugin-contributes-exceeds-manifest' });

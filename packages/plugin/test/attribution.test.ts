@@ -95,6 +95,30 @@ describe('attributePluginError', () => {
 });
 
 describe('registering a plugin', () => {
+  it('attributes a setup error to captured identity even when the error claims another plugin', async () => {
+    const kernel = createPluginKernel();
+    const claimed = new PluginError('plugin-invalid-definition', 'bad setup', {
+      pluginId: 'innocent',
+    });
+    const error = await failure(() =>
+      kernel.register(
+        definePlugin({
+          manifest: manifest('actual'),
+          setup() {
+            throw claimed;
+          },
+        }),
+      ),
+    );
+    expect(error).toMatchObject({
+      code: claimed.code,
+      message: claimed.message,
+      pluginId: 'actual',
+    });
+    expect(error.cause).toBe(claimed);
+    await kernel.dispose();
+  });
+
   it('names the plugin whose setup threw, and keeps what it threw', async () => {
     const boom = new Error('boom');
     const kernel = createPluginKernel();
@@ -530,7 +554,11 @@ describe('collecting contributions', () => {
     await kernel.seal();
 
     expect(() =>
-      kernel.extensions.collect(toolsExtensionPoint, { addTool: (t) => added.push(t.name) }),
+      kernel.extensions.collect(toolsExtensionPoint, {
+        addTool: (t) => {
+          added.push(t.name);
+        },
+      }),
     ).toThrowError(expect.objectContaining({ pluginId: 'bad' }));
     expect(added).toEqual(['one']);
   });

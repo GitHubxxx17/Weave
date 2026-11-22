@@ -1,5 +1,14 @@
 # Weave Foundation Architecture
 
+The plugin ownership repair binds service consumer views to frozen kernel
+identities and records only accepted governed contributions. Standard Session
+writers reject foreign namespaces through both direct use and factory deps;
+event readers expose metadata without registry mutation. Host service lifetime,
+Session history and Tool Pipeline behavior remain independent. This prerequisite
+for custom panels is specified before code in
+[ADR 0009](../adr/0009-plugin-consumer-ownership.md) and the
+[owner-boundary design](../superpowers/specs/2026-11-22-plugin-owner-boundary-design.md).
+
 The repository-local Plugin developer CLI is an independent leaf consuming only
 Plugin and Plugin-host. It scaffolds typed Tool/Command or no-entry Skills projects,
 checks the actual SDK, builds single ESM payloads and packs verified directories.

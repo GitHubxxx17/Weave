@@ -326,7 +326,8 @@ describe('GET /commands', () => {
         }),
       ).rejects.toMatchObject({
         code: 'plugin-registration-conflict',
-        message: expect.stringContaining('first-kit, second-kit'),
+        pluginId: 'second-kit',
+        message: expect.stringContaining('first-kit'),
       });
       expect(listServerCommands(runtime)).toEqual([]);
     } finally {

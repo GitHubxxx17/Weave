@@ -1,5 +1,5 @@
 import type { ExtensionCollector, ExtensionPoint } from './extension-point.js';
-import { attributePluginError, PluginError } from './plugin-errors.js';
+import { PluginError, type PluginErrorCode } from './plugin-errors.js';
 
 /**
  * Typed service machinery for the plugin kernel.
@@ -65,10 +65,16 @@ export interface ServiceInitContext {
 }
 
 /** A service implementation: dependencies, a factory and an optional disposer. */
+export interface ServiceConsumer {
+  readonly pluginId: string;
+}
+
 export interface ServiceImpl<T, D extends DepMap = DepMap> {
   readonly deps?: D;
   readonly factory: (deps: Resolved<D>, context: ServiceInitContext) => T | Promise<T>;
   readonly dispose?: (value: T) => void | Promise<void>;
+  /** The provider's policy for a plugin consumer; host resolution remains raw. */
+  readonly forConsumer?: (value: T, consumer: ServiceConsumer) => T | Promise<T>;
 }
 
 /** Removes a registration or instance; calling twice is a no-op. */
@@ -87,12 +93,50 @@ export interface ScopeContext {
   readonly signal: AbortSignal;
   resolve<T>(ref: ServiceRef<T>): Promise<T>;
   resolveAll<T>(ref: ServiceRef<T>): Promise<readonly T[]>;
+  /** Kernel-only resolution with a captured plugin identity. */
+  resolveForPlugin<T>(ref: ServiceRef<T>, pluginId: string): Promise<T>;
+  resolveAllForPlugin<T>(ref: ServiceRef<T>, pluginId: string): Promise<readonly T[]>;
   dispose(): Promise<void>;
 }
 
 function depsOf(registration: Registration): readonly ServiceRef<unknown>[] {
   const deps = registration.impl.deps;
   return deps === undefined ? [] : Object.values(deps);
+}
+
+/** Internal snapshot shared with PluginEnv's permission accounting. */
+export function captureServiceRef<T>(ref: ServiceRef<T>): ServiceRef<T> {
+  return Object.freeze({ id: ref.id, scope: ref.scope, multi: ref.multi });
+}
+
+/** Internal snapshot: permission accounting and resolution use the same deps. */
+export function captureServiceImpl<T, D extends DepMap>(
+  impl: ServiceImpl<T, D>,
+): ServiceImpl<T, D> {
+  const { deps, factory, dispose, forConsumer } = impl;
+  return Object.freeze({
+    ...(deps === undefined
+      ? {}
+      : {
+          deps: Object.freeze(
+            Object.fromEntries(
+              Object.entries(deps).map(([name, dep]) => [name, captureServiceRef(dep)]),
+            ),
+          ) as D,
+        }),
+    factory,
+    ...(dispose === undefined ? {} : { dispose }),
+    ...(forConsumer === undefined ? {} : { forConsumer }),
+  });
+}
+
+function assertMatchingRef(request: ServiceRef<unknown>, actual: ServiceRef<unknown>): void {
+  if (request.scope !== actual.scope || request.multi !== actual.multi) {
+    throw new PluginError(
+      'plugin-service-scope-violation',
+      `Service "${actual.id}" reference does not match its registered scope or multiplicity`,
+    );
+  }
 }
 
 /** Holds service registrations and resolves them lazily per scope. */
@@ -112,14 +156,16 @@ export class ServiceContainer {
     impl: ServiceImpl<T, D>,
     pluginId: string,
   ): Disposer {
-    const registration: Registration = {
-      ref,
-      impl: impl as unknown as ServiceImpl<unknown, DepMap>,
+    const capturedRef = captureServiceRef(ref);
+    const capturedImpl = captureServiceImpl(impl);
+    const registration: Registration = Object.freeze({
+      ref: capturedRef,
+      impl: capturedImpl as unknown as ServiceImpl<unknown, DepMap>,
       pluginId,
-    };
-    const existing = this.#registrations.get(ref.id);
+    });
+    const existing = this.#registrations.get(capturedRef.id);
     if (existing === undefined) {
-      this.#registrations.set(ref.id, [registration]);
+      this.#registrations.set(capturedRef.id, [registration]);
     } else {
       existing.push(registration);
     }
@@ -129,7 +175,7 @@ export class ServiceContainer {
         return;
       }
       disposed = true;
-      const list = this.#registrations.get(ref.id);
+      const list = this.#registrations.get(capturedRef.id);
       if (list === undefined) {
         return;
       }
@@ -138,7 +184,7 @@ export class ServiceContainer {
         list.splice(index, 1);
       }
       if (list.length === 0) {
-        this.#registrations.delete(ref.id);
+        this.#registrations.delete(capturedRef.id);
       }
     };
   }
@@ -166,6 +212,7 @@ export class ServiceContainer {
         );
       }
       for (const registration of list) {
+        assertMatchingRef(registration.ref, first.ref);
         for (const dep of depsOf(registration)) {
           if (scopeRank[dep.scope] > scopeRank[registration.ref.scope]) {
             throw new PluginError(
@@ -207,6 +254,8 @@ export class ServiceContainer {
       stack.push(id);
       for (const registration of list) {
         for (const dep of depsOf(registration)) {
+          const target = this.#registrations.get(dep.id)?.[0];
+          if (target !== undefined) assertMatchingRef(dep, target.ref);
           walk(dep.id, id, registration.pluginId);
         }
       }
@@ -267,6 +316,14 @@ interface LiveInstance {
   readonly dispose?: (value: unknown) => void | Promise<void>;
 }
 
+interface CollectedFailure {
+  readonly code: PluginErrorCode;
+  readonly message: string;
+  readonly pluginId: string | undefined;
+  readonly cause: unknown;
+  readonly stack: string | undefined;
+}
+
 class ScopeContextImpl implements ScopeContext {
   readonly scope: ServiceScope;
   readonly key: string;
@@ -274,9 +331,12 @@ class ScopeContextImpl implements ScopeContext {
   readonly #container: ServiceContainer;
   readonly #parent: ScopeContextImpl | undefined;
   readonly #collect: ExtensionCollector;
-  readonly #instances = new Map<string, Promise<unknown>>();
+  readonly #instances = new Map<Registration, Promise<unknown>>();
+  readonly #views = new Map<Registration, Map<string, Promise<unknown>>>();
   readonly #live: LiveInstance[] = [];
   readonly #abort = new AbortController();
+  #closed = false;
+  #disposal: Promise<void> | undefined;
 
   constructor(
     scope: ServiceScope,
@@ -291,104 +351,213 @@ class ScopeContextImpl implements ScopeContext {
     this.#container = container;
     this.#parent = parent;
     this.#collect = collect;
-    if (parentSignal.aborted) {
-      this.#abort.abort();
-    } else {
-      parentSignal.addEventListener('abort', () => this.#abort.abort(), { once: true });
-    }
+    if (parentSignal.aborted) this.#abort.abort();
+    else parentSignal.addEventListener('abort', () => this.#abort.abort(), { once: true });
     this.signal = this.#abort.signal;
   }
 
+  #assertOpen(): void {
+    if (this.#closed || this.signal.aborted) {
+      throw new PluginError(
+        'plugin-service-scope-violation',
+        `Service scope "${this.key}" is disposed`,
+      );
+    }
+  }
+
   async resolve<T>(ref: ServiceRef<T>): Promise<T> {
-    const all = await this.resolveAll(ref);
-    const value = all[all.length - 1];
-    if (value === undefined && all.length === 0) {
+    return this.#last(ref, await this.#resolveAll(ref));
+  }
+
+  resolveAll<T>(ref: ServiceRef<T>): Promise<readonly T[]> {
+    return this.#resolveAll(ref);
+  }
+
+  async resolveForPlugin<T>(ref: ServiceRef<T>, pluginId: string): Promise<T> {
+    return this.#last(ref, await this.#resolveAll(ref, pluginId));
+  }
+
+  resolveAllForPlugin<T>(ref: ServiceRef<T>, pluginId: string): Promise<readonly T[]> {
+    return this.#resolveAll(ref, pluginId);
+  }
+
+  #last<T>(ref: ServiceRef<T>, all: readonly T[]): T {
+    if (all.length === 0) {
       throw new PluginError(
         'plugin-service-missing-dependency',
         `Service "${ref.id}" has no implementation`,
       );
     }
-    return value as T;
+    return all[all.length - 1] as T;
   }
 
-  async resolveAll<T>(ref: ServiceRef<T>): Promise<readonly T[]> {
-    const refRank = scopeRank[ref.scope];
+  async #resolveAll<T>(request: ServiceRef<T>, pluginId?: string): Promise<readonly T[]> {
+    this.#assertOpen();
+    const ref = captureServiceRef(request);
+    const registrations = this.#container.registrationsFor(ref.id);
+    const actual = registrations[0]?.ref;
+    if (actual === undefined) return [];
+    for (const registration of registrations) assertMatchingRef(ref, registration.ref);
+    const refRank = scopeRank[actual.scope];
     const myRank = scopeRank[this.scope];
     if (refRank < myRank) {
       if (this.#parent === undefined) {
         throw new PluginError(
           'plugin-service-scope-violation',
-          `Service "${ref.id}" (${ref.scope}) cannot be resolved from scope "${this.scope}"`,
+          `Service "${actual.id}" cannot be resolved from scope "${this.scope}"`,
         );
       }
-      return this.#parent.resolveAll(ref);
+      const values = await this.#parent.#resolveAll(ref, pluginId);
+      this.#assertOpen();
+      return values;
     }
     if (refRank > myRank) {
       throw new PluginError(
         'plugin-service-scope-violation',
-        `Service "${ref.id}" (${ref.scope}) is finer-scoped than the resolving scope "${this.scope}"`,
+        `Service "${actual.id}" (${actual.scope}) is finer-scoped than the resolving scope "${this.scope}"`,
       );
     }
-    const registrations = this.#container.registrationsFor(ref.id);
     const values = await Promise.all(
-      registrations.map((registration, index) => this.#instantiate(ref, registration, index)),
+      registrations.map((registration) =>
+        pluginId === undefined
+          ? this.#instantiate(registration)
+          : this.#forConsumer(registration, pluginId),
+      ),
     );
+    this.#assertOpen();
     return values as readonly T[];
   }
 
-  #instantiate(
-    ref: ServiceRef<unknown>,
-    registration: Registration,
-    index: number,
-  ): Promise<unknown> {
-    const cacheKey = `${ref.id}#${String(index)}`;
-    const cached = this.#instances.get(cacheKey);
-    if (cached !== undefined) {
-      return cached;
+  #forConsumer(registration: Registration, pluginId: string): Promise<unknown> {
+    let consumers = this.#views.get(registration);
+    if (consumers === undefined) {
+      consumers = new Map();
+      this.#views.set(registration, consumers);
     }
+    const cached = consumers.get(pluginId);
+    if (cached !== undefined) return cached;
+    const promise = (async () => {
+      // Factory/dependency failures retain their own attribution; only this
+      // policy's failure belongs to the consumer rather than its provider.
+      const value = await this.#instantiate(registration);
+      this.#assertOpen();
+      const policy = registration.impl.forConsumer;
+      if (policy === undefined) return value;
+      let view: unknown;
+      try {
+        view = await policy(value, Object.freeze({ pluginId }));
+      } catch (cause: unknown) {
+        throw new PluginError(
+          'plugin-contribution-failed',
+          `Service "${registration.ref.id}" rejected consumer "${pluginId}"`,
+          { cause, pluginId },
+        );
+      }
+      this.#assertOpen();
+      return view;
+    })();
+    consumers.set(pluginId, promise);
+    return promise;
+  }
+
+  #instantiate(registration: Registration): Promise<unknown> {
+    const cached = this.#instances.get(registration);
+    if (cached !== undefined) return cached;
     const promise = (async () => {
       const deps = registration.impl.deps ?? {};
       const resolvedEntries = await Promise.all(
         Object.entries(deps).map(
-          async ([name, depRef]) => [name, await this.resolve(depRef)] as const,
+          async ([name, depRef]) =>
+            [name, await this.resolveForPlugin(depRef, registration.pluginId)] as const,
         ),
       );
+      this.#assertOpen();
       const resolved = Object.fromEntries(resolvedEntries) as Resolved<DepMap>;
+      // Only an exception actually thrown by this invocation's collector can
+      // preserve another contributor's attribution through the factory.
+      const collectedFailures = new Map<unknown, CollectedFailure>();
+      const collect: ExtensionCollector = (point, api) => {
+        try {
+          return this.#collect(point, api);
+        } catch (error: unknown) {
+          if (error instanceof PluginError && !collectedFailures.has(error)) {
+            collectedFailures.set(error, {
+              code: error.code,
+              message: error.message,
+              pluginId: error.pluginId,
+              cause: error.cause,
+              stack: error.stack,
+            });
+          }
+          throw error;
+        }
+      };
       let value: unknown;
       try {
         value = await registration.impl.factory(resolved, {
           signal: this.signal,
           scope: this.scope,
           scopeKey: this.key,
-          collect: this.#collect,
+          collect,
         });
       } catch (error: unknown) {
-        throw attributePluginError(
-          error,
-          registration.pluginId,
-          `Service "${ref.id}" from plugin "${registration.pluginId}" failed to initialise`,
+        const captured = collectedFailures.get(error);
+        if (captured !== undefined) {
+          const copy = new PluginError(captured.code, captured.message, {
+            pluginId: captured.pluginId ?? registration.pluginId,
+            ...(captured.cause === undefined ? {} : { cause: captured.cause }),
+          });
+          if (captured.stack !== undefined) copy.stack = captured.stack;
+          throw copy;
+        }
+        if (error instanceof PluginError) {
+          throw new PluginError(error.code, error.message, {
+            pluginId: registration.pluginId,
+            cause: error,
+          });
+        }
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new PluginError(
+          'plugin-contribution-failed',
+          `Service "${registration.ref.id}" from plugin "${registration.pluginId}" failed to initialise: ${detail}`,
+          { pluginId: registration.pluginId, cause: error },
         );
+      }
+      if (this.#closed || this.signal.aborted) {
+        await registration.impl.dispose?.(value);
+        this.#assertOpen();
       }
       this.#live.push({
         value,
-        ...(registration.impl.dispose === undefined
-          ? {}
-          : { dispose: registration.impl.dispose as (value: unknown) => void | Promise<void> }),
+        ...(registration.impl.dispose === undefined ? {} : { dispose: registration.impl.dispose }),
       });
       return value;
     })();
-    this.#instances.set(cacheKey, promise);
+    this.#instances.set(registration, promise);
     return promise;
   }
 
-  async dispose(): Promise<void> {
+  dispose(): Promise<void> {
+    if (this.#disposal !== undefined) return this.#disposal;
+    let resolveDisposal!: () => void;
+    let rejectDisposal!: (error: unknown) => void;
+    this.#disposal = new Promise<void>((resolve, reject) => {
+      resolveDisposal = resolve;
+      rejectDisposal = reject;
+    });
+    this.#closed = true;
+    // Abort listeners and raw disposers may reenter dispose synchronously.
+    // Publish the shared promise before either callback can run.
     this.#abort.abort();
+    void this.#disposeLive().then(resolveDisposal, rejectDisposal);
+    return this.#disposal;
+  }
+
+  async #disposeLive(): Promise<void> {
     const errors: unknown[] = [];
     for (let index = this.#live.length - 1; index >= 0; index -= 1) {
       const instance = this.#live[index];
-      if (instance?.dispose === undefined) {
-        continue;
-      }
+      if (instance?.dispose === undefined) continue;
       try {
         await instance.dispose(instance.value);
       } catch (error: unknown) {
@@ -397,11 +566,8 @@ class ScopeContextImpl implements ScopeContext {
     }
     this.#live.length = 0;
     this.#instances.clear();
-    if (errors.length === 1) {
-      throw errors[0];
-    }
-    if (errors.length > 1) {
-      throw new AggregateError(errors, 'Service disposal failed');
-    }
+    this.#views.clear();
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, 'Service disposal failed');
   }
 }

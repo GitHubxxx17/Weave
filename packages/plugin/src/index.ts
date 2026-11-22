@@ -55,6 +55,7 @@ export type {
   Disposer,
   Resolved,
   ScopeContext,
+  ServiceConsumer,
   ServiceImpl,
   ServiceInitContext,
   ServiceRef,
@@ -79,8 +80,14 @@ export type {
 } from './hook.js';
 export { createPluginEnv } from './plugin-env.js';
 export type { PluginEnv, PluginEnvDeps, ServiceHandle } from './plugin-env.js';
-export { createPluginEventRegistry, createPluginSessionStore } from './plugin-events.js';
+export {
+  createPluginEventRegistry,
+  createPluginEventReader,
+  createPluginSessionStore,
+} from './plugin-events.js';
 export type {
+  PluginEventInfo,
+  PluginEventReader,
   PluginEventDefinition,
   PluginEventHandle,
   PluginEventProjection,

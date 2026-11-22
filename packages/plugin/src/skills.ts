@@ -34,7 +34,7 @@ export interface AttributedSkillContribution extends SkillContribution {
 }
 
 export interface SkillsExtensionApi {
-  addSkill(skill: SkillContribution): void;
+  addSkill(skill: SkillContribution): void | false;
 }
 
 const encoder = new TextEncoder();

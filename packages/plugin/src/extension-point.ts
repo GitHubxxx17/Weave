@@ -3,8 +3,13 @@ import { type ContributedNameKey, type PluginCapability, type PluginManifest } f
 import { attributePluginError, PluginError } from './plugin-errors.js';
 import { type Disposer } from './service.js';
 
-/** Throws when a contributed name is not declared in the contributor's manifest. */
-export type ContributionCheck = (name: string) => void;
+/** Declaration validation, optionally coupled to synchronous owner acceptance. */
+export interface ContributionCheck {
+  /** Legacy validation only; this does not establish a successful contribution. */
+  (name: string): void;
+  /** Record only after the owner returns undefined; false explicitly skips it. */
+  (name: string, accept: () => void | false): void | false;
+}
 
 /**
  * Ties an extension point to the manifest: contributors must declare
@@ -51,7 +56,15 @@ export function defineExtensionPoint<T>(spec: {
   return Object.freeze({
     id: spec.id,
     singleSlot: spec.singleSlot ?? false,
-    ...(spec.governed === undefined ? {} : { governed: spec.governed }),
+    ...(spec.governed === undefined
+      ? {}
+      : {
+          governed: Object.freeze({
+            capability: spec.governed.capability,
+            key: spec.governed.key,
+            guard: spec.governed.guard,
+          }),
+        }),
   }) as ExtensionPoint<T>;
 }
 
@@ -74,6 +87,33 @@ interface ContributionEntry {
   readonly declaration: PluginDeclaration | undefined;
 }
 
+/** Observe accidental async work without blocking synchronous collection. */
+function observeThenable(value: unknown): boolean {
+  if (
+    value !== null &&
+    (typeof value === 'object' || typeof value === 'function') &&
+    typeof (value as { readonly then?: unknown }).then === 'function'
+  ) {
+    void Promise.resolve(value).catch(() => undefined);
+    return true;
+  }
+  return false;
+}
+
+function assertCapability<T>(point: ExtensionPoint<T>, entry: ContributionEntry): void {
+  const governed = point.governed;
+  if (
+    governed !== undefined &&
+    entry.declaration !== undefined &&
+    !entry.declaration.capabilities.includes(governed.capability)
+  )
+    throw new PluginError(
+      'plugin-capability-not-declared',
+      `Plugin "${entry.pluginId}" contributes to "${point.id}" but did not declare the "${governed.capability}" capability`,
+      { pluginId: entry.pluginId },
+    );
+}
+
 /** Collects contributions per extension point and replays them against an owner API. */
 export class ExtensionRegistry {
   readonly #contributions = new Map<string, ContributionEntry[]>();
@@ -93,20 +133,9 @@ export class ExtensionRegistry {
     pluginId: string,
     declaration?: PluginDeclaration,
   ): Disposer {
-    const governed = point.governed;
-    if (
-      governed !== undefined &&
-      declaration !== undefined &&
-      !declaration.capabilities.includes(governed.capability)
-    ) {
-      throw new PluginError(
-        'plugin-capability-not-declared',
-        `Plugin "${pluginId}" contributes to "${point.id}" but did not declare the "${governed.capability}" capability`,
-        { pluginId },
-      );
-    }
-    this.#singleSlot.set(point.id, point.singleSlot);
     const entry: ContributionEntry = { fn: fn as Contributor<unknown>, pluginId, declaration };
+    assertCapability(point, entry);
+    this.#singleSlot.set(point.id, point.singleSlot);
     const list = this.#contributions.get(point.id);
     if (list === undefined) {
       this.#contributions.set(point.id, [entry]);
@@ -148,15 +177,40 @@ export class ExtensionRegistry {
       );
     }
     const skillNames = new Set<string>();
+    const pendingSkills = new Set<string>();
     for (const entry of list) {
+      let active = true;
       try {
-        (entry.fn as Contributor<T>)(this.#guarded(point, api, entry, skillNames));
+        // The collector's point is canonical; a same-id author reference cannot
+        // change its capability or declaration policy.
+        assertCapability(point, entry);
+        const result: unknown = (entry.fn as Contributor<T>)(
+          this.#guarded(point, api, entry, skillNames, pendingSkills, () => active),
+        );
+        active = false;
+        if (observeThenable(result))
+          throw new PluginError(
+            'plugin-invalid-definition',
+            'Extension contributors must finish synchronously',
+            { pluginId: entry.pluginId },
+          );
       } catch (error: unknown) {
-        throw attributePluginError(
+        active = false;
+        const attributed = attributePluginError(
           error,
           entry.pluginId,
           `Plugin "${entry.pluginId}" failed while contributing to "${point.id}"`,
         );
+        // This boundary is executing this contributor, not resolving a provider;
+        // an exception cannot choose another plugin as the contribution owner.
+        if (attributed.pluginId !== entry.pluginId)
+          throw new PluginError(attributed.code, attributed.message, {
+            cause: error,
+            pluginId: entry.pluginId,
+          });
+        throw attributed;
+      } finally {
+        active = false;
       }
     }
     return api;
@@ -172,6 +226,8 @@ export class ExtensionRegistry {
     api: T,
     entry: ContributionEntry,
     skillNames: Set<string>,
+    pendingSkills: Set<string>,
+    active: () => boolean,
   ): T {
     const governed = point.governed;
     if (governed === undefined) {
@@ -180,18 +236,39 @@ export class ExtensionRegistry {
     const contributes = entry.declaration?.contributes;
     return governed.guard(
       api,
-      (name) => {
+      (name: string, accept?: () => void | false) => {
+        if (!active())
+          throw new PluginError(
+            'plugin-invalid-definition',
+            'The contribution API is closed after its callback returns',
+            { pluginId: entry.pluginId },
+          );
         assertNameDeclared(entry.pluginId, contributes, governed.key, name);
+        const identity = `${entry.pluginId}/${name}`;
         if (governed.key === 'skills') {
-          const identity = `${entry.pluginId}/${name}`;
-          if (skillNames.has(identity))
+          if (skillNames.has(identity) || pendingSkills.has(identity))
             throw new PluginError(
               'plugin-invalid-definition',
               `Plugin "${entry.pluginId}" contributed Skill "${name}" twice`,
               { pluginId: entry.pluginId },
             );
-          skillNames.add(identity);
         }
+        if (accept === undefined) return;
+        if (governed.key === 'skills') pendingSkills.add(identity);
+        let result: unknown;
+        try {
+          result = accept();
+          if (observeThenable(result) || (result !== undefined && result !== false))
+            throw new PluginError(
+              'plugin-invalid-definition',
+              'Contribution owners must synchronously return undefined or false',
+              { pluginId: entry.pluginId },
+            );
+        } finally {
+          if (governed.key === 'skills') pendingSkills.delete(identity);
+        }
+        if (result === false) return false;
+        if (governed.key === 'skills') skillNames.add(identity);
         this.#record(entry.pluginId, governed.key, name);
       },
       entry.pluginId,

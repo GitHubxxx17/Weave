@@ -18,6 +18,8 @@ import {
 } from './plugin-events.js';
 import { eventsExtensionPoint } from './seams.js';
 import {
+  captureServiceImpl,
+  captureServiceRef,
   type DepMap,
   type Disposer,
   type ServiceContainer,
@@ -124,22 +126,25 @@ export function createPluginEnv(deps: PluginEnvDeps): PluginEnv {
     manifest,
     signal,
     provide(ref, impl) {
-      assertNameDeclared(pluginId, manifest.contributes, 'services', ref.id);
-      usage?.provided.add(ref.id);
-      for (const dependency of Object.values(impl.deps ?? {})) {
+      const capturedRef = captureServiceRef(ref);
+      const capturedImpl = captureServiceImpl(impl);
+      assertNameDeclared(pluginId, manifest.contributes, 'services', capturedRef.id);
+      usage?.provided.add(capturedRef.id);
+      for (const dependency of Object.values(capturedImpl.deps ?? {})) {
         usage?.used.add(dependency.id);
       }
-      return tracked(container.register(ref, impl, pluginId));
+      return tracked(container.register(capturedRef, capturedImpl, pluginId));
     },
-    use(ref) {
+    use<T>(ref: ServiceRef<T>) {
+      const capturedRef = captureServiceRef(ref);
       if (usage !== undefined) {
         if (usage.closed) {
-          assertServiceUse(manifest, usage, ref.id);
+          assertServiceUse(manifest, usage, capturedRef.id);
         }
-        usage.used.add(ref.id);
+        usage.used.add(capturedRef.id);
       }
       return {
-        get: () => container.rootScope().resolve(ref),
+        get: () => container.rootScope().resolveForPlugin(capturedRef, pluginId),
       };
     },
     contribute(point, contributor) {
