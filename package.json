@@ -36,7 +36,8 @@
     "plugin:validate": "pnpm --filter @weave/plugin-cli... build && node packages/plugin-cli/dist/cli.js validate",
     "plugin:build": "pnpm --filter @weave/plugin-cli... build && node packages/plugin-cli/dist/cli.js build",
     "plugin:pack": "pnpm --filter @weave/plugin-cli... build && node packages/plugin-cli/dist/cli.js pack",
-    "plugin:verify": "pnpm --filter @weave/plugin-cli... --filter @weave/server... build && node apps/server/test/acceptance/plugin-cli.mjs"
+    "plugin:verify": "pnpm --filter @weave/plugin-cli... --filter @weave/server... build && node apps/server/test/acceptance/plugin-cli.mjs",
+    "web-plugin:verify": "pnpm --filter @weave/plugin-cli... --filter @weave/server... build && node apps/server/test/acceptance/web-plugin.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
