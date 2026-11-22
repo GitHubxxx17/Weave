@@ -142,6 +142,72 @@ export async function runFixtureTools(
   return events;
 }
 
+export async function writeFixturePlugin(
+  directory: string,
+  id: string,
+  text: string,
+  options: {
+    readonly marker?: string | undefined;
+    readonly relativePayload?: boolean;
+    readonly command?: string;
+    readonly version?: string;
+    readonly setupError?: string;
+  } = {},
+) {
+  const { marker, relativePayload, command, version = '1.0.0', setupError } = options;
+  const tool = id.replaceAll('-', '_');
+  const manifest: PluginManifest = {
+    id,
+    name: id,
+    version,
+    apiVersion: '1.0.0',
+    capabilities: command === undefined ? ['tool'] : ['tool', 'command'],
+    contributes: { tools: [tool], ...(command === undefined ? {} : { commands: [command] }) },
+    permissions: [],
+  };
+  await mkdir(directory, { recursive: true });
+  await writeFile(
+    join(directory, 'weave-plugin.json'),
+    JSON.stringify({ schemaVersion: 1, entry: 'index.mjs', manifest }),
+  );
+  if (relativePayload) await writeFile(join(directory, 'payload.txt'), text);
+  await writeFile(
+    join(directory, 'index.mjs'),
+    `${marker === undefined ? '' : `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'imported');`}
+    ${relativePayload ? `import { readFile } from 'node:fs/promises';` : ''}
+    export default (sdk) => ({ setup(env) {
+      ${setupError === undefined ? '' : `throw new Error(${JSON.stringify(setupError)});`}
+      env.contribute(sdk.toolsExtensionPoint, (tools) => tools.addTool({
+        name: ${JSON.stringify(tool)}, description: 'Read the fixture value',
+        parameters: { type: 'object' }, inputSchema: sdk.z.object({}),
+        execute: async () => ${relativePayload ? `readFile(new URL('./payload.txt', import.meta.url), 'utf8')` : JSON.stringify(text)}
+      }));
+      ${
+        command === undefined
+          ? ''
+          : `
+      env.contribute(sdk.commandsExtensionPoint, (commands) => commands.addCommand({
+        name: ${JSON.stringify(command)}, title: ${JSON.stringify(id)}, prompt: 'Run the fixture command'
+      }));`
+      }
+    } });`,
+  );
+  return manifest;
+}
+
+export function createFixtureMcpConfig(id: string, root: string, launchLog: string) {
+  return normalizeMcpServerConfig({
+    schemaVersion: 1,
+    id,
+    label: id,
+    transport: 'stdio',
+    command: process.execPath,
+    cwd: root,
+    args: [fileURLToPath(new URL('../fixtures/mcp-server.mjs', import.meta.url)), launchLog],
+    env: {},
+  });
+}
+
 export async function createRealManagedCompositionFixture(
   options: { readonly onKernelSetup?: () => void | Promise<void> } = {},
 ) {
@@ -206,71 +272,11 @@ export async function createRealManagedCompositionFixture(
     return closing;
   }
 
-  async function writePlugin(
-    directory: string,
-    id: string,
-    text: string,
-    marker?: string,
-    relativePayload = false,
-    command?: string,
-  ) {
-    const tool = id.replaceAll('-', '_');
-    const manifest: PluginManifest = {
-      id,
-      name: id,
-      version: '1.0.0',
-      apiVersion: '1.0.0',
-      capabilities: command === undefined ? ['tool'] : ['tool', 'command'],
-      contributes: { tools: [tool], ...(command === undefined ? {} : { commands: [command] }) },
-      permissions: [],
-    };
-    await mkdir(directory, { recursive: true });
-    await writeFile(
-      join(directory, 'weave-plugin.json'),
-      JSON.stringify({ schemaVersion: 1, entry: 'index.mjs', manifest }),
-    );
-    if (relativePayload) await writeFile(join(directory, 'payload.txt'), text);
-    await writeFile(
-      join(directory, 'index.mjs'),
-      `${marker === undefined ? '' : `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'imported');`}
-      ${relativePayload ? `import { readFile } from 'node:fs/promises';` : ''}
-      export default (sdk) => ({ setup(env) {
-        env.contribute(sdk.toolsExtensionPoint, (tools) => tools.addTool({
-          name: ${JSON.stringify(tool)}, description: 'Read the fixture value',
-          parameters: { type: 'object' }, inputSchema: sdk.z.object({}),
-          execute: async () => ${relativePayload ? `readFile(new URL('./payload.txt', import.meta.url), 'utf8')` : JSON.stringify(text)}
-        }));
-        ${
-          command === undefined
-            ? ''
-            : `
-        env.contribute(sdk.commandsExtensionPoint, (commands) => commands.addCommand({
-          name: ${JSON.stringify(command)}, title: ${JSON.stringify(id)}, prompt: 'Run the fixture command'
-        }));`
-        }
-      } });`,
-    );
-    return manifest;
-  }
-
   async function mutateMcp(command: McpAuthorityCommand) {
     const known = await mcpStore.read();
     return mcpStore.mutate(command, {
       expectedSequence: known.sequence,
       knownPrefix: known.events,
-    });
-  }
-
-  function createMcpConfig(id: string) {
-    return normalizeMcpServerConfig({
-      schemaVersion: 1,
-      id,
-      label: id,
-      transport: 'stdio',
-      command: process.execPath,
-      cwd: root,
-      args: [fileURLToPath(new URL('../fixtures/mcp-server.mjs', import.meta.url)), launchLog],
-      env: {},
     });
   }
 
@@ -292,9 +298,9 @@ export async function createRealManagedCompositionFixture(
       return extensions?.managed?.onOwnershipLostSync?.(error);
     },
     mutateMcp,
-    createMcpConfig,
+    createMcpConfig: (id: string) => createFixtureMcpConfig(id, root, launchLog),
     async seedMcp(id: string, trusted = true) {
-      const config = await createMcpConfig(id);
+      const config = await createFixtureMcpConfig(id, root, launchLog);
       const created = await mutateMcp({ kind: 'create', config });
       if (trusted) {
         await mutateMcp({
@@ -307,7 +313,7 @@ export async function createRealManagedCompositionFixture(
     },
     async seedManual(id: string, text: string, trusted = true, marker?: string) {
       const directory = join(pluginsDirectory, id);
-      const manifest = await writePlugin(directory, id, text, marker, false, id);
+      const manifest = await writeFixturePlugin(directory, id, text, { marker, command: id });
       const { digest } = await computeDirectoryDigest(directory);
       if (trusted)
         await authority.trust.append({ kind: 'trusted', pluginId: id, digest, manifest });
@@ -315,7 +321,7 @@ export async function createRealManagedCompositionFixture(
     },
     async writeSource(id: string, text = 'source', marker?: string) {
       const directory = join(root, `source-${++sequence}-private`);
-      const manifest = await writePlugin(directory, id, text, marker);
+      const manifest = await writeFixturePlugin(directory, id, text, { marker });
       return { directory, manifest };
     },
     async seedManaged(
@@ -326,7 +332,7 @@ export async function createRealManagedCompositionFixture(
       relativePayload = false,
     ) {
       const sourceDirectory = join(root, `import-${++sequence}`);
-      await writePlugin(sourceDirectory, id, text, marker, relativePayload);
+      await writeFixturePlugin(sourceDirectory, id, text, { marker, relativePayload });
       const staged = await owned.stage({ sourceDirectory });
       const identity: ValidatedArtifactIdentity = {
         pluginId: staged.descriptor.manifest.id,
