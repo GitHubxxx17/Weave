@@ -1,4 +1,8 @@
 import {
+  executionAcceptedPayloadSchema,
+  executionFinishedPayloadSchema,
+} from './execution-events.js';
+import {
   fileWriteIntentPayloadSchema,
   fileWritePayloadSchema,
   fileUndoStartedPayloadSchema,
@@ -64,6 +68,7 @@ const messageCreatedPayloadSchema = z
 const turnStartedPayloadSchema = z
   .object({
     turnId: nonEmptyStringSchema,
+    executionId: nonEmptyStringSchema.optional(),
     userMessageId: nonEmptyStringSchema.optional(),
     request: turnRequestMetadataSchema.optional(),
   })
@@ -177,6 +182,8 @@ const promptSectionContentPayloadSchema = z
  * The durable facts supported by the first Session Event Store slice.
  */
 export const sessionEventPayloadSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('execution.accepted'), payload: executionAcceptedPayloadSchema }),
+  z.object({ type: z.literal('execution.finished'), payload: executionFinishedPayloadSchema }),
   z.object({
     type: z.literal('workspace.file-write-intent'),
     payload: fileWriteIntentPayloadSchema,
@@ -305,6 +312,22 @@ export type SessionEventType = NewSessionEvent['type'];
 export const newSessionEventSchema = z.union([sessionEventPayloadSchema, pluginNewEventSchema]);
 
 const persistedEventSchemas = [
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('execution.accepted'),
+    payload: executionAcceptedPayloadSchema,
+  }),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('execution.finished'),
+    payload: executionFinishedPayloadSchema,
+  }),
   z.object({
     eventId: nonEmptyStringSchema,
     sessionId: nonEmptyStringSchema,

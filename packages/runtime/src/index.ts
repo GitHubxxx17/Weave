@@ -1,4 +1,27 @@
 export { createRuntime } from './runtime.js';
+export { createAgentExecutionService } from './agent-execution-service.js';
+export {
+  AgentExecutionError,
+  agentExecutionInputSchema,
+  agentExecutionLaunchSchema,
+  agentExecutionStatusSchema,
+  agentExecutionCursorSchema,
+  agentExecutionSummarySchema,
+  agentExecutionSnapshotSchema,
+  agentExecutionFrameSchema,
+} from './agent-execution-types.js';
+export type {
+  AgentExecutionInput,
+  AgentExecutionLaunch,
+  AgentExecutionStatus,
+  AgentExecutionSummary,
+  AgentExecutionSnapshot,
+  AgentExecutionFrame,
+  AgentExecutionSubscription,
+  AgentExecutionService,
+  AgentExecutionServiceOptions,
+  AgentExecutionErrorCode,
+} from './agent-execution-types.js';
 export type {
   SkillRef,
   SkillSource,

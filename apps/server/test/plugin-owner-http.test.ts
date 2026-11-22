@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { computeDirectoryDigest } from '@weave/plugin-host';
 import { startServer } from '../src/main.js';
 import { getServerSessionStore } from '../src/runtime.js';
+import { runExecutionToLegacyResponse } from './execution-http-fixture.js';
 
 describe('plugin ownership over loopback HTTP and SQLite', () => {
   it('persists only an own Pipeline report and retains history after unload and restart', async () => {
@@ -54,7 +55,7 @@ describe('plugin ownership over loopback HTTP and SQLite', () => {
     }
     async function run(sessionId: string, text: string) {
       return (
-        await post('/agent/runs/stream', {
+        await runExecutionToLegacyResponse(server!, {
           sessionId,
           provider: 'mock',
           model: 'fixture',

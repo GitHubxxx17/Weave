@@ -231,6 +231,21 @@ headless Agent Loop, the shared Tool Pipeline, and the Project/Session
 persistence boundary. It is a learning and maintenance guide, not a
 replacement for the package APIs or tests.
 
+## Background execution and recovery contract
+
+Background turns use Runtime `AgentExecutionService`, around the stable
+Generation Runner facade. Session appends `execution.accepted` before production
+and `execution.finished` after durable Turn confirmation. HTTP subscribers own
+only observations; disconnect does not cancel the run. Explicit cancellation,
+bounded snapshots/cursors, Session lifecycle admission, restart interruption and
+shutdown drain follow the [background execution design](../superpowers/specs/2026-11-23-background-executions-design.md).
+Studio replaces the exact live Turn by stable execution/Turn identity and returns
+to Session history only after its durable terminal prefix is readable. The old
+POST SSE endpoint remains a compatibility path; production Studio uses separate
+acceptance, observation and cancellation. No direct execution or HTTP dependency
+is added to lower package layers. The next message queue feature builds on these
+accepted input facts without changing Tool Pipeline or Generation ownership.
+
 ## The Request Path
 
 The Server exposes a health check, a thin Approval control plane with REST and
@@ -302,16 +317,18 @@ target. The proxies do not change the package boundary. Server validates the
 request, applies SessionService lifecycle rules, and transports data, while
 Runtime remains the source of truth for Agent behavior.
 
-When the browser cancels a request, the cancellation travels through the HTTP
-response and Server request lifecycle to the current Agent iterator's
-`return()`. Runtime then owns model/tool cancellation and the cancelled
-Turn/Step persistence. The browser must not create a second cancellation state
-machine.
+Production Studio first accepts durable input through `POST /sessions/:id/executions`,
+then observes GET SSE by execution identity. Browser abort detaches observation;
+only the explicit cancel API aborts the Runtime-owned producer. Refresh rebuilds
+the whole owned Turn from a bounded snapshot/replay cursor. Terminal history is
+used only after its durable sequence watermark is readable. Process restart
+interrupts unresolved accepted executions and never replays their side effects.
 
-The Studio slice is intentionally one request and one live stream. It has no
-Run Registry, background ownership, replay, `Last-Event-ID`, or reconnection
-protocol. A disconnected browser cannot use this endpoint to reconstruct
-missed transient events; durable Session facts remain the recovery boundary.
+The original `POST /agent/runs/stream` adapter remains available only to
+legacy-only compositions: there browser cancellation returns the Agent iterator,
+and there is no replay or reconnect guarantee. Production compositions with an
+execution service reject this legacy start endpoint, preserving one admission
+boundary for lifecycle, idempotency and busy checks.
 
 The Server does not create a model client per request or invoke a tool
 definition directly. `main.ts` starts the Runtime and injects one stable
@@ -1067,20 +1084,14 @@ keeps the development endpoint off the network by default and makes the
 security intent explicit. A later deployment surface can choose a different
 binding as part of a deliberate operational configuration.
 
-### Why Agent HTTP Uses POST + SSE
+### Legacy Agent HTTP adapter
 
-`POST /agent/runs/stream` is the smallest browser-facing adapter for the
-current Runtime contract. The request needs a JSON body containing the Session,
-user message, provider, and model, so `fetch()` is a better fit than
-`EventSource`, whose standard contract is a GET subscription without a JSON
-body. The response is still a normal SSE stream, so text deltas, reasoning,
-Tool Calls, tool results, completion, and errors can arrive incrementally.
-
-The adapter does not introduce a Run Registry, `runId`, Last-Event-ID, replay,
-or a separate durable run state. Those features are necessary for background
-tasks and page refresh recovery, but adding them now would duplicate transient
-Runtime state before Weave has a recovery contract for it. A later registry can
-subscribe to the same Runner events without changing the Runtime Agent Loop.
+The original `POST /agent/runs/stream` used fetch POST with a JSON body and an
+SSE response. It remains tested as a legacy-only adapter with connection-owned
+cancellation. Current production uses durable POST acceptance plus independent
+GET observation and explicit POST cancellation, as described in the background
+execution contract. The Runtime execution service owns reconnect state without
+changing the Agent Loop or making HTTP a lower-layer dependency.
 
 ## AI Editing Checklist
 

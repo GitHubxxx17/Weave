@@ -1792,6 +1792,14 @@ summary:hover > .disclosure-icon {
   stroke-width: 2.1;
 }
 
+.execution-connection-status {
+  align-self: center;
+  max-width: 12rem;
+  color: var(--ink-muted);
+  font-size: 0.65rem;
+  line-height: 1.3;
+}
+
 .send-button-cancel {
   color: var(--danger);
   background: #fff5f5;

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { AgentExecutionSnapshot, AgentExecutionStatusFrame } from './agent-execution-types.js';
 import { skillRefsSchema, type SkillRef } from '../skills/skill-types.js';
 import {
   contextBreakdownSchema,
@@ -162,4 +163,9 @@ export interface AgentStreamHandlers {
   /** HTTP transport accepted this run; this is not a model application receipt. */
   readonly onAccepted?: (() => void) | undefined;
   readonly onEvent: (event: AgentRuntimeEvent) => void;
+  readonly onReceipt?: ((snapshot: AgentExecutionSnapshot) => void) | undefined;
+  readonly onSnapshot?: ((snapshot: AgentExecutionSnapshot) => void) | undefined;
+  readonly onStatus?: ((status: AgentExecutionStatusFrame) => void) | undefined;
+  readonly onConnection?:
+    ((state: 'connecting' | 'connected' | 'reconnecting') => void) | undefined;
 }

@@ -22,6 +22,7 @@ import { openOwnedPluginArtifactStore } from '../src/owned-plugin-artifact-store
 import { createSqlitePluginAuthorityDatabase } from '../src/plugin-authority-store.js';
 import type { ProviderSecretCodec } from '../src/provider-secret-codec.js';
 import type { ProviderSettingsStore } from '../src/provider-settings-store.js';
+import { openExecutionStream, runExecutionToLegacyResponse } from './execution-http-fixture.js';
 
 vi.mock(import('../src/owned-plugin-artifact-store.js'), async (original) => {
   const actual = await original();
@@ -509,16 +510,12 @@ describe('startServer', () => {
     const approvalReader = approvalsResponse.body!.getReader();
     expect((await approvalReader.read()).done).toBe(false);
     try {
-      response = await fetch(`http://127.0.0.1:${server.port}/agent/runs/stream`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: 'shutdown-session',
-          provider: 'mock',
-          model: 'test',
-          userMessage: { role: 'user', content: [{ type: 'text', text: '/tool protected {}' }] },
-        }),
-      });
+      ({ response } = await openExecutionStream(server, {
+        sessionId: 'shutdown-session',
+        provider: 'mock',
+        model: 'test',
+        userMessage: { role: 'user', content: [{ type: 'text', text: '/tool protected {}' }] },
+      }));
       expect(response.status).toBe(200);
       await pendingApproval;
       const body = response.text();
@@ -713,18 +710,14 @@ describe('startServer', () => {
         },
       );
       const session = (await sessionResponse.json()) as { id: string };
-      const agentResponse = await fetch(`http://127.0.0.1:${firstPort}/agent/runs/stream`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: session.id,
-          userMessage: {
-            role: 'user',
-            content: [{ type: 'text', text: '请记录这条消息' }],
-          },
-          provider: 'mock',
-          model: 'test-model',
-        }),
+      const agentResponse = await runExecutionToLegacyResponse(first, {
+        sessionId: session.id,
+        userMessage: {
+          role: 'user',
+          content: [{ type: 'text', text: '请记录这条消息' }],
+        },
+        provider: 'mock',
+        model: 'test-model',
       });
       expect(agentResponse.status).toBe(200);
       await agentResponse.text();

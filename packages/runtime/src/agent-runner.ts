@@ -398,6 +398,8 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
       let activeStepUsage: TokenUsage | undefined;
       /** Estimated send-window composition of the currently open model step. */
       let activeStepContext: ContextBreakdown | undefined;
+      let assistantText = '';
+      let assistantReasoning = '';
 
       const settlePending = (): void => {
         if (!finished) {
@@ -478,14 +480,11 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
       const terminalEvents = (
         status: 'completed' | 'failed' | 'cancelled',
         reason?: string,
-        assistantText?: string,
-        assistantReasoning?: string,
+        partialText = assistantText,
+        partialReasoning = assistantReasoning,
       ): NewSessionEvent[] => {
         const events: NewSessionEvent[] = [];
-        if (
-          (assistantText !== undefined && assistantText.length > 0) ||
-          (assistantReasoning !== undefined && assistantReasoning.length > 0)
-        ) {
+        if (partialText.length > 0 || partialReasoning.length > 0) {
           events.push({
             type: 'message.created',
             payload: {
@@ -493,12 +492,12 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
               message: {
                 role: 'assistant',
                 content: [
-                  ...(assistantReasoning === undefined || assistantReasoning.length === 0
+                  ...(partialReasoning.length === 0
                     ? []
-                    : [{ type: 'reasoning' as const, text: assistantReasoning }]),
-                  ...(assistantText === undefined || assistantText.length === 0
+                    : [{ type: 'reasoning' as const, text: partialReasoning }]),
+                  ...(partialText.length === 0
                     ? []
-                    : [{ type: 'text' as const, text: assistantText }]),
+                    : [{ type: 'text' as const, text: partialText }]),
                 ],
               },
             },
@@ -554,8 +553,8 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
             }
             projectSession(storedEvents);
 
-            const messageId = crypto.randomUUID();
-            turnId = crypto.randomUUID();
+            const messageId = validRequest.executionIdentity?.userMessageId ?? crypto.randomUUID();
+            turnId = validRequest.executionIdentity?.turnId ?? crypto.randomUUID();
             stepId = crypto.randomUUID();
             await options.sessionStore.append(validRequest.sessionId, [
               {
@@ -567,6 +566,9 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
                 payload: {
                   turnId,
                   userMessageId: messageId,
+                  ...(validRequest.executionIdentity === undefined
+                    ? {}
+                    : { executionId: validRequest.executionIdentity.executionId }),
                   request: {
                     provider: validRequest.provider,
                     model: validRequest.model,
@@ -677,8 +679,8 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
               ]);
             }
 
-            let assistantText = '';
-            let assistantReasoning = '';
+            assistantText = '';
+            assistantReasoning = '';
             let finishSeen = false;
             let finishReason: FinishReason | undefined;
             let toolCalls = new Map<string, ToolCallState>();
@@ -907,6 +909,8 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
               },
             ]);
             activeStepStatus = 'completed';
+            assistantText = '';
+            assistantReasoning = '';
             activeStepUsage = undefined;
             activeStepContext = undefined;
 

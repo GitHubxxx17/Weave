@@ -25,6 +25,7 @@ import {
 import { createServerLocalPluginHost } from '../src/local-plugin-host.js';
 import { serverHostVersion } from '../src/host-version.js';
 import { pluginListResponseSchema } from '../src/plugin-catalog.js';
+import { openExecutionStream } from './execution-http-fixture.js';
 
 interface Fixture {
   readonly root: string;
@@ -948,6 +949,7 @@ describe('local plugin startup integration', () => {
       const turn = runTurn(server, '/tool stop_on_cancel {}');
       await toolStarted.promise;
       const stopping = server.stop();
+      await toolAborted.promise;
       expect(stoppingFromTool).toBe(stopping);
       await stopping;
       await turn;
@@ -1110,7 +1112,7 @@ describe('local plugin startup integration', () => {
     }
   });
 
-  it('cancels a local-enabled Approval SSE and queued same-session turn before durable stores close', async () => {
+  it('rejects a second same-session execution and cancels the active Approval before durable stores close', async () => {
     const f = await fixture();
     const baseStore = createInMemorySessionEventStore();
     let closed = false;
@@ -1176,31 +1178,40 @@ describe('local plugin startup integration', () => {
     let response: Response | undefined;
     try {
       expect(server.pluginHost).toBeDefined();
-      response = await fetch(`http://127.0.0.1:${server.port}/agent/runs/stream`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: 'local-session',
-          provider: 'mock',
-          model: 'test',
-          userMessage: { role: 'user', content: [{ type: 'text', text: '/tool protected {}' }] },
-        }),
-      });
+      ({ response } = await openExecutionStream(server, {
+        sessionId: 'local-session',
+        provider: 'mock',
+        model: 'test',
+        userMessage: { role: 'user', content: [{ type: 'text', text: '/tool protected {}' }] },
+      }));
       expect(response.status).toBe(200);
       const body = response.text();
       await pending.promise;
-      const queuedIterator = (
-        server.pluginHost!.runner.run({
-          sessionId: 'local-session',
-          provider: 'mock',
-          model: 'test',
-          userMessage: { role: 'user', content: [{ type: 'text', text: 'Queued request' }] },
-        }) as AsyncIterableIterator<unknown>
-      )[Symbol.asyncIterator]();
-      const queued = queuedIterator.next().catch((error: unknown) => error);
+      const second = await fetch(
+        `http://127.0.0.1:${server.port}/sessions/local-session/executions`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            requestId: 'second-request',
+            input: {
+              provider: 'mock',
+              model: 'test',
+              permissionMode: 'ask',
+              userMessage: { role: 'user', content: [{ type: 'text', text: 'Rejected request' }] },
+            },
+          }),
+        },
+      );
+      expect(second.status).toBe(409);
+      expect(await second.json()).toMatchObject({ error: { code: 'execution-busy' } });
+      expect(
+        (await baseStore.read('local-session')).filter(
+          (event) => event.type === 'execution.accepted',
+        ),
+      ).toHaveLength(1);
       await Promise.all([server.stop(), server.stop()]);
       await body;
-      expect(await queued).toEqual({ done: true, value: undefined });
       expect(broker.list()[0]?.status).toBe('cancelled');
       expect(terminalStatuses).toEqual(['cancelled']);
       expect(statusesAtClose).toEqual(['cancelled']);

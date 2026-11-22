@@ -103,6 +103,8 @@ export interface SessionListResult {
 export interface SessionServiceOptions {
   readonly projectStore: ProjectStore;
   readonly sessionStore: SessionEventStore;
+  /** Serializes lifecycle mutation with durable execution admission. */
+  readonly withSessionIdle?: <T>(sessionId: string, operation: () => Promise<T>) => Promise<T>;
 }
 
 const defaultSessionTitle = '未命名会话';
@@ -222,6 +224,8 @@ function assertProjectExists(project: Project | undefined, projectId: string): P
  */
 export function createSessionService(options: SessionServiceOptions): SessionService {
   const { projectStore, sessionStore } = options;
+  const withSessionIdle =
+    options.withSessionIdle ?? (<T>(_id: string, operation: () => Promise<T>) => operation());
   // Read-through incremental projection: a Session's history is parsed once and
   // later reads fold only new events, instead of replaying the whole log on
   // every get, lifecycle transition, and project-list entry.
@@ -341,16 +345,18 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
     },
 
     async archive(sessionId: string): Promise<SessionDetail> {
-      const projection = await readProjection(sessionId);
-      if (projection.deletedAt !== undefined) {
-        throw new SessionServiceError('session-deleted', `Session ${sessionId} is deleted`);
-      }
-      if (projection.archivedAt !== undefined) {
-        return detailFor(sessionId, projection);
-      }
-      return appendLifecycleEvent(sessionId, projection, {
-        type: 'session.archived',
-        payload: {},
+      return withSessionIdle(sessionId, async () => {
+        const projection = await readProjection(sessionId);
+        if (projection.deletedAt !== undefined) {
+          throw new SessionServiceError('session-deleted', `Session ${sessionId} is deleted`);
+        }
+        if (projection.archivedAt !== undefined) {
+          return detailFor(sessionId, projection);
+        }
+        return appendLifecycleEvent(sessionId, projection, {
+          type: 'session.archived',
+          payload: {},
+        });
       });
     },
 
@@ -369,13 +375,15 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
     },
 
     async delete(sessionId: string): Promise<SessionDetail> {
-      const projection = await readProjection(sessionId);
-      if (projection.deletedAt !== undefined) {
-        return detailFor(sessionId, projection);
-      }
-      return appendLifecycleEvent(sessionId, projection, {
-        type: 'session.deleted',
-        payload: {},
+      return withSessionIdle(sessionId, async () => {
+        const projection = await readProjection(sessionId);
+        if (projection.deletedAt !== undefined) {
+          return detailFor(sessionId, projection);
+        }
+        return appendLifecycleEvent(sessionId, projection, {
+          type: 'session.deleted',
+          payload: {},
+        });
       });
     },
 
