@@ -267,6 +267,36 @@ export function ManagedPluginDialog({
               <dd>v{manifest.version}</dd>
             </div>
           )}
+          {kind === 'activate' ? (
+            <>
+              <div>
+                <dt>名称</dt>
+                <dd>{review.manifest.name}</dd>
+              </div>
+              <div>
+                <dt>API 版本</dt>
+                <dd>{review.manifest.apiVersion}</dd>
+              </div>
+              {review.manifest.description === undefined ? null : (
+                <div>
+                  <dt>说明</dt>
+                  <dd>{review.manifest.description}</dd>
+                </div>
+              )}
+              {review.manifest.host === undefined ? null : (
+                <div>
+                  <dt>宿主</dt>
+                  <dd>{review.manifest.host}</dd>
+                </div>
+              )}
+              {review.manifest.engines === undefined ? null : (
+                <div>
+                  <dt>Weave 兼容</dt>
+                  <dd>{review.manifest.engines.weave}</dd>
+                </div>
+              )}
+            </>
+          ) : null}
           <div>
             <dt>目标摘要</dt>
             <dd>{digest === null ? '无' : <code>{digest}</code>}</dd>

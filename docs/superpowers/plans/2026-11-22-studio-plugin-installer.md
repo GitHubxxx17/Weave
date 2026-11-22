@@ -219,6 +219,7 @@ return (
 - Create `apps/studio/src/features/plugins/managed-plugins-section.tsx`, `apps/studio/src/features/plugins/managed-plugin-dialog.tsx`, and `apps/studio/src/features/plugins/managed-plugins.css`.
 - Modify `apps/studio/src/features/plugins/plugins-panel.tsx`, `apps/studio/src/features/mcp/mcp-panel.tsx` and `apps/studio/src/vite-env.d.ts`. Reuse existing ESM/MCP confirmation props, the PluginDialog focus shell and review markup.
 - Add `apps/studio/test/managed-plugins-panel.test.tsx`; extend `apps/studio/test/App.test.tsx` for explicit panel reopening/restoration and `apps/studio/test/mcp-panel.test.tsx` for blocked controls.
+- Review fix scope: modify `apps/studio/src/app/app.css` for a reachable narrow-screen activity panel and `apps/studio/src/features/plugins/plugin-dialog.tsx` for a labelled keyboard-scrollable body and valid focus restoration. Extend shared modal and managed panel tests for complete manifest review, deferred-preview focus, and stop-tracking completion followed by GET failure.
 
 **Interfaces**
 

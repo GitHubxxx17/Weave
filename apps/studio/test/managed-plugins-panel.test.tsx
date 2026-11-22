@@ -198,6 +198,29 @@ describe('Studio managed plugins', () => {
     expect(network.writes()).toHaveLength(2);
   });
 
+  it('restores focus to the source path after Escape from a deferred preview', async () => {
+    const deferred = pendingResponse();
+    installFetch({
+      managed: () => emptyHistory,
+      handle: (path) => (path === '/plugins/managed/preview' ? deferred.response : undefined),
+    });
+    renderPanel();
+    await screen.findByText('尚无受管插件');
+    const source = writePath('/local');
+    const trigger = screen.getByRole<HTMLButtonElement>('button', { name: '预览插件' });
+    trigger.focus();
+    fireEvent.click(trigger);
+    expect(trigger.disabled).toBe(true);
+    // JSDOM does not automatically drop focus when the focused button becomes disabled.
+    trigger.blur();
+    expect(document.activeElement).toBe(document.body);
+    await act(async () => deferred.finish(Response.json(validPreview)));
+    const cancel = within(screen.getByRole('dialog')).getByRole('button', { name: '取消' });
+    fireEvent.keyDown(cancel, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(source);
+  });
+
   it('opts into a validated plugin picker and ignores cancelled, invalid and stale results', async () => {
     const network = installFetch({ managed: () => emptyHistory });
     const picker = vi.fn();
@@ -300,8 +323,22 @@ describe('Studio managed plugins', () => {
       const dialog = within(screen.getByRole('dialog'));
       const cancel = dialog.getByRole('button', { name: '取消' });
       const confirm = dialog.getByRole('button', { name: `确认${action}` });
+      for (const value of [
+        'Notes',
+        'Local notes commands',
+        '1.0.0',
+        'in-process',
+        '>=0.1.0 <2.0.0',
+        'notes.writer',
+        'workspace:write',
+      ]) {
+        expect(dialog.getByText(value)).toBeTruthy();
+      }
       expect(document.activeElement).toBe(cancel);
       fireEvent.keyDown(cancel, { key: 'Tab', shiftKey: true });
+      const body = dialog.getByRole('region', { name: '审查内容' });
+      expect(document.activeElement).toBe(body);
+      fireEvent.keyDown(body, { key: 'Tab', shiftKey: true });
       expect(document.activeElement).toBe(confirm);
       fireEvent.keyDown(confirm, { key: 'Escape' });
       expect(document.activeElement).toBe(trigger);
@@ -402,6 +439,35 @@ describe('Studio managed plugins', () => {
     fireEvent.click(repreview);
     expect(document.activeElement).toBe(screen.getByRole('textbox', { name: '插件来源目录' }));
     expect(network.writes()).toHaveLength(3);
+  });
+
+  it('closes the stop-tracking review and offers a catalog read when the follow-up read fails', async () => {
+    let failRead = false;
+    const network = installFetch({
+      managed: () => emptyHistory,
+      handle: (path, init) => {
+        if (path === '/plugins/managed/preview') return Response.json(validPreview);
+        if (path === '/plugins/managed/import') return failure(503, 'response-lost');
+        if (failRead && init.method === 'GET') return failure(503, 'catalog-offline');
+      },
+    });
+    renderPanel();
+    await screen.findByText('尚无受管插件');
+    writePath('/local');
+    previewPath();
+    fireEvent.click(await screen.findByRole('button', { name: '确认导入' }));
+    const stop = await screen.findByRole('button', { name: '停止跟踪' });
+    fireEvent.click(stop);
+    failRead = true;
+    fireEvent.click(screen.getByRole('button', { name: '确认停止跟踪' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(screen.getByRole('alert').textContent).toContain('catalog-offline');
+    expect(screen.queryByRole('button', { name: '重试原请求' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '停止跟踪' })).toBeNull();
+    failRead = false;
+    fireEvent.click(screen.getByRole('button', { name: '读取目录' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(network.writes()).toHaveLength(2);
   });
 
   it('keeps receipt-time publication independent from a later catalog and preserves history after uninstall', async () => {

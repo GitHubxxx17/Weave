@@ -4829,7 +4829,21 @@ body:has(.panel-resizer-active) {
   }
 
   .activity-panel {
+    position: fixed;
+    inset: 0 0 0 auto;
+    z-index: 30;
+    width: min(420px, 100vw);
+    height: 100dvh;
+    box-shadow: -8px 0 24px rgb(28 32 43 / 12%);
+  }
+
+  .activity-panel[aria-hidden='true'],
+  .activity-panel .panel-resizer {
     display: none;
+  }
+
+  .activity-panel .activity-body {
+    overscroll-behavior: contain;
   }
 }
 

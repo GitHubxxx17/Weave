@@ -90,7 +90,8 @@ Store 统一派生 `sharedManagementBlocked`，纳入公共目录 ready、在途
 2. 一行对应一条 sticky managed ID，内部以 digest 与 importSequence 展示候选、版本、导入时间和本地目录来源。选择、匹配信任、实际发布分别显示。比较 selection/active 时使用 digest 加 activationSequence。同一代际的 published managed ID 对应的 base `kernel` 行并入 managed 区，继承 `provides`。手动冲突行仍可见。缺少相匹配的 base 行就将实际贡献视为未知。候选 manifest 的贡献是声明。
 3. 任意候选可「激活」，已选择版本可重新激活。已有选择及其他候选时提供「回退」操作，允许明确选择替代候选。候选历史仅有导入事实，文案以本次用已保存候选替换当前选择为准。两项都展示本次目标 manifest、digest 和前选择，通过不同 intent 提交。启用需要匹配的已存在信任。撤销保留选择，重新授信走激活。停用、撤销和卸载的确认提供默认关闭的立即选项，选中时取消涉及目标的当前和退役代际回合。默认让旧回合继续。
 4. 显示「决定已保存」及是否实际改变。回执区显示决定 `decision`，再显示本票据的应用状态和发布身份。committed 用 `application.active`，replayed 用该票据 `current` 中的目标行 active。失败展示固定安全 issue，允许显示旧发布版本或 admission 阻断。候选保存但无需加载用 `not-required`。插件列表的最新发布独立来自后来整组发布的 catalog。读取失败仍能展示已经捕获的回执信息，后续读取也不会改写它。卸载后的候选历史仍可用于激活。
-5. 复用 `PluginDialog`、声明展示和现有窄屏滚动方案。状态和按钮可用性在 render 派生。只在事件处理器发预览/写请求，effect 用于焦点或卸载作废预览。支持键盘焦点循环、Escape、焦点恢复、动态状态反馈和长摘要换行。
+5. 复用 `PluginDialog`、声明展示和窄屏滚动方案。审查显示完整目标 manifest，包括名称、说明、API 版本以及已声明的 host 和 engines。只读审查正文可以通过 Tab 获得焦点并用键盘滚动，仍参与同一模态焦点循环。状态和按钮可用性在 render 派生。只在事件处理器发预览/写请求，effect 用于焦点或卸载作废预览。支持 Escape、焦点恢复、动态状态反馈和长摘要换行。
+6. 当视口宽度不超过 960px 时，已打开的运行活动面板使用固定右侧面板，宽度不超过 420px 和视口宽度，内容在面板内滚动。折叠仍使用现有 App 状态，折叠后隐藏面板并由「显示上下文」重新打开。窄屏不展示桌面列宽拖动柄。360×640、640×420 和默认 Electron 窗口均可进入插件管理，文档没有横向溢出。
 
 ## Desktop 选择器和首次绑定
 

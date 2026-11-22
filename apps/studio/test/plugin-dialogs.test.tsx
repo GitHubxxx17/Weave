@@ -288,6 +288,9 @@ describe('PluginTrustDialog', () => {
     const cancel = screen.getByRole('button', { name: '取消' });
     screen.getByRole('textbox').focus();
     fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Tab', shiftKey: true });
+    const body = screen.getByRole('region', { name: '审查内容' });
+    expect(document.activeElement).toBe(body);
+    fireEvent.keyDown(body, { key: 'Tab', shiftKey: true });
     expect(document.activeElement).toBe(cancel);
     fireEvent.click(cancel);
     expect(onCancel).toHaveBeenCalledOnce();
@@ -322,16 +325,19 @@ describe('PluginDialog keyboard and focus lifecycle', () => {
     expect(root.hasAttribute('inert')).toBe(true);
     const cancel = screen.getByRole('button', { name: '取消' });
     const trust = screen.getByRole('button', { name: '信任并启用' });
+    const body = within(dialog).getByRole('region', { name: '审查内容' });
     expect(document.activeElement).toBe(cancel);
     fireEvent.keyDown(cancel, { key: 'Tab', shiftKey: true });
     // Cancel is followed by the trust action, and the digest is before Cancel.
     expect(document.activeElement).toBe(screen.getByRole('textbox', { name: '完整摘要' }));
     trust.focus();
     fireEvent.keyDown(trust, { key: 'Tab' });
+    expect(document.activeElement).toBe(body);
+    fireEvent.keyDown(body, { key: 'Tab' });
     expect(document.activeElement).toBe(screen.getByRole('textbox', { name: '完整摘要' }));
     const digest = screen.getByRole('textbox', { name: '完整摘要' });
     fireEvent.keyDown(digest, { key: 'Tab', shiftKey: true });
-    expect(document.activeElement).toBe(trust);
+    expect(document.activeElement).toBe(body);
     cancel.focus();
     fireEvent.keyDown(cancel, { key: 'Enter' });
     expect(onTrust).not.toHaveBeenCalled();

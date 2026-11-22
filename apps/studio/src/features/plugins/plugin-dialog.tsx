@@ -26,6 +26,7 @@ const focusableSelector =
   'button, input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])';
 
 function available(element: HTMLElement): boolean {
+  if (element === document.body || element === document.documentElement) return false;
   if (!element.isConnected || element.matches(':disabled') || element.hasAttribute('disabled')) {
     return false;
   }
@@ -142,7 +143,9 @@ export function PluginDialog({
         {fixedContent === undefined ? null : (
           <div className="plugin-dialog-fixed">{fixedContent}</div>
         )}
-        <div className="plugin-dialog-body">{children}</div>
+        <div className="plugin-dialog-body" role="region" aria-label="审查内容" tabIndex={0}>
+          {children}
+        </div>
         <footer className="plugin-dialog-actions">{actions}</footer>
       </section>
     </div>,

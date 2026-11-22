@@ -456,6 +456,10 @@ export function ManagedPluginsSection({
     if (dialog === null) inputRef.current?.focus();
     else window.requestAnimationFrame(() => inputRef.current?.focus());
   };
+  const getImportFallbackFocus = (): HTMLElement | null => {
+    const input = inputRef.current;
+    return input !== null && !input.disabled ? input : getFallbackFocus();
+  };
   const focusManagedRow = (id: string): void => {
     const row = document.getElementById(managedRowId(id));
     if (!(row instanceof HTMLDetailsElement)) return;
@@ -663,7 +667,9 @@ export function ManagedPluginsSection({
         <ManagedPluginDialog
           draft={dialog.draft}
           blocked={sharedManagementBlocked}
-          getFallbackFocus={getFallbackFocus}
+          getFallbackFocus={
+            dialog.draft.review.kind === 'import' ? getImportFallbackFocus : getFallbackFocus
+          }
           onSubmit={submitReview}
           onCancel={closeDialog}
           onReviewAgain={dialog.draft.review.kind === 'import' ? focusPath : closeDialog}
@@ -676,11 +682,17 @@ export function ManagedPluginsSection({
           getFallbackFocus={getFallbackFocus}
           onCancel={closeDialog}
           onConfirm={async () => {
-            if (dialog.kind === 'stop') await store.stopTrackingManaged();
-            else {
-              const outcome = await store.retryManaged();
-              if (outcome.kind === 'not-sent') throw outcome.error;
+            if (dialog.kind === 'stop') {
+              try {
+                await store.stopTrackingManaged();
+              } catch (reason) {
+                // A failed follow-up read is already reported by the catalog.
+                if (store.getSnapshot().managedUnresolved !== undefined) throw reason;
+              }
+              return;
             }
+            const outcome = await store.retryManaged();
+            if (outcome.kind === 'not-sent') throw outcome.error;
           }}
         />
       ) : null}
