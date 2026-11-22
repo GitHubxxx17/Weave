@@ -106,6 +106,18 @@ function respondError(context: Context, error: unknown): Response {
   return context.json(pluginErrorResponseSchema.parse({ error: issue }), status);
 }
 
+function respondManagementDisabled(context: Context): Response {
+  return context.json(
+    pluginErrorResponseSchema.parse({
+      error: {
+        code: 'plugin-management-disabled',
+        message: 'Local plugin management is not enabled',
+      },
+    }),
+    404,
+  );
+}
+
 function listPlugins(options: PluginAppOptions) {
   const snapshot = options.pluginManager?.snapshot();
   const catalog = options.pluginCatalog?.() ?? [];
@@ -142,20 +154,13 @@ export function registerPluginRoutes(app: Hono, options: PluginAppOptions): void
   ): Promise<Response> => {
     try {
       const result = await operation(options.pluginManager);
-      if (result === undefined) {
-        return context.json(
-          pluginErrorResponseSchema.parse({
-            error: {
-              code: 'plugin-management-disabled',
-              message: 'Local plugin management is not enabled',
-            },
-          }),
-          404,
-        );
-      }
+      if (result === undefined) return respondManagementDisabled(context);
       // Capture current desired state and catalog together after awaiting the decision.
       return context.json(pluginMutationResponseSchema.parse({ ...listPlugins(options), result }));
     } catch (error: unknown) {
+      if (options.pluginManager === undefined && error instanceof PluginRequestError) {
+        return respondManagementDisabled(context);
+      }
       return respondError(context, error);
     }
   };

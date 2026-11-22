@@ -52,6 +52,7 @@ vi.mock(import('../src/owned-plugin-artifact-store.js'), async (original) => {
 const setupFailure = 'private fixture setup exception';
 const publicationFailure = 'private fixture publication exception';
 const releaseFailure = 'private fixture release failure';
+const installedReadFailure = 'private fixture installed read failure';
 type Committed = Extract<ManagedMutationResponse, { kind: 'committed' }>;
 
 function activation(
@@ -190,7 +191,12 @@ afterEach(async () => {
 });
 
 function fixture() {
-  return createInstallerHttpFixture(cleanups, [setupFailure, publicationFailure, releaseFailure]);
+  return createInstallerHttpFixture(cleanups, [
+    setupFailure,
+    publicationFailure,
+    releaseFailure,
+    installedReadFailure,
+  ]);
 }
 
 function turnGate() {
@@ -392,6 +398,72 @@ describe('owned managed installer over HTTP', () => {
     expectIssue(await f.http(`${managed}/import`, unused, 409), 'plugin-preview-stale');
     expect(f.authority().lookupSync(importRequest(unused))).toEqual({ kind: 'absent' });
     await expect(fs.access(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each(['activate', 'enable'] as const)(
+    'returns a safe 500 for an installed read failure during %s without recording a decision',
+    async (kind) => {
+      const f = await fixture();
+      await f.startUnbound();
+      const source = await f.source();
+      const preview = await f.preview(source.directory);
+      await f.import(importBody('installed-read-import', preview));
+      if (kind === 'enable') {
+        await f.select(activation('installed-read-activate', f.snapshot(), preview));
+        await f.select(decisionInput('disable', 'installed-read-disable', f.snapshot()).request);
+      }
+      const before = f.snapshot();
+      const request =
+        kind === 'activate'
+          ? activation('failing-activate', before, preview)
+          : decisionInput('enable', 'failing-enable', before).request;
+      const { path, body } = selectionBody(request);
+      const entry = join(f.artifacts, preview.candidate.digest, 'payload', 'index.mjs');
+      const cause = Object.assign(new Error(`${installedReadFailure}: ${entry}`), {
+        code: 'EMFILE',
+      });
+      const { open, lstat } = fs;
+      const fault =
+        kind === 'activate'
+          ? vi.spyOn(fs, 'open').mockImplementation((file, flags, mode) => {
+              if (file === entry) throw cause;
+              return open(file, flags, mode);
+            })
+          : vi.spyOn(fs, 'lstat').mockImplementation((file, options) => {
+              if (file === entry && options === undefined) throw cause;
+              return lstat(file, options);
+            });
+
+      try {
+        expectIssue(
+          await f.http(path, body, 500),
+          'plugin-management-failed',
+          'Managed plugin management failed.',
+        );
+        expect(f.snapshot()).toEqual(before);
+        expect(f.authority().lookupSync(request)).toEqual({ kind: 'absent' });
+      } finally {
+        fault.mockRestore();
+      }
+      expectCommitted(await f.select(request), 'applied');
+    },
+  );
+
+  it('returns an integrity conflict when the installed artifacts container is a file', async () => {
+    const f = await fixture();
+    await f.startUnbound();
+    const source = await f.source();
+    const preview = await f.preview(source.directory);
+    await f.import(importBody('container-read-import', preview));
+    const before = f.snapshot();
+    const request = activation('container-read-activate', before, preview);
+    const { path, body } = selectionBody(request);
+    await fs.rename(f.artifacts, join(f.storeDirectory, 'displaced-artifacts'));
+    await fs.writeFile(f.artifacts, 'unexpected file');
+
+    expectIssue(await f.http(path, body, 409), 'plugin-artifact-unavailable');
+    expect(f.snapshot()).toEqual(before);
+    expect(f.authority().lookupSync(request)).toEqual({ kind: 'absent' });
   });
 
   it('publishes exact selection identities, preserves pinned files and records reviewed destructive decisions', async () => {

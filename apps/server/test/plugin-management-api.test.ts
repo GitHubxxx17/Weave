@@ -237,18 +237,21 @@ describe('local plugin HTTP management', () => {
 
   it.each([
     ['POST', '/plugins/sticky/trust', '{}'],
+    ['POST', '/plugins/ordinary/enable', 'bad'],
     ['POST', '/plugins/sticky/enable', '{"extra": true}'],
     ['POST', '/plugins/sticky/disable?immediate=1', '{}'],
     ['DELETE', '/plugins/sticky/trust?immediate=true&immediate=false', '{}'],
     ['POST', '/plugins/INVALID/enable', '{}'],
   ])(
-    'validates disabled legacy %s %s before consulting sticky authority',
+    'reports disabled for malformed legacy %s %s without consulting sticky authority',
     async (method, path, body) => {
       const assertManualPluginIdSync = vi.fn();
       const app = createApp({ status: 'running' } as never, { assertManualPluginIdSync });
       const response = await app.request(path, { method, headers, body });
-      expect(response.status).toBe(400);
-      expect(await response.json()).toMatchObject({ error: { code: 'plugin-invalid-request' } });
+      expect(response.status).toBe(404);
+      expect(await response.json()).toMatchObject({
+        error: { code: 'plugin-management-disabled' },
+      });
       expect(assertManualPluginIdSync).not.toHaveBeenCalled();
     },
   );

@@ -264,6 +264,40 @@ async function withArtifactErrors<T>(
   }
 }
 
+function corruptArtifact(cause: unknown): PluginArtifactError {
+  return new PluginArtifactError(
+    'plugin-artifact-corrupt',
+    'The published plugin artifact failed integrity validation',
+    { cause },
+  );
+}
+
+async function withPublishedErrors<T>(
+  abort: AbortSignal | undefined,
+  precise: boolean,
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (error: unknown) {
+    if (isAbort(error, abort)) throw error;
+    if (error instanceof PluginArtifactError) {
+      if (error.code === 'plugin-artifact-corrupt' || error.code === 'plugin-artifact-not-found') {
+        throw error;
+      }
+      if (precise && error.code === 'plugin-artifact-io') throw error;
+    } else if (
+      precise
+        ? !hasCode(error, 'ENOENT', 'ENOTDIR', 'ELOOP')
+        : hasCode(error, 'EACCES', 'EPERM', 'EIO')
+    ) {
+      // Preserve the legacy stage classification alongside precise published reads.
+      throw error;
+    }
+    throw corruptArtifact(error);
+  }
+}
+
 export function createPluginArtifactStore(
   options: PluginArtifactStoreOptions,
 ): PluginArtifactStore {
@@ -286,10 +320,10 @@ export function createPluginArtifactStore(
   async function validatePayload(
     payload: string,
     abort: AbortSignal | undefined,
-    reviewed = false,
+    precise = false,
   ): Promise<PluginArtifact> {
     const { digest, bytes, files, descriptorText, paths } = await checkPayload(payload, abort, {
-      reviewed,
+      reviewed: precise,
     });
     if (descriptorText === undefined) {
       throw new PluginArtifactError('plugin-artifact-invalid', 'The plugin descriptor is missing');
@@ -336,40 +370,38 @@ export function createPluginArtifactStore(
     }
   }
 
-  async function validatePublished(
+  async function validatePublishedPayload(
     object: string,
     digest: string,
     abort: AbortSignal | undefined,
-    reviewed = false,
+    precise: boolean,
   ): Promise<PluginArtifact> {
-    const corrupt = (cause: unknown) =>
-      new PluginArtifactError(
-        'plugin-artifact-corrupt',
-        'The published plugin artifact failed integrity validation',
-        { cause },
-      );
+    const artifact = await validatePayload(path.join(object, 'payload'), abort, precise);
+    if (artifact.digest !== digest) {
+      throw corruptArtifact(new Error('The payload digest does not match its name'));
+    }
+    return artifact;
+  }
+
+  async function findPublishedObject(digest: string, abort: AbortSignal | undefined) {
     try {
-      if (!(await directoryExists(object))) {
-        throw corrupt(new Error('The artifact object is missing'));
-      }
-      const artifact = await validatePayload(path.join(object, 'payload'), abort, reviewed);
-      if (artifact.digest !== digest) {
-        throw corrupt(new Error('The payload digest does not match its name'));
-      }
-      return artifact;
+      await assertRealDirectory(directory);
+      const root = await fs.realpath(directory);
+      const artifacts = path.join(root, 'artifacts');
+      await assertRealDirectory(artifacts);
+      const object = path.join(artifacts, digest);
+      await assertRealDirectory(object);
+      return object;
     } catch (error: unknown) {
-      if (isAbort(error, abort)) throw error;
-      if (error instanceof PluginArtifactError) {
-        if (error.code === 'plugin-artifact-corrupt') throw error;
-        if (reviewed && error.code === 'plugin-artifact-io') throw error;
-      } else if (
-        reviewed
-          ? !hasCode(error, 'ENOENT', 'ENOTDIR', 'ELOOP')
-          : hasCode(error, 'EACCES', 'EPERM', 'EIO')
-      ) {
-        throw error;
-      }
-      throw corrupt(error);
+      if (isAbort(error, abort) || !hasCode(error, 'ENOENT')) throw error;
+      abort?.throwIfAborted();
+      throw new PluginArtifactError(
+        'plugin-artifact-not-found',
+        'The plugin artifact was not found',
+        {
+          cause: error,
+        },
+      );
     }
   }
 
@@ -469,7 +501,12 @@ export function createPluginArtifactStore(
       let existing: PluginArtifact | undefined;
       try {
         if (await directoryExists(object)) {
-          existing = await validatePublished(object, digest, abort, reviewed);
+          existing = await withPublishedErrors(abort, reviewed, async () => {
+            if (!(await directoryExists(object))) {
+              throw corruptArtifact(new Error('The artifact object is missing'));
+            }
+            return validatePublishedPayload(object, digest, abort, reviewed);
+          });
           if (reviewed && !matchesReview(existing, expected)) {
             throw new PluginArtifactError(
               'plugin-artifact-corrupt',
@@ -606,19 +643,12 @@ export function createPluginArtifactStore(
       const digest = parse(artifactDigestSchema, input, 'plugin artifact digest');
       const { signal: abort } = parse(readOptionsSchema, options, 'plugin artifact read options');
       abort?.throwIfAborted();
-      return enqueueArtifact(abort, async () => {
-        const root = await normalizeStore(directory);
-        const artifacts = path.join(root, 'artifacts');
-        const object = path.join(artifacts, digest);
-        if (!(await directoryExists(artifacts)) || !(await entryExists(object))) {
-          abort?.throwIfAborted();
-          throw new PluginArtifactError(
-            'plugin-artifact-not-found',
-            'The plugin artifact was not found',
-          );
-        }
-        return validatePublished(object, digest, abort);
-      });
+      return enqueueArtifact(abort, () =>
+        withPublishedErrors(abort, true, async () => {
+          const object = await findPublishedObject(digest, abort);
+          return validatePublishedPayload(object, digest, abort, true);
+        }),
+      );
     },
   };
 }
