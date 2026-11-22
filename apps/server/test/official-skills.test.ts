@@ -14,6 +14,8 @@ import {
   importBody,
 } from './support/managed-plugin-installer-http-fixture.js';
 import { activateInput } from './support/plugin-authority-fixtures.js';
+import { createSqliteProjectStore } from '@weave/workspace';
+import { runExecutionToLegacyResponse } from './execution-http-fixture.js';
 
 const payload = fileURLToPath(
   new URL('../../../plugins/official/weave-official-skills', import.meta.url),
@@ -38,6 +40,14 @@ async function fixture() {
   await getServerSessionStore(f.server().runtime).append('official-session', [
     { type: 'session.created', payload: { title: 'Official Skills' } },
   ]);
+  const projects = createSqliteProjectStore({ filename: f.databaseFile });
+  const project = await projects.createProject({
+    name: 'Official Skills',
+    folderName: 'official',
+    folderPath: f.root,
+  });
+  await projects.attachSession(project.id, 'official-session');
+  await projects.close();
   return { f, source };
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>['f'];
@@ -75,25 +85,20 @@ async function run(
   selected = true,
   provider = 'mock',
 ): Promise<AgentRuntimeEvent[]> {
-  const response = await fetch(`http://127.0.0.1:${f.server().port}/agent/runs/stream`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    signal: AbortSignal.timeout(10_000),
-    body: JSON.stringify({
-      sessionId: 'official-session',
-      provider,
-      model: 'fixture',
-      ...(selected ? { skills: [skill] } : {}),
-      userMessage: {
-        role: 'user',
-        content: [
-          {
-            type: 'text',
-            text: `/tool read_skill ${JSON.stringify({ skill })}\n/tool read_skill_resource ${JSON.stringify({ skill, path })}`,
-          },
-        ],
-      },
-    }),
+  const response = await runExecutionToLegacyResponse(f.server(), {
+    sessionId: 'official-session',
+    provider,
+    model: 'fixture',
+    ...(selected ? { skills: [skill] } : {}),
+    userMessage: {
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text: `/tool read_skill ${JSON.stringify({ skill })}\n/tool read_skill_resource ${JSON.stringify({ skill, path })}`,
+        },
+      ],
+    },
   });
   const responseText = await response.text();
   expect(response.status, responseText).toBe(200);

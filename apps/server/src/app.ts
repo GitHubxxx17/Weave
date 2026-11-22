@@ -1,3 +1,8 @@
+import { registerAgentExecutionGuards } from './agent-execution-guard.js';
+import {
+  registerAgentExecutionRoutes,
+  type AgentExecutionAppOptions,
+} from './agent-execution-api.js';
 import {
   registerPanelGuards,
   registerPanelRoutes,
@@ -41,6 +46,7 @@ export interface AppOptions
   extends
     ApprovalAppOptions,
     AgentAppOptions,
+    AgentExecutionAppOptions,
     SessionAppOptions,
     WorkspaceAppOptions,
     FileAppOptions,
@@ -70,6 +76,7 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
   });
 
   registerPanelGuards(app, options ?? {});
+  registerAgentExecutionGuards(app, studioOrigin);
 
   if (studioOrigin !== undefined) {
     app.use(
@@ -77,7 +84,7 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
       cors({
         origin: studioOrigin,
         allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-        allowHeaders: ['Content-Type'],
+        allowHeaders: ['Content-Type', 'Last-Event-ID'],
       }),
     );
   }
@@ -98,6 +105,7 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
   registerFileRoutes(app, options ?? {});
   registerSessionRoutes(app, options ?? {});
   registerAgentRoutes(app, runtime, options ?? {});
+  registerAgentExecutionRoutes(app, options ?? {});
   registerSkillRoutes(app, options ?? {});
   registerProviderRoutes(app, options ?? {});
   registerPluginRoutes(app, options ?? {});

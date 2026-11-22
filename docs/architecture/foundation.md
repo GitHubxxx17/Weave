@@ -217,6 +217,21 @@ headless Agent Loop, the shared Tool Pipeline, and the Project/Session
 persistence boundary. It is a learning and maintenance guide, not a
 replacement for the package APIs or tests.
 
+## Background execution and recovery contract
+
+Background turns use Runtime `AgentExecutionService`, around the stable
+Generation Runner facade. Session appends `execution.accepted` before production
+and `execution.finished` after durable Turn confirmation. HTTP subscribers own
+only observations; disconnect does not cancel the run. Explicit cancellation,
+bounded snapshots/cursors, Session lifecycle admission, restart interruption and
+shutdown drain follow the [background execution design](../superpowers/specs/2026-11-23-background-executions-design.md).
+Studio replaces the exact live Turn by stable execution/Turn identity and returns
+to Session history only after its durable terminal prefix is readable. The old
+POST SSE endpoint remains a compatibility path; production Studio uses separate
+acceptance, observation and cancellation. No direct execution or HTTP dependency
+is added to lower package layers. The next message queue feature builds on these
+accepted input facts without changing Tool Pipeline or Generation ownership.
+
 ## The Request Path
 
 The Server exposes a health check, a thin Approval control plane with REST and

@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { computeDirectoryDigest } from '@weave/plugin-host';
 import { startServer } from '../src/main.js';
 import { getServerSessionStore } from '../src/runtime.js';
+import { runExecutionToLegacyResponse } from './execution-http-fixture.js';
 
 const catalogShape = z.object({
   schemaVersion: z.literal(1),
@@ -107,7 +108,7 @@ describe('quality-report plugin through real loopback HTTP and SQLite', () => {
           { name: 'Live CI not run', status: 'warn' },
         ],
       };
-      const run = await request('/agent/runs/stream', 'POST', {
+      const run = await runExecutionToLegacyResponse(server, {
         sessionId: session.id,
         provider: 'mock',
         model: 'fixture',

@@ -49,6 +49,19 @@ import type { LucideIcon } from 'lucide-react';
 
 import { AgentStreamError, streamAgentRun } from '../features/agent/agent-stream.js';
 import type { AgentRuntimeEvent, AgentRunRequestInput } from '../features/agent/agent-types.js';
+import type { AgentStreamHandlers } from '../features/agent/agent-types.js';
+import {
+  cancelAgentExecution,
+  getAgentExecution,
+  listAgentExecutions,
+  observeAgentExecution,
+  waitForExecutionRetry,
+} from '../features/agent/agent-execution-client.js';
+import {
+  isTerminalExecution,
+  type AgentExecutionSnapshot,
+} from '../features/agent/agent-execution-types.js';
+import { appendExecutionEvent, executionTurnView } from '../features/agent/agent-execution-view.js';
 import { useSessionSkills } from '../features/skills/use-session-skills.js';
 import { SkillPicker } from '../features/skills/skill-picker.js';
 import { SkillHistory } from '../features/skills/skill-history.js';
@@ -105,6 +118,8 @@ type RunStatus = 'idle' | 'streaming' | 'completed' | 'error' | 'cancelled';
 type SessionRunState = {
   readonly status: RunStatus;
   readonly errorMessage: string | null;
+  readonly connection?: 'connecting' | 'connected' | 'reconnecting' | undefined;
+  readonly stopping?: boolean | undefined;
 };
 
 /** Non-reactive bookkeeping for the single in-flight run of one session. */
@@ -113,6 +128,10 @@ type SessionRunHandle = {
   controller: AbortController;
   assistantId: string;
   tools: readonly ToolActivity[];
+  execution?: AgentExecutionSnapshot;
+  requestId?: string;
+  pendingCancel?: boolean;
+  cancelInFlight?: boolean;
 };
 
 const idleRunState: SessionRunState = { status: 'idle', errorMessage: null };
@@ -856,6 +875,15 @@ function StudioApp(): ReactElement {
   const [runStateBySession, setRunStateBySession] = useState<Record<string, SessionRunState>>({});
   const runHandles = useRef<Map<string, SessionRunHandle>>(new Map());
   const sessionActivityVersions = useRef(new Map<string, number>());
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      for (const handle of runHandles.current.values()) handle.controller.abort();
+      runHandles.current.clear();
+    };
+  }, []);
 
   /** Run status of any session; a session without a run is idle. */
   function sessionRunStatus(sessionId: string): RunStatus {
@@ -1072,6 +1100,12 @@ function StudioApp(): ReactElement {
               : project,
           ),
         );
+        await recoverSessionExecution(
+          firstProject.id,
+          firstSession.id,
+          detail.lastSequence,
+          () => disposed,
+        );
       } catch (error: unknown) {
         if (!disposed) {
           setWorkspaceError(workspaceErrorMessage(error));
@@ -1259,10 +1293,325 @@ function StudioApp(): ReactElement {
         return;
       }
       applySessionDetail(projectId, detail);
+      await recoverSessionExecution(projectId, sessionId, detail.lastSequence);
     } catch (error: unknown) {
       if (activeSessionIdRef.current === sessionId) {
         setNotice(workspaceErrorMessage(error));
       }
+    }
+  }
+
+  function executionIsCurrent(sessionId: string, runId: string): boolean {
+    return mounted.current && runHandles.current.get(sessionId)?.runId === runId;
+  }
+
+  function renderExecution(
+    projectId: string,
+    snapshot: AgentExecutionSnapshot,
+    runId: string,
+  ): void {
+    const handle = runHandles.current.get(snapshot.sessionId);
+    if (handle === undefined || !executionIsCurrent(snapshot.sessionId, runId)) return;
+    const previous = handle.execution;
+    handle.execution = snapshot;
+    if (isTerminalExecution(snapshot.status)) return;
+    const view = executionTurnView(snapshot);
+    const statuses = new Map(
+      view.turn.toolResults.map((result) => [result.toolCallId, result.status]),
+    );
+    const messages = toChatMessages(snapshot.sessionId, view.messages, statuses).map((message) => {
+      if (message.role === 'assistant') {
+        const liveTools = new Map<string, ToolActivity['status']>();
+        for (const event of snapshot.events) {
+          if (event.type === 'tool-call') liveTools.set(event.toolCall.id, 'called');
+          if (event.type === 'tool-executing') liveTools.set(event.toolCall.id, 'executing');
+          if (event.type === 'tool-result')
+            liveTools.set(
+              event.result.toolCallId,
+              event.status === 'failed' ? 'failed' : 'completed',
+            );
+        }
+        return {
+          ...message,
+          tools: message.tools.map((tool) => ({
+            ...tool,
+            status: liveTools.get(tool.toolCallId) ?? tool.status,
+          })),
+        };
+      }
+      return {
+        ...message,
+        submission: {
+          sessionId: snapshot.sessionId,
+          ...snapshot.input,
+          skills: snapshot.input.skills ?? [],
+          userMessage: {
+            role: 'user' as const,
+            content: snapshot.input.userMessage.content.filter(
+              (part): part is Extract<typeof part, { type: 'text' | 'image' }> =>
+                part.type === 'text' || part.type === 'image',
+            ),
+          },
+        },
+      };
+    });
+    const temporaryTurnId = liveTurnIdFor(handle.assistantId);
+    updateSessionMessages(projectId, snapshot.sessionId, (current) => [
+      ...current.filter(
+        (message) =>
+          message.turnId !== snapshot.turnId &&
+          message.turnId !== temporaryTurnId &&
+          (previous === undefined || message.turnId !== previous.turnId) &&
+          message.id !== snapshot.userMessageId,
+      ),
+      ...messages,
+    ]);
+    updateSessionTurns(projectId, snapshot.sessionId, (current) => [
+      ...current.filter(
+        (turn) =>
+          turn.turnId !== snapshot.turnId &&
+          turn.turnId !== temporaryTurnId &&
+          (previous === undefined || turn.turnId !== previous.turnId),
+      ),
+      view.turn,
+    ]);
+  }
+
+  function executionHandlers(
+    projectId: string,
+    sessionId: string,
+    runId: string,
+  ): AgentStreamHandlers {
+    return {
+      onSnapshot: (snapshot) => {
+        if (!executionIsCurrent(sessionId, runId)) return;
+        renderExecution(projectId, snapshot, runId);
+        setRunStateBySession((current) => ({
+          ...current,
+          [sessionId]: {
+            ...current[sessionId],
+            status: 'streaming',
+            errorMessage: snapshot.error?.message ?? null,
+            stopping:
+              runHandles.current.get(sessionId)?.pendingCancel || snapshot.status === 'cancelling',
+          },
+        }));
+      },
+      onEvent: (event) => {
+        const handle = runHandles.current.get(sessionId);
+        if (handle?.execution === undefined || !executionIsCurrent(sessionId, runId)) return;
+        renderExecution(projectId, appendExecutionEvent(handle.execution, event), runId);
+      },
+      onStatus: (status) => {
+        const handle = runHandles.current.get(sessionId);
+        if (handle?.execution === undefined || !executionIsCurrent(sessionId, runId)) return;
+        handle.execution = { ...handle.execution, ...status };
+        setRunStateBySession((current) => ({
+          ...current,
+          [sessionId]: {
+            ...current[sessionId],
+            status: 'streaming',
+            errorMessage: status.error?.message ?? null,
+            stopping: handle.pendingCancel || status.status === 'cancelling',
+          },
+        }));
+      },
+      onConnection: (connection) => {
+        if (!executionIsCurrent(sessionId, runId)) return;
+        setRunStateBySession((current) => ({
+          ...current,
+          [sessionId]: {
+            ...current[sessionId],
+            status: 'streaming',
+            errorMessage: current[sessionId]?.errorMessage ?? null,
+            connection,
+          },
+        }));
+      },
+    };
+  }
+
+  async function requestExecutionCancel(
+    projectId: string,
+    sessionId: string,
+    runId: string,
+  ): Promise<void> {
+    const handle = runHandles.current.get(sessionId);
+    if (
+      handle?.execution === undefined ||
+      handle.cancelInFlight ||
+      !executionIsCurrent(sessionId, runId)
+    )
+      return;
+    handle.cancelInFlight = true;
+    try {
+      const snapshot = await cancelAgentExecution(sessionId, handle.execution.executionId);
+      if (!executionIsCurrent(sessionId, runId)) return;
+      // Cancellation receipts may lag the observation stream; never replace newer output.
+      if (!isTerminalExecution(handle.execution.status)) {
+        handle.execution = {
+          ...handle.execution,
+          status: snapshot.status,
+          ...(snapshot.durableThroughSequence === undefined
+            ? {}
+            : { durableThroughSequence: snapshot.durableThroughSequence }),
+          ...(snapshot.error === undefined ? {} : { error: snapshot.error }),
+        };
+      }
+    } catch (error: unknown) {
+      if (executionIsCurrent(sessionId, runId))
+        setSessionRunState(sessionId, {
+          status: 'streaming',
+          stopping: true,
+          errorMessage: `停止请求未确认，可再次点击停止。${safeErrorMessage(error)}`,
+        });
+    } finally {
+      handle.cancelInFlight = false;
+    }
+  }
+
+  async function reconcileExecution(
+    projectId: string,
+    sessionId: string,
+    runId: string,
+  ): Promise<void> {
+    let attempt = 0;
+    while (executionIsCurrent(sessionId, runId)) {
+      const handle = runHandles.current.get(sessionId);
+      const snapshot = handle?.execution;
+      if (handle === undefined || snapshot === undefined || !isTerminalExecution(snapshot.status))
+        return;
+      try {
+        const detail = await workspaceApi.getSession(sessionId);
+        if (!executionIsCurrent(sessionId, runId)) return;
+        const turn = detail.turns.find(
+          (candidate) =>
+            candidate.turnId === snapshot.turnId &&
+            candidate.userMessageId === snapshot.userMessageId,
+        );
+        if (
+          detail.id === sessionId &&
+          snapshot.durableThroughSequence !== undefined &&
+          detail.lastSequence >= snapshot.durableThroughSequence &&
+          ((turn !== undefined && turn.status !== 'running') ||
+            (turn === undefined && snapshot.status !== 'completed'))
+        ) {
+          applySessionDetail(projectId, detail);
+          runHandles.current.delete(sessionId);
+          setSessionRunState(sessionId, {
+            status:
+              snapshot.status === 'completed'
+                ? 'completed'
+                : snapshot.status === 'cancelled'
+                  ? 'cancelled'
+                  : 'error',
+            errorMessage:
+              snapshot.status === 'failed' || snapshot.status === 'interrupted'
+                ? (snapshot.error?.message ?? '本次运行已中断；会话记录已更新。')
+                : null,
+          });
+          return;
+        }
+      } catch (error: unknown) {
+        if (!executionIsCurrent(sessionId, runId)) return;
+        setSessionRunState(sessionId, {
+          status: 'streaming',
+          stopping: handle.pendingCancel,
+          connection: 'reconnecting',
+          errorMessage: `正在确认持久化会话记录。${workspaceErrorMessage(error)}`,
+        });
+      }
+      await waitForExecutionRetry(attempt++, handle.controller.signal);
+    }
+  }
+
+  async function resumeExecution(
+    projectId: string,
+    sessionId: string,
+    runId: string,
+  ): Promise<void> {
+    let attempt = 0;
+    while (executionIsCurrent(sessionId, runId)) {
+      const handle = runHandles.current.get(sessionId);
+      if (handle?.execution === undefined) return;
+      try {
+        if (!isTerminalExecution(handle.execution.status)) {
+          const snapshot = await getAgentExecution(sessionId, handle.execution.executionId);
+          if (!executionIsCurrent(sessionId, runId)) return;
+          await observeAgentExecution(snapshot, executionHandlers(projectId, sessionId, runId), {
+            signal: handle.controller.signal,
+          });
+        }
+        await reconcileExecution(projectId, sessionId, runId);
+        return;
+      } catch (error: unknown) {
+        if (!executionIsCurrent(sessionId, runId)) return;
+        setSessionRunState(sessionId, {
+          status: 'streaming',
+          stopping: handle.pendingCancel,
+          connection: 'reconnecting',
+          errorMessage: `正在恢复运行连接。${safeErrorMessage(error)}`,
+        });
+        try {
+          await waitForExecutionRetry(attempt++, handle.controller.signal);
+        } catch {
+          return;
+        }
+      }
+    }
+  }
+
+  async function recoverSessionExecution(
+    projectId: string,
+    sessionId: string,
+    lastSequence: number,
+    disposed?: () => boolean,
+  ): Promise<void> {
+    if (runHandles.current.has(sessionId)) return;
+    const activityVersion = sessionActivityVersions.current.get(sessionId) ?? 0;
+    try {
+      const summaries = await listAgentExecutions(sessionId);
+      if (
+        !mounted.current ||
+        disposed?.() ||
+        runHandles.current.has(sessionId) ||
+        (sessionActivityVersions.current.get(sessionId) ?? 0) !== activityVersion
+      )
+        return;
+      const active =
+        summaries.find((summary) => !isTerminalExecution(summary.status)) ??
+        summaries.find(
+          (summary) =>
+            summary.durableThroughSequence !== undefined &&
+            summary.durableThroughSequence > lastSequence,
+        );
+      if (active === undefined) return;
+      const snapshot = await getAgentExecution(sessionId, active.executionId);
+      if (
+        !mounted.current ||
+        disposed?.() ||
+        runHandles.current.has(sessionId) ||
+        (sessionActivityVersions.current.get(sessionId) ?? 0) !== activityVersion
+      )
+        return;
+      const runId = createId('observation');
+      runHandles.current.set(sessionId, {
+        runId,
+        assistantId: snapshot.turnId,
+        controller: new AbortController(),
+        execution: snapshot,
+        tools: [],
+      });
+      renderExecution(projectId, snapshot, runId);
+      setSessionRunState(sessionId, {
+        status: 'streaming',
+        stopping: snapshot.status === 'cancelling',
+        errorMessage: snapshot.error?.message ?? null,
+      });
+      void resumeExecution(projectId, sessionId, runId);
+    } catch (error: unknown) {
+      if (mounted.current && !disposed?.() && activeSessionIdRef.current === sessionId)
+        setNotice(`无法恢复运行状态。${safeErrorMessage(error)}`);
     }
   }
 
@@ -1607,7 +1956,6 @@ function StudioApp(): ReactElement {
         skills: selectedSessionId === sessionId ? selectedSkills.map(skillRef) : [],
       },
     );
-    const previousTurnIds = new Set(sessionContext.session.turns.map((turn) => turn.turnId));
 
     // Persist a generated title on the first message of an untitled session so
     // it survives a reload (the local title update below is only cosmetic).
@@ -1636,6 +1984,7 @@ function StudioApp(): ReactElement {
       controller: requestController,
       assistantId,
       tools: [],
+      requestId: crypto.randomUUID(),
     });
     conversationScroll.scrollToBottom('auto');
     updateSessionMessages(projectId, sessionId, (current) => [
@@ -1704,10 +2053,9 @@ function StudioApp(): ReactElement {
 
     let completedObserved = false;
     let completedTurnId: string | undefined;
-    let terminalReconciled = false;
     let accepted = false;
     const accept = (): void => {
-      if (accepted) return;
+      if (accepted || !executionIsCurrent(sessionId, runId)) return;
       accepted = true;
       if (retry === undefined) {
         sessionSkills.clearSent(sessionId, selectedRevision, submission.skills);
@@ -1721,9 +2069,21 @@ function StudioApp(): ReactElement {
       await streamAgentRun(
         submission,
         {
+          ...executionHandlers(projectId, sessionId, runId),
+          onReceipt: (snapshot) => {
+            if (!executionIsCurrent(sessionId, runId)) return;
+            accept();
+            renderExecution(projectId, snapshot, runId);
+            if (runHandles.current.get(sessionId)?.pendingCancel)
+              void requestExecutionCancel(projectId, sessionId, runId);
+          },
           onAccepted: accept,
           onEvent: (event) => {
             accept();
+            if (runHandles.current.get(sessionId)?.execution !== undefined) {
+              executionHandlers(projectId, sessionId, runId).onEvent(event);
+              return;
+            }
             if (event.type === 'completed') {
               completedObserved = true;
               completedTurnId = event.turnId;
@@ -1731,47 +2091,32 @@ function StudioApp(): ReactElement {
             handleEvent(event, runId, assistantId, projectId, sessionId);
           },
         },
-        { signal: requestController.signal },
+        {
+          signal: requestController.signal,
+          requestId: runHandles.current.get(sessionId)?.requestId,
+        },
       );
+      if (runHandles.current.get(sessionId)?.execution !== undefined) {
+        await reconcileExecution(projectId, sessionId, runId);
+        return;
+      }
       accept();
-      if (!completedObserved && runHandles.current.get(sessionId)?.runId === runId) {
-        // Host cancellation can close SSE after durable terminal persistence without
-        // yielding completed. EOF alone cannot tell us the Turn's outcome.
-        try {
-          const detail = await workspaceApi.getSession(sessionId);
-          if (runHandles.current.get(sessionId)?.runId !== runId) return;
-          // Studio and its local Server share a clock. Older durable ids may be
-          // unknown after a local Stop or a not-yet-loaded Session summary.
-          const newTurns = detail.turns.filter(
-            (turn) => !previousTurnIds.has(turn.turnId) && turn.startedAt >= occurredAt,
-          );
-          const terminal = newTurns.length === 1 ? newTurns[0] : undefined;
-          if (detail.id !== sessionId || terminal === undefined || terminal.status === 'running') {
-            setSessionRunState(sessionId, {
-              status: 'error',
-              errorMessage: '响应流已结束，无法确认会话终态。请重新打开会话读取最新状态。',
-            });
-          } else {
-            applySessionDetail(projectId, detail);
-            terminalReconciled = true;
-            setSessionRunState(sessionId, {
-              status: terminal.status === 'failed' ? 'error' : terminal.status,
-              errorMessage: terminal.status === 'failed' ? '本次运行失败；会话记录已更新。' : null,
-            });
-          }
-        } catch (error: unknown) {
-          if (runHandles.current.get(sessionId)?.runId !== runId) return;
-          setSessionRunState(sessionId, {
-            status: 'error',
-            errorMessage: `响应流已结束，无法确认会话终态。${workspaceErrorMessage(error)}`,
-          });
-        }
+      if (!completedObserved && executionIsCurrent(sessionId, runId)) {
+        // Receipt-less integrations cannot establish an execution identity.
+        setSessionRunState(sessionId, {
+          status: 'error',
+          errorMessage: '响应流已结束，无法确认会话终态。请重新打开会话读取最新状态。',
+        });
       }
     } catch (error: unknown) {
       if (runHandles.current.get(sessionId)?.runId !== runId) {
         return;
       }
 
+      if (runHandles.current.get(sessionId)?.execution !== undefined) {
+        void resumeExecution(projectId, sessionId, runId);
+        return;
+      }
       if (error instanceof DOMException && error.name === 'AbortError') {
         setSessionRunState(sessionId, { status: 'cancelled', errorMessage: null });
         finishLiveTurn(projectId, sessionId, liveTurnId, 'cancelled');
@@ -1783,26 +2128,18 @@ function StudioApp(): ReactElement {
         finishLiveTurn(projectId, sessionId, liveTurnId, 'failed');
       }
     } finally {
-      if (runHandles.current.get(sessionId)?.runId === runId) {
+      if (
+        runHandles.current.get(sessionId)?.runId === runId &&
+        runHandles.current.get(sessionId)?.execution === undefined
+      ) {
         runHandles.current.delete(sessionId);
-        if (!terminalReconciled)
+        if (completedTurnId !== undefined)
           void workspaceApi
             .getSession(sessionId)
             .then((detail) => {
               if (detail.id !== sessionId) return;
-              // Only merge facts for this run: a later run may already be streaming.
-              const candidates = detail.turns.filter(
-                (turn) =>
-                  !previousTurnIds.has(turn.turnId) &&
-                  turn.startedAt >= occurredAt &&
-                  turn.userMessageId !== undefined &&
-                  detail.messages.some(
-                    (message) =>
-                      message.messageId === turn.userMessageId && message.role === 'user',
-                  ),
-              );
-              const knownTurnId =
-                completedTurnId ?? (candidates.length === 1 ? candidates[0]?.turnId : undefined);
+              // Explicit completed identities support older integrations without inference.
+              const knownTurnId = completedTurnId;
               if (knownTurnId === undefined) return;
               const durable = detail.turns.find((turn) => turn.turnId === knownTurnId);
               if (durable === undefined) return;
@@ -2535,12 +2872,10 @@ function StudioApp(): ReactElement {
       return;
     }
 
-    runHandles.current.delete(sessionId);
-    handle.controller.abort();
-    setSessionRunState(sessionId, { status: 'cancelled', errorMessage: null });
-    if (activeProjectId !== '' && sessionId !== '') {
-      finishLiveTurn(activeProjectId, sessionId, liveTurnIdFor(handle.assistantId), 'cancelled');
-    }
+    handle.pendingCancel = true;
+    setSessionRunState(sessionId, { status: 'streaming', stopping: true, errorMessage: null });
+    if (handle.execution !== undefined)
+      void requestExecutionCancel(activeProjectId, sessionId, handle.runId);
   }
 
   if (isLoadingWorkspace) {
@@ -3534,6 +3869,17 @@ function StudioApp(): ReactElement {
                   ) : null}
                 </div>
                 {status === 'streaming' ? (
+                  <span className="execution-connection-status" role="status">
+                    {activeRunState.stopping
+                      ? '正在停止…'
+                      : activeRunState.connection === 'reconnecting'
+                        ? '连接已断开，正在重连…'
+                        : activeRunState.connection === 'connecting'
+                          ? '正在连接…'
+                          : '运行中'}
+                  </span>
+                ) : null}
+                {status === 'streaming' ? (
                   <button
                     className="send-button send-button-cancel"
                     type="button"
@@ -3891,7 +4237,11 @@ function StudioApp(): ReactElement {
         context={{
           statusKey: status,
           projectId: activeProjectId,
-          statusLabel: statusLabels[status],
+          statusLabel: activeRunState.stopping
+            ? '正在停止'
+            : activeRunState.connection === 'reconnecting'
+              ? '正在重连'
+              : statusLabels[status],
           isRunning: status === 'streaming',
           hasRunningSessions: Object.values(runStateBySession).some(
             (run) => run.status === 'streaming',

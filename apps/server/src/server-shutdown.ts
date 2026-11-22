@@ -1,3 +1,4 @@
+import type { AgentExecutionService } from '@weave/runtime';
 import type { PanelService } from './plugin-panel-types.js';
 import type { ServerType } from '@hono/node-server';
 import type { ExtensionCoordinator } from './extension-coordinator.js';
@@ -7,6 +8,7 @@ import type { PluginAuthorityDatabase } from './plugin-authority-types.js';
 import type { PluginMarketplaceManager } from './plugin-marketplace-manager.js';
 
 export interface ServerShutdownResources {
+  readonly agentExecutionService?: Pick<AgentExecutionService, 'closeSync' | 'drain'> | undefined;
   readonly panelService?: Pick<PanelService, 'closeSync' | 'drain'> | undefined;
   readonly server?: ServerType | undefined;
   readonly coordinator?: ExtensionCoordinator | undefined;
@@ -116,12 +118,17 @@ export function createServerShutdown(options: ServerShutdownOptions): ServerShut
       authority,
       pluginMarketplaceManager,
       panelService,
+      agentExecutionService,
     } = resources;
+    agentExecutionService?.closeSync();
     panelService?.closeSync();
     installer?.closeSync();
     pluginMarketplaceManager?.closeSync();
     // Start HTTP close before cancellation. Its completion can depend on Agent SSE.
     if (server !== undefined) httpClose ??= settle(() => closeServer(server));
+    // Finish execution terminal facts before any Generation consumer is disposed.
+    if (!settledCleanup && agentExecutionService !== undefined)
+      await record(() => agentExecutionService.drain());
     if (owned !== undefined && !consumersDrained) {
       const quiesce = async () => {
         if (quiesced) return;

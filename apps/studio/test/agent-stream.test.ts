@@ -6,7 +6,7 @@ import {
   AgentStreamError,
   parseAgentEvent,
   parseSseFrame,
-  streamAgentRun,
+  streamLegacyAgentRun as streamAgentRun,
 } from '../src/features/agent/agent-stream.js';
 import type { AgentRunRequestInput, AgentRuntimeEvent } from '../src/features/agent/agent-types.js';
 

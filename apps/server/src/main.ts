@@ -1,3 +1,4 @@
+import { createAgentExecutionService, type AgentExecutionService } from '@weave/runtime';
 import { createPanelService } from './plugin-panel-service.js';
 import type { PanelService } from './plugin-panel-types.js';
 import { mkdir } from 'node:fs/promises';
@@ -165,6 +166,7 @@ export async function startServer(
   let installer: ManagedPluginInstaller | undefined;
   let pluginMarketplaceManager: PluginMarketplaceManager | undefined;
   let server: ServerType | undefined;
+  let agentExecutionService: AgentExecutionService | undefined;
   const shutdown = createServerShutdown({
     resources: () => ({
       server,
@@ -174,6 +176,7 @@ export async function startServer(
       owned,
       installer,
       pluginMarketplaceManager,
+      agentExecutionService,
     }),
     disposeHost: () => disposeServerPlugins(runtime),
     stopRuntime: () => runtime.stop(),
@@ -225,7 +228,14 @@ export async function startServer(
     await runtime.start();
     await registerServerPlugins(runtime, options.plugins);
     const sessionStore = getServerSessionStore(runtime);
-    const sessionService = createSessionService({ projectStore: projects, sessionStore });
+    const sessionService = createSessionService({
+      projectStore: projects,
+      sessionStore,
+      withSessionIdle: (sessionId, operation) =>
+        agentExecutionService === undefined
+          ? operation()
+          : agentExecutionService.withSessionIdle(sessionId, operation),
+    });
     const runnerOptions = Object.freeze({
       hostVersion: serverHostVersion,
       skillsDirectory: resolveSkillsDirectory({ ...options, databaseFile }),
@@ -318,6 +328,28 @@ export async function startServer(
     });
     assertStartupOwnership();
 
+    agentExecutionService = createAgentExecutionService({
+      runner: coordinator.runner,
+      sessionStore,
+      admit: async (sessionId) => {
+        await sessionService.assertRunnable(sessionId);
+        const allProjects = await projects.listProjects();
+        for (const project of allProjects) {
+          if (
+            (await projects.listSessionRefs(project.id)).some((ref) => ref.sessionId === sessionId)
+          )
+            return;
+        }
+        throw new Error('Execution Session is no longer attached to a Project');
+      },
+    });
+    const knownSessionIds = new Set<string>();
+    for (const project of await projects.listProjects()) {
+      for (const ref of await projects.listSessionRefs(project.id))
+        knownSessionIds.add(ref.sessionId);
+    }
+    await agentExecutionService.recover([...knownSessionIds]);
+
     let resolveListening!: () => void;
     let rejectListening!: (error: unknown) => void;
     const listening = new Promise<void>((resolve, reject) => {
@@ -330,6 +362,7 @@ export async function startServer(
           approvalBrokerService,
           panelService,
           agentRunner: coordinator.runner,
+          agentExecutionService,
           projectStore: projects,
           sessionService,
           skillCatalogService: createSkillCatalogService({

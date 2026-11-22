@@ -1,3 +1,4 @@
+import { AgentExecutionError } from '@weave/runtime';
 import type { Context, Hono } from 'hono';
 import { z } from 'zod';
 import { SessionServiceError, type SessionService } from './session-service.js';
@@ -24,13 +25,21 @@ function errorStatus(code: string): 400 | 404 | 409 | 410 | 422 | 500 | 503 {
   if (code === 'session-deleted') {
     return 410;
   }
-  if (code === 'session-archived' || code === 'workspace-session-already-attached') {
+  if (
+    code === 'execution-busy' ||
+    code === 'session-archived' ||
+    code === 'workspace-session-already-attached'
+  ) {
     return 409;
   }
   if (code === 'session-projection-invalid') {
     return 422;
   }
-  if (code === 'session-service-unavailable') {
+  if (
+    code === 'execution-closed' ||
+    code === 'execution-persistence-error' ||
+    code === 'session-service-unavailable'
+  ) {
     return 503;
   }
   return 500;
@@ -41,7 +50,11 @@ function jsonError(context: Context, code: string, message: string): Response {
 }
 
 function mapError(context: Context, error: unknown): Response {
-  if (error instanceof WorkspaceStoreError || error instanceof SessionServiceError) {
+  if (
+    error instanceof AgentExecutionError ||
+    error instanceof WorkspaceStoreError ||
+    error instanceof SessionServiceError
+  ) {
     return jsonError(context, error.code, error.message);
   }
   return jsonError(context, 'server-internal-error', 'Server request failed');

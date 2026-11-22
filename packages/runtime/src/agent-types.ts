@@ -27,6 +27,10 @@ import type { ToolRegistry } from './tool-registry.js';
 const nonEmptyStringSchema = z.string().min(1);
 
 export interface AgentRunRequest {
+  /** Internal host identity; external HTTP request schemas never accept this port. */
+  readonly executionIdentity?:
+    | { readonly executionId: string; readonly turnId: string; readonly userMessageId: string }
+    | undefined;
   readonly skills?: readonly SkillRef[] | undefined;
   readonly sessionId: string;
   readonly userMessage: UserMessage;
@@ -47,6 +51,14 @@ export interface AgentRunRequest {
  */
 export const agentRunRequestSchema: z.ZodType<AgentRunRequest> = z
   .object({
+    executionIdentity: z
+      .object({
+        executionId: nonEmptyStringSchema,
+        turnId: nonEmptyStringSchema,
+        userMessageId: nonEmptyStringSchema,
+      })
+      .strict()
+      .optional(),
     sessionId: nonEmptyStringSchema,
     userMessage: userMessageSchema,
     provider: nonEmptyStringSchema,

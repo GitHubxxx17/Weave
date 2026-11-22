@@ -7,6 +7,7 @@ import {
   ToolExecutionError,
   toolPermissionModeSchema,
   type AgentRunner,
+  type AgentExecutionService,
   type AgentRuntimeEvent,
   type Runtime,
 } from '@weave/runtime';
@@ -30,6 +31,7 @@ const agentHttpRequestSchema = z
 /** Runtime dependency injected into the Agent HTTP adapter. */
 export interface AgentAppOptions {
   readonly agentRunner?: AgentRunner | undefined;
+  readonly agentExecutionService?: AgentExecutionService | undefined;
   readonly sessionService?: SessionService | undefined;
 }
 
@@ -225,6 +227,14 @@ function createAgentEventStream(
 /** Mounts the HTTP route that exposes one Agent turn as an SSE stream. */
 export function registerAgentRoutes(app: Hono, _runtime: Runtime, options: AgentAppOptions): void {
   app.post('/agent/runs/stream', async (context: Context) => {
+    if (options.agentExecutionService !== undefined) {
+      return jsonError(
+        context,
+        409,
+        'execution-use-control-api',
+        'Use the durable execution control API',
+      );
+    }
     const parsedBody = await readAgentRequest(context);
     if (parsedBody instanceof Response) {
       return parsedBody;

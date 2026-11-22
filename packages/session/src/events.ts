@@ -13,6 +13,10 @@ import {
   turnRequestMetadataSchema,
 } from '@weave/protocol';
 import { z } from 'zod';
+import {
+  executionAcceptedPayloadSchema,
+  executionFinishedPayloadSchema,
+} from './execution-events.js';
 
 const nonEmptyStringSchema = z.string().min(1);
 const positiveSequenceSchema = z.number().int().positive().safe();
@@ -58,6 +62,7 @@ const turnStartedPayloadSchema = z
   .object({
     turnId: nonEmptyStringSchema,
     userMessageId: nonEmptyStringSchema.optional(),
+    executionId: nonEmptyStringSchema.optional(),
     request: turnRequestMetadataSchema.optional(),
   })
   .passthrough();
@@ -162,6 +167,8 @@ const promptSectionContentPayloadSchema = z
  * The durable facts supported by the first Session Event Store slice.
  */
 export const sessionEventPayloadSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('execution.accepted'), payload: executionAcceptedPayloadSchema }),
+  z.object({ type: z.literal('execution.finished'), payload: executionFinishedPayloadSchema }),
   z.object({ type: z.literal('skill.content'), payload: skillContentPayloadSchema }),
   z.object({ type: z.literal('skill.catalog-applied'), payload: skillCatalogAppliedPayloadSchema }),
   z.object({ type: z.literal('skill.requested'), payload: skillRequestedPayloadSchema }),
@@ -279,6 +286,22 @@ export type SessionEventType = NewSessionEvent['type'];
 export const newSessionEventSchema = z.union([sessionEventPayloadSchema, pluginNewEventSchema]);
 
 const persistedEventSchemas = [
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('execution.accepted'),
+    payload: executionAcceptedPayloadSchema,
+  }),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('execution.finished'),
+    payload: executionFinishedPayloadSchema,
+  }),
   z.object({
     eventId: nonEmptyStringSchema,
     sessionId: nonEmptyStringSchema,

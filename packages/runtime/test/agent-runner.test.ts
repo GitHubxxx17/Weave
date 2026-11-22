@@ -126,6 +126,54 @@ const validRequest: AgentRunRequest = {
 };
 
 describe('Agent Runner contracts', () => {
+  it('uses host-preallocated identities and persists interrupted model output once', async () => {
+    const store = createInMemorySessionEventStore();
+    const controller = new AbortController();
+    const runner = createAgentRunner({
+      sessionStore: store,
+      llm: {
+        async *stream(): AsyncIterable<StreamEvent> {
+          yield { type: 'reasoning-delta', text: 'thinking' };
+          yield { type: 'text-delta', text: 'partial' };
+          controller.abort();
+          throw abortError();
+        },
+      },
+    });
+    await expect(
+      collect(
+        runner.run({
+          ...validRequest,
+          signal: controller.signal,
+          executionIdentity: {
+            executionId: 'execution',
+            turnId: 'owned-turn',
+            userMessageId: 'owned-user',
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    const events = await store.read('session-1');
+    expect(events.find((event) => event.type === 'turn.started')).toMatchObject({
+      payload: { turnId: 'owned-turn', userMessageId: 'owned-user', executionId: 'execution' },
+    });
+    expect(
+      projectSession(events).messages.map(({ messageId, message }) => ({ messageId, message })),
+    ).toMatchObject([
+      { messageId: 'owned-user', message: validRequest.userMessage },
+      {
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'reasoning', text: 'thinking' },
+            { type: 'text', text: 'partial' },
+          ],
+        },
+      },
+    ]);
+    expect(projectSession(events).messages).toHaveLength(2);
+  });
+
   it('validates a provider-independent Agent Run request', () => {
     expect(agentRunRequestSchema.parse(validRequest)).toMatchObject({
       sessionId: 'session-1',
@@ -1384,7 +1432,12 @@ describe('Agent Runner contracts', () => {
       code: 'agent-stream-protocol',
     });
     const projection = projectSession(await store.read('session-1'));
-    expect(projection.messages.map(({ message }) => message)).toEqual([validRequest.userMessage]);
+    expect(projection.messages.map(({ message }) => message)).toEqual([
+      validRequest.userMessage,
+      ...(_name === 'missing finish'
+        ? [{ role: 'assistant', content: [{ type: 'text', text: 'partial' }] }]
+        : []),
+    ]);
     expect(projection.turns[0]).toMatchObject({
       status: 'failed',
       steps: [{ status: 'failed' }],
@@ -1975,7 +2028,7 @@ describe('Agent Runner contracts', () => {
     await baseStore.close();
   });
 
-  it('preserves failed terminal events as one ordered batch without an assistant message', async () => {
+  it('preserves failed terminal events and partial output as one ordered batch', async () => {
     const recordingStore = recordingSessionEventStore();
     const runner = createAgentRunner({
       llm: recordingClient(
@@ -1999,8 +2052,9 @@ describe('Agent Runner contracts', () => {
       initializationBatch[1]?.type !== 'turn.started' ||
       initializationBatch[2]?.type !== 'step.started' ||
       failedTerminalBatch === undefined ||
-      failedTerminalBatch[0]?.type !== 'step.completed' ||
-      failedTerminalBatch[1]?.type !== 'turn.completed'
+      failedTerminalBatch[0]?.type !== 'message.created' ||
+      failedTerminalBatch[1]?.type !== 'step.completed' ||
+      failedTerminalBatch[2]?.type !== 'turn.completed'
     ) {
       throw new Error('Expected initialization and failed terminal append batches');
     }
@@ -2010,7 +2064,7 @@ describe('Agent Runner contracts', () => {
     expect(recordingStore.batches.map((batch) => batch.map(({ type }) => type))).toEqual([
       ['session.created'],
       ['message.created', 'turn.started', 'step.started'],
-      ['step.completed', 'turn.completed'],
+      ['message.created', 'step.completed', 'turn.completed'],
     ]);
     expect(initializationBatch[2]).toEqual({
       type: 'step.started',
@@ -2023,6 +2077,13 @@ describe('Agent Runner contracts', () => {
       },
     });
     expect(failedTerminalBatch).toEqual([
+      {
+        type: 'message.created',
+        payload: {
+          messageId: expect.any(String),
+          message: { role: 'assistant', content: [{ type: 'text', text: 'partial' }] },
+        },
+      },
       {
         type: 'step.completed',
         payload: {
@@ -2041,10 +2102,7 @@ describe('Agent Runner contracts', () => {
         },
       },
     ]);
-    expect(failedTerminalBatch).not.toContainEqual(
-      expect.objectContaining({ type: 'message.created' }),
-    );
-    expect(projectSession(await recordingStore.store.read('session-1')).messages).toHaveLength(1);
+    expect(projectSession(await recordingStore.store.read('session-1')).messages).toHaveLength(2);
 
     await recordingStore.store.close();
   });
