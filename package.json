@@ -30,7 +30,12 @@
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
     "marketplace:generate": "pnpm --filter @weave/server... build && node apps/server/dist/marketplace-cli.js generate",
     "marketplace:check": "pnpm --filter @weave/server... build && node apps/server/dist/marketplace-cli.js check",
-    "marketplace:entry": "pnpm --filter @weave/server... build && node apps/server/dist/marketplace-cli.js entry"
+    "marketplace:entry": "pnpm --filter @weave/server... build && node apps/server/dist/marketplace-cli.js entry",
+    "plugin:create": "pnpm --filter @weave/plugin-cli... build && node packages/plugin-cli/dist/cli.js create",
+    "plugin:validate": "pnpm --filter @weave/plugin-cli... build && node packages/plugin-cli/dist/cli.js validate",
+    "plugin:build": "pnpm --filter @weave/plugin-cli... build && node packages/plugin-cli/dist/cli.js build",
+    "plugin:pack": "pnpm --filter @weave/plugin-cli... build && node packages/plugin-cli/dist/cli.js pack",
+    "plugin:verify": "pnpm --filter @weave/plugin-cli... --filter @weave/server... build && node apps/server/test/acceptance/plugin-cli.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

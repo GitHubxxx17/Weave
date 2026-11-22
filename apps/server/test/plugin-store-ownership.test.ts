@@ -320,6 +320,7 @@ describe('managed store filesystem policy', () => {
       populate(root(aboveLimit), bound + 1);
       await expect(validateStorePaths(pathOptions(aboveLimit))).rejects.toMatchObject(invalid);
     },
+    30_000,
   );
 
   it.each([

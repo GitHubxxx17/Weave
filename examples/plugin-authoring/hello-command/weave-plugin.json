@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "entry": "index.mjs",
+  "manifest": {
+    "id": "hello-command",
+    "name": "Hello Command",
+    "version": "0.1.0",
+    "apiVersion": "1.0.0",
+    "description": "A prompt command using Weave's injected SDK.",
+    "capabilities": ["command"],
+    "contributes": { "commands": ["hello-command"] },
+    "permissions": []
+  }
+}

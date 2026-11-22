@@ -1,0 +1,29 @@
+{
+  "name": "@weave/plugin-cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "weave-plugin": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint src test",
+    "test": "vitest run --root ../.. --config vitest.config.ts packages/plugin-cli/test --maxWorkers=1",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@weave/plugin": "workspace:*",
+    "@weave/plugin-host": "workspace:*",
+    "@types/node": "24.10.1",
+    "typescript": "5.9.3",
+    "esbuild": "0.28.2",
+    "zod": "4.6.7"
+  }
+}

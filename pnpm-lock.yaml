@@ -224,6 +224,27 @@ importers:
         specifier: workspace:*
         version: link:../session
 
+  packages/plugin-cli:
+    dependencies:
+      '@types/node':
+        specifier: 24.10.1
+        version: 24.10.1
+      '@weave/plugin':
+        specifier: workspace:*
+        version: link:../plugin
+      '@weave/plugin-host':
+        specifier: workspace:*
+        version: link:../plugin-host
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
+
   packages/plugin-host:
     dependencies:
       '@weave/plugin':

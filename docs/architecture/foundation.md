@@ -1,5 +1,13 @@
 # Weave Foundation Architecture
 
+The repository-local Plugin developer CLI is an independent leaf consuming only
+Plugin and Plugin-host. It scaffolds typed Tool/Command or no-entry Skills projects,
+checks the actual SDK, builds single ESM payloads and packs verified directories.
+It does not install dependencies, execute author configs or change trust. Source,
+payload and output-container contracts are defined before implementation in
+[ADR 0008](../adr/0008-plugin-developer-tooling.md) and the
+[CLI design](../superpowers/specs/2026-11-22-plugin-developer-cli-design.md).
+
 Declarative Skill packages extend installation with a strict schema-2 descriptor,
 `host:declarative` and no executable entry. The host reads bounded text snapshots
 and adapts them to the existing governed Skills seam; exact trust, independent
@@ -17,8 +25,8 @@ per-generation/per-turn pins and required audit. This is instruction data;
 execution and approval stay under existing Runtime policy. The [usage guide](../learning/2026-11-22-skills.md) covers authoring, selection,
 progressive resources, durable provenance and exact retries. The
 [text-package guide](../learning/2026-11-22-declarative-skill-packages.md) covers
-no-entry distribution; developer CLI and custom panels remain separate following
-topics. Current verified Codex, Harness and Kimi
+no-entry distribution; the developer CLI is the independent leaf described above,
+and custom panels follow separately. Current verified Codex, Harness and Kimi
 references and official-content choices are recorded in the
 [reference audit](../learning/2026-11-22-official-plugin-references.md).
 

@@ -15,6 +15,11 @@ explicit source review and separate trust/activation flow.
 
 ## Prepare the plugin
 
+Use the repository-local [developer CLI](2026-11-22-plugin-developer-cli.md)
+for Tool/Command/Skills scaffolding and verified build/pack directories. Choose
+the reported `payload` child as the GitHub subdirectory; the external local receipt
+is not part of the payload and does not establish remote provenance.
+
 Build the plugin in the developer repository before requesting collection. The
 selected directory must contain a strict `weave-plugin.json` and either an already
 bundled schema-1 `.js`/`.mjs` entry or a schema-2 declarative Skills payload with

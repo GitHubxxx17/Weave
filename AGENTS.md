@@ -69,9 +69,12 @@ Weave 对标 Codex、Kiro 和 DeepSeek Harness。设计、实现、交互与验�
 Tests belong in each package's or app's `test/` directory, not in `src/`.
 Internal dependencies follow `protocol -> {llm, session} -> runtime -> plugin -> {plugin-builtins, plugin-host} -> server -> desktop`;
 `workspace` has no internal dependencies and is consumed only by `server`.
-`plugin-host` depends only on `plugin` and is consumed only by `server`; it
+`plugin-host` depends only on `plugin` and is consumed by `server` and the
+independent developer-tooling leaf `plugin-cli`; it
 reads and loads plugins from disk but knows nothing of the Runtime, HTTP, or
-any Agent behavior.
+any Agent behavior. `plugin-cli` depends only internally on `plugin` and
+`plugin-host`; it validates/builds local artifacts and knows no Runtime execution,
+HTTP, Session or installation authority.
 `studio` imports no `@weave/*` package and no Node or Electron module; it
 reaches the Runtime only through the Server HTTP/SSE contract. Lower layers
 must not import higher layers. Any cross-package change must update the
