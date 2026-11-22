@@ -87,11 +87,11 @@ const builtinSchema = z
     version,
   })
   .readonly();
-const communitySchema = z
+const githubSchema = z
   .strictObject({
     ...fields,
     kind: z.literal('github'),
-    category: z.literal('community'),
+    category: z.enum(['official', 'community']),
     publisher: z.string().min(1).max(300),
     releases: z.array(releaseSchema).min(1).max(20).readonly(),
   })
@@ -104,7 +104,7 @@ export const pluginMarketplaceSchema = z
     communityStatus: z.enum(['unconfigured', 'ready', 'unavailable']),
     indexSource: marketplaceIndexSourceSchema.optional(),
     entries: z
-      .array(z.discriminatedUnion('kind', [builtinSchema, communitySchema]))
+      .array(z.discriminatedUnion('kind', [builtinSchema, githubSchema]))
       .max(105)
       .readonly(),
   })
@@ -114,6 +114,9 @@ export const pluginMarketplaceSchema = z
       if (ids.has(entry.id)) ctx.addIssue({ code: 'custom', message: 'Duplicate plugin ID' });
       ids.add(entry.id);
       if (entry.kind === 'github') {
+        if (entry.category === 'official' && entry.publisher !== 'Weave') {
+          ctx.addIssue({ code: 'custom', message: 'Invalid official publisher' });
+        }
         const versions = new Set<string>();
         for (const release of entry.releases) {
           if (release.manifest.id !== entry.id || versions.has(release.manifest.version)) {

@@ -56,6 +56,38 @@ const index = () => ({ schemaVersion: 1, plugins: [plugin] });
 const headers = { Host: 'localhost', 'Content-Type': 'application/json' };
 
 describe('marketplace index sources', () => {
+  it('rejects a future protected release as a whole index and retains only the last good snapshot', async () => {
+    const protectedEntry = structuredClone(plugin);
+    protectedEntry.id = protectedEntry.releases[0]!.manifest.id = 'weave-official-skills';
+    protectedEntry.releases[0]!.manifest.version = '9999.0.0';
+    const futureIndex = { schemaVersion: 1, plugins: [plugin, protectedEntry] };
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(Response.json(index()))
+      .mockResolvedValueOnce(Response.json(futureIndex))
+      .mockResolvedValueOnce(Response.json(futureIndex));
+    const { manager } = await fixture(fetch);
+    await manager.add({ name: 'Weave', url: 'https://catalog.example/index.json' });
+    const id = manager.listSources().sources[1]!.id;
+    await manager.refresh(id);
+    await manager.refresh(id);
+    expect(manager.listSources().sources[1]).toMatchObject({
+      status: 'unavailable',
+      stale: true,
+      errorCode: 'invalid-index',
+    });
+    expect(manager.catalog(id).catalog.plugins).toEqual([plugin]);
+    await manager.add({ name: 'Weave future', url: 'https://catalog.example/future.json' });
+    const futureId = manager.listSources().sources[2]!.id;
+    await manager.refresh(futureId);
+    expect(manager.listSources().sources[2]).toMatchObject({
+      status: 'unavailable',
+      stale: false,
+      errorCode: 'invalid-index',
+    });
+    expect(manager.catalog(futureId).catalog.plugins).toEqual([]);
+  });
+
   it('persists add/remove facts, canonicalizes GitHub URLs and never fetches on configuration or reads', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>();
     const { manager, settingsFile } = await fixture(fetch);

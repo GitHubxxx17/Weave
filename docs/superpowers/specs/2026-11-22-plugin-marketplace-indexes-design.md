@@ -2,6 +2,12 @@
 
 Date: 2026-11-22. Status: approved product direction; implementation contract.
 
+The [official Skills extension](2026-11-22-official-skills-design.md) adds host-owned
+exact release attribution to this index contract. Input stays category-free; the
+Server may project GitHub official/community only after complete source and manifest
+matching. Builtin versus GitHub kind still controls installation. Unknown protected
+releases invalidate the whole index and retain any last-good cached snapshot.
+
 The owner approved borrowing DeepSeek Harness's index mechanism after reviewing
 its current implementation. This extends the in-progress Stage 6.5 marketplace,
 not the separately preserved Stage 6.4 acquisition change. No external publication,
@@ -47,7 +53,8 @@ Keep legacy `pluginMarketplace` cached catalog support for createApp callers.
 Add an optional `pluginMarketplaceManager` to the app options. Its service owns:
 
 - A built-in `weave` source: actual code-owned official builtins plus the checked-in
-  `marketplace/index.json` community directory. The directory starts honestly empty.
+  `marketplace/index.json` directory. It started empty; distributed official entries
+  require an independently verified real payload release and the matching host table.
 - An `operator` source when the existing absolute catalog option/environment is set.
 - At most ten user-added remote sources. Canonical URL identity prevents duplicate
   additions. HTTPS only, no credentials or fragments; normalize GitHub blob URLs

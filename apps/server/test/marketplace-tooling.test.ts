@@ -53,6 +53,20 @@ function submission(id = 'community-notes', version = '1.0.0') {
 // Removing deterministic sorting, shared schema validation or bounded file reads
 // would make the resulting published catalog unsafe or dependent on local order.
 describe('marketplace index generation', () => {
+  it('refuses an unknown protected identity in submission writes and generator write/check without replacing files', async () => {
+    const paths = await fixture();
+    const entry = submission('weave-official-skills', '9999.0.0');
+    const submissionFile = join(paths.submissionsDirectory, `${entry.id}.json`);
+    await expect(writeMarketplaceSubmission(submissionFile, entry)).rejects.toThrow();
+    await expect(readFile(submissionFile)).rejects.toMatchObject({ code: 'ENOENT' });
+    await writeFile(submissionFile, JSON.stringify(entry));
+    await writeFile(paths.outputFile, 'preserved');
+    for (const mode of ['write', 'check'] as const) {
+      await expect(generateMarketplaceIndex({ ...paths, mode })).rejects.toThrow();
+      expect(await readFile(paths.outputFile, 'utf8')).toBe('preserved');
+    }
+  });
+
   it('generates an honest empty catalog and ignores the submission guide', async () => {
     const paths = await fixture();
     await writeFile(join(paths.submissionsDirectory, 'README.md'), 'submission instructions');
@@ -184,6 +198,29 @@ describe('marketplace index generation', () => {
 });
 
 describe('preparing a marketplace submission', () => {
+  it('rejects an acquired but unrecognized protected manifest through shared admission and releases the scratch source', async () => {
+    const { root } = await fixture();
+    const payload = join(root, 'protected-skills');
+    await writeDeclarativeSkillFixture(payload, { id: 'weave-official-skills' });
+    let released = false;
+    const acquirer: GithubPluginAcquirer = {
+      async withSource(_source, use) {
+        try {
+          return await use(payload, new AbortController().signal);
+        } finally {
+          released = true;
+        }
+      },
+    };
+    await expect(
+      prepareMarketplaceSubmission(
+        { name: 'Weave', description: 'Skills', publisher: 'Weave', tags: [], source: source() },
+        { acquirer },
+      ),
+    ).rejects.toThrow();
+    expect(released).toBe(true);
+  });
+
   it('inspects a fixed no-entry Skill source and preserves its full manifest in schema-1 submissions', async () => {
     const { root } = await fixture();
     const payload = join(root, 'skills-plugin');

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "local-example",
+  "label": "Local example",
+  "transport": "stdio",
+  "command": "/absolute/path/to/node",
+  "args": ["/absolute/path/to/mcp-server.mjs", "--mode", "local"],
+  "cwd": "/absolute/path/to/workspace",
+  "env": {
+    "SERVICE_TOKEN": {
+      "fromHostEnv": "MY_SERVICE_TOKEN"
+    }
+  }
+}

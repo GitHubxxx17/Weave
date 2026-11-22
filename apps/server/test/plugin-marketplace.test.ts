@@ -13,6 +13,8 @@ import {
   loadPluginMarketplaceCatalog,
   maxPluginMarketplaceBytes,
   projectPluginMarketplace,
+  pluginMarketplaceIndexSchema,
+  pluginMarketplaceResponseSchema,
 } from '../src/plugin-marketplace.js';
 import { writeDeclarativeSkillFixture } from './support/declarative-skill-fixture.js';
 import { startServer } from '../src/main.js';
@@ -159,6 +161,54 @@ describe('GET /plugins/marketplace', () => {
 });
 
 describe('static community marketplace', () => {
+  it('rejects an unrecognized protected release across schema, local load and typed projection', async () => {
+    const entry = plugin();
+    entry.id = entry.releases[0]!.manifest.id = 'weave-official-skills';
+    const value = { schemaVersion: 1, plugins: [entry] };
+    expect(pluginMarketplaceIndexSchema.safeParse(value).success).toBe(false);
+    const { file } = await fileFixture(value);
+    expect(await loadPluginMarketplaceCatalog(file)).toEqual({
+      communityStatus: 'unavailable',
+      plugins: [],
+    });
+    expect(() =>
+      projectPluginMarketplace({ communityStatus: 'ready', plugins: [entry] }, [], '1.0.0'),
+    ).toThrow();
+  });
+
+  it('keeps Weave display claims community and validates official GitHub response publishers', () => {
+    const entry = plugin();
+    entry.id = entry.releases[0]!.manifest.id = 'weave-community-skills';
+    entry.name = entry.publisher = entry.releases[0]!.manifest.name = 'Weave';
+    const response = projectPluginMarketplace(
+      { communityStatus: 'ready', plugins: [entry] },
+      [],
+      '1.0.0',
+    );
+    expect(response.entries[0]).toMatchObject({
+      kind: 'github',
+      category: 'community',
+      publisher: 'Weave',
+    });
+    const official = {
+      ...response,
+      entries: [{ ...response.entries[0]!, category: 'official', publisher: 'Weave' }],
+    };
+    expect(pluginMarketplaceResponseSchema.safeParse(official).success).toBe(true);
+    expect(
+      pluginMarketplaceResponseSchema.safeParse({
+        ...official,
+        entries: [{ ...official.entries[0], publisher: 'Other' }],
+      }).success,
+    ).toBe(false);
+    expect(
+      pluginMarketplaceResponseSchema.safeParse({
+        ...official,
+        entries: [{ ...official.entries[0], category: 'verified' }],
+      }).success,
+    ).toBe(false);
+  });
+
   it('sorts fixed releases numerically and checks engine, API and host compatibility', async () => {
     const entry = plugin();
     const base = entry.releases[0]!;

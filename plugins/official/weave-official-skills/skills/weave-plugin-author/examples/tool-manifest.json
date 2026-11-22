@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "entry": "index.mjs",
+  "manifest": {
+    "id": "hello-tool",
+    "name": "hello-tool",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "host": "in-process",
+    "capabilities": ["tool"],
+    "contributes": {
+      "tools": ["hello-tool"]
+    },
+    "permissions": []
+  }
+}

@@ -132,8 +132,66 @@ describe('marketplace discovery client', () => {
     );
   });
 
+  it('accepts host-attributed official GitHub releases while preserving custom index provenance', async () => {
+    const official = {
+      ...entry,
+      category: 'official',
+      publisher: 'Weave',
+    };
+    const discovery = {
+      ...catalog,
+      indexSource: { id: 'team', name: 'Team mirror', url: 'https://example.com/index.json' },
+      entries: [official],
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(discovery)));
+    const result = await fetchPluginMarketplace(undefined, 'team');
+    expect(result.entries[0]).toEqual(official);
+    expect(result.entries[0]?.kind).toBe('github');
+    expect(result.indexSource).toEqual({
+      id: 'team',
+      name: 'Team mirror',
+      url: 'https://example.com/index.json',
+    });
+  });
+
+  it('keeps community attribution when display metadata names Weave', () => {
+    const result = pluginMarketplaceSchema.parse({
+      ...catalog,
+      entries: [{ ...entry, publisher: 'Weave', name: 'Weave maintained plugin' }],
+    });
+    expect(result.entries[0]?.category).toBe('community');
+  });
+
+  it('preserves the closed builtin entry contract', () => {
+    const builtin = {
+      kind: 'builtin',
+      category: 'official',
+      id: 'tool-registry',
+      name: 'Tools',
+      description: 'Builtin tools',
+      publisher: 'Weave',
+      tags: ['Tools'],
+      version: '1.0.0',
+    };
+    expect(pluginMarketplaceSchema.parse({ ...catalog, entries: [builtin] }).entries).toEqual([
+      builtin,
+    ]);
+    for (const invalid of [
+      { ...builtin, category: 'community' },
+      { ...builtin, publisher: 'Developer' },
+      { ...builtin, releases: entry.releases },
+    ]) {
+      expect(pluginMarketplaceSchema.safeParse({ ...catalog, entries: [invalid] }).success).toBe(
+        false,
+      );
+    }
+  });
+
   it.each([
     { ...entry, category: 'official' },
+    { ...entry, category: 'verified', publisher: 'Weave' },
+    { ...entry, category: 'official', publisher: 'Weave', verified: true },
+    { ...entry, category: 'official', publisher: 'Weave', version: '1.0.0' },
     { ...entry, id: 'another-plugin' },
     { ...entry, releases: [entry.releases[0], entry.releases[0]] },
     { ...entry, releases: [{ ...entry.releases[0], source: { ...source, commit: 'main' } }] },
