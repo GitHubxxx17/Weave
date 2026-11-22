@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, writeFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm, symlink, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
+import { workspaceObjectIdentity } from '../src/workspace-mutation.js';
 import {
   createWorkspacePolicy,
   restoreFileSnapshot,
@@ -189,4 +190,18 @@ it('refuses missing successful file identity and a same-byte replacement inode',
     status: 'conflict',
     reason: 'file-identity-changed',
   });
+  expect(await readFile(join(f.root, 'a'), 'utf8')).toBe('after');
+});
+
+it('distinguishes reused device/inode pairs by birth time and rejects missing incarnation evidence', async () => {
+  const f = await fixture();
+  const metadata = await stat(join(f.root, 'a'), { bigint: true });
+  const original = workspaceObjectIdentity(metadata);
+  const reused = workspaceObjectIdentity({ ...metadata, birthtimeNs: metadata.birthtimeNs + 1n });
+  expect(reused).not.toBe(original);
+  expect(() => workspaceObjectIdentity({ dev: metadata.dev, ino: metadata.ino })).toThrow();
+  expect(() => workspaceObjectIdentity({ ...metadata, birthtimeNs: 0n })).toThrow();
+  expect(() => workspaceObjectIdentity({ ...metadata, birthtimeNs: -1n })).toThrow();
+  await writeFile(join(f.root, 'a'), 'later');
+  expect(await workspaceFileIdentity(join(f.root, 'a'))).toBe(f.snapshot.fileIdentity);
 });

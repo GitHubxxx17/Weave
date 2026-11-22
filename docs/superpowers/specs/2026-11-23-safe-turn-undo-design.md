@@ -8,8 +8,14 @@ semantics in the 2026-11-19 draft while preserving its legacy event reads.
 Only a terminal turn of a live Session attached to the requested Project can be
 reviewed or undone. Server resolves that relation before reading file contents or
 mutating files. A changed Project root is rejected by a persisted root identity
-(canonical root, device and inode digest). Restores cover built-in edit_file and
-write_file only; shell, MCP, plugin side effects and directories are outside scope.
+(canonical root, device, inode and positive birth-time nanosecond digest). File
+identity also includes birth time, so reuse of a deleted file's device/inode pair
+does not make the new file eligible for restoration. Missing/nonpositive birth
+time fails capture/restore closed. A filesystem that substitutes change time for
+birth time may conservatively make later writes unavailable; no OS inode
+generation or atomic compare-and-swap guarantee is claimed. Restores cover built-in
+edit_file and write_file only; shell, MCP, plugin side effects and directories are
+outside scope.
 
 Runtime writes retain the optional best-effort pre-write hook. A new required
 write-intent hook resolves a canonical root-relative target path and must append
