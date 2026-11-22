@@ -7,7 +7,10 @@ privilege. Studio mirrors that category but routes installable GitHub releases
 through normal preview/import/review/activation. Distributed official IDs are
 protected only in index admission, not globally reserved from installation. The
 [official Skills design](../superpowers/specs/2026-11-22-official-skills-design.md)
-records these cross-app contracts before implementation.
+records these cross-app contracts before implementation. The first packaged
+release pins content commit `5809b6a8fe2d987735a3dbd782df1bff1fd5af43` and was
+acquired through the real GitHub transport before submission/index generation;
+see the [release record](../learning/2026-11-22-official-skills.md).
 
 Declarative custom panels add governed closed JSON in Plugin, immutable current-only
 binding and durable-prefix projection in Server, and independent HTTP validation

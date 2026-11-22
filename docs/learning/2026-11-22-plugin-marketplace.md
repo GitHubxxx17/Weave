@@ -7,8 +7,10 @@
 ## 使用与维护目录
 
 默认的 Weave 目录来自仓库中的 `marketplace/index.json`，社区投稿保存在
-`marketplace/submissions/`，通过生成工具整理和校验。初始社区列表为空，不列出
-未实际发布的插件。开发者投稿流程见 [发布指南](plugin-marketplace-publishing.md)。
+`marketplace/submissions/`，通过生成工具整理和校验。默认目录已收录
+`weave-official-skills@1.0.0`，提供使用指南、插件开发、技能创作和 MCP 配置四项
+可单独选择的技能；固定来源与校验见[官方技能指南](2026-11-22-official-skills.md)。
+社区列表仍为空。开发者投稿流程见 [发布指南](plugin-marketplace-publishing.md)。
 
 发现页支持管理多个索引源：添加 HTTPS JSON 地址或 GitHub 文件地址，切换来源后
 显式刷新，才会读取远程目录。添加与移除来源的配置以追加记录持久保存；刷新失败

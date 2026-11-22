@@ -124,7 +124,28 @@ const officialMarketplacePolicy = createOfficialMarketplacePolicy([
     description: 'Weave 维护的使用指南、插件开发、技能创作与 MCP 配置技能。',
     publisher: 'Weave',
     tags: ['Weave', '技能', '开发指南'],
-    releases: [],
+    releases: [
+      {
+        manifest: {
+          id: 'weave-official-skills',
+          name: 'Weave 官方使用与开发指南',
+          version: '1.0.0',
+          apiVersion: '1.0.0',
+          description: 'Weave 产品使用、插件开发、Skills 创作与本地 MCP 的版本化指南。',
+          host: 'declarative',
+          capabilities: ['skill'],
+          contributes: {
+            skills: ['weave-guide', 'weave-plugin-author', 'weave-skill-author', 'weave-mcp-guide'],
+          },
+          permissions: [],
+        },
+        source: {
+          repository: 'https://github.com/githubxxx17/weave',
+          commit: '5809b6a8fe2d987735a3dbd782df1bff1fd5af43',
+          subdirectory: 'plugins/official/weave-official-skills',
+        },
+      },
+    ],
   },
 ]);
 
