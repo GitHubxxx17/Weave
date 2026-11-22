@@ -391,12 +391,6 @@ describe('managed plugin public errors', () => {
         ] as const,
     ),
     [
-      new PluginAuthorityError('plugin-authority-invalid', privatePath),
-      400,
-      'plugin-invalid-request',
-      'Invalid managed plugin request.',
-    ],
-    [
       new PluginAuthorityError('plugin-authority-not-found', privatePath),
       404,
       'plugin-authority-not-found',
@@ -447,6 +441,7 @@ describe('managed plugin public errors', () => {
     ),
     ...[
       new PluginArtifactError('plugin-artifact-io', privatePath),
+      new PluginAuthorityError('plugin-authority-invalid', privatePath),
       new PluginAuthorityError('plugin-authority-protocol', privatePath),
       new PluginAuthorityError('plugin-authority-storage', privatePath),
       new ExplicitLocalAuthorityError(new Error(privatePath)),
@@ -468,6 +463,22 @@ describe('managed plugin public errors', () => {
       code,
       message,
     );
+  });
+
+  it('reports invalid prepared import evidence as a server failure after request validation', async () => {
+    const { app, installer } = fixture();
+    installer.import.mockRejectedValueOnce(
+      new ManagedCommitFailure(new PluginAuthorityError('plugin-authority-invalid', privatePath), [
+        new Error(privatePath),
+      ]),
+    );
+    await expectError(
+      await app.request(managed + '/import', post(importBody)),
+      500,
+      'plugin-management-failed',
+      'Managed plugin management failed.',
+    );
+    expect(installer.import).toHaveBeenCalledTimes(1);
   });
 
   it('reports a malformed internal catalog with the generic fixed error', async () => {

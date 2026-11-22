@@ -126,8 +126,6 @@ function publicCode(failure: unknown): keyof typeof issues {
       case 'plugin-authority-activation-required':
       case 'plugin-authority-busy':
         return error.code;
-      case 'plugin-authority-invalid':
-        return 'plugin-invalid-request';
       case 'plugin-authority-closed':
         return 'plugin-installer-unavailable';
     }
