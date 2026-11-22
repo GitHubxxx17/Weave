@@ -51,6 +51,7 @@ export type ManagedMutationStep<Replay, Saved> =
 
 type ManagedAttributedFailure = ExtensionIdentity & {
   readonly sourceId: string;
+  readonly failureKind: Exclude<ManagedApplicationFailureKind, 'adoption'>;
   readonly cause: unknown;
 };
 
@@ -550,19 +551,19 @@ export function createExtensionCoordinator(
       sourceId: string,
       item: ExtensionIdentity,
       reason: unknown,
-      original?: { cause: unknown },
+      attribution?: Pick<ManagedAttributedFailure, 'cause' | 'failureKind'>,
     ): void {
       const keys = excluded.get(sourceId)!;
       if (keys.has(item.identity)) throw new Error('Extension exclusions must increase on retry');
       keys.add(item.identity);
       const { pluginId, identity } = item;
-      if (original !== undefined)
+      if (attribution !== undefined)
         diagnostics?.attributed.push({
           sourceId,
           pluginId,
           identity,
           ...originOf(item),
-          cause: original.cause,
+          ...attribution,
         });
       failures.push({
         sourceId,
@@ -578,7 +579,11 @@ export function createExtensionCoordinator(
 
     type OwnedItem = { sourceId: string; item: PreparedExtensionItem };
 
-    function attribute(items: readonly OwnedItem[], original: unknown): void {
+    function attribute(
+      items: readonly OwnedItem[],
+      original: unknown,
+      failureKind: ManagedAttributedFailure['failureKind'],
+    ): void {
       if (authorityMarker(original) !== undefined) throw original;
       const reason = items.reduce(
         (current, { item }) => item.normalizeError?.(current) ?? current,
@@ -594,7 +599,7 @@ export function createExtensionCoordinator(
         throw reason;
       }
       const { sourceId, item } = blamed[0]!;
-      exclude(sourceId, item, reason, { cause: original });
+      exclude(sourceId, item, reason, { cause: original, failureKind });
     }
 
     function excludeUnready(items: readonly OwnedItem[]): boolean {
@@ -699,7 +704,10 @@ export function createExtensionCoordinator(
                 identityFailure = { ...failure, sourceId: source.id };
                 break;
               }
-              exclude(source.id, failure, failure.error, { cause: failure.error });
+              exclude(source.id, failure, failure.error, {
+                cause: failure.error,
+                failureKind: 'preparation',
+              });
             }
             if (identityFailure !== undefined) break;
           }
@@ -712,7 +720,7 @@ export function createExtensionCoordinator(
             } catch (original: unknown) {
               if (authorityMarker(original) !== undefined) throw original;
               checkIteration();
-              attribute(items, original);
+              attribute(items, original, 'preparation');
               continue;
             }
             checkIteration();
@@ -772,7 +780,7 @@ export function createExtensionCoordinator(
                 } catch (original: unknown) {
                   if (authorityMarker(original) !== undefined) throw original;
                   checkIteration();
-                  attribute(items, original);
+                  attribute(items, original, 'publication');
                   continue;
                 }
                 activeByGeneration.set(next.id, nextMembers);

@@ -1,5 +1,11 @@
 import { createServer } from 'node:http';
-import { PluginError, toolsExtensionPoint, type KernelPlugin } from '@weave/plugin';
+import { createMockLlmClient } from '@weave/llm';
+import {
+  llmProvidersExtensionPoint,
+  PluginError,
+  toolsExtensionPoint,
+  type KernelPlugin,
+} from '@weave/plugin';
 import { ExplicitLocalAuthorityError } from '@weave/plugin-host';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
@@ -60,6 +66,7 @@ class FixtureSource {
   recheckValid = true;
   ready = true;
   includeInstanceId = false;
+  includeProvider = false;
   origin: ExtensionIdentity['origin'];
   managedIdentity: { readonly digest: string; readonly activationSequence: number } | undefined;
 
@@ -125,17 +132,31 @@ class FixtureSource {
         let disposal: Promise<void> | undefined;
         const dispose = () => (disposal ??= resourceDisposer());
         const toolName = this.id.replaceAll('-', '_');
+        const providerId = this.includeProvider ? this.id : undefined;
         const plugin: KernelPlugin = {
           manifest: {
             id: this.id,
             name: this.id,
             version: '1.0.0',
             apiVersion: '1.0.0',
-            capabilities: ['tool'],
-            contributes: { tools: [toolName] },
+            capabilities: providerId === undefined ? ['tool'] : ['tool', 'llm-provider'],
+            contributes: {
+              tools: [toolName],
+              ...(providerId === undefined ? {} : { providers: [providerId] }),
+            },
           },
           async setup(env) {
             await onSetup?.();
+            if (providerId !== undefined) {
+              env.contribute(llmProvidersExtensionPoint, (api) =>
+                api.addProvider({
+                  id: providerId,
+                  label: providerId,
+                  type: 'mock',
+                  client: createMockLlmClient([]),
+                }),
+              );
+            }
             env.contribute(toolsExtensionPoint, (api) =>
               api.addTool({
                 name: toolName,
@@ -415,12 +436,68 @@ describe('Server extension coordination', () => {
           pluginId: local.id,
           origin: 'managed',
           identity: 'first',
+          failureKind: 'publication',
         },
       ]);
       expect(result.outcome.attributedFailures?.[0]?.cause).toBe(original);
       expect(f.coordinator.snapshot().failed.map(({ error }) => error)).toEqual([
         { code: 'plugin-load-failed', message: 'Managed plugin preparation failed' },
       ]);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it('attributes a real ServerHost provider conflict to publication and publishes survivors', async () => {
+    const local = new FixtureSource('local-esm');
+    local.origin = 'managed';
+    local.includeProvider = true;
+    const survivor = new FixtureSource('survivor');
+    const f = await fixture(local, survivor);
+    try {
+      const host = f.runtime.serverHost;
+      const publish = host.commit;
+      const commit = vi.spyOn(host, 'commit').mockImplementationOnce((...args) => {
+        const release = host.reserveProvider(local.id);
+        try {
+          return publish(...args);
+        } finally {
+          release();
+        }
+      });
+      const result = await f.coordinator.mutateManaged(local.id, async () => ({
+        disposition: 'rebuild',
+        saved: 'saved',
+      }));
+      expect(commit).toHaveBeenCalledTimes(2);
+      const failure = commit.mock.results[0];
+      expect(failure).toMatchObject({
+        type: 'throw',
+        value: {
+          code: 'plugin-registration-conflict',
+          pluginId: local.id,
+        },
+      });
+      expect(result).toMatchObject({
+        kind: 'committed',
+        observed: { generation: { acceptingRuns: true }, members: [{ pluginId: survivor.id }] },
+        outcome: {
+          kind: 'completed',
+          attributedFailures: [
+            {
+              sourceId: local.id,
+              pluginId: local.id,
+              identity: 'first',
+              origin: 'managed',
+              failureKind: 'publication',
+            },
+          ],
+        },
+      });
+      if (result.kind !== 'committed' || result.outcome.kind !== 'completed') {
+        throw new Error('Expected surviving generation');
+      }
+      expect(result.outcome.attributedFailures?.[0]?.cause).toBe(failure?.value);
     } finally {
       await f.close();
     }

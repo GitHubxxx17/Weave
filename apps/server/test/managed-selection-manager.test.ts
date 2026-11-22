@@ -1,3 +1,4 @@
+import { PluginError } from '@weave/plugin';
 import * as pluginHost from '@weave/plugin-host';
 import { describe, expect, it, vi } from 'vitest';
 import type {
@@ -608,6 +609,47 @@ describe('queued managed selection', () => {
       await f.close();
     }
   });
+
+  it.each(['notes', 'other'] as const)(
+    'classifies a recovered commit failure for %s only when it is the selected target',
+    async (failureId) => {
+      const f = await createRealManagedCompositionFixture();
+      try {
+        await f.seedManaged('notes', 'target', false);
+        await f.seedManaged('other', 'other');
+        const host = f.compose();
+        const failure = new PluginError(
+          'plugin-registration-conflict',
+          'Private provider conflict',
+          {
+            pluginId: failureId,
+          },
+        );
+        const commit = vi.spyOn(f.runtime.serverHost, 'commit').mockImplementationOnce(() => {
+          throw failure;
+        });
+        const result = await host.applyManagedSelection!(selection(activate(f).request));
+        if (result.kind !== 'committed') throw new Error('Expected a committed result');
+        expect(commit).toHaveBeenCalledTimes(2);
+        expect(result.observed.generation.acceptingRuns).toBe(true);
+        expect(result.observed.members.map(({ pluginId }) => pluginId)).toEqual([
+          failureId === 'notes' ? 'other' : 'notes',
+        ]);
+        if (failureId === 'notes') {
+          expect(result.application).toMatchObject({
+            status: 'failed',
+            failureKind: 'publication',
+          });
+          if (result.application.status !== 'failed') throw new Error('Expected failure');
+          expect(result.application.cause).toBe(failure);
+        } else {
+          expect(result.application).toEqual({ status: 'applied' });
+        }
+      } finally {
+        await f.close();
+      }
+    },
+  );
 
   it.each(['notes', 'other'] as const)(
     'keeps the original %s load cause private and applies any surviving target',

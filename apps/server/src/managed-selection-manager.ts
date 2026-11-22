@@ -307,7 +307,8 @@ export function createManagedSelectionManager(
       ...decision,
       application: {
         status: 'failed',
-        failureKind: ready === undefined ? 'publication' : 'preparation',
+        failureKind:
+          attributed?.failureKind ?? (ready === undefined ? 'publication' : 'preparation'),
         ...(attributed === undefined ? {} : { cause: attributed.cause }),
       },
     };
