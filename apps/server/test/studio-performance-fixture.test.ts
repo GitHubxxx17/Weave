@@ -1,4 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import {
+  agentExecutionFrameSchema,
+  agentExecutionSnapshotSchema,
+  agentExecutionSummarySchema,
+} from '@weave/runtime';
+import { z } from 'zod';
 // @ts-expect-error Node-only acceptance tooling is JavaScript, outside production TS contracts.
 import { createScenario } from './performance/scenario.mjs';
 // @ts-expect-error Node-only acceptance tooling is JavaScript, outside production TS contracts.
@@ -44,39 +50,103 @@ describe('Studio performance fixture', () => {
     }
   });
 
-  it('emits ordered paced deltas and a terminal event using the current SSE contract', async () => {
+  it('accepts once, streams the original 100 tokens and restores two durable visible messages', async () => {
     const fixture = await startPerformanceFixture({
       count: 100,
       variant: 'markdown',
       intervalMs: 0,
     });
     try {
-      const response = await fetch(`${fixture.url}/agent/runs/stream`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: 'benchmark-history',
-          userMessage: {
-            role: 'user',
-            content: [{ type: 'text', text: 'benchmark' }],
-          },
-          provider: 'mock',
-          model: 'benchmark',
-        }),
-      });
+      const input = {
+        userMessage: { role: 'user', content: [{ type: 'text', text: 'benchmark request' }] },
+        provider: 'mock',
+        model: 'benchmark',
+        permissionMode: 'ask',
+      };
+      const post = (value: unknown) =>
+        fetch(`${fixture.url}/sessions/benchmark-history/executions`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(value),
+        });
+      const accepted = await post({ requestId: 'benchmark-request', input });
+      expect(accepted.status).toBe(202);
+      const receipt = agentExecutionSnapshotSchema.parse(await accepted.json());
+      const replay = await post({ requestId: 'benchmark-request', input });
+      expect(replay.status).toBe(202);
+      expect(agentExecutionSnapshotSchema.parse(await replay.json()).executionId).toBe(
+        receipt.executionId,
+      );
+      expect(
+        (await post({ requestId: 'benchmark-request', input: { ...input, model: 'conflict' } }))
+          .status,
+      ).toBe(409);
+      const path = `${fixture.url}/sessions/benchmark-history/executions/${receipt.executionId}`;
+      const response = await fetch(`${path}/events?after=${encodeURIComponent(receipt.cursor)}`);
       expect(response.headers.get('content-type')).toContain('text/event-stream');
       const body = await response.text();
       const frames = body
         .trim()
         .split('\n\n')
-        .map((frame) => JSON.parse(frame.split('\ndata: ')[1]!));
-      expect(frames.slice(0, -1).map((frame) => frame.text)).toEqual(
+        .map((frame) => agentExecutionFrameSchema.parse(JSON.parse(frame.split('\ndata: ')[1]!)));
+      expect(
+        frames
+          .filter((frame) => frame.type === 'event' && frame.event.type === 'text-delta')
+          .map((frame) =>
+            frame.type === 'event' && frame.event.type === 'text-delta' ? frame.event.text : '',
+          ),
+      ).toEqual(
         Array.from(
           { length: 100 },
           (_, index) => `benchmark-stream-${String(index).padStart(3, '0')} `,
         ),
       );
-      expect(frames.at(-1)).toEqual({ type: 'completed', turnId: 'benchmark-live' });
+      expect(frames.at(-1)).toMatchObject({
+        type: 'status',
+        status: 'completed',
+        durableThroughSequence: expect.any(Number),
+      });
+      const snapshot = agentExecutionSnapshotSchema.parse(await (await fetch(path)).json());
+      expect(snapshot).toMatchObject({
+        executionId: receipt.executionId,
+        status: 'completed',
+        events: [],
+      });
+      const summaries = z
+        .array(agentExecutionSummarySchema)
+        .parse(await (await fetch(`${fixture.url}/sessions/benchmark-history/executions`)).json());
+      expect(summaries).toHaveLength(1);
+      const detail = await (await fetch(`${fixture.url}/sessions/benchmark-history`)).json();
+      expect(
+        detail.messages.filter((message: { role: string }) =>
+          ['user', 'assistant'].includes(message.role),
+        ),
+      ).toHaveLength(102);
+      expect(detail.messages.slice(-2)).toMatchObject([
+        {
+          messageId: receipt.userMessageId,
+          turnId: receipt.turnId,
+          role: 'user',
+          content: input.userMessage.content,
+        },
+        {
+          turnId: receipt.turnId,
+          role: 'assistant',
+          content: [
+            {
+              type: 'text',
+              text: Array.from(
+                { length: 100 },
+                (_, index) => `benchmark-stream-${String(index).padStart(3, '0')} `,
+              ).join(''),
+            },
+          ],
+        },
+      ]);
+      expect(detail.lastSequence).toBeGreaterThanOrEqual(snapshot.durableThroughSequence!);
+      expect((await fetch(`${fixture.url}/agent/runs/stream`, { method: 'POST' })).status).toBe(
+        404,
+      );
     } finally {
       await fixture.close();
     }

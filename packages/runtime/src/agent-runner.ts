@@ -566,6 +566,9 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
                 payload: {
                   turnId,
                   userMessageId: messageId,
+                  ...(validRequest.executionIdentity === undefined
+                    ? {}
+                    : { executionId: validRequest.executionIdentity.executionId }),
                   request: {
                     provider: validRequest.provider,
                     model: validRequest.model,

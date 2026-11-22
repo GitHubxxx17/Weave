@@ -1,10 +1,16 @@
-/* global AbortController */
+import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { readFile, realpath } from 'node:fs/promises';
 import { dirname, extname, resolve, relative, sep } from 'node:path';
 import { fileURLToPath, URL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
+import {
+  AgentExecutionError,
+  agentExecutionLaunchSchema,
+  createAgentExecutionService,
+} from '@weave/runtime';
+import { createInMemorySessionEventStore, projectSession } from '@weave/session';
 import { createScenario, scenarioOptionsSchema } from './scenario.mjs';
 
 const optionsSchema = scenarioOptionsSchema.extend({
@@ -16,22 +22,14 @@ const jsonHeaders = {
   'cache-control': 'no-store',
 };
 const fixtureError = (code) => ({ error: { code, message: 'Isolated performance fixture' } });
-const streamInput = z.object({
-  sessionId: z.enum(['benchmark-history', 'benchmark-control']),
-  userMessage: z.object({
-    role: z.literal('user'),
-    content: z
-      .array(
-        z.object({
-          type: z.literal('text'),
-          text: z.string().max(10000),
-        }),
-      )
-      .max(1),
-  }),
-  provider: z.literal('mock'),
-  model: z.string().max(100),
-});
+const launchInput = agentExecutionLaunchSchema.refine(
+  ({ input }) =>
+    input.provider === 'mock' &&
+    input.model.length <= 100 &&
+    input.userMessage.content.length <= 1 &&
+    input.userMessage.content.every((part) => part.type === 'text' && part.text.length <= 10000),
+  'Use the bounded benchmark workload',
+);
 const mime = {
   '.html': 'text/html',
   '.js': 'text/javascript',
@@ -49,7 +47,66 @@ export async function startPerformanceFixture(input) {
     options.distDirectory ??
       resolve(dirname(fileURLToPath(import.meta.url)), '../../../studio/dist'),
   );
-  const streams = new Set();
+  const store = createInMemorySessionEventStore();
+  for (const session of scenario.sessions)
+    await store.append(session.id, [
+      { type: 'session.created', payload: { title: session.title } },
+    ]);
+  // Exercise the actual ownership/replay boundary without a real provider or
+  // workspace. Only the existing 100 paced text deltas make up the workload.
+  const executions = createAgentExecutionService({
+    sessionStore: store,
+    admit: async (sessionId) => {
+      if (!scenario.sessions.some((session) => session.id === sessionId))
+        throw new AgentExecutionError('execution-not-found', 'Unknown benchmark Session');
+    },
+    runner: {
+      run(request) {
+        return {
+          async *[Symbol.asyncIterator]() {
+            const { turnId, userMessageId, executionId } = request.executionIdentity;
+            await store.append(request.sessionId, [
+              {
+                type: 'message.created',
+                payload: { messageId: userMessageId, message: request.userMessage },
+              },
+              { type: 'turn.started', payload: { turnId, userMessageId, executionId } },
+            ]);
+            let text = '';
+            let failure;
+            try {
+              for (let index = 0; index < 100; index++) {
+                request.signal.throwIfAborted();
+                const token = `benchmark-stream-${String(index).padStart(3, '0')} `;
+                text += token;
+                yield { type: 'text-delta', text: token };
+                await delay(options.intervalMs, undefined, { signal: request.signal });
+              }
+            } catch (error) {
+              failure = error;
+            }
+            const status = request.signal.aborted ? 'cancelled' : failure ? 'failed' : 'completed';
+            await store.append(request.sessionId, [
+              ...(text
+                ? [
+                    {
+                      type: 'message.created',
+                      payload: {
+                        messageId: `${turnId}-assistant`,
+                        message: { role: 'assistant', content: [{ type: 'text', text }] },
+                      },
+                    },
+                  ]
+                : []),
+              { type: 'turn.completed', payload: { turnId, status } },
+            ]);
+            if (failure) throw failure;
+            yield { type: 'completed', turnId };
+          },
+        };
+      },
+    },
+  });
   const sockets = new Set();
   let closing;
   const json = (response, data, status = 200) => {
@@ -57,8 +114,21 @@ export async function startPerformanceFixture(input) {
     response.end(JSON.stringify(data));
   };
   const server = createServer((request, response) => {
-    void handle(request, response).catch(() => {
-      if (!response.headersSent) json(response, fixtureError('benchmark-invalid-request'), 400);
+    void handle(request, response).catch((error) => {
+      if (!response.headersSent)
+        json(
+          response,
+          fixtureError(
+            error instanceof AgentExecutionError ? error.code : 'benchmark-invalid-request',
+          ),
+          error instanceof AgentExecutionError
+            ? error.code === 'execution-not-found'
+              ? 404
+              : ['execution-busy', 'execution-request-conflict'].includes(error.code)
+                ? 409
+                : 400
+            : 400,
+        );
       else response.destroy();
     });
   });
@@ -67,8 +137,61 @@ export async function startPerformanceFixture(input) {
     socket.once('close', () => sockets.delete(socket));
   });
   async function handle(request, response) {
-    const path = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
-    if (request.method === 'POST' && path === '/agent/runs/stream') {
+    const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+    const path = url.pathname;
+    const executionRoute =
+      /^\/sessions\/(benchmark-(?:history|control))\/executions(?:\/([^/]+)(?:\/(events|cancel))?)?$/.exec(
+        path,
+      );
+    if (executionRoute) {
+      const [, sessionId, executionId, action] = executionRoute;
+      if (request.method === 'GET' && action === 'events') {
+        const subscription = await executions.subscribe(
+          sessionId,
+          executionId,
+          url.searchParams.get('after') ?? request.headers['last-event-id'],
+        );
+        response.once('close', subscription.close);
+        response.writeHead(200, {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-store',
+        });
+        response.flushHeaders();
+        const write = async (frame) => {
+          if (response.destroyed) return;
+          const cursor = frame.type === 'snapshot' ? frame.snapshot.cursor : frame.cursor;
+          if (
+            !response.write(
+              `id: ${cursor}\nevent: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`,
+            )
+          )
+            await Promise.race([once(response, 'drain'), once(response, 'close')]);
+        };
+        try {
+          for (const frame of subscription.initial) await write(frame);
+          for await (const frame of subscription.events) {
+            if (response.destroyed) break;
+            await write(frame);
+          }
+          response.end();
+        } finally {
+          subscription.close();
+        }
+        return;
+      }
+      if (request.method === 'GET' && !action) {
+        json(
+          response,
+          executionId
+            ? await executions.get(sessionId, executionId)
+            : await executions.list(sessionId),
+        );
+        return;
+      }
+      if (request.method !== 'POST' || (executionId && action !== 'cancel')) {
+        json(response, fixtureError('benchmark-not-found'), 404);
+        return;
+      }
       let body = '';
       let bytes = 0;
       for await (const chunk of request) {
@@ -79,33 +202,20 @@ export async function startPerformanceFixture(input) {
         }
         body += chunk.toString('utf8');
       }
-      const parsed = streamInput.safeParse(JSON.parse(body));
+      const parsed = (action === 'cancel' ? z.strictObject({}) : launchInput).safeParse(
+        JSON.parse(body),
+      );
       if (!parsed.success) {
         json(response, fixtureError('benchmark-invalid-input'), 400);
         return;
       }
-      const controller = new AbortController();
-      streams.add(controller);
-      response.once('close', () => controller.abort());
-      response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
-      response.flushHeaders();
-      try {
-        for (let index = 0; index < 100; index++) {
-          if (controller.signal.aborted) return;
-          const text = `benchmark-stream-${String(index).padStart(3, '0')} `;
-          response.write(
-            `event: text-delta\ndata: ${JSON.stringify({ type: 'text-delta', text })}\n\n`,
-          );
-          await delay(options.intervalMs, undefined, { signal: controller.signal });
-        }
-        response.end(
-          `event: completed\ndata: ${JSON.stringify({ type: 'completed', turnId: 'benchmark-live' })}\n\n`,
-        );
-      } catch (error) {
-        if (!controller.signal.aborted) throw error;
-      } finally {
-        streams.delete(controller);
-      }
+      json(
+        response,
+        action === 'cancel'
+          ? await executions.cancel(sessionId, executionId)
+          : await executions.launch(sessionId, parsed.data),
+        202,
+      );
       return;
     }
     if (request.method !== 'GET') {
@@ -118,7 +228,31 @@ export async function startPerformanceFixture(input) {
     }
     const session = scenario.sessions.find((s) => path === `/sessions/${s.id}`);
     if (session) {
-      json(response, session);
+      const projection = projectSession(await store.read(session.id));
+      json(response, {
+        ...session,
+        lastSequence: session.lastSequence + projection.lastSequence - 1,
+        messages: [
+          ...session.messages,
+          ...projection.messages.map(({ message, sequence, ...metadata }) => ({
+            ...message,
+            ...metadata,
+            sequence: session.lastSequence + sequence - 1,
+          })),
+        ],
+        turns: [
+          ...session.turns,
+          ...projection.turns.map((turn) => ({
+            ...turn,
+            provider: 'mock',
+            model: 'benchmark',
+            modelSteps: [],
+            toolCalls: 0,
+            failedToolCalls: 0,
+            toolResults: [],
+          })),
+        ],
+      });
       return;
     }
     if (path === '/settings/providers') {
@@ -208,11 +342,15 @@ export async function startPerformanceFixture(input) {
   return {
     url: `http://127.0.0.1:${address.port}`,
     async close() {
-      closing ??= new Promise((resolveClose, reject) => {
-        for (const controller of streams) controller.abort();
-        server.close((error) => (error ? reject(error) : resolveClose()));
-        for (const socket of sockets) socket.destroy();
-      });
+      closing ??= (async () => {
+        executions.closeSync();
+        await executions.drain();
+        await new Promise((resolveClose, reject) => {
+          server.close((error) => (error ? reject(error) : resolveClose()));
+          for (const socket of sockets) socket.destroy();
+        });
+        await store.close();
+      })();
       return closing;
     },
   };

@@ -2369,127 +2369,147 @@ describe('Studio Agent Chat', () => {
     expect(api.mock.calls.some(([url]) => String(url).endsWith('/cancel'))).toBe(false);
   });
 
-  it('uses the production execution client for sending and replaces a restarted terminal snapshot only with durable history', async () => {
-    streamAgentRunMock.mockImplementationOnce(async (request, handlers, options) => {
-      const actual = await vi.importActual<typeof import('../src/features/agent/agent-stream.js')>(
-        '../src/features/agent/agent-stream.js',
+  it.each(['epoch', 'restart'])(
+    'uses the production client to recover terminal sequence zero in %s epoch and waits for durable history',
+    async (terminalEpoch) => {
+      streamAgentRunMock.mockImplementationOnce(async (request, handlers, options) => {
+        const actual = await vi.importActual<
+          typeof import('../src/features/agent/agent-stream.js')
+        >('../src/features/agent/agent-stream.js');
+        await actual.streamAgentRun(request, handlers, options);
+      });
+      const baseFetch = fetchMock;
+      let durable = false;
+      let releaseTerminal: (() => void) | undefined;
+      let requestId = '';
+      let observations = 0;
+      const api = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === `/sessions/${sessionIds.local}/executions` && init?.method === 'POST') {
+          const body = JSON.parse(String(init.body)) as {
+            requestId: string;
+            input: AgentExecutionSnapshot['input'];
+          };
+          requestId = body.requestId;
+          return Response.json({
+            ...body,
+            executionId: 'real-client',
+            sessionId: sessionIds.local,
+            turnId: 'real-turn',
+            userMessageId: 'real-user',
+            createdAt: '2026-11-23T00:00:00.000Z',
+            status: 'running',
+            cursor: 'epoch:real-client:1',
+            events: [{ type: 'text-delta', text: 'live exact text' }],
+          });
+        }
+        if (url.includes('/real-client/events')) {
+          observations += 1;
+          if (observations === 1)
+            return new Response(
+              new ReadableStream({
+                start(controller) {
+                  releaseTerminal = () => controller.close();
+                },
+              }),
+              { headers: { 'Content-Type': 'text/event-stream' } },
+            );
+          return new Response(
+            `event: snapshot\ndata: ${JSON.stringify({
+              type: 'snapshot',
+              snapshot: {
+                executionId: 'real-client',
+                requestId,
+                sessionId: sessionIds.local,
+                turnId: 'real-turn',
+                userMessageId: 'real-user',
+                createdAt: '2026-11-23T00:00:00.000Z',
+                input: {
+                  provider: 'mock',
+                  model: 'weave-local-demo',
+                  permissionMode: 'ask',
+                  userMessage: { role: 'user', content: [{ type: 'text', text: 'real question' }] },
+                },
+                status: 'completed',
+                cursor: `${terminalEpoch}:real-client:0`,
+                events: [],
+                durableThroughSequence: 99,
+              },
+            })}\n\n`,
+            { headers: { 'Content-Type': 'text/event-stream' } },
+          );
+        }
+        if (durable && url === `/sessions/${sessionIds.local}`)
+          return Response.json({
+            ...sessionDetail(sessionIds.local, '本地 Agent 演示', [
+              {
+                role: 'user',
+                turnId: 'real-turn',
+                messageId: 'real-user',
+                content: [{ type: 'text', text: 'real question' }],
+              },
+              {
+                role: 'assistant',
+                turnId: 'real-turn',
+                content: [{ type: 'text', text: 'durable exact text' }],
+              },
+            ]),
+            lastSequence: 99,
+            turns: [
+              {
+                turnId: 'real-turn',
+                userMessageId: 'real-user',
+                startedAt: '2026-11-23T00:00:00.000Z',
+                status: 'completed',
+              },
+            ],
+          });
+        if (url === `/sessions/${sessionIds.local}`)
+          return Response.json({
+            ...sessionDetail(sessionIds.local, '本地 Agent 演示', [
+              { role: 'user', content: [{ type: 'text', text: 'unbound historical question' }] },
+              { role: 'assistant', content: [{ type: 'text', text: 'unbound historical answer' }] },
+              {
+                role: 'assistant',
+                turnId: 'previous-turn',
+                content: [{ type: 'text', text: 'previous completed answer' }],
+              },
+            ]),
+            turns: [
+              {
+                turnId: 'previous-turn',
+                status: 'completed',
+                startedAt: '2026-11-22T00:00:00.000Z',
+              },
+            ],
+          });
+        return baseFetch(input, init);
+      });
+      vi.stubGlobal('fetch', api);
+      await renderApp();
+      fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: 'real question' } });
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await screen.findByText('live exact text');
+      expect(screen.getByText('unbound historical answer')).toBeTruthy();
+      act(() => releaseTerminal?.());
+      await waitFor(() => expect(observations).toBe(2));
+      expect(screen.getByText('live exact text')).toBeTruthy();
+      expect(screen.getByRole('button', { name: '停止运行' })).toBeTruthy();
+      expect(
+        (screen.getByRole('button', { name: '审阅本轮文件' }) as HTMLButtonElement).disabled,
+      ).toBe(true);
+      durable = true;
+      await screen.findByText('durable exact text');
+      expect(screen.queryByText('live exact text')).toBeNull();
+      expect(screen.getAllByText('real question')).toHaveLength(1);
+      expect(
+        (screen.getByRole('button', { name: '审阅本轮文件' }) as HTMLButtonElement).disabled,
+      ).toBe(false);
+      expect(api.mock.calls.some(([url]) => String(url).includes('/agent/runs/stream'))).toBe(
+        false,
       );
-      await actual.streamAgentRun(request, handlers, options);
-    });
-    const baseFetch = fetchMock;
-    let durable = false;
-    let releaseTerminal: (() => void) | undefined;
-    let requestId = '';
-    const api = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url === `/sessions/${sessionIds.local}/executions` && init?.method === 'POST') {
-        const body = JSON.parse(String(init.body)) as {
-          requestId: string;
-          input: AgentExecutionSnapshot['input'];
-        };
-        requestId = body.requestId;
-        return Response.json({
-          ...body,
-          executionId: 'real-client',
-          sessionId: sessionIds.local,
-          turnId: 'real-turn',
-          userMessageId: 'real-user',
-          createdAt: '2026-11-23T00:00:00.000Z',
-          status: 'running',
-          cursor: 'epoch:real-client:1',
-          events: [{ type: 'text-delta', text: 'live exact text' }],
-        });
-      }
-      if (url.includes('/real-client/events')) {
-        return new Response(
-          new ReadableStream({
-            start(controller) {
-              releaseTerminal = () => {
-                controller.enqueue(
-                  new TextEncoder().encode(
-                    `event: snapshot\ndata: ${JSON.stringify({
-                      type: 'snapshot',
-                      snapshot: {
-                        executionId: 'real-client',
-                        requestId,
-                        sessionId: sessionIds.local,
-                        turnId: 'real-turn',
-                        userMessageId: 'real-user',
-                        createdAt: '2026-11-23T00:00:00.000Z',
-                        input: {
-                          provider: 'mock',
-                          model: 'weave-local-demo',
-                          permissionMode: 'ask',
-                          userMessage: {
-                            role: 'user',
-                            content: [{ type: 'text', text: 'real question' }],
-                          },
-                        },
-                        status: 'completed',
-                        cursor: 'restart:real-client:0',
-                        events: [],
-                        durableThroughSequence: 99,
-                      },
-                    })}\n\n`,
-                  ),
-                );
-                controller.close();
-              };
-            },
-          }),
-          { headers: { 'Content-Type': 'text/event-stream' } },
-        );
-      }
-      if (durable && url === `/sessions/${sessionIds.local}`)
-        return Response.json({
-          ...sessionDetail(sessionIds.local, '本地 Agent 演示', [
-            {
-              role: 'user',
-              turnId: 'real-turn',
-              messageId: 'real-user',
-              content: [{ type: 'text', text: 'real question' }],
-            },
-            {
-              role: 'assistant',
-              turnId: 'real-turn',
-              content: [{ type: 'text', text: 'durable exact text' }],
-            },
-          ]),
-          lastSequence: 99,
-          turns: [
-            {
-              turnId: 'real-turn',
-              userMessageId: 'real-user',
-              startedAt: '2026-11-23T00:00:00.000Z',
-              status: 'completed',
-            },
-          ],
-        });
-      if (url === `/sessions/${sessionIds.local}`)
-        return Response.json(
-          sessionDetail(sessionIds.local, '本地 Agent 演示', [
-            { role: 'user', content: [{ type: 'text', text: 'unbound historical question' }] },
-            { role: 'assistant', content: [{ type: 'text', text: 'unbound historical answer' }] },
-          ]),
-        );
-      return baseFetch(input, init);
-    });
-    vi.stubGlobal('fetch', api);
-    await renderApp();
-    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: 'real question' } });
-    fireEvent.click(screen.getByRole('button', { name: '发送' }));
-    await screen.findByText('live exact text');
-    expect(screen.getByText('unbound historical answer')).toBeTruthy();
-    act(() => releaseTerminal?.());
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(screen.getByText('live exact text')).toBeTruthy();
-    expect(screen.getByRole('button', { name: '停止运行' })).toBeTruthy();
-    durable = true;
-    await screen.findByText('durable exact text');
-    expect(screen.queryByText('live exact text')).toBeNull();
-    expect(screen.getAllByText('real question')).toHaveLength(1);
-    expect(api.mock.calls.some(([url]) => String(url).includes('/agent/runs/stream'))).toBe(false);
-  });
+    },
+  );
 
   it('recovers an accepted-but-never-started interrupted execution from its durable watermark', async () => {
     const execution: AgentExecutionSnapshot = {

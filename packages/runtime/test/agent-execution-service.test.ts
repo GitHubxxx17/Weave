@@ -67,6 +67,79 @@ async function setup(llm: LlmClient, store: SessionEventStore = createInMemorySe
 }
 
 describe('owned Agent executions', () => {
+  it('returns the settled snapshot when exact replay reads a stale accepted prefix', async () => {
+    const base = createInMemorySessionEventStore();
+    const captured = deferred<void>();
+    const releaseRead = deferred<void>();
+    const finishModel = deferred<void>();
+    let pauseRead = false;
+    const store: SessionEventStore = {
+      ...base,
+      async read(sessionId, options) {
+        const events = await base.read(sessionId, options);
+        if (pauseRead) {
+          pauseRead = false;
+          captured.resolve();
+          await releaseRead.promise;
+        }
+        return events;
+      },
+    };
+    const { service } = await setup(
+      {
+        async *stream(): AsyncIterable<StreamEvent> {
+          yield { type: 'text-delta', text: 'complete' };
+          await finishModel.promise;
+          yield { type: 'finish', reason: 'stop' };
+        },
+      },
+      store,
+    );
+    const receipt = await service.launch('session', launch);
+    const subscription = await service.subscribe('session', receipt.executionId);
+    pauseRead = true;
+    const replay = service.launch('session', launch);
+    await captured.promise;
+    finishModel.resolve();
+    for await (const _frame of subscription.events) {
+      void _frame;
+    }
+    releaseRead.resolve();
+    expect(await replay).toMatchObject({
+      executionId: receipt.executionId,
+      status: 'completed',
+      events: [],
+      durableThroughSequence: expect.any(Number),
+    });
+  });
+
+  it('preserves detached snapshots and queued terminal delivery when live buffers are released', async () => {
+    const finish = deferred<void>();
+    const produced = deferred<void>();
+    const { service } = await setup({
+      async *stream(): AsyncIterable<StreamEvent> {
+        yield { type: 'text-delta', text: 'retained output' };
+        produced.resolve();
+        await finish.promise;
+        yield { type: 'finish', reason: 'stop' };
+      },
+    });
+    const receipt = await service.launch('session', launch);
+    await produced.promise;
+    const before = await service.get('session', receipt.executionId);
+    const subscription = await service.subscribe('session', receipt.executionId, before.cursor);
+    finish.resolve();
+    await terminal(service, 'session', receipt.executionId);
+    const queued = [];
+    for await (const frame of subscription.events) queued.push(frame);
+    expect(queued).toMatchObject([
+      { type: 'event', event: { type: 'completed' } },
+      { type: 'status', status: 'completed', durableThroughSequence: expect.any(Number) },
+    ]);
+    expect(before.events).toContainEqual({ type: 'text-delta', text: 'retained output' });
+    expect((await service.get('session', receipt.executionId)).events).toEqual([]);
+  });
+
   it('recovers unfinished accepted Turns and steps without executing the Runner', async () => {
     const store = createInMemorySessionEventStore();
     await store.append('session', [

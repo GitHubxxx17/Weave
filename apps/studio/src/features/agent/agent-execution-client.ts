@@ -189,13 +189,17 @@ export async function observeAgentExecution(
   handlers.onSnapshot?.(snapshot);
   if (terminal) return;
   let attempt = 0;
-  const acceptCursor = (next: string, replacement = false): boolean => {
+  const acceptCursor = (
+    next: string,
+    replacement = false,
+    durableTerminalReset = false,
+  ): boolean => {
     const [epoch, executionId, sequence] = next.split(':');
     const [currentEpoch, , currentSequence] = cursor.split(':');
     if (executionId !== snapshot.executionId) throw protocolError();
     if (epoch !== currentEpoch) {
       if (!replacement) throw protocolError();
-    } else if (Number(sequence) <= Number(currentSequence)) return false;
+    } else if (Number(sequence) <= Number(currentSequence) && !durableTerminalReset) return false;
     cursor = next;
     return true;
   };
@@ -229,7 +233,21 @@ export async function observeAgentExecution(
         parsed.data.requestId !== snapshot.requestId
       )
         throw protocolError();
-      if (!acceptCursor(parsed.data.cursor, true)) return;
+      const confirmedTerminal = isTerminalExecution(parsed.data.status);
+      if (
+        confirmedTerminal &&
+        (parsed.data.durableThroughSequence === undefined ||
+          parsed.data.durableThroughSequence < (snapshot.durableThroughSequence ?? 0))
+      )
+        throw protocolError();
+      // Evicted live executions reconstruct from durable facts at sequence zero,
+      // even within the same Server epoch. Only a confirmed, output-free terminal
+      // snapshot can end observation without advancing the live cursor.
+      const durableTerminalReset =
+        confirmedTerminal &&
+        parsed.data.cursor.split(':')[2] === '0' &&
+        parsed.data.events.length === 0;
+      if (!acceptCursor(parsed.data.cursor, true, durableTerminalReset)) return;
       snapshot = parsed.data;
       handlers.onSnapshot?.(snapshot);
       terminal = isTerminalExecution(snapshot.status);

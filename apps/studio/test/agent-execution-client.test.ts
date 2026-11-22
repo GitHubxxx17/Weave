@@ -121,15 +121,74 @@ describe('recoverable execution client', () => {
     expect(connection).toHaveBeenCalledWith('reconnecting');
   });
 
-  it('aborting observation closes only the reader and never posts cancel', async () => {
-    const closed = vi.fn();
+  it('settles from a durable terminal snapshot with sequence zero after same-epoch live state eviction', async () => {
+    vi.useFakeTimers();
+    const terminal = {
+      ...snapshot,
+      status: 'completed',
+      cursor: 'epoch:execution-1:0',
+      durableThroughSequence: 25,
+    };
     const fetcher = vi
       .fn()
-      .mockResolvedValue(
-        new Response(new ReadableStream({ cancel: closed }), {
-          headers: { 'Content-Type': 'text/event-stream' },
-        }),
-      );
+      .mockResolvedValueOnce(
+        sse([
+          [
+            'event',
+            { cursor: 'epoch:execution-1:2', event: { type: 'text-delta', text: 'partial' } },
+          ],
+        ]),
+      )
+      .mockResolvedValueOnce(sse([['snapshot', { type: 'snapshot', snapshot: terminal }]]))
+      .mockRejectedValue(new Error('unexpected third subscription'));
+    vi.stubGlobal('fetch', fetcher);
+    const view = vi.fn();
+    const result = observeAgentExecution(snapshot, { onEvent: vi.fn(), onSnapshot: view }).then(
+      () => 'settled',
+      () => 'failed',
+    );
+    await vi.runAllTimersAsync();
+    expect(await result).toBe('settled');
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(view.mock.calls).toEqual([[snapshot], [terminal]]);
+  });
+
+  it('ignores an older live snapshot and requires a persistence watermark before accepting a reset terminal snapshot', async () => {
+    vi.useFakeTimers();
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(
+        sse([
+          [
+            'snapshot',
+            {
+              ...snapshot,
+              cursor: 'epoch:execution-1:0',
+              events: [{ type: 'text-delta', text: 'stale' }],
+            },
+          ],
+          ['snapshot', { ...snapshot, status: 'completed', cursor: 'epoch:execution-1:0' }],
+        ]),
+      )
+      .mockRejectedValue(new Error('unexpected retry'));
+    vi.stubGlobal('fetch', fetcher);
+    const view = vi.fn();
+    const result = observeAgentExecution(snapshot, { onEvent: vi.fn(), onSnapshot: view }).catch(
+      (error: unknown) => error,
+    );
+    await vi.runAllTimersAsync();
+    expect(await result).toMatchObject({ code: 'agent-stream-protocol' });
+    expect(view.mock.calls).toEqual([[snapshot]]);
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it('aborting observation closes only the reader and never posts cancel', async () => {
+    const closed = vi.fn();
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(new ReadableStream({ cancel: closed }), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      }),
+    );
     vi.stubGlobal('fetch', fetcher);
     const controller = new AbortController();
     const run = observeAgentExecution(
@@ -256,13 +315,11 @@ describe('recoverable execution client', () => {
   it('rejects unbounded unterminated SSE data while permitting a full bounded snapshot', async () => {
     vi.stubGlobal(
       'fetch',
-      vi
-        .fn()
-        .mockResolvedValue(
-          new Response('data: ' + 'x'.repeat(9 * 1024 * 1024), {
-            headers: { 'Content-Type': 'text/event-stream' },
-          }),
-        ),
+      vi.fn().mockResolvedValue(
+        new Response('data: ' + 'x'.repeat(9 * 1024 * 1024), {
+          headers: { 'Content-Type': 'text/event-stream' },
+        }),
+      ),
     );
     await expect(observeAgentExecution(snapshot, { onEvent: vi.fn() })).rejects.toMatchObject({
       code: 'agent-stream-protocol',

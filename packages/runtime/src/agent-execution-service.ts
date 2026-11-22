@@ -292,6 +292,12 @@ export function createAgentExecutionService(
       status(state, outcome);
       for (const subscriber of state.subscribers) subscriber.finish();
       state.subscribers.clear();
+      // Detached initial snapshots and subscriber queues own their copies.
+      // Retained subscription handles must not keep the complete live view.
+      state.events.length = 0;
+      state.ring.length = 0;
+      state.ringBytes = 0;
+      state.outputBytes = 0;
       live.delete(state.accepted.executionId);
     } catch (error: unknown) {
       markPersistenceError(state, error);
@@ -307,6 +313,8 @@ export function createAgentExecutionService(
       const frozen = structuredClone(parsed.data);
       const digest = createHash('sha256').update(canonicalJson(frozen.input), 'utf8').digest('hex');
       return gate(sessionId, async () => {
+        // Retain a settled state while its older durable prefix is being read.
+        const observedLive = new Map(live);
         const existing = await records(sessionId);
         const replay = existing.find((item) => item.requestId === frozen.requestId);
         if (replay !== undefined) {
@@ -315,7 +323,10 @@ export function createAgentExecutionService(
               'execution-request-conflict',
               'Request identifier already belongs to different input',
             );
-          return snapshot(replay, live.get(replay.executionId));
+          return snapshot(
+            replay,
+            live.get(replay.executionId) ?? observedLive.get(replay.executionId),
+          );
         }
         if (closed)
           throw new AgentExecutionError('execution-closed', 'Execution admission is closed');
@@ -432,12 +443,13 @@ export function createAgentExecutionService(
       const queued: { frame: AgentExecutionFrame; bytes: number }[] = [];
       let queuedBytes = 0;
       let ended = state === undefined || terminalStatuses.has(state.status);
+      const subscribers = state?.subscribers;
       let pending: ((value: IteratorResult<AgentExecutionFrame>) => void) | undefined;
       const close = (): void => {
         ended = true;
         queued.length = 0;
         queuedBytes = 0;
-        state?.subscribers.delete(subscriber);
+        subscribers?.delete(subscriber);
         pending?.({ done: true, value: undefined });
         pending = undefined;
       };
@@ -467,7 +479,7 @@ export function createAgentExecutionService(
         },
         close,
       };
-      if (!ended) state?.subscribers.add(subscriber);
+      if (!ended) subscribers?.add(subscriber);
       const iterator: AsyncIterator<AgentExecutionFrame> = {
         next() {
           const item = queued.shift();
