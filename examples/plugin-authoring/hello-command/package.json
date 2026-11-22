@@ -1,0 +1,5 @@
+{
+  "name": "hello-command",
+  "private": true,
+  "type": "module"
+}

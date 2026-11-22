@@ -13,6 +13,7 @@ const workspacePackageNames = new Set([
   '@weave/plugin',
   '@weave/plugin-builtins',
   '@weave/plugin-host',
+  '@weave/plugin-cli',
   '@weave/mcp-client',
   '@weave/server',
   '@weave/desktop',
@@ -88,6 +89,13 @@ const packageLayers = new Map([
       // Server that embeds it.
       allowedDependencies: ['@weave/plugin'],
       layer: 'plugin-host',
+    },
+  ],
+  [
+    '@weave/plugin-cli',
+    {
+      allowedDependencies: ['@weave/plugin', '@weave/plugin-host'],
+      layer: 'plugin-cli',
     },
   ],
   [

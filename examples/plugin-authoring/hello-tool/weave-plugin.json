@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "entry": "index.mjs",
+  "manifest": {
+    "id": "hello-tool",
+    "name": "Hello Tool",
+    "version": "0.1.0",
+    "apiVersion": "1.0.0",
+    "description": "A typed echo tool using Weave's injected SDK.",
+    "capabilities": ["tool"],
+    "contributes": { "tools": ["hello-tool"] },
+    "permissions": []
+  }
+}

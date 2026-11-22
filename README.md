@@ -39,8 +39,10 @@ for the Studio workflow, launch configuration format, trust boundaries, and
 troubleshooting. See [Skills usage and authoring](docs/learning/2026-11-22-skills.md)
 for per-session selection, exact retry, progressive resource reads and supported
 `SKILL.md` metadata. See [installable Skills text packages](docs/learning/2026-11-22-declarative-skill-packages.md)
-for the no-build format and maintained coding example. Developer authoring tools
-and custom panel SDK remain the next independent extension topics.
+for the no-build format and maintained coding example. The repository-local
+[developer CLI](docs/learning/2026-11-22-plugin-developer-cli.md) scaffolds Tool,
+Command and Skills projects and validates/builds/packs actual payload directories.
+Custom panel SDK and maintained official releases follow as independent topics.
 
 The Stage 6.1 [local plugin artifact store](docs/learning/2026-11-21-plugin-artifact-store.md)
 provides bounded, non-executing directory copies at fixed content-addressed paths.
@@ -92,6 +94,7 @@ weave/
 │   ├── plugin/       # Typed Plugin Kernel, SDK, hooks, and extension points
 │   ├── plugin-builtins/ # Built-in plugins and the MCP tool adapter
 │   ├── plugin-host/  # ESM/Skills payload discovery, trust, loading, generations
+│   ├── plugin-cli/   # Repository-local authoring, SDK check, build and pack
 │   └── mcp-client/   # Bounded local stdio MCP transport and frozen catalog
 ├── docs/              # Architecture, ADR, and learning material
 └── root tooling       # pnpm, Turbo, TypeScript, ESLint, Prettier, Vitest
@@ -101,6 +104,8 @@ The package dependency direction is
 `protocol -> {llm, session} -> runtime -> plugin -> {plugin-builtins, plugin-host} -> server -> desktop`.
 `mcp-client` is an independent transport package consumed by `plugin-builtins`
 and `server`; `workspace` remains independent and is consumed by `server`.
+The independent `plugin-cli` leaf consumes only Plugin and Plugin-host for local
+authoring and payload validation; it does not import Server or Runtime.
 `protocol` owns stable public contracts, `llm` isolates provider differences,
 `session` stores durable facts and rebuilds read models, `workspace` stores
 Project metadata, `runtime` assembles services and lifecycle state, `plugin`

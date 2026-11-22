@@ -1,0 +1,5 @@
+{
+  "name": "hello-tool",
+  "private": true,
+  "type": "module"
+}
