@@ -27,7 +27,10 @@
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
     "build": "turbo run build",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "marketplace:generate": "pnpm --filter @weave/server... build && node apps/server/dist/marketplace-cli.js generate",
+    "marketplace:check": "pnpm --filter @weave/server... build && node apps/server/dist/marketplace-cli.js check",
+    "marketplace:entry": "pnpm --filter @weave/server... build && node apps/server/dist/marketplace-cli.js entry"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

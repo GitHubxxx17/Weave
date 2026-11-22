@@ -23,6 +23,10 @@ import type {
 import { usePluginCatalogState, usePluginCatalogStore } from './plugin-catalog-context.js';
 import { pluginDialogError } from './plugin-dialog.js';
 import type { PluginListItem } from './plugin-types.js';
+import {
+  marketplaceValueEqual,
+  type MarketplaceInstallSelection,
+} from './plugin-marketplace-types.js';
 
 import './managed-plugins.css';
 
@@ -348,8 +352,12 @@ type OpenDialog =
 
 export function ManagedPluginsSection({
   getFallbackFocus,
+  marketplaceSelection: initialMarketplaceSelection,
+  onClearMarketplaceSelection,
 }: {
   readonly getFallbackFocus: () => HTMLElement | null;
+  readonly marketplaceSelection?: MarketplaceInstallSelection;
+  readonly onClearMarketplaceSelection?: () => void;
 }): ReactElement {
   const store = usePluginCatalogStore();
   const {
@@ -369,11 +377,18 @@ export function ManagedPluginsSection({
   const sourceChoiceName = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const repositoryRef = useRef<HTMLInputElement>(null);
-  const [sourceKind, setSourceKind] = useState<'local' | 'github'>('local');
+  const [marketplaceSelection, setMarketplaceSelection] = useState(initialMarketplaceSelection);
+  const [sourceKind, setSourceKind] = useState<'local' | 'github'>(
+    initialMarketplaceSelection === undefined ? 'local' : 'github',
+  );
   const [path, setPath] = useState('');
-  const [repository, setRepository] = useState('');
-  const [commit, setCommit] = useState('');
-  const [subdirectory, setSubdirectory] = useState('');
+  const [repository, setRepository] = useState(
+    initialMarketplaceSelection?.source.repository ?? '',
+  );
+  const [commit, setCommit] = useState(initialMarketplaceSelection?.source.commit ?? '');
+  const [subdirectory, setSubdirectory] = useState(
+    initialMarketplaceSelection?.source.subdirectory ?? '',
+  );
   const [previewing, setPreviewing] = useState(false);
   const [localError, setLocalError] = useState<string>();
   const [dialog, setDialog] = useState<OpenDialog | null>(null);
@@ -409,6 +424,10 @@ export function ManagedPluginsSection({
   const closeDialog = (): void => {
     invalidate();
     setDialog(null);
+  };
+  const clearMarketplaceSelection = (): void => {
+    setMarketplaceSelection(undefined);
+    onClearMarketplaceSelection?.();
   };
   const managedCatalog = managed?.kind === 'enabled' ? managed.catalog : undefined;
   const bridge = window.weaveDesktop;
@@ -457,14 +476,30 @@ export function ManagedPluginsSection({
         current === revision.current &&
         !store.getSnapshot().sharedManagementBlocked &&
         document.querySelector('[data-plugin-dialog-portal]') === null
-      )
+      ) {
+        if (
+          marketplaceSelection !== undefined &&
+          (!('github' in result) ||
+            !marketplaceValueEqual(result.github, marketplaceSelection.source) ||
+            !marketplaceValueEqual(result.candidate.manifest, marketplaceSelection.manifest))
+        ) {
+          setLocalError('实际插件声明与市场版本不一致，已阻止导入。请核对发布者提供的版本。');
+          return;
+        }
         setDialog({
           kind: 'review',
           draft:
             'github' in result
-              ? { review: { kind: 'import', preview: result }, github: result.github }
+              ? {
+                  review: { kind: 'import', preview: result },
+                  github: result.github,
+                  ...(marketplaceSelection === undefined
+                    ? {}
+                    : { marketplacePublisher: marketplaceSelection.publisher }),
+                }
               : { review: { kind: 'import', preview: result }, sourceDirectory: path },
         });
+      }
     } catch (reason) {
       if (current === revision.current) setLocalError(pluginDialogError(reason));
     } finally {
@@ -486,6 +521,7 @@ export function ManagedPluginsSection({
       setRepository('');
       setCommit('');
       setSubdirectory('');
+      clearMarketplaceSelection();
     }
     return outcome;
   };
@@ -642,6 +678,26 @@ export function ManagedPluginsSection({
       {managedCatalog === undefined ? null : (
         <>
           <div className="managed-path-entry">
+            {marketplaceSelection === undefined ? null : (
+              <div className="marketplace-source-attribution">
+                <p>
+                  市场发布者：{marketplaceSelection.publisher} ·{' '}
+                  {marketplaceSelection.manifest.name} v{marketplaceSelection.manifest.version}
+                </p>
+                <p className="plugin-note">预览时将核对市场版本与实际插件声明。</p>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={sharedManagementBlocked}
+                  onClick={() => {
+                    invalidate();
+                    clearMarketplaceSelection();
+                  }}
+                >
+                  改为手动来源
+                </button>
+              </div>
+            )}
             <fieldset className="managed-source-choice" disabled={sharedManagementBlocked}>
               <legend>插件来源</legend>
               {(['local', 'github'] as const).map((kind) => (
@@ -652,6 +708,7 @@ export function ManagedPluginsSection({
                     checked={sourceKind === kind}
                     onChange={() => {
                       invalidate();
+                      clearMarketplaceSelection();
                       setSourceKind(kind);
                       setLocalError(undefined);
                     }}
@@ -671,6 +728,7 @@ export function ManagedPluginsSection({
                   disabled={sharedManagementBlocked}
                   onChange={(event) => {
                     invalidate();
+                    clearMarketplaceSelection();
                     setPath(event.target.value);
                     setLocalError(undefined);
                   }}
@@ -689,6 +747,7 @@ export function ManagedPluginsSection({
                     disabled={sharedManagementBlocked}
                     onChange={(event) => {
                       invalidate();
+                      clearMarketplaceSelection();
                       setRepository(event.target.value);
                       setLocalError(undefined);
                     }}
@@ -703,6 +762,7 @@ export function ManagedPluginsSection({
                     disabled={sharedManagementBlocked}
                     onChange={(event) => {
                       invalidate();
+                      clearMarketplaceSelection();
                       setCommit(event.target.value);
                       setLocalError(undefined);
                     }}
@@ -718,6 +778,7 @@ export function ManagedPluginsSection({
                     disabled={sharedManagementBlocked}
                     onChange={(event) => {
                       invalidate();
+                      clearMarketplaceSelection();
                       setSubdirectory(event.target.value);
                       setLocalError(undefined);
                     }}

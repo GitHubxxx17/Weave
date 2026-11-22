@@ -285,7 +285,7 @@ The detailed learning guide is
 
 ### Local plugin installation
 
-The Studio Plugins panel can import an already bundled local ESM plugin
+Open **插件市场** in Studio's left navigation, then **已安装**, to import an already bundled local ESM plugin
 directory into a bound managed store. Import prepares a candidate. Activation
 requires a separate review before Server loads that version.
 
@@ -328,7 +328,7 @@ WEAVE_TEST_PROFILE=/absolute/isolated/profile node --input-type=module -e '
 Run `pnpm --filter @weave/studio dev` in another terminal and open
 `http://127.0.0.1:5173`.
 
-The same bound profile supports public GitHub sources in the Plugins panel.
+The same bound profile supports public GitHub sources in the marketplace's Installed view.
 Choose GitHub and provide `https://github.com/owner/repository`, a complete
 40-character lowercase commit SHA and an optional relative plugin subdirectory.
 The directory must already contain a bundled Weave plugin. Preview downloads and
@@ -336,6 +336,40 @@ validates the fixed content; import saves a candidate and activation remains a
 separate review. GitHub API rate limits apply. See
 [GitHub acquisition](docs/learning/2026-11-22-github-plugin-acquisition.md) for
 source identity, cancellation and installation behavior.
+
+### Plugin marketplace
+
+The left **插件市场** page separates discovery from installed plugin management.
+Search and filter official bundled plugins and community releases in **发现插件**;
+local/GitHub installation, version history, explicit activation and MCP stay in
+**已安装**. The main plugin entry is no longer a right-hand activity tab.
+Switching pages retains the active conversation, draft, terminal and preview tabs.
+
+Official entries identify Weave's actual bundled plugins. The default community
+directory is maintained in `marketplace/submissions/` and generated into
+`marketplace/index.json`; it starts empty rather than listing unpublished plugins.
+Use **管理索引源** in Discover to add HTTPS JSON indexes, including GitHub blob
+URLs. Switch sources to browse them, then explicitly refresh to fetch current
+content. Source settings survive Server restart. Discovery reads cached data;
+adding a source does not install or trust its plugins. A failed refresh retains
+the last successful catalog and reports its stale state.
+
+Operators can also set `WEAVE_PLUGIN_MARKETPLACE_CATALOG` to an absolute catalog
+path or pass `pluginMarketplaceCatalogFile` to `startServer`. Restart Server after
+editing this local file. The local directory remains independent of user-added
+remote sources. Unreadable or invalid indexes do not stop agent work.
+
+Choosing **准备安装** copies a fixed release into the existing import form. Press
+**预览插件** to fetch and compare the actual manifest with the index declaration.
+Import creates an inert candidate, and activation requires its own trust review.
+The marketplace supports public fixed-commit GitHub bundles. Developers prepare
+an entry, submit it through a GitHub PR, and validate the deterministic directory
+with `pnpm marketplace:check`; see the
+[publishing guide](docs/learning/plugin-marketplace-publishing.md). The checked-in
+directory works without a hosted account or upload service. Custom right panels
+retain their own future SDK design. See the
+[marketplace guide](docs/learning/2026-11-22-plugin-marketplace.md) for the catalog
+format, bounds, lifecycle and developer publication workflow.
 
 ## Agent Runner
 

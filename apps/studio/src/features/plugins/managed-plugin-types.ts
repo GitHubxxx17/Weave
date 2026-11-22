@@ -61,7 +61,7 @@ export const githubPluginSourceSchema = z
 export type GithubPluginSource = z.infer<typeof githubPluginSourceSchema>;
 
 // Preserve the reviewed manifest in full for the activation command.
-const manifestSchema = z
+export const managedManifestSchema = z
   .strictObject({
     id: pluginIdSchema,
     name: z.string().min(1),
@@ -101,7 +101,9 @@ const manifestSchema = z
       .readonly(),
   })
   .readonly();
-export type ManagedManifest = z.infer<typeof manifestSchema>;
+export type ManagedManifest = z.infer<typeof managedManifestSchema>;
+
+const manifestSchema = managedManifestSchema;
 
 const candidateFields = {
   manifest: manifestSchema,

@@ -11,6 +11,10 @@ import { registerFileUndoRoutes } from './file-undo-api.js';
 import { registerFileRoutes, type FileAppOptions } from './file-api.js';
 import { registerPluginRoutes, type PluginAppOptions } from './plugin-api.js';
 import { registerMcpRoutes, type McpAppOptions } from './mcp-api.js';
+import {
+  registerPluginMarketplaceRoutes,
+  type PluginMarketplaceAppOptions,
+} from './plugin-marketplace-api.js';
 
 const healthResponseSchema = z.object({
   status: z.enum(['ok', 'unavailable']),
@@ -36,6 +40,7 @@ export interface AppOptions
     FileAppOptions,
     PluginAppOptions,
     McpAppOptions,
+    PluginMarketplaceAppOptions,
     ProviderAppOptions {
   /**
    * Exact browser origin allowed to call the local control plane.
@@ -85,6 +90,7 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
   registerAgentRoutes(app, runtime, options ?? {});
   registerProviderRoutes(app, options ?? {});
   registerPluginRoutes(app, options ?? {});
+  registerPluginMarketplaceRoutes(app, options ?? {});
   registerMcpRoutes(app, options ?? {});
 
   return app;

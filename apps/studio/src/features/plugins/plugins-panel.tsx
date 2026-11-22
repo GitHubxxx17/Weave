@@ -8,6 +8,7 @@ import { PluginDecisionDialog } from './plugin-decision-dialog.js';
 import { createPluginReview, type PluginReview } from './plugin-review.js';
 import { PluginTrustDialog } from './plugin-trust-dialog.js';
 import type { PluginDeclarations, PluginIssue, PluginListItem } from './plugin-types.js';
+import type { MarketplaceInstallSelection } from './plugin-marketplace-types.js';
 
 const knownOrigins = ['builtin', 'registered', 'kernel', 'local'] as const;
 const originLabels: Readonly<Record<string, string>> = {
@@ -347,8 +348,12 @@ function visible(element: HTMLElement): boolean {
 
 export function PluginsPanel({
   hasRunningSessions,
+  marketplaceSelection,
+  onClearMarketplaceSelection,
 }: {
   readonly hasRunningSessions: boolean;
+  readonly marketplaceSelection?: MarketplaceInstallSelection;
+  readonly onClearMarketplaceSelection?: () => void;
 }): ReactElement {
   const store = usePluginCatalogStore();
   const {
@@ -378,7 +383,9 @@ export function PluginsPanel({
   for (const plugin of catalog?.plugins ?? [])
     idCounts.set(plugin.id, (idCounts.get(plugin.id) ?? 0) + 1);
   const getFallbackFocus = (): HTMLElement | null => {
-    const tab = [...document.querySelectorAll<HTMLElement>('[data-plugin-tab]')].find(visible);
+    const tab = [...document.querySelectorAll<HTMLElement>('[data-plugin-navigation]')].find(
+      visible,
+    );
     if (tab !== undefined) return tab;
     if (regionRef.current !== null && visible(regionRef.current)) return regionRef.current;
     return (
@@ -403,7 +410,7 @@ export function PluginsPanel({
           <button
             type="button"
             className="icon-button"
-            aria-label="刷新插件列表"
+            aria-label="全量重新发现并加载扩展"
             title="全量重新发现并加载扩展"
             disabled={
               busy ||
@@ -515,7 +522,11 @@ export function PluginsPanel({
               </div>
             ))}
       </section>
-      <ManagedPluginsSection getFallbackFocus={getFallbackFocus} />
+      <ManagedPluginsSection
+        getFallbackFocus={getFallbackFocus}
+        {...(marketplaceSelection === undefined ? {} : { marketplaceSelection })}
+        {...(onClearMarketplaceSelection === undefined ? {} : { onClearMarketplaceSelection })}
+      />
       <McpPanel hasRunningSessions={hasRunningSessions} getFallbackFocus={getFallbackFocus} />
       {local === undefined ? (
         catalog === undefined ? null : (

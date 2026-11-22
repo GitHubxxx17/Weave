@@ -106,7 +106,7 @@ function renderPanel(store = createPluginCatalogStore(), hasRunningSessions = tr
   return render(
     <StrictMode>
       <PluginCatalogProvider store={store}>
-        <button data-plugin-tab="">插件标签</button>
+        <button data-plugin-navigation="">插件标签</button>
         <PluginsPanel hasRunningSessions={hasRunningSessions} />
       </PluginCatalogProvider>
     </StrictMode>,
@@ -815,7 +815,7 @@ describe('Studio managed plugins', () => {
     fireEvent.click(screen.getByRole('button', { name: '确认激活' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     fireEvent.click(screen.getByRole('button', { name: '读取目录' }));
-    const reload = await screen.findByRole('button', { name: '重新发现并加载扩展' });
+    const reload = await screen.findByRole('button', { name: '重新发现并加载扩展', hidden: false });
     expect(screen.getByText('受管插件目录等待同步')).toBeTruthy();
     expect(network.writes()).toHaveLength(1);
     fireEvent.click(reload);

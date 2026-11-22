@@ -10,14 +10,16 @@ import {
 
 const storageKey = 'weave.studio.panelTabs.v2';
 
-const panelKindSchema = z.string().refine(isPanelKind);
-
-const storedTabSchema = z.object({ id: z.string().min(1), kind: panelKindSchema });
+// Validate stored structure before filtering obsolete and future kinds individually.
+const storedTabSchema = z.object({
+  id: z.string().min(1).max(256),
+  kind: z.string().min(1).max(128),
+});
 
 const storedLayoutSchema = z.object({
-  tabs: z.array(storedTabSchema),
-  pinned: z.array(z.string()),
-  active: z.string(),
+  tabs: z.array(storedTabSchema).max(128),
+  pinned: z.array(z.string().max(256)).max(128),
+  active: z.string().max(256),
 });
 
 /**
@@ -61,11 +63,16 @@ function defaultLayout(): PanelLayout {
  * single-instance tabs, and repairs the pinned set and active id so a stored
  * layout is always usable.
  */
-function normalize(layout: PanelLayout): PanelLayout {
+function normalize(layout: {
+  readonly tabs: readonly { readonly id: string; readonly kind: string }[];
+  readonly pinned: readonly string[];
+  readonly active: string;
+}): PanelLayout {
   const seenIds = new Set<string>();
   const seenSingletonKinds = new Set<PanelKind>();
   const tabs: PanelTab[] = [];
   for (const tab of layout.tabs) {
+    if (!isPanelKind(tab.kind)) continue;
     const descriptor = panelDescriptor(tab.kind);
     if (descriptor === undefined || descriptor.comingSoon || seenIds.has(tab.id)) {
       continue;
@@ -83,7 +90,8 @@ function normalize(layout: PanelLayout): PanelLayout {
     seenIds.add(tab.id);
     tabs.push({ id: tab.id, kind: tab.kind });
   }
-  const safeTabs = tabs.length > 0 ? tabs : defaultLayout().tabs;
+  if (tabs.length === 0) return defaultLayout();
+  const safeTabs = tabs;
   const ids = new Set(safeTabs.map((tab) => tab.id));
   const pinned = [...new Set(layout.pinned)].filter((id) => ids.has(id));
   const active = ids.has(layout.active) ? layout.active : (safeTabs[0]?.id ?? 'overview');

@@ -1,3 +1,6 @@
 .superpowers/**
 docs/superpowers/**
 pnpm-lock.yaml
+
+# Generated deterministically; marketplace:check validates its exact bytes.
+marketplace/index.json

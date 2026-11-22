@@ -19,6 +19,65 @@ function cleanupOptions(resources: () => ServerShutdownResources) {
 }
 
 describe('Server shutdown', () => {
+  it('starts coordinator cancellation synchronously before awaiting marketplace settings drain', async () => {
+    const release = Promise.withResolvers<void>();
+    const drained = Promise.withResolvers<void>();
+    let fromCancellation: Promise<void> | undefined;
+    const coordinator = {
+      dispose() {
+        fromCancellation = shutdown.stop();
+        return Promise.resolve();
+      },
+    } as unknown as NonNullable<ServerShutdownResources['coordinator']>;
+    const options = cleanupOptions(() => ({
+      coordinator,
+      pluginMarketplaceManager: {
+        closeSync() {},
+        async drain() {
+          drained.resolve();
+          await release.promise;
+        },
+      },
+    }));
+    const shutdown = createServerShutdown(options);
+    const stopping = shutdown.stop();
+    expect(fromCancellation).toBe(stopping);
+    await drained.promise;
+    expect(options.disposeHost).not.toHaveBeenCalled();
+    release.resolve();
+    await stopping;
+    expect(options.disposeHost).toHaveBeenCalledOnce();
+  });
+
+  it.each(['stop', 'failStartup'] as const)(
+    'closes marketplace refreshes and drains persisted settings before HTTP cleanup during %s',
+    async (method) => {
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const closeSync = vi.fn();
+      const options = cleanupOptions(() => ({
+        pluginMarketplaceManager: {
+          closeSync,
+          async drain() {
+            entered.resolve();
+            await release.promise;
+          },
+        },
+      }));
+      const shutdown = createServerShutdown(options);
+      const cause = new Error('startup');
+      const operation = (method === 'stop' ? shutdown.stop() : shutdown.failStartup(cause)).catch(
+        (error: unknown) => error,
+      );
+      await entered.promise;
+      expect(closeSync).toHaveBeenCalledOnce();
+      expect(options.disposeHost).not.toHaveBeenCalled();
+      release.resolve();
+      expect(await operation).toBe(method === 'stop' ? undefined : cause);
+      expect(options.disposeHost).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each(['stop', 'failStartup'] as const)(
     'awaits external acquisition cleanup before lease release during %s',
     async (method) => {

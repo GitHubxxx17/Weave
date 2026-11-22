@@ -298,7 +298,7 @@ describe('PluginsPanel', () => {
 
     expect((await screen.findByRole('alert')).textContent).toContain('插件请求失败');
 
-    fireEvent.click(screen.getByRole('button', { name: '刷新插件列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '全量重新发现并加载扩展' }));
 
     expect(await screen.findByText('Server Echo')).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
@@ -399,13 +399,14 @@ describe('local plugin management panel', () => {
           finish = resolve;
         }),
     );
-    fireEvent.click(screen.getByRole('button', { name: '刷新插件列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '全量重新发现并加载扩展' }));
     expect(screen.getByText('local-echo', { selector: '.plugin-name' })).toBeTruthy();
     expect((screen.getByRole('button', { name: '审阅并信任' }) as HTMLButtonElement).disabled).toBe(
       true,
     );
     expect(
-      (screen.getByRole('button', { name: '刷新插件列表' }) as HTMLButtonElement).disabled,
+      (screen.getByRole('button', { name: '全量重新发现并加载扩展' }) as HTMLButtonElement)
+        .disabled,
     ).toBe(true);
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     finish(
@@ -419,7 +420,8 @@ describe('local plugin management panel', () => {
     );
     await waitFor(() =>
       expect(
-        (screen.getByRole('button', { name: '刷新插件列表' }) as HTMLButtonElement).disabled,
+        (screen.getByRole('button', { name: '全量重新发现并加载扩展' }) as HTMLButtonElement)
+          .disabled,
       ).toBe(false),
     );
   });
@@ -490,7 +492,7 @@ describe('local plugin management panel', () => {
     expect(screen.getByText(/发现结果已截断/)).toBeTruthy();
     expect(screen.getByText(/无法完成扫描/)).toBeTruthy();
     expect(screen.getByText(/等待重新构建/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: '刷新插件列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '全量重新发现并加载扩展' }));
     expect(await screen.findByText(/构建失败/)).toBeTruthy();
   });
 
@@ -567,7 +569,7 @@ describe('local plugin management panel', () => {
     });
     render(
       <PluginCatalogProvider store={store}>
-        <button data-plugin-tab="">插件标签</button>
+        <button data-plugin-navigation="">插件标签</button>
         <PluginsPanel hasRunningSessions={false} />
       </PluginCatalogProvider>,
     );
