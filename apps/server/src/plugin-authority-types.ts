@@ -1,6 +1,11 @@
 import { isAbsolute, join } from 'node:path';
 import { pluginManifestSchema, type PluginManifest } from '@weave/plugin';
-import type { PluginTrustStore, RecordedPluginTrustEvent } from '@weave/plugin-host';
+import {
+  githubPluginSourceSchema,
+  type GithubPluginSource,
+  type PluginTrustStore,
+  type RecordedPluginTrustEvent,
+} from '@weave/plugin-host';
 import { z } from 'zod';
 
 export type Digest = string;
@@ -48,6 +53,12 @@ export interface LocalDirectoryProvenance {
   readonly sourceDirectory: string;
 }
 
+export interface GithubProvenance extends GithubPluginSource {
+  readonly kind: 'github';
+}
+
+export type PluginProvenance = LocalDirectoryProvenance | GithubProvenance;
+
 export interface ValidatedArtifactIdentity {
   readonly pluginId: string;
   readonly digest: Digest;
@@ -64,7 +75,7 @@ export interface ManagedSelection {
 
 export interface ManagedCandidate extends ValidatedArtifactIdentity {
   readonly firstImportSequence: Sequence;
-  readonly provenance: LocalDirectoryProvenance;
+  readonly provenance: PluginProvenance;
 }
 
 export interface ManagedPluginRecord {
@@ -115,7 +126,7 @@ export type ManagedPreparation =
   | {
       readonly kind: 'import';
       readonly artifact: ValidatedArtifactIdentity;
-      readonly provenance: LocalDirectoryProvenance;
+      readonly provenance: PluginProvenance;
     }
   | { readonly kind: 'activate' | 'enable'; readonly artifact: ValidatedArtifactIdentity }
   | { readonly kind: 'disable' | 'revoke' | 'uninstall' };
@@ -133,7 +144,7 @@ export type PluginInstallEvent =
       readonly manifest: PluginManifest;
       readonly files: number;
       readonly bytes: number;
-      readonly provenance: LocalDirectoryProvenance;
+      readonly provenance: PluginProvenance;
     }
   | {
       readonly kind: 'activated';
@@ -304,7 +315,7 @@ const artifactSchema: z.ZodType<ValidatedArtifactIdentity> = z
     message: 'Artifact plugin ID must equal manifest ID',
     path: ['manifest', 'id'],
   });
-const provenanceSchema: z.ZodType<LocalDirectoryProvenance> = z
+const localProvenanceSchema = z
   .object({
     kind: z.literal('local-directory'),
     sourceDirectory: z
@@ -315,6 +326,11 @@ const provenanceSchema: z.ZodType<LocalDirectoryProvenance> = z
       }),
   })
   .strict();
+const githubProvenanceSchema = githubPluginSourceSchema.extend({ kind: z.literal('github') });
+const provenanceSchema: z.ZodType<PluginProvenance> = z.union([
+  localProvenanceSchema,
+  githubProvenanceSchema,
+]);
 
 function commandSchema(immediate: z.ZodType<boolean>): z.ZodType<ManagedCommand> {
   return z

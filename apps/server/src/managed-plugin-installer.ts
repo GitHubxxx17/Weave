@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import { basename, dirname, join } from 'node:path';
 import {
+  createGithubPluginAcquirer,
+  githubPluginSourceSchema,
   PluginArtifactError,
+  type GithubPluginAcquirer,
+  type GithubPluginSource,
   type LocalPluginDeclarationClaims,
   type PluginArtifact,
   type PluginArtifactSourceIdentity,
@@ -24,6 +29,7 @@ import {
   type PluginAuthorityDatabase,
   type PluginAuthoritySnapshot,
   type RecordedManagedOperation,
+  type PluginProvenance,
 } from './plugin-authority-types.js';
 import { absoluteStorePathSchema } from './plugin-store-ownership-types.js';
 
@@ -36,6 +42,10 @@ export interface ManagedImportPreview {
   readonly expiresAt: string;
   readonly expectedInstallSequence: number;
   readonly candidate: Omit<PluginArtifactSourceIdentity, 'sourceDirectory'>;
+}
+
+export interface ManagedGithubImportPreview extends ManagedImportPreview {
+  readonly github: GithubPluginSource;
 }
 
 export type ManagedImportResult =
@@ -57,6 +67,10 @@ export type ManagedImportResult =
 
 export interface ManagedPluginInstaller {
   preview(sourceDirectory: string, signal?: AbortSignal): Promise<ManagedImportPreview>;
+  previewGithub(
+    source: GithubPluginSource,
+    signal?: AbortSignal,
+  ): Promise<ManagedGithubImportPreview>;
   import(request: ManagedImportRequest, signal?: AbortSignal): Promise<ManagedImportResult>;
   readonly applySelection: ApplyManagedSelection;
   snapshot(): {
@@ -64,12 +78,15 @@ export interface ManagedPluginInstaller {
     observed: ManagedRuntimeObservation;
   };
   closeSync(): void;
+  drain(): Promise<void>;
 }
 
 export interface ManagedPluginInstallerOptions {
   readonly coordinator: ExtensionCoordinator;
   readonly authority: Pick<PluginAuthorityDatabase, 'lookupSync' | 'commitSync' | 'snapshotSync'>;
-  readonly store: Pick<OwnedPluginArtifactStore, 'preview' | 'stage'>;
+  readonly store: Pick<OwnedPluginArtifactStore, 'preview' | 'stage'> &
+    Partial<Pick<OwnedPluginArtifactStore, 'binding'>>;
+  readonly githubAcquirer?: GithubPluginAcquirer;
   readonly composition: Pick<
     ReturnType<typeof createManagedPluginComposition>,
     | 'assertCommandLeaseSync'
@@ -93,8 +110,9 @@ type Saved = Pick<
 >;
 
 interface Preview {
-  readonly requestedDirectory: string;
-  readonly source: PluginArtifactSourceIdentity;
+  readonly requestedDirectory?: string;
+  readonly provenance: PluginProvenance;
+  readonly source: Omit<PluginArtifactSourceIdentity, 'sourceDirectory'>;
   readonly installSequence: number;
   readonly deadline: number;
 }
@@ -111,7 +129,10 @@ function stalePreview(cause?: unknown): ManagedInstallerError {
   return new ManagedInstallerError('plugin-preview-stale', { cause });
 }
 
-function matchesSource(artifact: PluginArtifact, source: PluginArtifactSourceIdentity): boolean {
+function matchesSource(
+  artifact: PluginArtifact,
+  source: Omit<PluginArtifactSourceIdentity, 'sourceDirectory'>,
+): boolean {
   return (
     artifact.digest === source.digest &&
     artifact.files === source.files &&
@@ -135,12 +156,39 @@ export function createManagedPluginInstaller(
   options: ManagedPluginInstallerOptions,
 ): ManagedPluginInstaller {
   const { authority, coordinator, composition, store } = options;
+  const githubAcquirer =
+    options.githubAcquirer ??
+    (store.binding === undefined
+      ? undefined
+      : createGithubPluginAcquirer({
+          directory: join(
+            dirname(store.binding.storeDirectory),
+            `.${basename(store.binding.storeDirectory)}.github-acquisition`,
+          ),
+        }));
   const monotonicNow = options.monotonicNow ?? (() => performance.now());
   const wallNow = options.wallNow ?? Date.now;
   const previews = new Map<string, Preview>();
   const lifetime = new AbortController();
   const loss = composition.managedAuthority.ownershipLossSignal;
   let pending = false;
+  const pendingOperations = new Set<Promise<void>>();
+
+  function tracked<T>(operation: () => Promise<T>): Promise<T> {
+    let resolve!: () => void;
+    const completion = new Promise<void>((done) => {
+      resolve = done;
+    });
+    pendingOperations.add(completion);
+    return operation().finally(() => {
+      pendingOperations.delete(completion);
+      resolve();
+    });
+  }
+
+  async function drain() {
+    while (pendingOperations.size > 0) await Promise.all([...pendingOperations]);
+  }
 
   function closeSync() {
     loss.removeEventListener('abort', closeSync);
@@ -165,14 +213,14 @@ export function createManagedPluginInstaller(
     }
   }
 
-  async function preview(
-    sourceDirectory: string,
+  async function inspectPreview(
+    inspect: (signal: AbortSignal) => Promise<{
+      source: PluginArtifactSourceIdentity;
+      requestedDirectory?: string;
+      provenance: PluginProvenance;
+    }>,
     signal?: AbortSignal,
   ): Promise<ManagedImportPreview> {
-    const directory = absoluteStorePathSchema.safeParse(sourceDirectory);
-    if (!directory.success) {
-      throw new ManagedInstallerError('plugin-invalid-request', { cause: directory.error });
-    }
     assertActiveSync(signal);
     pruneExpiredSync();
     if (pending || previews.size >= maxPreviews) {
@@ -183,7 +231,7 @@ export function createManagedPluginInstaller(
       signal === undefined ? lifetime.signal : AbortSignal.any([lifetime.signal, signal]);
     try {
       // The owned store returns validated, detached and frozen evidence.
-      const source = await store.preview({ sourceDirectory: directory.data, signal: effective });
+      const { source, requestedDirectory, provenance } = await inspect(effective);
       assertActiveSync(signal);
       const installSequence = authority.snapshotSync().heads.installSequence;
       assertActiveSync(signal);
@@ -193,8 +241,14 @@ export function createManagedPluginInstaller(
       const deadline = monotonicNow() + previewLifetimeMs;
       const expiresAt = new Date(wallNow() + previewLifetimeMs).toISOString();
       previews.set(previewId, {
-        requestedDirectory: directory.data,
-        source,
+        ...(requestedDirectory === undefined ? {} : { requestedDirectory }),
+        provenance,
+        source: {
+          manifest: source.manifest,
+          digest: source.digest,
+          files: source.files,
+          bytes: source.bytes,
+        },
         installSequence,
         deadline,
       });
@@ -215,6 +269,49 @@ export function createManagedPluginInstaller(
     } finally {
       pending = false;
     }
+  }
+
+  function preview(sourceDirectory: string, signal?: AbortSignal): Promise<ManagedImportPreview> {
+    return tracked(async () => {
+      const directory = absoluteStorePathSchema.safeParse(sourceDirectory);
+      if (!directory.success)
+        throw new ManagedInstallerError('plugin-invalid-request', { cause: directory.error });
+      return inspectPreview(async (effective) => {
+        const source = await store.preview({ sourceDirectory: directory.data, signal: effective });
+        return {
+          source,
+          requestedDirectory: directory.data,
+          provenance: { kind: 'local-directory', sourceDirectory: source.sourceDirectory },
+        };
+      }, signal);
+    });
+  }
+
+  function previewGithub(
+    input: GithubPluginSource,
+    signal?: AbortSignal,
+  ): Promise<ManagedGithubImportPreview> {
+    return tracked(async () => {
+      const parsed = githubPluginSourceSchema.safeParse(input);
+      if (!parsed.success)
+        throw new ManagedInstallerError('plugin-invalid-request', { cause: parsed.error });
+      const github = parsed.data;
+      assertActiveSync(signal);
+      if (githubAcquirer === undefined)
+        throw new ManagedInstallerError('plugin-installer-disabled');
+      const review = await inspectPreview(async (effective) => {
+        composition.assertCommandLeaseSync();
+        assertActiveSync(signal);
+        const source = await githubAcquirer.withSource(
+          github,
+          (sourceDirectory, acquisitionSignal) =>
+            store.preview({ sourceDirectory, signal: acquisitionSignal }),
+          effective,
+        );
+        return { source, provenance: { kind: 'github', ...github } };
+      }, signal);
+      return { ...review, github };
+    });
   }
 
   function assertNamespaceSync(pluginId: string, claims: NamespaceClaims, previewId: string) {
@@ -244,9 +341,40 @@ export function createManagedPluginInstaller(
 
   async function stageReview(review: Preview, previewId: string, signal: AbortSignal) {
     try {
+      if (review.provenance.kind === 'github') {
+        if (githubAcquirer === undefined)
+          throw new ManagedInstallerError('plugin-installer-disabled');
+        const { repository, commit, subdirectory } = review.provenance;
+        const source = { repository, commit, subdirectory };
+        return await githubAcquirer.withSource(
+          source,
+          async (sourceDirectory, acquisitionSignal) => {
+            const acquired = await store.preview({ sourceDirectory, signal: acquisitionSignal });
+            if (
+              canonicalJson({
+                manifest: acquired.manifest,
+                digest: acquired.digest,
+                files: acquired.files,
+                bytes: acquired.bytes,
+              }) !== canonicalJson(review.source)
+            ) {
+              previews.delete(previewId);
+              throw stalePreview();
+            }
+            return store.stage({
+              sourceDirectory,
+              expectedSource: acquired,
+              signal: acquisitionSignal,
+            });
+          },
+          signal,
+        );
+      }
+      if (review.requestedDirectory === undefined)
+        throw new Error('Local preview lacks requested directory');
       return await store.stage({
         sourceDirectory: review.requestedDirectory,
-        expectedSource: review.source,
+        expectedSource: { ...review.source, sourceDirectory: review.provenance.sourceDirectory },
         signal,
       });
     } catch (cause: unknown) {
@@ -352,10 +480,7 @@ export function createManagedPluginInstaller(
             files: artifact.files,
             bytes: artifact.bytes,
           },
-          provenance: {
-            kind: 'local-directory' as const,
-            sourceDirectory: review.source.sourceDirectory,
-          },
+          provenance: review.provenance,
         };
         // No awaits between the last live head, cached namespace observations and commit.
         assertFreshSync();
@@ -426,7 +551,8 @@ export function createManagedPluginInstaller(
 
   return {
     preview,
-    import: importReviewed,
+    previewGithub,
+    import: (request, signal) => tracked(() => importReviewed(request, signal)),
     applySelection: options.applySelection,
     snapshot() {
       const cachedAuthority = composition.cachedAuthoritySync();
@@ -434,5 +560,6 @@ export function createManagedPluginInstaller(
       return { authority: cachedAuthority, observed: { generation, members } };
     },
     closeSync,
+    drain,
   };
 }

@@ -1,4 +1,4 @@
-import { foldTrust } from '@weave/plugin-host';
+import { foldTrust, githubPluginSourceSchema } from '@weave/plugin-host';
 import { z } from 'zod';
 import type {
   ManagedApplicationFailureKind,
@@ -39,6 +39,9 @@ const previewSchema = z.strictObject({
 });
 export type ImportPreviewResponse = z.infer<typeof previewSchema>;
 export const importPreviewResponseSchema: z.ZodType<ImportPreviewResponse> = previewSchema;
+export const githubImportPreviewResponseSchema = previewSchema.extend({
+  github: githubPluginSourceSchema,
+});
 
 const selectionSchema = z.strictObject({
   digest: digestSchema,
@@ -67,11 +70,19 @@ const catalogSchema = z.strictObject({
     z.strictObject({
       pluginId: pluginIdSchema,
       candidates: z.array(
-        candidateSchema.extend({
-          importSequence: linkSchema,
-          importedAt: z.iso.datetime(),
-          provenance: z.literal('local-directory'),
-        }),
+        z.discriminatedUnion('provenance', [
+          candidateSchema.extend({
+            importSequence: linkSchema,
+            importedAt: z.iso.datetime(),
+            provenance: z.literal('local-directory'),
+          }),
+          candidateSchema.extend({
+            importSequence: linkSchema,
+            importedAt: z.iso.datetime(),
+            provenance: z.literal('github'),
+            github: githubPluginSourceSchema,
+          }),
+        ]),
       ),
       selection: selectionSchema.nullable(),
       trust: trustSchema.nullable(),
@@ -217,7 +228,7 @@ function projectCatalog(
         pluginId,
         candidates: [...candidates]
           .sort(byImportSequence)
-          .map(({ digest, manifest, files, bytes, firstImportSequence }) => {
+          .map(({ digest, manifest, files, bytes, firstImportSequence, provenance }) => {
             const recorded = imports.get(firstImportSequence);
             if (
               recorded === undefined ||
@@ -233,7 +244,16 @@ function projectCatalog(
               bytes,
               importSequence: firstImportSequence,
               importedAt: recorded.occurredAt,
-              provenance: 'local-directory' as const,
+              ...(provenance.kind === 'local-directory'
+                ? { provenance: 'local-directory' as const }
+                : {
+                    provenance: 'github' as const,
+                    github: {
+                      repository: provenance.repository,
+                      commit: provenance.commit,
+                      subdirectory: provenance.subdirectory,
+                    },
+                  }),
             };
           }),
         selection: projectSelection(selection),

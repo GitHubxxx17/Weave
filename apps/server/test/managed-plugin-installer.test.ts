@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { PluginArtifactError } from '@weave/plugin-host';
+import * as pluginHostPackage from '@weave/plugin-host';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createManagedPluginInstaller,
@@ -9,6 +10,7 @@ import {
   type ManagedPluginInstallerOptions,
 } from '../src/managed-plugin-installer.js';
 import { PluginStoreOwnershipError } from '../src/plugin-store-ownership-types.js';
+import { createSqlitePluginAuthorityDatabase } from '../src/plugin-authority-store.js';
 import { createServerShutdown } from '../src/server-shutdown.js';
 import { createRealManagedCompositionFixture } from './support/managed-plugin-composition-fixture.js';
 
@@ -43,7 +45,11 @@ async function withFixture(run: (fixture: Fixture) => Promise<void>) {
   }
 }
 
-function manager(fixture: Fixture, options?: Parameters<Fixture['compose']>[0]) {
+function manager(
+  fixture: Fixture,
+  options?: Parameters<Fixture['compose']>[0],
+  installerOverrides: Partial<ManagedPluginInstallerOptions> = {},
+) {
   const host = fixture.compose(options);
   const snapshotSync = vi.fn(fixture.authority.snapshotSync);
   const lookupSync = vi.fn(fixture.authority.lookupSync);
@@ -64,11 +70,13 @@ function manager(fixture: Fixture, options?: Parameters<Fixture['compose']>[0]) 
     applySelection: host.applyManagedSelection!,
     monotonicNow: () => monotonic,
     wallNow: () => wall,
+    ...installerOverrides,
   };
   const installer = createManagedPluginInstaller(installerOptions);
   return {
     host,
     installer,
+    installerOptions,
     preview,
     stage,
     scan,
@@ -84,6 +92,386 @@ function manager(fixture: Fixture, options?: Parameters<Fixture['compose']>[0]) 
 }
 
 describe('managed plugin installer', () => {
+  it('derives the production scratch root as a hidden sibling and asserts ownership before acquisition', () =>
+    withFixture(async (fixture) => {
+      const { directory } = await fixture.writeSource('notes');
+      const calls: string[] = [];
+      const create = vi.spyOn(pluginHostPackage, 'createGithubPluginAcquirer').mockReturnValue({
+        async withSource(_source, use, signal) {
+          expect(calls.at(-1)).toBe('lease');
+          calls.push('acquire');
+          return use(directory, signal!);
+        },
+      });
+      try {
+        const m = manager(fixture, undefined, { store: fixture.owned });
+        const assertLease = m.installerOptions.composition.assertCommandLeaseSync;
+        vi.spyOn(m.installerOptions.composition, 'assertCommandLeaseSync').mockImplementation(
+          () => {
+            calls.push('lease');
+            return assertLease();
+          },
+        );
+        expect(create).toHaveBeenCalledExactlyOnceWith({
+          directory: join(
+            fixture.owned.binding.storeDirectory,
+            '..',
+            `.${basename(fixture.owned.binding.storeDirectory)}.github-acquisition`,
+          ),
+        });
+        await m.installer.previewGithub({
+          repository: 'https://github.com/weave/notes',
+          commit: 'a'.repeat(40),
+          subdirectory: '',
+        });
+        expect(calls).toEqual(['lease', 'acquire', 'lease']);
+        m.installer.closeSync();
+      } finally {
+        create.mockRestore();
+      }
+    }));
+
+  it.each(['coordinator', 'unpublished'] as const)(
+    'drains the wired installer before %s disposal completes',
+    (operation) =>
+      withFixture(async (fixture) => {
+        const entered = Promise.withResolvers<void>();
+        const cleanup = Promise.withResolvers<void>();
+        let cleaned = false;
+        const host = fixture.compose({
+          installer: true,
+          githubAcquirer: {
+            async withSource(_source, _use, signal) {
+              entered.resolve();
+              await new Promise<void>((resolve) =>
+                signal!.addEventListener('abort', () => resolve(), { once: true }),
+              );
+              await cleanup.promise;
+              cleaned = true;
+              throw signal!.reason;
+            },
+          },
+        });
+        const pending = host
+          .installer!.previewGithub({
+            repository: 'https://github.com/weave/notes',
+            commit: 'a'.repeat(40),
+            subdirectory: '',
+          })
+          .catch((cause: unknown) => cause);
+        await entered.promise;
+        let disposed = false;
+        const disposal = (
+          operation === 'coordinator' ? host.coordinator.dispose() : host.closeUnpublished()
+        ).then(() => {
+          disposed = true;
+        });
+        try {
+          await Promise.resolve();
+          expect(disposed).toBe(false);
+          expect(cleaned).toBe(false);
+        } finally {
+          cleanup.resolve();
+        }
+        expect(await pending).toMatchObject(unavailable);
+        await disposal;
+        expect(cleaned).toBe(true);
+        await expect(
+          host.installer!.previewGithub({
+            repository: 'https://github.com/weave/notes',
+            commit: 'a'.repeat(40),
+            subdirectory: '',
+          }),
+        ).rejects.toMatchObject(unavailable);
+      }),
+  );
+
+  it('fails preview and import before durable authority when remote cleanup fails', () =>
+    withFixture(async (fixture) => {
+      const { directory } = await fixture.writeSource('notes');
+      let failCleanup = true;
+      const failure = new Error('private cleanup');
+      const m = manager(fixture, undefined, {
+        githubAcquirer: {
+          async withSource(_source, use, signal) {
+            const result = await use(directory, signal!);
+            if (failCleanup) throw failure;
+            return result;
+          },
+        },
+      });
+      const source = {
+        repository: 'https://github.com/weave/notes',
+        commit: 'a'.repeat(40),
+        subdirectory: '',
+      };
+      await expect(m.installer.previewGithub(source)).rejects.toBe(failure);
+      expect(m.snapshotSync).not.toHaveBeenCalled();
+      failCleanup = false;
+      const review = await m.installer.previewGithub(source);
+      failCleanup = true;
+      await expect(m.installer.import(request(review))).rejects.toBe(failure);
+      expect(m.commitSync).not.toHaveBeenCalled();
+      expect(fixture.authority.snapshotSync().heads.operationSequence).toBe(0);
+      m.installer.closeSync();
+    }));
+
+  it('reacquires reviewed GitHub bytes in a new directory, commits after cleanup and replays offline', () =>
+    withFixture(async (fixture) => {
+      const marker = join(fixture.root, 'must-never-execute');
+      const first = await fixture.writeSource('notes', 'source', marker);
+      const second = await fixture.writeSource('notes', 'source', marker);
+      const normalizedSecond = await fs.realpath(second.directory);
+      const source = {
+        repository: 'https://github.com/weave/notes',
+        commit: 'a'.repeat(40),
+        subdirectory: 'plugins/notes',
+      };
+      let acquired = 0;
+      let cleaned = 0;
+      const m = manager(fixture, undefined, {
+        githubAcquirer: {
+          async withSource(_source, use, signal) {
+            const directory = acquired++ === 0 ? first.directory : second.directory;
+            try {
+              return await use(directory, signal!);
+            } finally {
+              await fs.rm(directory, { recursive: true });
+              cleaned++;
+            }
+          },
+        },
+      });
+      const initial = m.host.coordinator.generationSnapshot();
+      const review = await m.installer.previewGithub({
+        ...source,
+        repository: 'https://github.com/WEAVE/Notes',
+      });
+      expect(review.github).toEqual(source);
+      expect(cleaned).toBe(1);
+      expect(JSON.stringify(review)).not.toContain(first.directory);
+      m.commitSync.mockImplementation((input) => {
+        expect(cleaned).toBe(2);
+        return fixture.authority.commitSync(input);
+      });
+      const original = request(review);
+      const imported = await m.installer.import(original);
+      expect(imported).toMatchObject({
+        kind: 'committed',
+        application: { status: 'not-required' },
+      });
+      expect(fixture.authority.snapshotSync()).toMatchObject({
+        installations: [
+          { selection: null, candidates: [{ provenance: { kind: 'github', ...source } }] },
+        ],
+        trustEvents: [],
+      });
+      expect(m.host.coordinator.generationSnapshot()).toEqual(initial);
+      expect(m.stage.mock.calls[0]?.[0]).toMatchObject({
+        sourceDirectory: second.directory,
+        expectedSource: { ...review.candidate, sourceDirectory: normalizedSecond },
+      });
+      m.installer.closeSync();
+      await expect(m.installer.import(original, AbortSignal.abort())).resolves.toMatchObject({
+        kind: 'replayed',
+        operation: imported.operation,
+      });
+      expect(acquired).toBe(2);
+      await m.installer.drain();
+      expect(await fixture.exists(marker)).toBe(false);
+      await fixture.authority.close();
+      const reopened = createSqlitePluginAuthorityDatabase({ filename: fixture.databaseFile });
+      const offline = createManagedPluginInstaller({
+        ...m.installerOptions,
+        authority: reopened,
+        githubAcquirer: {
+          async withSource() {
+            throw new Error('Network unavailable after restart');
+          },
+        },
+      });
+      try {
+        offline.closeSync();
+        await expect(offline.import(original, AbortSignal.abort())).resolves.toMatchObject({
+          kind: 'replayed',
+          operation: imported.operation,
+        });
+      } finally {
+        offline.closeSync();
+        await offline.drain();
+        await reopened.close();
+      }
+    }));
+
+  it('invalidates a GitHub review when reacquisition changes its measured bytes', () =>
+    withFixture(async (fixture) => {
+      const first = await fixture.writeSource('notes');
+      const second = await fixture.writeSource('notes', 'changed');
+      let acquired = 0;
+      const m = manager(fixture, undefined, {
+        githubAcquirer: {
+          async withSource(_source, use, signal) {
+            return use(acquired++ === 0 ? first.directory : second.directory, signal!);
+          },
+        },
+      });
+      const review = await m.installer.previewGithub({
+        repository: 'https://github.com/weave/notes',
+        commit: 'a'.repeat(40),
+        subdirectory: '',
+      });
+      await expect(m.installer.import(request(review))).rejects.toMatchObject(stale);
+      await expect(m.installer.import(request(review, 'again'))).rejects.toMatchObject(stale);
+      expect(acquired).toBe(2);
+      expect(m.stage).not.toHaveBeenCalled();
+      expect(fixture.authority.snapshotSync().heads.operationSequence).toBe(0);
+      m.installer.closeSync();
+    }));
+
+  it('passes acquisition deadline cancellation to preview and stage while preserving a retryable review', () =>
+    withFixture(async (fixture) => {
+      const { directory } = await fixture.writeSource('notes');
+      const deadline = new AbortController();
+      const m = manager(fixture, undefined, {
+        githubAcquirer: {
+          async withSource(_source, use) {
+            return use(directory, deadline.signal);
+          },
+        },
+      });
+      const review = await m.installer.previewGithub({
+        repository: 'https://github.com/weave/notes',
+        commit: 'a'.repeat(40),
+        subdirectory: '',
+      });
+      expect(m.preview.mock.calls[0]?.[0].signal).toBe(deadline.signal);
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      m.stage.mockImplementationOnce(async (input) => {
+        expect(input.signal).toBe(deadline.signal);
+        entered.resolve();
+        await release.promise;
+        return fixture.owned.stage(input);
+      });
+      const importing = m.installer.import(request(review)).catch((cause: unknown) => cause);
+      await entered.promise;
+      const timeout = new Error('deadline reached');
+      deadline.abort(timeout);
+      release.resolve();
+      expect(await importing).toBe(timeout);
+      expect(m.commitSync).not.toHaveBeenCalled();
+      m.installer.closeSync();
+    }));
+
+  it('cancels a fresh GitHub import before commit and waits for reacquisition cleanup', () =>
+    withFixture(async (fixture) => {
+      const { directory } = await fixture.writeSource('notes');
+      const entered = Promise.withResolvers<void>();
+      const cleanup = Promise.withResolvers<void>();
+      let call = 0;
+      let cleaned = false;
+      const m = manager(fixture, undefined, {
+        githubAcquirer: {
+          async withSource(_source, use, signal) {
+            if (call++ === 0) return use(directory, signal!);
+            entered.resolve();
+            await new Promise<void>((resolve) =>
+              signal!.addEventListener('abort', () => resolve(), { once: true }),
+            );
+            await cleanup.promise;
+            cleaned = true;
+            throw signal!.reason;
+          },
+        },
+      });
+      const review = await m.installer.previewGithub({
+        repository: 'https://github.com/weave/notes',
+        commit: 'a'.repeat(40),
+        subdirectory: '',
+      });
+      const caller = new AbortController();
+      const pending = m.installer
+        .import(request(review), caller.signal)
+        .catch((cause: unknown) => cause);
+      await entered.promise;
+      caller.abort(new Error('caller cancelled'));
+      let drained = false;
+      const drain = m.installer.drain().then(() => {
+        drained = true;
+      });
+      try {
+        await Promise.resolve();
+        expect(drained).toBe(false);
+        expect(m.commitSync).not.toHaveBeenCalled();
+      } finally {
+        cleanup.resolve();
+      }
+      expect(await pending).toMatchObject(unavailable);
+      await drain;
+      expect(cleaned).toBe(true);
+      expect(fixture.authority.snapshotSync().heads.operationSequence).toBe(0);
+      m.installer.closeSync();
+    }));
+
+  it('drains remote preview cleanup after close before allowing shutdown to release ownership', () =>
+    withFixture(async (fixture) => {
+      const entered = Promise.withResolvers<void>();
+      const cleanup = Promise.withResolvers<void>();
+      const cleaned = Promise.withResolvers<void>();
+      const m = manager(fixture, undefined, {
+        githubAcquirer: {
+          async withSource(_source, _use, signal) {
+            entered.resolve();
+            await new Promise<void>((resolve) =>
+              signal!.addEventListener('abort', () => resolve(), { once: true }),
+            );
+            await cleanup.promise;
+            cleaned.resolve();
+            throw signal!.reason;
+          },
+        },
+      });
+      const pending = m.installer
+        .previewGithub({
+          repository: 'https://github.com/weave/notes',
+          commit: 'a'.repeat(40),
+          subdirectory: '',
+        })
+        .catch((cause: unknown) => cause);
+      await entered.promise;
+      let released = false;
+      const shutdown = createServerShutdown({
+        resources: () => ({
+          installer: m.installer,
+          owned: {
+            quiesce: fixture.owned.quiesce,
+            async close() {
+              await cleaned.promise;
+              released = true;
+              await fixture.owned.close();
+            },
+          },
+        }),
+        disposeHost: async () => {},
+        stopRuntime: async () => {},
+        closeProjectStore() {},
+        closeProviderSettingsStore() {},
+        closeManualTrustStore() {},
+        closeMcpAuthorityStore() {},
+      });
+      const stopped = shutdown.stop();
+      try {
+        await Promise.resolve();
+        expect(released).toBe(false);
+        expect(() => fixture.owned.assertHeldSync()).not.toThrow();
+      } finally {
+        cleanup.resolve();
+      }
+      expect(await pending).toMatchObject(unavailable);
+      await stopped;
+      expect(released).toBe(true);
+    }));
+
   it('checks the input and allows one pending inspection and 64 live reviews', () =>
     withFixture(async (fixture) => {
       const m = manager(fixture);

@@ -2,12 +2,15 @@ import { z } from 'zod';
 import { runtimeApiUrl } from '../runtime/runtime-bridge.js';
 import { PluginApiError } from './plugin-api.js';
 import {
+  githubManagedPreviewSchema,
+  githubPluginSourceInputSchema,
   managedCatalogSchema,
   managedHeadSchema,
   managedIssueSchema,
   managedMutationResponseSchema,
   managedPreviewSchema,
   type ManagedCatalog,
+  type GithubManagedPreview,
   type ManagedCatalogObservation,
   type ManagedMutationResponse,
   type ManagedPlugin,
@@ -23,6 +26,11 @@ const errorStatuses: ReadonlyMap<string, number> = new Map([
   ['plugin-artifact-invalid', 400],
   ['plugin-artifact-unsupported-file', 400],
   ['plugin-artifact-too-large', 400],
+  ['plugin-github-invalid', 400],
+  ['plugin-github-too-large', 400],
+  ['plugin-github-unavailable', 502],
+  ['plugin-github-rate-limited', 429],
+  ['plugin-github-timeout', 504],
   ['forbidden-origin', 403],
   ['plugin-installer-disabled', 404],
   ['plugin-authority-not-found', 404],
@@ -137,6 +145,33 @@ export async function previewManagedPlugin(
     signal,
   );
   return decodeResponse(response, managedPreviewSchema, signal);
+}
+
+export async function previewGithubManagedPlugin(
+  source: unknown,
+  signal?: AbortSignal,
+): Promise<GithubManagedPreview> {
+  const parsed = githubPluginSourceInputSchema.safeParse(source);
+  if (!parsed.success)
+    throw new PluginApiError(
+      'plugin-github-invalid',
+      '请输入有效的 GitHub 仓库、完整提交和子目录',
+      0,
+    );
+  const github = parsed.data;
+  const response = await fetchResponse(
+    runtimeApiUrl(`${managedPath}/github/preview`),
+    postJson(JSON.stringify(github)),
+    signal,
+  );
+  const preview = await decodeResponse(response, githubManagedPreviewSchema, signal);
+  if (
+    preview.github.repository !== github.repository ||
+    preview.github.commit !== github.commit ||
+    preview.github.subdirectory !== github.subdirectory
+  )
+    throw invalidResponse();
+  return preview;
 }
 
 function expectedHead(value: number): number {

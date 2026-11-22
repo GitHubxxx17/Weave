@@ -4,12 +4,14 @@ import { z } from 'zod';
 import {
   managedAction,
   ManagedContributions,
+  ManagedGithubSource,
   type ManagedDraft,
   ManagedIdentity,
   ManagedPluginDialog,
   ManagedRecoveryDialog,
   managedRecoveryText,
 } from './managed-plugin-dialog.js';
+import { githubPluginSourceInputSchema } from './managed-plugin-types.js';
 import type {
   ManagedCandidate,
   ManagedCatalogObservation,
@@ -195,6 +197,7 @@ function ManagedRow({
   };
   const activate = (candidate: ManagedCandidate, intent: 'activate' | 'rollback'): void => {
     onReview({
+      ...(candidate.provenance === 'github' ? { github: candidate.github } : {}),
       review: {
         ...basis,
         kind: 'activate',
@@ -300,11 +303,15 @@ function ManagedRow({
                 >
                   <span>v{candidate.manifest.version}</span>
                   <span>
-                    导入序号 {candidate.importSequence} · 本地目录 ·{' '}
+                    导入序号 {candidate.importSequence} ·{' '}
+                    {candidate.provenance === 'github' ? 'GitHub 仓库' : '本地目录'} ·{' '}
                     <time dateTime={candidate.importedAt}>
                       {new Date(candidate.importedAt).toLocaleString()}
                     </time>
                   </span>
+                  {candidate.provenance === 'github' ? (
+                    <ManagedGithubSource source={candidate.github} />
+                  ) : null}
                   <code>{candidate.digest}</code>
                   <div className="plugin-actions">
                     <button
@@ -359,8 +366,14 @@ export function ManagedPluginsSection({
     canRecoverManagedLag,
   } = usePluginCatalogState();
   const titleId = useId();
+  const sourceChoiceName = useId();
   const inputRef = useRef<HTMLInputElement>(null);
+  const repositoryRef = useRef<HTMLInputElement>(null);
+  const [sourceKind, setSourceKind] = useState<'local' | 'github'>('local');
   const [path, setPath] = useState('');
+  const [repository, setRepository] = useState('');
+  const [commit, setCommit] = useState('');
+  const [subdirectory, setSubdirectory] = useState('');
   const [previewing, setPreviewing] = useState(false);
   const [localError, setLocalError] = useState<string>();
   const [dialog, setDialog] = useState<OpenDialog | null>(null);
@@ -373,6 +386,16 @@ export function ManagedPluginsSection({
     },
     [],
   );
+  useLayoutEffect(() => {
+    const invalidatePreview = (): void => {
+      if (!store.getSnapshot().sharedManagementBlocked || previewAbort.current === null) return;
+      revision.current++;
+      previewAbort.current.abort();
+      previewAbort.current = null;
+      setPreviewing(false);
+    };
+    return store.subscribe(invalidatePreview);
+  }, [store]);
   const invalidate = (): number => {
     previewAbort.current?.abort();
     previewAbort.current = null;
@@ -383,7 +406,10 @@ export function ManagedPluginsSection({
     invalidate();
     setDialog(next);
   };
-  const closeDialog = (): void => setDialog(null);
+  const closeDialog = (): void => {
+    invalidate();
+    setDialog(null);
+  };
   const managedCatalog = managed?.kind === 'enabled' ? managed.catalog : undefined;
   const bridge = window.weaveDesktop;
   const picker =
@@ -408,23 +434,36 @@ export function ManagedPluginsSection({
     if (sharedManagementBlocked || previewAbort.current !== null) return;
     const current = invalidate();
     setLocalError(undefined);
-    if (!manualPath.safeParse(path).success) {
+    if (sourceKind === 'local' && !manualPath.safeParse(path).success) {
       setLocalError('请输入本机服务上的绝对目录路径。');
       inputRef.current?.focus();
+      return;
+    }
+    const github = githubPluginSourceInputSchema.safeParse({ repository, commit, subdirectory });
+    if (sourceKind === 'github' && !github.success) {
+      setLocalError('请输入 GitHub 仓库地址、40 位小写提交 SHA 和有效的相对子目录。');
+      repositoryRef.current?.focus();
       return;
     }
     const controller = new AbortController();
     previewAbort.current = controller;
     setPreviewing(true);
     try {
-      const result = await store.previewManaged(path, controller.signal);
+      const result =
+        sourceKind === 'github' && github.success
+          ? await store.previewGithubManaged(github.data, controller.signal)
+          : await store.previewManaged(path, controller.signal);
       if (
         current === revision.current &&
+        !store.getSnapshot().sharedManagementBlocked &&
         document.querySelector('[data-plugin-dialog-portal]') === null
       )
         setDialog({
           kind: 'review',
-          draft: { review: { kind: 'import', preview: result }, sourceDirectory: path },
+          draft:
+            'github' in result
+              ? { review: { kind: 'import', preview: result }, github: result.github }
+              : { review: { kind: 'import', preview: result }, sourceDirectory: path },
         });
     } catch (reason) {
       if (current === revision.current) setLocalError(pluginDialogError(reason));
@@ -442,19 +481,26 @@ export function ManagedPluginsSection({
       review.kind === 'import' &&
       current === revision.current &&
       (outcome.kind === 'saved' || outcome.kind === 'unresolved')
-    )
+    ) {
       setPath('');
+      setRepository('');
+      setCommit('');
+      setSubdirectory('');
+    }
     return outcome;
   };
   const focusPath = (): void => {
     closeDialog();
     setLocalError(undefined);
     // PluginDialog restores focus during its unmount before the next frame.
-    if (dialog === null) inputRef.current?.focus();
-    else window.requestAnimationFrame(() => inputRef.current?.focus());
+    const focusInput = (): void => {
+      (sourceKind === 'github' ? repositoryRef : inputRef).current?.focus();
+    };
+    if (dialog === null) focusInput();
+    else window.requestAnimationFrame(focusInput);
   };
   const getImportFallbackFocus = (): HTMLElement | null => {
-    const input = inputRef.current;
+    const input = (sourceKind === 'github' ? repositoryRef : inputRef).current;
     return input !== null && !input.disabled ? input : getFallbackFocus();
   };
   const focusManagedRow = (id: string): void => {
@@ -596,23 +642,91 @@ export function ManagedPluginsSection({
       {managedCatalog === undefined ? null : (
         <>
           <div className="managed-path-entry">
-            <label>
-              插件来源目录
-              <input
-                ref={inputRef}
-                value={path}
-                autoComplete="off"
-                spellCheck={false}
-                disabled={sharedManagementBlocked}
-                onChange={(event) => {
-                  invalidate();
-                  setPath(event.target.value);
-                  setLocalError(undefined);
-                }}
-              />
-            </label>
+            <fieldset className="managed-source-choice" disabled={sharedManagementBlocked}>
+              <legend>插件来源</legend>
+              {(['local', 'github'] as const).map((kind) => (
+                <label key={kind}>
+                  <input
+                    type="radio"
+                    name={sourceChoiceName}
+                    checked={sourceKind === kind}
+                    onChange={() => {
+                      invalidate();
+                      setSourceKind(kind);
+                      setLocalError(undefined);
+                    }}
+                  />
+                  {kind === 'local' ? '本地目录' : 'GitHub 仓库'}
+                </label>
+              ))}
+            </fieldset>
+            {sourceKind === 'local' ? (
+              <label>
+                插件来源目录
+                <input
+                  ref={inputRef}
+                  value={path}
+                  autoComplete="off"
+                  spellCheck={false}
+                  disabled={sharedManagementBlocked}
+                  onChange={(event) => {
+                    invalidate();
+                    setPath(event.target.value);
+                    setLocalError(undefined);
+                  }}
+                />
+              </label>
+            ) : (
+              <>
+                <label>
+                  GitHub 仓库地址
+                  <input
+                    ref={repositoryRef}
+                    value={repository}
+                    placeholder="https://github.com/owner/repo"
+                    autoComplete="off"
+                    spellCheck={false}
+                    disabled={sharedManagementBlocked}
+                    onChange={(event) => {
+                      invalidate();
+                      setRepository(event.target.value);
+                      setLocalError(undefined);
+                    }}
+                  />
+                </label>
+                <label>
+                  完整提交 SHA
+                  <input
+                    value={commit}
+                    autoComplete="off"
+                    spellCheck={false}
+                    disabled={sharedManagementBlocked}
+                    onChange={(event) => {
+                      invalidate();
+                      setCommit(event.target.value);
+                      setLocalError(undefined);
+                    }}
+                  />
+                </label>
+                <label>
+                  插件子目录（可选）
+                  <input
+                    value={subdirectory}
+                    placeholder="留空使用仓库根目录"
+                    autoComplete="off"
+                    spellCheck={false}
+                    disabled={sharedManagementBlocked}
+                    onChange={(event) => {
+                      invalidate();
+                      setSubdirectory(event.target.value);
+                      setLocalError(undefined);
+                    }}
+                  />
+                </label>
+              </>
+            )}
             <div className="plugin-actions">
-              {picker === undefined ? null : (
+              {picker === undefined || sourceKind !== 'local' ? null : (
                 <button
                   type="button"
                   className="secondary-button"
@@ -630,6 +744,19 @@ export function ManagedPluginsSection({
               >
                 预览插件
               </button>
+              {previewing ? (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => {
+                    invalidate();
+                    setLocalError(undefined);
+                    (sourceKind === 'github' ? repositoryRef : inputRef).current?.focus();
+                  }}
+                >
+                  取消预览
+                </button>
+              ) : null}
             </div>
             {previewing ? (
               <p className="plugin-note" role="status">

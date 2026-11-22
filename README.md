@@ -328,6 +328,15 @@ WEAVE_TEST_PROFILE=/absolute/isolated/profile node --input-type=module -e '
 Run `pnpm --filter @weave/studio dev` in another terminal and open
 `http://127.0.0.1:5173`.
 
+The same bound profile supports public GitHub sources in the Plugins panel.
+Choose GitHub and provide `https://github.com/owner/repository`, a complete
+40-character lowercase commit SHA and an optional relative plugin subdirectory.
+The directory must already contain a bundled Weave plugin. Preview downloads and
+validates the fixed content; import saves a candidate and activation remains a
+separate review. GitHub API rate limits apply. See
+[GitHub acquisition](docs/learning/2026-11-22-github-plugin-acquisition.md) for
+source identity, cancellation and installation behavior.
+
 ## Agent Runner
 
 `createAgentRunner()` is the Runtime boundary for one Session turn. It
