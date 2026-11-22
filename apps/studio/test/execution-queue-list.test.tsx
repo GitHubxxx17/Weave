@@ -25,6 +25,7 @@ const state: AgentExecutionQueueSnapshot = {
     model: 'model',
     imageCount: 1,
     skillCount: 2,
+    fileCount: id === 'a' ? 3 : 1,
   })),
 };
 it('exposes exact queue rows, count and independent copy/move/cancel actions', () => {
@@ -41,6 +42,8 @@ it('exposes exact queue rows, count and independent copy/move/cancel actions', (
     />,
   );
   expect(screen.getByText('待执行 2/10')).toBeTruthy();
+  expect(screen.getByText(/3 个文件/)).toBeTruthy();
+  expect(screen.getByText(/1 个文件/)).toBeTruthy();
   expect(
     (screen.getByRole('button', { name: '上移第 1 条消息' }) as HTMLButtonElement).disabled,
   ).toBe(true);

@@ -1,5 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentPlan, ContextBreakdown, Message, TokenUsage } from '@weave/protocol';
+import type {
+  AgentPlan,
+  ContextBreakdown,
+  Message,
+  TokenUsage,
+  FileAttachmentSummary,
+} from '@weave/protocol';
 import {
   createSessionProjectionCache,
   SessionProjectionError,
@@ -53,6 +59,7 @@ export type SessionMessage = ProjectedSessionMessage['message'] & {
   readonly occurredAt: string;
   /** Exact Turn association, including linked user messages in new logs. */
   readonly turnId?: string;
+  readonly fileAttachments?: readonly FileAttachmentSummary[];
 };
 
 /** Per-Turn timing, attribution, and token usage summed over its model steps. */
@@ -149,6 +156,7 @@ function detailFor(sessionId: string, projection: SessionProjection): SessionDet
       sequence: item.sequence,
       occurredAt: item.occurredAt,
       ...(item.turnId === undefined ? {} : { turnId: item.turnId }),
+      ...(item.fileAttachments === undefined ? {} : { fileAttachments: item.fileAttachments }),
     })),
     turns: projection.turns.map(turnSummaryFor),
   };

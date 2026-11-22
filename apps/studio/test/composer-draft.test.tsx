@@ -170,3 +170,51 @@ it('keeps real Session text across root changes while rejecting the old owner ep
   expect(result.current.draft.text).toBe('owned text');
   expect(result.current.isOwnerCurrent(owner)).toBe(false);
 });
+
+it('owns ordered files through Session ABA, root changes and accepted revisions', () => {
+  const { result, rerender } = renderHook(
+    ({ sessionId, rootKey }) => useComposerDraft({ sessionId, rootKey, projectId: 'p' }),
+    { initialProps: { sessionId: 'a', rootKey: 'one' } },
+  );
+  const original = result.current.owner;
+  act(() => expect(result.current.addFile(original, 'a.ts')).toBe('added'));
+  const revision = result.current.capture();
+  act(() => expect(result.current.addFile(original, 'a.ts')).toBe('duplicate'));
+  expect(result.current.capture().revision).toBe(revision.revision);
+  rerender({ sessionId: 'b', rootKey: 'one' });
+  act(() => expect(result.current.addFile(original, 'stale.ts')).toBe('stale'));
+  rerender({ sessionId: 'a', rootKey: 'one' });
+  expect(result.current.draft.files).toEqual([{ path: 'a.ts' }]);
+  act(() => result.current.addFile(result.current.owner, 'new.ts'));
+  act(() => expect(result.current.clearSubmittedDraftIfCurrent(revision)).toBe(false));
+  const oldOwner = result.current.owner;
+  const oldRevision = result.current.capture().revision;
+  act(() => {
+    result.current.setText('keep text');
+    result.current.setImages([{ id: 'keep-image' }]);
+  });
+  rerender({ sessionId: 'a', rootKey: 'two' });
+  expect(result.current.draft.files).toEqual([]);
+  expect(result.current.draft.text).toBe('keep text');
+  expect(result.current.draft.images).toEqual([{ id: 'keep-image' }]);
+  expect(result.current.capture().revision).toBeGreaterThan(oldRevision);
+  act(() => expect(result.current.addFile(oldOwner, 'wrong.ts')).toBe('stale'));
+});
+
+it('migrates provisional refs and enforces the exact eight file limit', () => {
+  const { result } = renderHook(() =>
+    useComposerDraft({ sessionId: '', rootKey: 'root', projectId: 'p' }),
+  );
+  act(() => {
+    for (let i = 0; i < 8; i += 1)
+      expect(result.current.addFile(result.current.owner, `${i}.ts`)).toBe('added');
+  });
+  act(() => expect(result.current.addFile(result.current.owner, 'ninth.ts')).toBe('full'));
+  const capture = result.current.capture();
+  act(() =>
+    expect(result.current.migrateProvisional(capture, 'created', 'p', 'root')).not.toBeNull(),
+  );
+  expect(result.current.draft.files).toHaveLength(8);
+  act(() => result.current.removeFile('0.ts'));
+  expect(result.current.draft.files[0]).toEqual({ path: '1.ts' });
+});

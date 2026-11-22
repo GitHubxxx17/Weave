@@ -256,6 +256,30 @@ server restart interrupts all unfinished entries without replaying tools. Studio
 separates admission from observation and reconciles exact Turns while the next
 execution is already live. Tool Pipeline and plugin authority remain unchanged.
 
+## Project file context contract
+
+The [project file context design](../superpowers/specs/2026-11-23-file-context-design.md)
+defines explicit Composer/file-tree selection before implementation. Protocol
+owns strict relative refs and summary values. Session stores one immutable
+`execution.accepted.fileContext` bundle, validates it against ordered logical
+refs, and projects only exact started user-message summaries. Runtime owns the
+bounded rooted capture helper and the core `captureFiles` admission port; Server
+resolves authoritative Project/Session membership and composes that port. Exact
+request replay precedes capture, and queue promotion never rereads accepted files.
+
+The Runner validates the durable claimed execution and exact input inside Turn
+admission before starting any captured request, then renders saved file content
+before both initial and tool-loop context budgeting. Metadata, queue SSE and
+Session HTTP responses expose summaries/counts only. Studio submits paths,
+preserves draft ownership and shows snapshot semantics; ordinary `@path` text
+alone grants no capture. Limits are eight UTF-8 files, 64 KiB each and 256 KiB per
+batch, with complete acceptance or rejection. No dependencies are added.
+
+Node path checks, no-follow opens and observed incarnation checks remain subject
+to external parent-path races; they provide no descriptor-relative OS sandbox or
+atomic multi-file snapshot. The existing Tool Pipeline, approval, plugin and
+Generation boundaries remain authoritative.
+
 ## The Request Path
 
 The Server exposes a health check, a thin Approval control plane with REST and
@@ -760,6 +784,19 @@ cancellation state machine.
 ## Layer Boundaries
 
 ### Product references
+
+On 2026-11-23, project file context checked Codex
+[`a0995c2b2b68248960c69cb812b5f4898dac7e4c`](https://github.com/openai/codex/tree/a0995c2b2b68248960c69cb812b5f4898dac7e4c),
+Harness
+[`4b399c39a6d1479cd84ca591b4d7c88e24d38a96`](https://github.com/deepseek-ai/deepseek-harness/tree/4b399c39a6d1479cd84ca591b4d7c88e24d38a96)
+and Kiro's official [file references](https://kiro.dev/docs/cli/chat/file-references/)
+and [context](https://kiro.dev/docs/cli/chat/context/) documents. Weave adopts
+explicit selection, stale-result rejection and input ownership, and deliberately
+freezes complete text before queue acceptance. Codex path completion is not
+claimed to freeze ordinary file text; Harness path refs and uploaded attachments
+remain distinct; Kiro's truncation policy is not adopted. The
+[file context design](../superpowers/specs/2026-11-23-file-context-design.md)
+records exact source links and limits.
 
 On 2026-11-22 the marketplace index extension additionally checked Harness master
 `d98f5d68519215da48f3002da2cb9c9d2068d81d`. Its

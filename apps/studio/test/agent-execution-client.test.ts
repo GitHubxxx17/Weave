@@ -326,3 +326,59 @@ describe('recoverable execution client', () => {
     });
   });
 });
+
+it.each([
+  [503, 'execution-file-capture-timeout'],
+  [500, 'execution-file-capture-failed'],
+])('treats capture %s as a definite rejection with one launch', async (status, code) => {
+  vi.useFakeTimers();
+  const fetcher = vi
+    .fn()
+    .mockResolvedValue(
+      Response.json({ error: { code, message: '重新添加文件后发送' } }, { status }),
+    );
+  vi.stubGlobal('fetch', fetcher);
+  const accepted = vi.fn();
+  const run = streamAgentRun(
+    { ...input, files: [{ path: 'src/a.ts' }] },
+    { onEvent: vi.fn(), onAccepted: accepted },
+  );
+  const result = run.catch((error: unknown) => error);
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(await result).toMatchObject({ code });
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(accepted).not.toHaveBeenCalled();
+});
+
+it('freezes ordered logical file refs into every ambiguous transport retry', async () => {
+  vi.useFakeTimers();
+  const files = [{ path: 'b.ts' }, { path: 'a.ts' }];
+  const accepted = {
+    ...snapshot,
+    status: 'cancelled',
+    durableThroughSequence: 10,
+    input: { ...snapshot.input, files },
+    fileAttachments: files.map(({ path }) => ({
+      path,
+      encoding: 'utf-8',
+      byteLength: 1,
+      sha256: 'a'.repeat(64),
+    })),
+  };
+  const fetcher = vi
+    .fn()
+    .mockRejectedValueOnce(new TypeError('lost'))
+    .mockResolvedValueOnce(Response.json(accepted));
+  vi.stubGlobal('fetch', fetcher);
+  const run = streamAgentRun({ ...input, files }, { onEvent: vi.fn() }, { requestId: 'request-1' });
+  files[0]!.path = 'edited-after-launch.ts';
+  await vi.runAllTimersAsync();
+  await run;
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(fetcher.mock.calls[0]?.[1]?.body).toBe(fetcher.mock.calls[1]?.[1]?.body);
+  expect(JSON.parse(fetcher.mock.calls[0]?.[1]?.body as string).input.files).toEqual([
+    { path: 'b.ts' },
+    { path: 'a.ts' },
+  ]);
+  expect(String(fetcher.mock.calls[0]?.[1]?.body)).not.toContain('sha256');
+});

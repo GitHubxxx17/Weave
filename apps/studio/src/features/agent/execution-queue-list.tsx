@@ -28,10 +28,12 @@ export function ExecutionQueueList({
         <ol>
           {state.queued.map((entry, index) => (
             <li key={entry.executionId}>
-              <div className="execution-queue-preview">{entry.preview || '图片消息'}</div>
+              <div className="execution-queue-preview">
+                {entry.preview || (entry.fileCount > 0 ? '文件消息' : '图片消息')}
+              </div>
               <div className="execution-queue-meta">
                 {entry.provider} · {entry.model} · {entry.imageCount} 张图片 · {entry.skillCount}{' '}
-                个技能
+                个技能 · {entry.fileCount} 个文件
               </div>
               <div className="execution-queue-actions">
                 <button

@@ -97,6 +97,25 @@ async function fixture() {
 }
 
 describe('background execution HTTP adapter', () => {
+  it.each([
+    ['execution-file-too-large', 413],
+    ['execution-file-unavailable', 422],
+    ['execution-file-invalid-utf8', 422],
+    ['execution-file-changed', 409],
+    ['execution-file-capture-timeout', 503],
+    ['execution-file-capture-failed', 500],
+  ] as const)('maps definite capture error %s to HTTP %s', async (code, status) => {
+    const { app, service } = await fixture();
+    service.launch.mockRejectedValueOnce(new AgentExecutionError(code, 'Safe file capture error'));
+    const response = await app.request('/sessions/s1/executions', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ requestId: 'r', input }),
+    });
+    expect(response.status).toBe(status);
+    expect(await response.json()).toEqual({ error: { code, message: 'Safe file capture error' } });
+  });
+
   it('accepts strict execution input without binding the request signal to production', async () => {
     const { app, service } = await fixture();
     const response = await app.request('/sessions/s1/executions', {

@@ -1,3 +1,4 @@
+import { filePathSchema } from '../file-context/file-context-types.js';
 import {
   Suspense,
   lazy,
@@ -131,6 +132,8 @@ function saveSplitRatio(value: number): void {
 export interface FileTreePanelProps {
   readonly projectId: string | undefined;
   readonly onSetFolder: () => void;
+  readonly onAddFile?: ((path: string) => void) | undefined;
+  readonly selectedFiles?: readonly string[] | undefined;
 }
 
 /**
@@ -140,7 +143,12 @@ export interface FileTreePanelProps {
  * narrow — with a draggable divider to set the split. Data comes from the
  * Server file routes; the browser never touches the filesystem.
  */
-export function FileTreePanel({ projectId, onSetFolder }: FileTreePanelProps): ReactElement {
+export function FileTreePanel({
+  projectId,
+  onSetFolder,
+  onAddFile,
+  selectedFiles = [],
+}: FileTreePanelProps): ReactElement {
   const [files, setFiles] = useState<readonly string[] | null>(null);
   const [treeStatus, setTreeStatus] = useState<LoadStatus>('loading');
   const [treeError, setTreeError] = useState<{ code: string; message: string } | null>(null);
@@ -474,6 +482,22 @@ export function FileTreePanel({ projectId, onSetFolder }: FileTreePanelProps): R
                 <span className="file-viewer-path" title={selected}>
                   {selected}
                 </span>
+                {onAddFile !== undefined ? (
+                  <button
+                    type="button"
+                    className="file-viewer-add"
+                    title={selected}
+                    aria-label={`${selectedFiles.includes(selected) ? '已添加' : '添加到消息'} ${selected}`}
+                    disabled={
+                      selectedFiles.includes(selected) ||
+                      selectedFiles.length >= 8 ||
+                      !filePathSchema.safeParse(selected).success
+                    }
+                    onClick={() => onAddFile(selected)}
+                  >
+                    {selectedFiles.includes(selected) ? '已添加' : '添加到消息'}
+                  </button>
+                ) : null}
                 <div className="file-viewer-modes" role="group" aria-label="查看模式">
                   <button
                     type="button"

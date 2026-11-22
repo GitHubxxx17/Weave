@@ -1,4 +1,5 @@
 import { freezeExecutionInput } from './agent-execution-input.js';
+import { createFileContextCapture } from './agent-file-context.js';
 import { createAgentExecutionService, type AgentExecutionService } from '@weave/runtime';
 import { createPanelService } from './plugin-panel-service.js';
 import type { PanelService } from './plugin-panel-types.js';
@@ -332,6 +333,7 @@ export async function startServer(
     agentExecutionService = createAgentExecutionService({
       runner: coordinator.runner,
       sessionStore,
+      captureFiles: createFileContextCapture(projects),
       resolveInput: async (_sessionId, input) =>
         freezeExecutionInput(
           input,

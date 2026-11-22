@@ -8,6 +8,10 @@ import {
   projectSession,
   type NewSessionEvent,
   type SessionExecution,
+  capturedFileContextSchema,
+  executionAcceptedPayloadSchema,
+  fileAttachmentSummaries,
+  type CapturedFileContext,
 } from '@weave/session';
 import { agentRuntimeEventSchema, type AgentRuntimeEvent } from './agent-types.js';
 import {
@@ -109,6 +113,7 @@ export function createAgentExecutionService(
   let tail = Promise.resolve();
   let queueSequence = 0;
   let closed = false;
+  const captureController = new AbortController();
   const cursor = (executionId: string, sequence: number): string =>
     `${epoch}:${executionId}:${sequence}`;
   // One short mutation gate also makes global pending reservations atomic.
@@ -170,6 +175,7 @@ export function createAgentExecutionService(
         model: item.model,
         imageCount: item.imageCount,
         skillCount: item.skillCount,
+        fileCount: item.fileCount,
       })),
       scheduler: state.error !== undefined ? 'blocked' : closed ? 'closing' : 'ready',
       limits: { sessionQueued: 10, globalQueued: 100 },
@@ -274,6 +280,9 @@ export function createAgentExecutionService(
       turnId: accepted.turnId,
       userMessageId: accepted.userMessageId,
       input: accepted.input,
+      ...(accepted.fileContext === undefined
+        ? {}
+        : { fileAttachments: fileAttachmentSummaries(accepted.fileContext) }),
       ...(accepted.runInput === undefined
         ? {}
         : {
@@ -674,22 +683,57 @@ export function createAgentExecutionService(
             'Effective execution input changed immutable request fields',
           );
         requireMutable(sessionId);
-        const accepted: SessionExecution = {
+        const executionIdentity = {
           executionId: randomUUID(),
-          requestId: frozen.requestId,
-          requestDigest,
           turnId: randomUUID(),
           userMessageId: randomUUID(),
+        };
+        let fileContext: CapturedFileContext | undefined;
+        let captureSignal: AbortSignal | undefined;
+        if (frozen.input.files !== undefined) {
+          if (options.captureFiles === undefined)
+            throw new AgentExecutionError(
+              'execution-file-unavailable',
+              'Project file capture is unavailable',
+            );
+          captureSignal = AbortSignal.any([captureController.signal, AbortSignal.timeout(5000)]);
+          try {
+            captureSignal.throwIfAborted();
+            const captured = await options.captureFiles(sessionId, frozen.input.files, {
+              signal: captureSignal,
+            });
+            captureSignal.throwIfAborted();
+            fileContext = capturedFileContextSchema.parse(structuredClone(captured));
+          } catch (error: unknown) {
+            if (captureSignal.aborted)
+              throw new AgentExecutionError(
+                'execution-file-capture-timeout',
+                'Project file capture ended before acceptance',
+              );
+            if (error instanceof AgentExecutionError) throw error;
+            throw new AgentExecutionError(
+              'execution-file-capture-failed',
+              'Project files could not be captured',
+            );
+          }
+        }
+        requireMutable(sessionId);
+        const accepted: SessionExecution = {
+          ...executionIdentity,
+          requestId: frozen.requestId,
+          requestDigest,
           input: frozen.input,
           dispatch: 'queued',
           runInput: structuredClone(effective.data),
+          ...(fileContext === undefined ? {} : { fileContext }),
           sessionId,
           createdAt: new Date().toISOString(),
           status: immediate ? 'accepted' : 'queued',
         };
         if (
           bytes(snapshot(accepted)) + 1024 > snapshotMaxBytes ||
-          bytes(effective.data) + 1024 > snapshotMaxBytes
+          bytes(effective.data) + 1024 > snapshotMaxBytes ||
+          bytes(accepted) + 1024 > snapshotMaxBytes
         )
           throw new AgentExecutionError(
             'execution-output-limit',
@@ -704,6 +748,17 @@ export function createAgentExecutionService(
         void _sessionId;
         void _createdAt;
         void _status;
+        if (!executionAcceptedPayloadSchema.safeParse(payload).success)
+          throw new AgentExecutionError(
+            'execution-file-capture-failed',
+            'Captured files do not match the accepted input',
+          );
+        // After append begins, only durable reconciliation can decide acceptance.
+        if (captureSignal?.aborted)
+          throw new AgentExecutionError(
+            'execution-file-capture-timeout',
+            'Project file capture ended before acceptance',
+          );
         const batch: NewSessionEvent[] = [
           { type: 'execution.accepted', payload },
           ...(immediate
@@ -1098,6 +1153,7 @@ export function createAgentExecutionService(
     },
     closeSync() {
       closed = true;
+      captureController.abort();
       for (const sessionId of queues.keys()) notifyQueue(sessionId);
     },
     async drain() {

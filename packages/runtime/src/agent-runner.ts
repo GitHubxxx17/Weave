@@ -1,4 +1,5 @@
 import type { LlmClient, LlmProviderDescriptor } from '@weave/llm';
+import { isDeepStrictEqual } from 'node:util';
 import {
   llmRequestSchema,
   streamEventSchema,
@@ -11,7 +12,8 @@ import {
   type ToolCall,
 } from '@weave/protocol';
 import type { NewSessionEvent } from '@weave/session';
-import { projectSession } from '@weave/session';
+import { projectSession, projectAgentExecutions, projectMessageFileContexts } from '@weave/session';
+import { renderSessionModelHistory } from './file-context-render.js';
 import {
   AgentRunError,
   agentRunRequestSchema,
@@ -545,6 +547,53 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
           const startTurn = async (): Promise<void> => {
             if (signal.aborted) throw createAbortError();
             let storedEvents = await options.sessionStore.read(validRequest.sessionId);
+            const accepted =
+              validRequest.executionIdentity === undefined
+                ? undefined
+                : projectAgentExecutions(storedEvents).find(
+                    (item) =>
+                      item.fileContext !== undefined &&
+                      (item.executionId === validRequest.executionIdentity?.executionId ||
+                        item.turnId === validRequest.executionIdentity?.turnId ||
+                        item.userMessageId === validRequest.executionIdentity?.userMessageId),
+                  );
+            if (validRequest.files !== undefined || accepted?.fileContext !== undefined) {
+              const effective = accepted?.runInput ?? accepted?.input;
+              const expected = validRequest.executionIdentity;
+              if (
+                accepted?.fileContext === undefined ||
+                accepted.status !== 'accepted' ||
+                expected === undefined ||
+                accepted.executionId !== expected.executionId ||
+                accepted.turnId !== expected.turnId ||
+                accepted.userMessageId !== expected.userMessageId ||
+                !(
+                  [
+                    'files',
+                    'userMessage',
+                    'skills',
+                    'provider',
+                    'model',
+                    'temperature',
+                    'maxTokens',
+                    'useProviderDefaults',
+                    'reasoningEffort',
+                    'permissionMode',
+                  ] as const
+                ).every((field) => isDeepStrictEqual(effective?.[field], validRequest[field])) ||
+                storedEvents.some(
+                  (event) =>
+                    event.type === 'turn.started' &&
+                    (event.payload.turnId === expected.turnId ||
+                      event.payload.executionId === expected.executionId ||
+                      event.payload.userMessageId === expected.userMessageId),
+                )
+              )
+                throw new AgentRunError(
+                  'agent-invalid-input',
+                  'File input requires its exact claimed execution',
+                );
+            }
             if (storedEvents.length === 0) {
               await options.sessionStore.append(validRequest.sessionId, [
                 { type: 'session.created', payload: {} },
@@ -614,12 +663,20 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
             throw new Error('Turn admission did not start the turn');
           lifecycleStarted = true;
 
-          let projectedSession = projectSession(
-            await options.sessionStore.read(validRequest.sessionId),
-          );
-          let messages: readonly Message[] = projectedSession.messages.map(
-            ({ message }) => message,
-          );
+          const loadModelHistory = async () => {
+            const events = await options.sessionStore.read(validRequest.sessionId);
+            const session = projectSession(events);
+            return {
+              session,
+              messages: renderSessionModelHistory(
+                session.messages,
+                projectMessageFileContexts(events),
+              ),
+            };
+          };
+          let loadedHistory = await loadModelHistory();
+          let projectedSession = loadedHistory.session;
+          let messages: readonly Message[] = loadedHistory.messages;
           const permissionMode: ToolPermissionMode = validRequest.permissionMode ?? 'ask';
           const tools =
             options.toolRegistry === undefined
@@ -1057,10 +1114,9 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
               }
             }
 
-            projectedSession = projectSession(
-              await options.sessionStore.read(validRequest.sessionId),
-            );
-            messages = projectedSession.messages.map(({ message }) => message);
+            loadedHistory = await loadModelHistory();
+            projectedSession = loadedHistory.session;
+            messages = loadedHistory.messages;
           }
         } catch (primaryError: unknown) {
           const completionPersistenceFailed = terminalOutcome === 'completed';

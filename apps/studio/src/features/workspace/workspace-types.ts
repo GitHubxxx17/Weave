@@ -1,3 +1,4 @@
+import { fileAttachmentSummariesSchema } from '../file-context/file-context-types.js';
 import { z } from 'zod';
 import { turnSkillsSchema } from '../skills/skill-types.js';
 
@@ -20,7 +21,11 @@ const messageSchema = z.discriminatedUnion('role', [
     .object({ role: z.literal('system'), content: z.array(contentPartSchema) })
     .extend(messageMetadataSchema.shape),
   z
-    .object({ role: z.literal('user'), content: z.array(contentPartSchema) })
+    .object({
+      role: z.literal('user'),
+      content: z.array(contentPartSchema),
+      fileAttachments: fileAttachmentSummariesSchema.optional(),
+    })
     .extend(messageMetadataSchema.shape),
   z
     .object({

@@ -1,3 +1,8 @@
+import {
+  fileReferenceSchema,
+  fileReferencesSchema,
+  type FileReference,
+} from '../file-context/file-context-types.js';
 import { useCallback, useRef, useState, type RefObject, type SetStateAction } from 'react';
 export interface ComposerOwner {
   readonly sessionId: string;
@@ -28,6 +33,7 @@ export interface PanelInsertionContext {
 interface Draft {
   readonly text: string;
   readonly images: readonly unknown[];
+  readonly files: readonly FileReference[];
   readonly literalSend: boolean;
   readonly revision: number;
   readonly owner?: ComposerOwner;
@@ -78,7 +84,13 @@ function contextKey(c: PanelInsertionContext | null): string {
         c.lifetime,
       ]);
 }
-const emptyDraft = (): Draft => ({ text: '', images: [], literalSend: false, revision: 0 });
+const emptyDraft = (): Draft => ({
+  text: '',
+  images: [],
+  files: [],
+  literalSend: false,
+  revision: 0,
+});
 /** App-owned draft and interaction authority. Owner epochs deliberately survive Session ABA. */
 export function useComposerDraft(options: {
   sessionId: string;
@@ -145,7 +157,17 @@ export function useComposerDraft(options: {
   }
   if (!current.buckets.has(draftKey(current.owner)))
     current.buckets.set(draftKey(current.owner), emptyDraft());
-  const active = { ...current.buckets.get(draftKey(current.owner))!, owner: current.owner };
+  const stored = current.buckets.get(draftKey(current.owner))!;
+  const rootChanged =
+    stored.owner !== undefined &&
+    (stored.owner.rootKey !== current.owner.rootKey ||
+      stored.owner.projectId !== current.owner.projectId);
+  if (rootChanged) current.sequence += 1;
+  const active = {
+    ...stored,
+    ...(rootChanged ? { files: [], revision: current.sequence } : {}),
+    owner: current.owner,
+  };
   current.buckets.delete(draftKey(current.owner));
   current.buckets.set(draftKey(current.owner), active);
   while (current.buckets.size > 129) {
@@ -171,6 +193,34 @@ export function useComposerDraft(options: {
         ...d,
         images: typeof value === 'function' ? value(d.images as readonly T[]) : value,
       })),
+    [update],
+  );
+  const addFile = useCallback(
+    (owner: ComposerOwner, path: string): 'added' | 'duplicate' | 'full' | 'stale' => {
+      const s = state.current;
+      if (!sameComposerOwner(s.owner, owner)) return 'stale';
+      const file = fileReferenceSchema.parse({ path });
+      const draft = s.buckets.get(draftKey(s.owner)) ?? emptyDraft();
+      if (draft.files.some((entry) => entry.path === path)) return 'duplicate';
+      if (draft.files.length >= 8) return 'full';
+      update((d) => ({ ...d, files: [...d.files, file] }));
+      return 'added';
+    },
+    [update],
+  );
+  const removeFile = useCallback(
+    (path: string): void => {
+      const s = state.current;
+      if (!s.buckets.get(draftKey(s.owner))?.files.some((file) => file.path === path)) return;
+      update((d) => ({ ...d, files: d.files.filter((file) => file.path !== path) }));
+    },
+    [update],
+  );
+  const setFiles = useCallback(
+    (files: readonly FileReference[]): void => {
+      const validated = files.length === 0 ? [] : fileReferencesSchema.parse(files);
+      update((d) => ({ ...d, files: validated }));
+    },
     [update],
   );
   const resetLiteral = useCallback(() => update((d) => ({ ...d, literalSend: false })), [update]);
@@ -317,6 +367,10 @@ export function useComposerDraft(options: {
     draft: active,
     setText,
     setImages,
+    addFile,
+    removeFile,
+    setFiles,
+    rootChanged,
     resetLiteral,
     markLiteral,
     setSampling,

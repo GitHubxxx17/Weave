@@ -192,6 +192,7 @@ describe('Agent HTTP/SSE API', () => {
   it.each([
     ['not-json', 'agent-invalid-input'],
     [JSON.stringify({ ...validRequest, sessionId: '' }), 'agent-invalid-input'],
+    [JSON.stringify({ ...validRequest, files: [{ path: 'a.txt' }] }), 'agent-invalid-input'],
   ])('returns 400 for invalid Agent input: %s', async (body, code) => {
     const runtime = createRuntime();
     await runtime.start();

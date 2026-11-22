@@ -1,3 +1,7 @@
+import {
+  fileReferencesSchema,
+  fileAttachmentSummariesSchema,
+} from '../file-context/file-context-types.js';
 import { z } from 'zod';
 import { skillRefsSchema } from '../skills/skill-types.js';
 import { agentRuntimeEventSchema } from './agent-types.js';
@@ -24,6 +28,7 @@ export const agentExecutionInputSchema = z.strictObject({
   reasoningEffort: z.string().min(1).optional(),
   permissionMode: z.enum(['ask', 'trust', 'yolo']),
   skills: skillRefsSchema.optional(),
+  files: fileReferencesSchema.optional(),
 });
 export type AgentExecutionInput = z.infer<typeof agentExecutionInputSchema>;
 export const agentExecutionStatusSchema = z.enum([
@@ -59,6 +64,7 @@ export const agentExecutionSummarySchema = z.strictObject({
 export const agentExecutionSnapshotSchema = agentExecutionSummarySchema
   .extend({
     input: agentExecutionInputSchema,
+    fileAttachments: fileAttachmentSummariesSchema.optional(),
     effectiveSettings: z
       .strictObject({
         useProviderDefaults: z.literal(false),
@@ -77,6 +83,7 @@ export const agentExecutionQueueEntrySchema = agentExecutionSummarySchema
     model: z.string().min(1),
     imageCount: z.number().int().nonnegative().safe(),
     skillCount: z.number().int().nonnegative().max(32),
+    fileCount: z.number().int().nonnegative().max(8),
   })
   .strict();
 export const agentExecutionQueueSnapshotSchema = z.strictObject({
