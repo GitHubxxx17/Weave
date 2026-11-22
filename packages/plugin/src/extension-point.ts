@@ -147,9 +147,10 @@ export class ExtensionRegistry {
           `(from plugins ${list.map((entry) => entry.pluginId).join(', ')})`,
       );
     }
+    const skillNames = new Set<string>();
     for (const entry of list) {
       try {
-        (entry.fn as Contributor<T>)(this.#guarded(point, api, entry));
+        (entry.fn as Contributor<T>)(this.#guarded(point, api, entry, skillNames));
       } catch (error: unknown) {
         throw attributePluginError(
           error,
@@ -166,7 +167,12 @@ export class ExtensionRegistry {
    * checked against the manifest's `contributes` when one was declared, and
    * recorded either way so the host can list what each plugin added.
    */
-  #guarded<T>(point: ExtensionPoint<T>, api: T, entry: ContributionEntry): T {
+  #guarded<T>(
+    point: ExtensionPoint<T>,
+    api: T,
+    entry: ContributionEntry,
+    skillNames: Set<string>,
+  ): T {
     const governed = point.governed;
     if (governed === undefined) {
       return api;
@@ -176,6 +182,16 @@ export class ExtensionRegistry {
       api,
       (name) => {
         assertNameDeclared(entry.pluginId, contributes, governed.key, name);
+        if (governed.key === 'skills') {
+          const identity = `${entry.pluginId}/${name}`;
+          if (skillNames.has(identity))
+            throw new PluginError(
+              'plugin-invalid-definition',
+              `Plugin "${entry.pluginId}" contributed Skill "${name}" twice`,
+              { pluginId: entry.pluginId },
+            );
+          skillNames.add(identity);
+        }
         this.#record(entry.pluginId, governed.key, name);
       },
       entry.pluginId,
@@ -208,6 +224,7 @@ export class ExtensionRegistry {
       promptSections: [...(byKind?.get('promptSections') ?? [])],
       events: [...(byKind?.get('events') ?? [])],
       commands: [...(byKind?.get('commands') ?? [])],
+      skills: [...(byKind?.get('skills') ?? [])],
     };
   }
 

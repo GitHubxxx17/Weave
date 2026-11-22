@@ -35,6 +35,7 @@ const kindLabels: Record<ContributedNameKey | 'services' | 'hooks', string> = {
   promptSections: 'prompt section',
   events: 'event',
   commands: 'command',
+  skills: 'skill',
   hooks: 'hook',
   services: 'service',
 };

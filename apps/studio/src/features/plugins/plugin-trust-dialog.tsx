@@ -14,6 +14,7 @@ const declarationLabels: Readonly<Record<string, string>> = {
   promptSections: '提示词片段',
   events: '会话事件',
   commands: '命令',
+  skills: '技能',
   hooks: '钩子',
   services: '服务',
   permissions: '权限',

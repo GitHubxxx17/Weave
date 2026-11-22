@@ -15,6 +15,7 @@ export const pluginDeclarationsSchema = z
     promptSections: nameListSchema.optional(),
     events: nameListSchema.optional(),
     commands: nameListSchema.optional(),
+    skills: nameListSchema.optional(),
     hooks: nameListSchema.optional(),
     services: nameListSchema.optional(),
   })
@@ -88,6 +89,7 @@ export const pluginListItemSchema = z
         promptSections: nameListSchema,
         events: nameListSchema.default([]).readonly(),
         commands: nameListSchema.default([]).readonly(),
+        skills: nameListSchema.optional(),
         hooks: nameListSchema.default([]).readonly(),
         services: nameListSchema,
       })

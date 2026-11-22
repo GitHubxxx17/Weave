@@ -115,3 +115,19 @@ export type {
   GithubPluginAcquirerOptions,
   GithubPluginSource,
 } from './github-source.js';
+
+export { parseSkillDocument } from './skill-document.js';
+export { discoverSkillBundles, pinSkillBundle, readPinnedSkillResource } from './skills.js';
+export { SkillHostError, createSkillScanBudget } from './skill-types.js';
+export type {
+  SkillHostErrorCode,
+  SkillRootInput,
+  DiskSkillHandle,
+  DiscoveredSkillBundle,
+  SkillResourceIdentity,
+  SkillDiscoveryResult,
+  PinnedSkillBundle,
+  ParsedSkillDocument,
+  SkillScanBudget,
+  SkillIoOptions,
+} from './skill-types.js';

@@ -625,3 +625,24 @@ describe('local plugin management panel', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 });
+
+it('shows the Skill capability and actual contributed Skill names', async () => {
+  stubPlugins([
+    plugin({
+      capabilities: ['skill'],
+      provides: {
+        tools: [],
+        providers: [],
+        promptSections: [],
+        events: [],
+        commands: [],
+        hooks: [],
+        services: [],
+        skills: ['team-review'],
+      },
+    }),
+  ]);
+  renderPluginPanel();
+  expect(await screen.findByText('team-review')).toBeTruthy();
+  expect(screen.getAllByText('技能').length).toBeGreaterThan(0);
+});

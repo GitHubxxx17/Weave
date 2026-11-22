@@ -2,6 +2,9 @@ import { type LlmProviderRegistry } from '@weave/llm';
 import {
   approvalBrokerRef,
   commandsExtensionPoint,
+  skillsExtensionPoint,
+  attributedSkillContributionSchema,
+  type AttributedSkillContribution,
   createPluginEventRegistry,
   createPluginKernel,
   createPluginSessionStore,
@@ -43,6 +46,8 @@ import {
   type ToolPipeline,
   type ToolRegistry,
   type WorkspaceResolver,
+  type SkillToolPorts,
+  createSkillTools,
 } from '@weave/runtime';
 import { describePlugin, type CommandListItem, type PluginListItem } from './plugin-catalog.js';
 import { appliedPromptSections, type AppliedPromptSection } from './prompt-audit.js';
@@ -56,6 +61,8 @@ export interface AgentKernelAssembly {
   readonly approvalBroker: ApprovalBroker;
   readonly sessionStore: SessionEventStore;
   readonly timeoutMs: number;
+  readonly toolResultMaxBytes?: number | undefined;
+  readonly skillPorts?: SkillToolPorts | undefined;
   readonly resolveWorkspaceRoot?: ((sessionId: string) => Promise<string | undefined>) | undefined;
   readonly commandEnvironment?: (() => NodeJS.ProcessEnv | Promise<NodeJS.ProcessEnv>) | undefined;
   /**
@@ -82,6 +89,7 @@ export interface AssembledAgentKernel {
   readonly plugins: readonly PluginListItem[];
   /** The slash commands plugins contributed, in registration order, as `GET /commands` lists them. */
   readonly commands: readonly CommandListItem[];
+  readonly skills: readonly AttributedSkillContribution[];
 }
 
 /**
@@ -146,6 +154,9 @@ export async function assembleAgentKernel(
             registry,
             approvalBroker: broker,
             timeoutMs,
+            ...(assembly.toolResultMaxBytes === undefined
+              ? {}
+              : { maxResultBytes: assembly.toolResultMaxBytes }),
             // The pipeline resolves after every plugin registered, so the
             // handlers are known; without any, the pipeline stays unwrapped.
             ...(kernel.hooks.count(toolAroundHook) === 0
@@ -198,6 +209,11 @@ export async function assembleAgentKernel(
         }
         api.addTool(createRecallTool({ resolve: createSessionRecallResolver(sessionStore) }));
         api.addTool(createUpdatePlanTool());
+        if (assembly.skillPorts !== undefined) {
+          const skillTools = createSkillTools(assembly.skillPorts);
+          api.addTool(skillTools.readSkill);
+          api.addTool(skillTools.readSkillResource);
+        }
       });
     },
   });
@@ -294,6 +310,11 @@ export async function assembleAgentKernel(
       }),
     );
 
+    const skills: AttributedSkillContribution[] = [];
+    kernel.extensions.collect(skillsExtensionPoint, {
+      addSkill: (skill) => skills.push(attributedSkillContributionSchema.parse(skill)),
+    });
+
     // Every owner has collected by now, so what each plugin contributed is known.
     const plugins = generation
       .plugins()
@@ -308,7 +329,14 @@ export async function assembleAgentKernel(
         ),
       );
 
-    return { kernel, toolPipeline, promptSections, plugins, commands };
+    return {
+      kernel,
+      toolPipeline,
+      promptSections,
+      plugins,
+      commands,
+      skills: Object.freeze(skills),
+    };
   } catch (error: unknown) {
     await kernel.dispose().catch(() => undefined);
     throw error;

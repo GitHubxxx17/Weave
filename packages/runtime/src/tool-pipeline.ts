@@ -11,7 +11,7 @@ import { ApprovalError, type ApprovalDecision, type ApprovalBroker } from './app
 import { approvalRequiredForMode } from './approval-risk.js';
 import type { ToolRegistry } from './tool-registry.js';
 
-const defaultMaxResultBytes = 32_000;
+export const defaultToolResultMaxBytes = 32_000;
 
 /**
  * Middleware around one whole tool execution: validation, approval, the tool
@@ -234,11 +234,37 @@ function withAround(
           cause: parsedRequest.error,
         });
       }
-      const request = parsedRequest.data;
+      const request = Object.freeze(parsedRequest.data);
 
       let result: unknown;
       try {
-        result = await around(request, (next) => pipeline.execute(next));
+        result = await around(request, (next) => {
+          // Normalize once before identity comparisons: plugin accessors must
+          // not return one identity here and a different one during execution.
+          const parsedNext = toolExecutionRequestSchema.safeParse(next);
+          if (!parsedNext.success) {
+            throw new ToolExecutionError('tool-invalid-input', 'Tool middleware input is invalid', {
+              cause: parsedNext.error,
+            });
+          }
+          const nextRequest = Object.freeze(parsedNext.data);
+          // Middleware can retry/adjust arguments, but cannot borrow another
+          // turn's host-owned authority or upgrade the user's permission mode.
+          if (
+            nextRequest.name !== request.name ||
+            nextRequest.toolCallId !== request.toolCallId ||
+            nextRequest.sessionId !== request.sessionId ||
+            nextRequest.turnId !== request.turnId ||
+            nextRequest.signal !== request.signal ||
+            nextRequest.permissionMode !== request.permissionMode
+          ) {
+            throw new ToolExecutionError(
+              'tool-invalid-input',
+              'Tool middleware changed invocation identity',
+            );
+          }
+          return pipeline.execute(nextRequest);
+        });
       } catch (error: unknown) {
         if (error instanceof ToolExecutionError) {
           throw error;
@@ -318,7 +344,7 @@ function policyApproval(
 /** Creates a Tool Pipeline that owns validation and execution lifecycle. */
 export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
   const timeoutMs = options.timeoutMs;
-  const maxResultBytes = options.maxResultBytes ?? defaultMaxResultBytes;
+  const maxResultBytes = options.maxResultBytes ?? defaultToolResultMaxBytes;
 
   if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs < 0)) {
     throw new RangeError('timeoutMs must be a finite non-negative number');
@@ -335,7 +361,7 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
           cause: parsedRequest.error,
         });
       }
-      const request = parsedRequest.data;
+      const request = Object.freeze(parsedRequest.data);
 
       const tool = options.registry.get(request.name);
       if (tool === undefined) {
@@ -429,6 +455,8 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
             const pendingSummary = approval.summarize(inputResult.data, {
               signal,
               ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
+              ...(request.turnId === undefined ? {} : { turnId: request.turnId }),
+              toolCallId: request.toolCallId,
             });
             summary = isPromiseLike(pendingSummary) ? await pendingSummary : pendingSummary;
           } catch (error: unknown) {
@@ -496,6 +524,8 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
           result = await (tool as RegisteredToolDefinition).execute(inputResult.data, {
             signal,
             ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
+            ...(request.turnId === undefined ? {} : { turnId: request.turnId }),
+            toolCallId: request.toolCallId,
           });
         } catch (error: unknown) {
           if (timedOut) {

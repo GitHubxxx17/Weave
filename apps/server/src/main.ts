@@ -6,6 +6,8 @@ import { createSqliteSessionEventStore, type SessionEventStore } from '@weave/se
 import type { WeavePlugin } from '@weave/plugin';
 import { createSqliteProjectStore, type ProjectStore } from '@weave/workspace';
 import { z } from 'zod';
+import { resolveSkillsDirectory } from './skill-path.js';
+import { createSkillCatalogService } from './skill-catalog.js';
 import { createApp } from './app.js';
 import { createSessionService } from './session-service.js';
 import { createWorkspaceRootResolver } from './workspace-root.js';
@@ -89,6 +91,7 @@ export function parseAgentMaxSteps(value: string | undefined): number | undefine
 export interface StartServerOptions {
   readonly databaseFile?: string;
   readonly dataDirectory?: string;
+  readonly skillsDirectory?: string | false;
   readonly studioOrigin?: string;
   readonly environment?: NodeJS.ProcessEnv;
   readonly fetch?: typeof globalThis.fetch;
@@ -221,6 +224,7 @@ export async function startServer(
     const sessionService = createSessionService({ projectStore: projects, sessionStore });
     const runnerOptions = Object.freeze({
       hostVersion: serverHostVersion,
+      skillsDirectory: resolveSkillsDirectory({ ...options, databaseFile }),
       resolveWorkspaceRoot: createWorkspaceRootResolver(projects),
       ...(maxSteps === undefined ? {} : { maxSteps }),
     }) satisfies ServerAgentRunnerOptions;
@@ -318,6 +322,9 @@ export async function startServer(
           agentRunner: coordinator.runner,
           projectStore: projects,
           sessionService,
+          skillCatalogService: createSkillCatalogService({
+            current: () => runtime.serverHost.controller()?.current(),
+          }),
           providerRegistry: runtime.serverHost.providerRegistry,
           defaultProvider: providerSettings.defaultProvider,
           providerSettingsManager,

@@ -34,6 +34,7 @@ export type {
   SessionToolCall,
   SessionToolResult,
   SessionTurn,
+  SessionTurnSkills,
 } from './projection.js';
 
 export { createSessionProjectionCache } from './projection-cache.js';
@@ -41,3 +42,5 @@ export type { SessionProjectionCache, SessionProjectionCacheOptions } from './pr
 
 export { collectFileUndo, fileUndoForTurn } from './file-undo.js';
 export type { FileSnapshot, TurnFileUndo } from './file-undo.js';
+
+export type { SkillApplication, SkillFailure } from './skill-events.js';

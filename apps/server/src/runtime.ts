@@ -18,6 +18,7 @@ import {
   type ApprovalBroker,
   type Runtime,
   type RuntimeService,
+  type AgentContextOptions,
   type SessionEventStoreFactory,
 } from '@weave/runtime';
 import { createInMemorySessionEventStore } from '@weave/session';
@@ -35,6 +36,9 @@ import {
   type ServerRuntime,
 } from './server-host.js';
 import { observeTurns } from './turn-observer.js';
+import { createGenerationSkillCatalog } from './skill-catalog.js';
+import { createTurnSkillController } from './skill-turns.js';
+import { withSkillAuditPipeline } from './skill-audit.js';
 import { serverHostVersion } from './host-version.js';
 
 export type { ServerRuntime } from './server-host.js';
@@ -68,6 +72,9 @@ export interface ServerAgentRunnerOptions {
   readonly resolveWorkspaceRoot?: (sessionId: string) => Promise<string | undefined>;
   /** Overrides {@link defaultToolTimeoutMs}; mainly for tests. */
   readonly toolTimeoutMs?: number;
+  readonly toolResultMaxBytes?: number;
+  readonly context?: AgentContextOptions;
+  readonly skillsDirectory?: string | false;
   /** Model steps allowed per turn; the Runtime default applies when omitted. */
   readonly maxSteps?: number;
   /** Base environment for `run_command`; defaults to the login shell environment. */
@@ -183,6 +190,21 @@ export async function assembleServerGeneration(
   );
   const sessionStore = runtime.get(host.sessionStoreService);
   const resolveWorkspaceRoot = options.resolveWorkspaceRoot;
+  let skills: import('@weave/plugin').AttributedSkillContribution[] = [];
+  const skillCatalog = createGenerationSkillCatalog({
+    generation: id,
+    resolveWorkspaceRoot,
+    userDirectory: options.skillsDirectory,
+    pluginSkills: () => skills,
+  });
+  const skillController = createTurnSkillController({
+    catalog: skillCatalog,
+    store: sessionStore,
+    generation: id,
+    ...(options.toolResultMaxBytes === undefined
+      ? {}
+      : { maxToolResultBytes: options.toolResultMaxBytes }),
+  });
   const assembled = await assembleAgentKernel({
     hostVersion: options.hostVersion ?? serverHostVersion,
     toolRegistry,
@@ -190,12 +212,15 @@ export async function assembleServerGeneration(
     approvalBroker: runtime.get(approvalBrokerService),
     sessionStore,
     timeoutMs: options.toolTimeoutMs ?? defaultToolTimeoutMs,
+    skillPorts: skillController,
+    toolResultMaxBytes: options.toolResultMaxBytes,
     resolveWorkspaceRoot,
     commandEnvironment: options.commandEnvironment,
     registeredPlugins: host.registeredPlugins(),
     kernelPlugins: options.kernelPlugins,
   });
   try {
+    skills = [...assembled.skills];
     const { promptSections } = assembled;
     const { hooks } = assembled.kernel;
     // Turns are announced from the Session Store, which records every turn's start
@@ -221,7 +246,7 @@ export async function assembleServerGeneration(
       llmRegistry: providerRegistry,
       sessionStore: runnerStore,
       toolRegistry,
-      toolPipeline: assembled.toolPipeline,
+      toolPipeline: withSkillAuditPipeline(assembled.toolPipeline, skillController),
       // Plugins wrap the model stream only when one registered a handler.
       ...(hooks.count(llmRequestHook) === 0
         ? {}
@@ -230,24 +255,40 @@ export async function assembleServerGeneration(
               hooks.runWrap(llmRequestHook, call, async (wrapped) => next(wrapped)),
           }),
       ...(options.maxSteps === undefined ? {} : { maxSteps: options.maxSteps }),
+      ...(options.context === undefined ? {} : { context: options.context }),
       instructions: async (context) => {
         // The record comes first and a failure fails the turn, so no plugin text
         // reaches a model without being on record.
         await promptAudit.record(context);
-        return baseInstructions(context);
+        const base = await baseInstructions(context);
+        const prepared = await skillController.prepare(context);
+        return `${base}\n\n${prepared.text}`;
       },
     });
     let disposal: Promise<void> | undefined;
     return {
       id,
       runner,
-      resources: { ...assembled, toolRegistry, pluginProviderRegistry, providerRegistry },
+      resources: {
+        ...assembled,
+        toolRegistry,
+        pluginProviderRegistry,
+        providerRegistry,
+        skillCatalog,
+        skillController,
+      },
       dispose() {
-        disposal ??= assembled.kernel.dispose();
+        skillController.closeSync();
+        disposal ??= (async () => {
+          await skillController.drain();
+          await assembled.kernel.dispose();
+        })();
         return disposal;
       },
     };
   } catch (error: unknown) {
+    skillController.closeSync();
+    await skillController.drain().catch(() => undefined);
     await assembled.kernel.dispose().catch(() => undefined);
     throw error;
   }

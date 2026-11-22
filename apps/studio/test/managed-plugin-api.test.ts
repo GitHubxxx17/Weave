@@ -6,6 +6,7 @@ import {
   previewManagedPlugin,
   sendManagedRequest,
 } from '../src/features/plugins/managed-plugin-api.js';
+import { managedManifestSchema } from '../src/features/plugins/managed-plugin-types.js';
 import type {
   ManagedMutationResponse,
   ManagedReview,
@@ -654,4 +655,13 @@ describe('managed request failures', () => {
       controller.signal.reason,
     );
   });
+});
+
+it('retains governed Skill declarations when reviewing managed candidates', () => {
+  const result = managedManifestSchema.parse({
+    ...managedManifest,
+    capabilities: ['skill'],
+    contributes: { skills: ['team-review'] },
+  });
+  expect(result.contributes.skills).toEqual(['team-review']);
 });

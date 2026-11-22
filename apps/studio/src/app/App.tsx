@@ -48,7 +48,11 @@ import {
 import type { LucideIcon } from 'lucide-react';
 
 import { AgentStreamError, streamAgentRun } from '../features/agent/agent-stream.js';
-import type { AgentRuntimeEvent } from '../features/agent/agent-types.js';
+import type { AgentRuntimeEvent, AgentRunRequestInput } from '../features/agent/agent-types.js';
+import { useSessionSkills } from '../features/skills/use-session-skills.js';
+import { SkillPicker } from '../features/skills/skill-picker.js';
+import { SkillHistory } from '../features/skills/skill-history.js';
+import { sameSkill, skillRef, type SkillSummary } from '../features/skills/skill-types.js';
 import { useAutoScroll } from '../features/conversation/use-auto-scroll.js';
 import { MarkdownMessage } from '../features/conversation/markdown-message.js';
 import { ToolStep } from '../features/conversation/tool-step.js';
@@ -110,6 +114,10 @@ const idleRunState: SessionRunState = { status: 'idle', errorMessage: null };
 type ProductView = 'studio' | 'projects' | 'history' | 'archived' | 'settings' | 'marketplace';
 type OpenMenu = 'project' | 'more' | 'context' | 'permission' | 'model' | null;
 
+type AgentSubmissionSnapshot = Readonly<
+  AgentRunRequestInput & { readonly skills: NonNullable<AgentRunRequestInput['skills']> }
+>;
+
 type ChatMessage = {
   readonly id: string;
   readonly role: 'user' | 'assistant';
@@ -117,6 +125,9 @@ type ChatMessage = {
   readonly reasoning: string;
   readonly tools: readonly ToolActivity[];
   readonly occurredAt: string;
+  readonly submission?: AgentSubmissionSnapshot | undefined;
+  readonly originalUserMessage?: AgentRunRequestInput['userMessage'] | undefined;
+  readonly selectedSkills?: readonly SkillSummary[] | undefined;
   /** Images attached to a user message, base64-encoded. */
   readonly images?: readonly { readonly mediaType: string; readonly data: string }[] | undefined;
   /** Turn that produced an assistant reply; live runs use a temporary id. */
@@ -643,6 +654,14 @@ function toChatMessages(
         tools: [],
         occurredAt: message.occurredAt ?? '',
         images: messageImages(message),
+        originalUserMessage: {
+          role: 'user',
+          content: message.content.filter(
+            (part): part is Extract<typeof part, { type: 'text' | 'image' }> =>
+              part.type === 'text' || part.type === 'image',
+          ),
+        },
+        ...(message.turnId === undefined ? {} : { turnId: message.turnId }),
       });
       return;
     }
@@ -832,6 +851,7 @@ function StudioApp(): ReactElement {
   const [expandedMessageIds, setExpandedMessageIds] = useState<readonly string[]>([]);
   const [runStateBySession, setRunStateBySession] = useState<Record<string, SessionRunState>>({});
   const runHandles = useRef<Map<string, SessionRunHandle>>(new Map());
+  const sessionActivityVersions = useRef(new Map<string, number>());
 
   /** Run status of any session; a session without a run is idle. */
   function sessionRunStatus(sessionId: string): RunStatus {
@@ -860,6 +880,10 @@ function StudioApp(): ReactElement {
   const activeProject = projects.find((project) => project.id === activeProjectId);
   const sessions = activeProject?.sessions ?? [];
   const activeSession = sessions.find((session) => session.id === activeSessionId);
+  const sessionSkills = useSessionSkills(
+    activeSessionId,
+    `${activeProjectId}:${activeProject?.folderPath ?? ''}`,
+  );
   const selectedProvider =
     providerSettings.providers.find((provider) => provider.id === selectedProviderId) ??
     providerSettings.providers[0];
@@ -882,12 +906,33 @@ function StudioApp(): ReactElement {
   const latestAssistantId =
     [...messages].reverse().find((message) => message.role === 'assistant')?.id ?? null;
 
-  /** Runs the last user message again as a new Turn; history is kept. */
-  function retryLastTurn(): void {
-    const lastUserMessage = [...messages].reverse().find((message) => message.role === 'user');
-    if (lastUserMessage !== undefined && lastUserMessage.text.trim() !== '') {
-      void submitMessage(lastUserMessage.text);
-    }
+  function submissionForTurn(turnId: string): AgentSubmissionSnapshot | undefined {
+    const turn = turns.find((entry) => entry.turnId === turnId);
+    const message = messages.find(
+      (entry) =>
+        entry.role === 'user' &&
+        (entry.turnId === turnId ||
+          (turn?.userMessageId !== undefined && entry.id === turn.userMessageId)),
+    );
+    if (message?.submission !== undefined) return message.submission;
+    if (
+      turn?.request === undefined ||
+      turn.request.useProviderDefaults !== false ||
+      message === undefined
+    )
+      return undefined;
+    return {
+      sessionId: activeSessionId,
+      userMessage: message.originalUserMessage ?? { role: 'user', content: [] },
+      ...turn.request,
+      skills: (turn.skills?.requested ?? []).map(skillRef),
+    };
+  }
+
+  /** Repeats the exact original message, refs and settings as a new Turn. */
+  function retryTurn(turnId: string): void {
+    const submission = submissionForTurn(turnId);
+    if (submission !== undefined) void submitMessage(submission);
   }
 
   /** Inserts a reply as a Markdown quote at the top of the draft. */
@@ -1189,8 +1234,10 @@ function StudioApp(): ReactElement {
     if (runHandles.current.has(sessionId)) {
       return;
     }
+    const activityVersion = sessionActivityVersions.current.get(sessionId) ?? 0;
     try {
       const detail = await workspaceApi.getSession(sessionId);
+      if ((sessionActivityVersions.current.get(sessionId) ?? 0) !== activityVersion) return;
       // A run may have started while the snapshot was in flight; don't clobber it.
       if (runHandles.current.has(sessionId)) {
         return;
@@ -1450,24 +1497,80 @@ function StudioApp(): ReactElement {
   }
 
   /**
-   * Sends a message. `retryText` resends an earlier message as a new Turn
+   * Sends a message. A retry snapshot creates a new Turn
    * (the previous Turn stays in history) without touching the draft input.
    */
-  async function submitMessage(retryText?: string): Promise<void> {
-    const typed = (retryText ?? messageInput).trim();
+  async function submitMessage(retry?: AgentSubmissionSnapshot): Promise<void> {
+    const typed = messageInput.trim();
     // A draft that invokes a slash command is sent as the command's prompt, so
     // the message shown and stored is the text the model receives.
-    const text = retryText === undefined ? commandPicker.expand(typed) : typed;
-    const images = retryText === undefined ? pendingImages : [];
+    const text =
+      retry === undefined
+        ? commandPicker.expand(typed)
+        : retry.userMessage.content
+            .filter((part) => part.type === 'text')
+            .map((part) => part.text)
+            .join('\n');
+    const images =
+      retry === undefined
+        ? pendingImages
+        : retry.userMessage.content.filter((part) => part.type === 'image');
+    const selectedSkills = retry === undefined ? [...sessionSkills.draft.selected] : [];
+    const selectedRevision = sessionSkills.draft.revision;
+    const selectedSessionId = activeSessionId;
+    const settings = {
+      provider: selectedProviderId,
+      model: selectedModel,
+      useProviderDefaults: false,
+      ...(selectedProvider?.temperature === undefined
+        ? {}
+        : { temperature: selectedProvider.temperature }),
+      ...(selectedProvider?.maxTokens === undefined
+        ? {}
+        : { maxTokens: selectedProvider.maxTokens }),
+      reasoningEffort,
+      permissionMode,
+    };
     if ((text === '' && images.length === 0) || status === 'streaming') {
       return;
     }
 
-    const sessionContext = getActiveSessionContext() ?? (await ensureSessionForMessage());
+    const retryProject =
+      retry === undefined
+        ? undefined
+        : projects.find((project) =>
+            project.sessions.some((session) => session.id === retry.sessionId),
+          );
+    const retrySession = retryProject?.sessions.find((session) => session.id === retry?.sessionId);
+    const sessionContext =
+      retry === undefined
+        ? (getActiveSessionContext() ?? (await ensureSessionForMessage()))
+        : retryProject === undefined || retrySession === undefined
+          ? null
+          : { projectId: retryProject.id, sessionId: retrySession.id, session: retrySession };
     if (sessionContext === null) {
       return;
     }
     const { projectId, sessionId } = sessionContext;
+    if (runHandles.current.has(sessionId)) return;
+    const submission: AgentSubmissionSnapshot = structuredClone(
+      retry ?? {
+        sessionId,
+        userMessage: {
+          role: 'user',
+          content: [
+            ...(text === '' ? [] : [{ type: 'text' as const, text }]),
+            ...images.map((image) => ({
+              type: 'image' as const,
+              mediaType: image.mediaType,
+              data: image.data,
+            })),
+          ],
+        },
+        ...settings,
+        skills: selectedSessionId === sessionId ? selectedSkills.map(skillRef) : [],
+      },
+    );
     const previousTurnIds = new Set(sessionContext.session.turns.map((turn) => turn.turnId));
 
     // Persist a generated title on the first message of an untitled session so
@@ -1477,7 +1580,7 @@ function StudioApp(): ReactElement {
       .find((project) => project.id === projectId)
       ?.sessions.find((session) => session.id === sessionId)?.title;
     const shouldPersistTitle =
-      retryText === undefined &&
+      retry === undefined &&
       generatedTitle !== '' &&
       (existingTitle === undefined || existingTitle === '未命名会话' || existingTitle === '');
 
@@ -1488,6 +1591,10 @@ function StudioApp(): ReactElement {
     const requestController = new AbortController();
     const occurredAt = new Date().toISOString();
 
+    sessionActivityVersions.current.set(
+      sessionId,
+      (sessionActivityVersions.current.get(sessionId) ?? 0) + 1,
+    );
     runHandles.current.set(sessionId, {
       runId,
       controller: requestController,
@@ -1505,6 +1612,9 @@ function StudioApp(): ReactElement {
         tools: [],
         occurredAt,
         images: images.map((image) => ({ mediaType: image.mediaType, data: image.data })),
+        turnId: liveTurnId,
+        submission,
+        selectedSkills: retry === undefined ? selectedSkills : [],
       },
       {
         id: assistantId,
@@ -1522,8 +1632,8 @@ function StudioApp(): ReactElement {
         turnId: liveTurnId,
         status: 'running',
         startedAt: occurredAt,
-        provider: selectedProviderId,
-        model: selectedModel,
+        provider: submission.provider,
+        model: submission.model,
         modelSteps: [],
         toolResults: [],
         toolCalls: 0,
@@ -1549,7 +1659,7 @@ function StudioApp(): ReactElement {
           : project,
       ),
     );
-    if (retryText === undefined) {
+    if (retry === undefined) {
       setMessageInput('');
       setPendingImages([]);
     }
@@ -1560,34 +1670,32 @@ function StudioApp(): ReactElement {
     setSessionRunState(sessionId, { status: 'streaming', errorMessage: null });
 
     let completedObserved = false;
+    let completedTurnId: string | undefined;
+    let terminalReconciled = false;
+    let accepted = false;
+    const accept = (): void => {
+      if (accepted) return;
+      accepted = true;
+      if (retry === undefined)
+        sessionSkills.clearSent(sessionId, selectedRevision, submission.skills);
+    };
     try {
       await streamAgentRun(
+        submission,
         {
-          sessionId,
-          userMessage: {
-            role: 'user',
-            content: [
-              ...(text === '' ? [] : [{ type: 'text' as const, text }]),
-              ...images.map((image) => ({
-                type: 'image' as const,
-                mediaType: image.mediaType,
-                data: image.data,
-              })),
-            ],
-          },
-          provider: selectedProviderId,
-          model: selectedModel,
-          reasoningEffort,
-          permissionMode,
-        },
-        {
+          onAccepted: accept,
           onEvent: (event) => {
-            if (event.type === 'completed') completedObserved = true;
+            accept();
+            if (event.type === 'completed') {
+              completedObserved = true;
+              completedTurnId = event.turnId;
+            }
             handleEvent(event, runId, assistantId, projectId, sessionId);
           },
         },
         { signal: requestController.signal },
       );
+      accept();
       if (!completedObserved && runHandles.current.get(sessionId)?.runId === runId) {
         // Host cancellation can close SSE after durable terminal persistence without
         // yielding completed. EOF alone cannot tell us the Turn's outcome.
@@ -1607,6 +1715,7 @@ function StudioApp(): ReactElement {
             });
           } else {
             applySessionDetail(projectId, detail);
+            terminalReconciled = true;
             setSessionRunState(sessionId, {
               status: terminal.status === 'failed' ? 'error' : terminal.status,
               errorMessage: terminal.status === 'failed' ? '本次运行失败；会话记录已更新。' : null,
@@ -1638,6 +1747,43 @@ function StudioApp(): ReactElement {
     } finally {
       if (runHandles.current.get(sessionId)?.runId === runId) {
         runHandles.current.delete(sessionId);
+        if (!terminalReconciled)
+          void workspaceApi
+            .getSession(sessionId)
+            .then((detail) => {
+              if (detail.id !== sessionId) return;
+              // Only merge facts for this run: a later run may already be streaming.
+              const candidates = detail.turns.filter(
+                (turn) =>
+                  !previousTurnIds.has(turn.turnId) &&
+                  turn.startedAt >= occurredAt &&
+                  turn.userMessageId !== undefined &&
+                  detail.messages.some(
+                    (message) =>
+                      message.messageId === turn.userMessageId && message.role === 'user',
+                  ),
+              );
+              const knownTurnId =
+                completedTurnId ?? (candidates.length === 1 ? candidates[0]?.turnId : undefined);
+              if (knownTurnId === undefined) return;
+              const durable = detail.turns.find((turn) => turn.turnId === knownTurnId);
+              if (durable === undefined) return;
+              updateSessionTurns(projectId, sessionId, (current) =>
+                current.map((turn) =>
+                  turn.turnId === knownTurnId || turn.turnId === liveTurnId
+                    ? { ...turn, ...durable }
+                    : turn,
+                ),
+              );
+              updateSessionMessages(projectId, sessionId, (current) =>
+                current.map((message) =>
+                  message.id === userMessageId || message.id === assistantId
+                    ? { ...message, turnId: knownTurnId }
+                    : message,
+                ),
+              );
+            })
+            .catch(() => undefined);
       }
     }
   }
@@ -1712,6 +1858,7 @@ function StudioApp(): ReactElement {
 
     try {
       const detail = await workspaceApi.archiveSession(sessionId);
+      sessionSkills.forget(sessionId);
       applySessionDetail(projectId, detail);
 
       if (projectId === activeProjectId && sessionId === activeSessionId) {
@@ -1761,6 +1908,7 @@ function StudioApp(): ReactElement {
 
     try {
       await workspaceApi.deleteSession(session.sessionId);
+      sessionSkills.forget(session.sessionId);
       setProjects((current) =>
         current.map((project) =>
           project.id !== session.projectId
@@ -2922,6 +3070,20 @@ function StudioApp(): ReactElement {
                               )}
                           </p>
                         ) : null}
+                        {message.role === 'user' ||
+                        (message.role === 'assistant' &&
+                          !messages.some(
+                            (entry) => entry.role === 'user' && entry.turnId === message.turnId,
+                          )) ? (
+                          <SkillHistory
+                            skills={
+                              message.turnId === undefined
+                                ? undefined
+                                : turnById.get(message.turnId)?.skills
+                            }
+                            selected={message.selectedSkills}
+                          />
+                        ) : null}
                         {message.role === 'user' && (message.images?.length ?? 0) > 0 ? (
                           <div className="message-images">
                             {(message.images ?? []).map((image, index) => (
@@ -2952,7 +3114,12 @@ function StudioApp(): ReactElement {
                           text={message.text}
                           canRetry={message.turnId === lastTurnId}
                           disabled={status === 'streaming'}
-                          onRetry={() => retryLastTurn()}
+                          retryUnavailableReason={
+                            submissionForTurn(message.turnId) === undefined
+                              ? '旧会话未记录原始请求设置，无法精确重试'
+                              : undefined
+                          }
+                          onRetry={() => retryTurn(message.turnId as string)}
                           onQuote={() => quoteReply(message.text)}
                         />
                       ) : null}
@@ -2985,6 +3152,19 @@ function StudioApp(): ReactElement {
             onInspectToolCall={inspectToolCall}
           />
           <div className="composer-box">
+            {sessionSkills.open && activeSessionId !== '' ? (
+              <SkillPicker
+                key={`${activeSessionId}:${activeProject?.folderPath ?? ''}`}
+                sessionId={activeSessionId}
+                catalog={sessionSkills.catalogState.catalog}
+                loading={sessionSkills.catalogState.loading}
+                error={sessionSkills.catalogState.error}
+                selected={sessionSkills.draft.selected}
+                onToggle={sessionSkills.toggle}
+                onRefresh={() => void sessionSkills.refresh()}
+                onClose={sessionSkills.close}
+              />
+            ) : null}
             {commandPicker.open ? (
               <CommandPickerList
                 commands={commandPicker.items}
@@ -3035,8 +3215,51 @@ function StudioApp(): ReactElement {
                 ))}
               </div>
             ) : null}
+            {sessionSkills.draft.selected.length > 0 ? (
+              <div className="skill-chips" aria-label="待发送技能">
+                {sessionSkills.draft.selected.map((skill) => {
+                  const latest = sessionSkills.catalogState.catalog?.entries.find(
+                    (entry) => entry.id === skill.id,
+                  );
+                  const stale =
+                    latest !== undefined
+                      ? !sameSkill(latest, skill)
+                      : sessionSkills.catalogState.catalog?.complete === true;
+                  return (
+                    <span
+                      className={`skill-chip${stale ? ' skill-warning' : ''}`}
+                      key={skill.id}
+                      title={`${skill.source.label} · ${skill.id}`}
+                    >
+                      <span>
+                        {skill.name}
+                        {stale ? ' · 内容已变化，请重新选择' : ''}
+                      </span>
+                      <button
+                        type="button"
+                        aria-label={`移除技能 ${skill.name}`}
+                        onClick={() => sessionSkills.remove(skill.id)}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  );
+                })}
+              </div>
+            ) : null}
             <div className="composer-toolbar">
               <div className="composer-tools">
+                <button
+                  className="composer-tool-button"
+                  type="button"
+                  aria-label="选择技能"
+                  title={activeSessionId === '' ? '请先新建会话以选择技能' : '为本轮选择技能'}
+                  disabled={activeSessionId === ''}
+                  aria-expanded={sessionSkills.open}
+                  onClick={sessionSkills.open ? sessionSkills.close : sessionSkills.show}
+                >
+                  <Sparkles aria-hidden="true" />
+                </button>
                 <div className={`menu-anchor${openMenu === 'context' ? ' menu-anchor-open' : ''}`}>
                   <button
                     className="composer-tool-button"

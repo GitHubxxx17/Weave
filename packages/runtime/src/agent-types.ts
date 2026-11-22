@@ -4,6 +4,8 @@ import {
   planSchema,
   toolCallSchema,
   userMessageSchema,
+  skillRefsSchema,
+  type SkillRef,
   type AgentPlan,
   type ContextBreakdown,
   type LlmRequest,
@@ -25,11 +27,14 @@ import type { ToolRegistry } from './tool-registry.js';
 const nonEmptyStringSchema = z.string().min(1);
 
 export interface AgentRunRequest {
+  readonly skills?: readonly SkillRef[] | undefined;
   readonly sessionId: string;
   readonly userMessage: UserMessage;
   readonly provider: string;
   readonly model: string;
   readonly temperature?: number | undefined;
+  /** False preserves a captured sampling snapshot, including absent values. */
+  readonly useProviderDefaults?: boolean | undefined;
   readonly maxTokens?: number | undefined;
   readonly reasoningEffort?: string | undefined;
   /** Tools available to this run; defaults to `workspace`. */
@@ -47,9 +52,11 @@ export const agentRunRequestSchema: z.ZodType<AgentRunRequest> = z
     provider: nonEmptyStringSchema,
     model: nonEmptyStringSchema,
     temperature: z.number().finite().nonnegative().optional(),
+    useProviderDefaults: z.boolean().optional(),
     maxTokens: z.number().finite().nonnegative().optional(),
     reasoningEffort: nonEmptyStringSchema.optional(),
     permissionMode: toolPermissionModeSchema.optional(),
+    skills: skillRefsSchema.optional(),
     signal: z.instanceof(AbortSignal).optional(),
   })
   .passthrough();
@@ -237,11 +244,7 @@ export interface AgentRunnerOptions {
    * to that turn. A failure here fails the turn before any model call.
    */
   readonly instructions?:
-    | ((context: {
-        readonly sessionId: string;
-        readonly permissionMode: ToolPermissionMode;
-        readonly turnId: string;
-      }) => string | undefined | Promise<string | undefined>)
+    | ((context: AgentInstructionsContext) => string | undefined | Promise<string | undefined>)
     | undefined;
   /**
    * Tuning for deterministic, fidelity-preserving context compression applied
@@ -250,6 +253,16 @@ export interface AgentRunnerOptions {
    * `defaultWindowTokens` here.
    */
   readonly context?: AgentContextOptions | undefined;
+}
+
+/** Facts captured after queue admission, owned by this exact turn. */
+export interface AgentInstructionsContext {
+  readonly sessionId: string;
+  readonly permissionMode: ToolPermissionMode;
+  readonly turnId: string;
+  readonly skills: readonly SkillRef[];
+  readonly signal: AbortSignal;
+  readonly maxToolResultTokens: number;
 }
 
 /** Budget knobs for the Agent Runner's send-window builder. */

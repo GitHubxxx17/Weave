@@ -7,6 +7,25 @@ export {
   pluginCommandSchema,
 } from './commands.js';
 export type { PluginCommand } from './commands.js';
+export {
+  attributedSkillContributionSchema,
+  skillContributionSchema,
+  skillNamePattern,
+  isSkillResourcePath,
+} from './skills.js';
+export type {
+  SkillContribution,
+  AttributedSkillContribution,
+  SkillsExtensionApi,
+} from './skills.js';
+export type {
+  SkillRef,
+  SkillSummary,
+  SkillSource,
+  SkillCatalog,
+  SkillPage,
+  SkillIssue,
+} from '@weave/runtime';
 export { pluginManifestSchema } from './manifest.js';
 export type {
   ContributedNameKey,
@@ -97,6 +116,7 @@ export {
   pluginEventsRef,
   promptSectionsExtensionPoint,
   sessionStoreRef,
+  skillsExtensionPoint,
   toolAroundHook,
   toolPipelineRef,
   toolPolicyHook,

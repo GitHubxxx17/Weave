@@ -9,6 +9,8 @@ import {
 } from '@weave/plugin';
 import { type SessionEventStore } from '@weave/session';
 import {
+  agentRunRequestSchema,
+  AgentRunError,
   type AgentRunRequest,
   type AgentRuntimeEvent,
   type Runtime,
@@ -21,12 +23,16 @@ import {
   type GenerationController,
   type RunnerGeneration,
 } from '@weave/plugin-host';
+import type { GenerationSkillCatalog } from './skill-catalog.js';
+import type { TurnSkillController } from './skill-turns.js';
 import type { AssembledAgentKernel } from './agent-kernel.js';
 import { createProviderView } from './provider-view.js';
 import { type CommandListItem, type PluginListItem } from './plugin-catalog.js';
 
 /** Resources exclusively owned by a sealed Server generation. */
 export interface ServerGenerationResources extends AssembledAgentKernel {
+  readonly skillCatalog: GenerationSkillCatalog;
+  readonly skillController: TurnSkillController;
   readonly toolRegistry: ToolRegistry;
   readonly pluginProviderRegistry: LlmProviderRegistry;
   readonly providerRegistry: LlmProviderRegistry;
@@ -151,7 +157,26 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
     if (!Number.isSafeInteger(generation.id) || generation.id <= 0) {
       throw new Error('Generation ids must increase monotonically');
     }
-    controller = createGenerationRunner(generation);
+    const underlying = createGenerationRunner(generation);
+    // The generic GenerationRunner admits later at the Session queue head.
+    // Copy structured request data now while preserving the actual AbortSignal.
+    const runner: ServerGenerationController['runner'] = {
+      run(request) {
+        const parsed = agentRunRequestSchema.safeParse(request);
+        if (!parsed.success)
+          return {
+            [Symbol.asyncIterator]() {
+              return {
+                next: async () => {
+                  throw new AgentRunError('agent-invalid-input', 'Agent run request is invalid');
+                },
+              };
+            },
+          };
+        return underlying.runner.run(parsed.data);
+      },
+    };
+    controller = { ...underlying, runner };
     locked = true;
     return { retirement: Promise.resolve() };
   };

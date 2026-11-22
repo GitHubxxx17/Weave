@@ -164,6 +164,7 @@ describe('GET /plugins', () => {
           commands: [],
           hooks: [],
           services: [],
+          skills: [],
         },
       });
       expect(byId.get('note-kernel')).toEqual({
@@ -190,6 +191,7 @@ describe('GET /plugins', () => {
           commands: ['summarize'],
           hooks: ['weave.tools.result'],
           services: [],
+          skills: [],
         },
       });
     } finally {
@@ -217,7 +219,7 @@ describe('GET /plugins', () => {
         provides: { services: ['weave.approval.broker', 'weave.session.store'] },
       });
       expect(byId.get('server-tool-host')?.provides).toMatchObject({
-        tools: ['recall', 'update_plan'],
+        tools: ['recall', 'update_plan', 'read_skill', 'read_skill_resource'],
         services: ['weave.tools.pipeline'],
       });
     } finally {

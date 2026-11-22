@@ -22,6 +22,8 @@ export type ToolPermissionMode = z.infer<typeof toolPermissionModeSchema>;
  * Context supplied to every tool implementation by the shared pipeline.
  */
 export interface ToolExecutionContext {
+  readonly turnId?: string | undefined;
+  readonly toolCallId?: string | undefined;
   /** Cooperative cancellation signal for the current invocation. */
   readonly signal: AbortSignal;
   /** Session associated with the invocation, when one exists. */
@@ -85,6 +87,7 @@ export type RegisteredToolDefinition = ToolDefinition<never, unknown>;
 
 /** Input accepted by one Tool Pipeline invocation. */
 export interface ToolExecutionRequest {
+  readonly turnId?: string | undefined;
   /** Provider-generated id used to correlate the tool result. */
   readonly toolCallId: string;
   /** Registered tool name. */
@@ -108,6 +111,7 @@ export const toolExecutionRequestSchema: z.ZodType<ToolExecutionRequest> = z
     name: nonEmptyStringSchema,
     arguments: z.string(),
     sessionId: nonEmptyStringSchema.optional(),
+    turnId: nonEmptyStringSchema.optional(),
     signal: z.instanceof(AbortSignal).optional(),
     timeoutMs: nonNegativeFiniteNumberSchema.optional(),
     permissionMode: toolPermissionModeSchema.optional(),

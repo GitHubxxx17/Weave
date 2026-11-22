@@ -19,6 +19,7 @@ export interface MessageFooterProps {
   /** Only the last Turn of a Session can be retried. */
   readonly canRetry: boolean;
   readonly disabled: boolean;
+  readonly retryUnavailableReason?: string | undefined;
   readonly onRetry: () => void;
   readonly onQuote: () => void;
 }
@@ -36,6 +37,7 @@ export function MessageFooter({
   text,
   canRetry,
   disabled,
+  retryUnavailableReason,
   onRetry,
   onQuote,
 }: MessageFooterProps): ReactElement {
@@ -88,8 +90,8 @@ export function MessageFooter({
             className="message-action"
             type="button"
             aria-label="重试"
-            title="用同一条消息重新运行"
-            disabled={disabled}
+            title={retryUnavailableReason ?? '使用原消息、技能和设置重新运行'}
+            disabled={disabled || retryUnavailableReason !== undefined}
             onClick={onRetry}
           >
             <RotateCcw aria-hidden="true" />

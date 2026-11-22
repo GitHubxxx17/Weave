@@ -1,4 +1,13 @@
 export { createRuntime } from './runtime.js';
+export type {
+  SkillRef,
+  SkillSource,
+  SkillSummary,
+  SkillIssue,
+  SkillCatalog,
+  SkillPage,
+  TurnRequestMetadata,
+} from '@weave/protocol';
 export { createSessionEventStoreService } from './session-service.js';
 export type {
   Runtime,
@@ -23,6 +32,7 @@ export type {
 } from '@weave/session';
 export { AgentRunError, agentRunRequestSchema, agentRuntimeEventSchema } from './agent-types.js';
 export type {
+  AgentInstructionsContext,
   AgentCompletionReason,
   AgentRunErrorCode,
   AgentRunner,
@@ -33,7 +43,7 @@ export type {
   LlmCall,
   LlmMiddleware,
 } from './agent-types.js';
-export { createAgentRunner } from './agent-runner.js';
+export { defaultAgentMaxToolResultTokens, createAgentRunner } from './agent-runner.js';
 export {
   ToolExecutionError,
   toolDefinitionSchema,
@@ -66,7 +76,7 @@ export {
   updatePlanToolName,
 } from './update-plan-tool.js';
 export type { UpdatePlanInput } from './update-plan-tool.js';
-export { createToolPipeline } from './tool-pipeline.js';
+export { defaultToolResultMaxBytes, createToolPipeline } from './tool-pipeline.js';
 export type {
   ToolAround,
   ToolPipeline,
@@ -159,3 +169,18 @@ export type {
   CreateApprovalRequestInput,
 } from './approval-types.js';
 export { createApprovalBroker } from './approval-broker.js';
+
+export { estimateTokens } from './context/token-estimate.js';
+export {
+  createSkillTools,
+  readSkillInputSchema,
+  readSkillResourceInputSchema,
+  readSkillToolName,
+  readSkillResourceToolName,
+} from './skill-tools.js';
+export type {
+  ReadSkillInput,
+  ReadSkillResourceInput,
+  SkillToolPorts,
+  SkillTools,
+} from './skill-tools.js';

@@ -192,6 +192,8 @@ describe('Server host', () => {
         'second-tool',
         'recall',
         'update_plan',
+        'read_skill',
+        'read_skill_resource',
         'kernel-tool',
       ]);
     } finally {

@@ -51,13 +51,16 @@ export type SessionMessage = ProjectedSessionMessage['message'] & {
   readonly messageId: string;
   readonly sequence: number;
   readonly occurredAt: string;
-  /** Turn that produced the message; absent for the user message that starts a Turn. */
+  /** Exact Turn association, including linked user messages in new logs. */
   readonly turnId?: string;
 };
 
 /** Per-Turn timing, attribution, and token usage summed over its model steps. */
 export interface SessionTurnSummary {
   readonly turnId: string;
+  readonly userMessageId?: string;
+  readonly request?: import('@weave/protocol').TurnRequestMetadata;
+  readonly skills?: SessionProjection['turns'][number]['skills'];
   readonly status: 'running' | 'completed' | 'failed' | 'cancelled';
   readonly startedAt: string;
   readonly completedAt?: string;
@@ -167,6 +170,9 @@ function turnSummaryFor(turn: SessionProjection['turns'][number]): SessionTurnSu
   );
   return {
     turnId: turn.turnId,
+    ...(turn.userMessageId === undefined ? {} : { userMessageId: turn.userMessageId }),
+    ...(turn.request === undefined ? {} : { request: turn.request }),
+    ...(turn.skills === undefined ? {} : { skills: turn.skills }),
     status: turn.status,
     startedAt: turn.startedAt,
     ...(turn.completedAt === undefined ? {} : { completedAt: turn.completedAt }),

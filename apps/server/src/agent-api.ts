@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { Context, Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
-import { userMessageSchema } from '@weave/protocol';
+import { skillRefsSchema, userMessageSchema } from '@weave/protocol';
 import {
   AgentRunError,
   ToolExecutionError,
@@ -22,6 +22,8 @@ const agentHttpRequestSchema = z
     maxTokens: z.number().finite().nonnegative().optional(),
     reasoningEffort: z.string().min(1).optional(),
     permissionMode: toolPermissionModeSchema.optional(),
+    skills: skillRefsSchema.optional(),
+    useProviderDefaults: z.boolean().optional(),
   })
   .strict();
 

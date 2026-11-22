@@ -37,7 +37,7 @@ const defaultReserveOutputTokens = 4096;
 /** Safety margin kept free below the window, as a fraction of the window. */
 const defaultContextMarginRatio = 0.05;
 /** A single tool result above this many tokens is head/tail truncated. */
-const defaultMaxToolResultTokens = 8000;
+export const defaultAgentMaxToolResultTokens = 8000;
 
 /** Retry attempts for a model step that fails before emitting any output. */
 const maxModelRetries = 2;
@@ -483,6 +483,12 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
           const validRequest = requestResult.data;
           // Provider settings may change while the turn is awaiting the session store or a tool.
           const { client: llm, descriptor } = resolveLlmProvider(options, validRequest.provider);
+          const effectiveTemperature =
+            validRequest.temperature ??
+            (validRequest.useProviderDefaults === false ? undefined : descriptor?.temperature);
+          const effectiveMaxTokens =
+            validRequest.maxTokens ??
+            (validRequest.useProviderDefaults === false ? undefined : descriptor?.maxTokens);
           sessionId = validRequest.sessionId;
           let storedEvents = await options.sessionStore.read(validRequest.sessionId);
           if (storedEvents.length === 0) {
@@ -501,7 +507,26 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
               type: 'message.created',
               payload: { messageId, message: validRequest.userMessage },
             },
-            { type: 'turn.started', payload: { turnId } },
+            {
+              type: 'turn.started',
+              payload: {
+                turnId,
+                userMessageId: messageId,
+                request: {
+                  provider: validRequest.provider,
+                  model: validRequest.model,
+                  permissionMode: validRequest.permissionMode ?? 'ask',
+                  useProviderDefaults: false,
+                  ...(effectiveTemperature === undefined
+                    ? {}
+                    : { temperature: effectiveTemperature }),
+                  ...(effectiveMaxTokens === undefined ? {} : { maxTokens: effectiveMaxTokens }),
+                  ...(validRequest.reasoningEffort === undefined
+                    ? {}
+                    : { reasoningEffort: validRequest.reasoningEffort }),
+                },
+              },
+            },
             {
               type: 'step.started',
               payload: {
@@ -512,6 +537,14 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
                 model: validRequest.model,
               },
             },
+            ...(validRequest.skills === undefined
+              ? []
+              : [
+                  {
+                    type: 'skill.requested' as const,
+                    payload: { turnId, userMessageId: messageId, skills: [...validRequest.skills] },
+                  },
+                ]),
           ]);
           lifecycleStarted = true;
 
@@ -533,15 +566,17 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
                   sessionId: validRequest.sessionId,
                   permissionMode,
                   turnId,
+                  skills: Object.freeze(
+                    (validRequest.skills ?? []).map((ref) => Object.freeze({ ...ref })),
+                  ),
+                  signal,
+                  maxToolResultTokens:
+                    options.context?.maxToolResultTokens ?? defaultAgentMaxToolResultTokens,
                 });
           const systemMessages: readonly Message[] =
             instructionText === undefined || instructionText.trim() === ''
               ? []
               : [{ role: 'system', content: [{ type: 'text', text: instructionText }] }];
-
-          // Provider defaults fill sampling params the request did not set.
-          const effectiveTemperature = validRequest.temperature ?? descriptor?.temperature;
-          const effectiveMaxTokens = validRequest.maxTokens ?? descriptor?.maxTokens;
 
           while (true) {
             if (modelSteps >= maxSteps) {
@@ -590,7 +625,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
               tools,
               budget,
               maxToolResultTokens:
-                options.context?.maxToolResultTokens ?? defaultMaxToolResultTokens,
+                options.context?.maxToolResultTokens ?? defaultAgentMaxToolResultTokens,
             });
             activeStepContext = built.breakdown;
             emit({
@@ -830,6 +865,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
                   name: toolCall.name,
                   arguments: toolCall.arguments,
                   sessionId: validRequest.sessionId,
+                  turnId,
                   permissionMode,
                   signal,
                 });
@@ -1024,6 +1060,12 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
           stopped = true;
           queuedEvents.length = 0;
           internalController.abort(createAbortError());
+          // Abort is immediate, but already accepted instructions/tool/audit
+          // persistence must settle before the terminal fact closes the Turn.
+          // execute owns its terminal append; only then is fallback safe.
+          if (executionPromise !== undefined) {
+            await executionPromise;
+          }
           let returnError: unknown;
           let hasReturnError = false;
           if (
@@ -1043,9 +1085,6 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
               returnError = error;
               hasReturnError = true;
             }
-          }
-          if (executionPromise !== undefined) {
-            await executionPromise;
           }
           if (hasReturnError) {
             finish(returnError, true);

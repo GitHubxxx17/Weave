@@ -6,6 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentStreamError, streamAgentRun } from '../src/features/agent/agent-stream.js';
 import { App } from '../src/app/App.js';
 import type { AgentStreamHandlers } from '../src/features/agent/agent-types.js';
+import {
+  planningRef,
+  planningSkill,
+  projectSkill,
+  skillCatalog,
+} from './support/skill-fixtures.js';
 import { disabledManagedCatalog } from './support/disabled-managed-catalog.js';
 import {
   managedCatalog,
@@ -1398,7 +1404,10 @@ describe('Studio Agent Chat', () => {
     fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '默认强度' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     expect(await screen.findByText('默认强度')).toBeTruthy();
-    expect(streamAgentRunMock.mock.calls[0]?.[0]).toMatchObject({ reasoningEffort: 'medium' });
+    expect(streamAgentRunMock.mock.calls[0]?.[0]).toMatchObject({
+      reasoningEffort: 'medium',
+      skills: [],
+    });
 
     fireEvent.click(screen.getByRole('button', { name: '模型与强度' }));
     fireEvent.change(screen.getByRole('slider'), { target: { value: '2' } });
@@ -2344,7 +2353,7 @@ describe('Studio Agent Chat', () => {
     );
   });
 
-  it('does not reconcile a stream that supplied its completed event', async () => {
+  it('reads durable provenance after a completed event without replacing streamed messages', async () => {
     streamAgentRunMock.mockImplementation(async (_request, handlers) => {
       handlers.onEvent({ type: 'completed', turnId: 'complete' });
     });
@@ -2357,7 +2366,8 @@ describe('Studio Agent Chat', () => {
     await screen.findByText('已完成', { selector: '.run-status' });
     expect(
       fetchMock.mock.calls.filter(([url]) => String(url) === `/sessions/${sessionIds.local}`),
-    ).toHaveLength(before);
+    ).toHaveLength(before + 1);
+    expect(screen.getByText('正常完成')).toBeTruthy();
   });
 
   it.each(['read-failure', 'old-terminal', 'still-running', 'ambiguous', 'wrong-session'])(
@@ -3156,4 +3166,348 @@ describe('Studio Agent Chat', () => {
       });
     });
   });
+});
+
+describe('Session Skills', () => {
+  function useSkillsRoutes(): void {
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (/\/sessions\/[^/]+\/skills$/.test(url)) return Response.json(skillCatalog());
+      if (url.endsWith('/skills/preview')) {
+        return Response.json({
+          schemaVersion: 1,
+          skill: planningSkill,
+          instructions: '先核对项目约束，再列出步骤。',
+        });
+      }
+      return base(input, init);
+    });
+  }
+
+  it('keeps selected Skills in their own Session and previews inert instructions', async () => {
+    useSkillsRoutes();
+    streamAgentRunMock.mockImplementation(async (_request, handlers) => {
+      handlers.onEvent({ type: 'completed', turnId: 'skill-turn' });
+    });
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: '选择技能' }));
+    const picker = await screen.findByRole('dialog', { name: '技能' });
+    await within(picker).findByText(planningSkill.description);
+    fireEvent.click(within(picker).getByRole('button', { name: '预览 weave-planning' }));
+    expect(await within(picker).findByText('先核对项目约束，再列出步骤。')).toBeTruthy();
+    fireEvent.click(within(picker).getByRole('checkbox', { name: /weave-planning/ }));
+    fireEvent.click(within(picker).getByRole('button', { name: '关闭技能' }));
+    expect(screen.getByRole('button', { name: '移除技能 weave-planning' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Session event store/ }));
+    expect(screen.queryByRole('button', { name: '移除技能 weave-planning' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /本地 Agent 演示/ }));
+    expect(screen.getByRole('button', { name: '移除技能 weave-planning' })).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '使用计划' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(streamAgentRunMock).toHaveBeenCalled());
+    expect(streamAgentRunMock.mock.calls[0]?.[0]).toMatchObject({
+      sessionId: sessionIds.local,
+      skills: [planningRef],
+    });
+    expect(screen.queryByRole('button', { name: '移除技能 weave-planning' })).toBeNull();
+    expect(screen.getByText(/已选择.*weave-planning/)).toBeTruthy();
+  });
+
+  it('retries the full image, settings and exact Skill snapshot without clearing the new draft', async () => {
+    useSkillsRoutes();
+    let n = 0;
+    streamAgentRunMock.mockImplementation(async (_request, handlers) => {
+      handlers.onEvent({ type: 'text-delta', text: `快照回答 ${++n}` });
+      handlers.onEvent({ type: 'completed', turnId: `snapshot-${n}` });
+    });
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: '选择技能' }));
+    const picker = await screen.findByRole('dialog', { name: '技能' });
+    fireEvent.click(await within(picker).findByRole('checkbox', { name: /weave-planning/ }));
+    fireEvent.click(within(picker).getByRole('button', { name: '关闭技能' }));
+    fireEvent.change(screen.getByLabelText('选择图片文件'), {
+      target: { files: [new File(['hello'], 'snapshot.png', { type: 'image/png' })] },
+    });
+    await screen.findByAltText('snapshot.png');
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await screen.findByText('快照回答 1');
+    const original = streamAgentRunMock.mock.calls[0]?.[0];
+    fireEvent.click(screen.getByRole('button', { name: '模型与强度' }));
+    fireEvent.change(screen.getByRole('slider'), { target: { value: '2' } });
+    fireEvent.click(screen.getByRole('button', { name: '模型与强度' }));
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '下一轮草稿' } });
+    fireEvent.click(screen.getByRole('button', { name: '选择技能' }));
+    const next = await screen.findByRole('dialog', { name: '技能' });
+    fireEvent.click(await within(next).findByRole('checkbox', { name: /review-code/ }));
+    fireEvent.click(within(next).getByRole('button', { name: '关闭技能' }));
+    fireEvent.click(screen.getByRole('button', { name: '重试' }));
+    await screen.findByText('快照回答 2');
+    expect(streamAgentRunMock.mock.calls[1]?.[0]).toEqual(original);
+    expect((screen.getByLabelText('发送消息') as HTMLTextAreaElement).value).toBe('下一轮草稿');
+    expect(screen.getByRole('button', { name: '移除技能 review-code' })).toBeTruthy();
+  });
+
+  it('reconstructs exact retry and honest Skill provenance from durable history', async () => {
+    useSkillsRoutes();
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === `/sessions/${sessionIds.local}`) {
+        return Response.json({
+          ...sessionDetail(sessionIds.local, '本地 Agent 演示', [
+            {
+              role: 'user',
+              turnId: 'history-skills',
+              content: [
+                { type: 'text', text: '前文' },
+                { type: 'image', mediaType: 'image/png', data: 'aGVsbG8=' },
+                { type: 'text', text: '后文' },
+              ],
+            },
+            {
+              role: 'assistant',
+              turnId: 'history-skills',
+              content: [{ type: 'text', text: '历史技能回答' }],
+            },
+          ]),
+          turns: [
+            {
+              turnId: 'history-skills',
+              userMessageId: `${sessionIds.local}-message-1`,
+              status: 'completed',
+              startedAt: '2026-11-22T00:00:00Z',
+              request: {
+                provider: 'mock',
+                model: 'original-model',
+                useProviderDefaults: false,
+                temperature: 0.2,
+                maxTokens: 777,
+                reasoningEffort: 'low',
+                permissionMode: 'ask',
+              },
+              skills: {
+                requested: [planningRef],
+                applications: [
+                  { skill: planningSkill, invocation: 'user', placement: 0, delivery: 'prepared' },
+                  {
+                    skill: projectSkill,
+                    invocation: 'model',
+                    placement: 1,
+                    delivery: 'prepared',
+                    toolCallId: 'read-one',
+                  },
+                ],
+                failures: [],
+              },
+            },
+          ],
+        });
+      }
+      return base(input, init);
+    });
+    streamAgentRunMock.mockImplementation(async (_request, handlers) =>
+      handlers.onEvent({ type: 'completed', turnId: 'history-retry' }),
+    );
+    await renderApp();
+    await screen.findByText('历史技能回答');
+    expect(screen.getByText(/已加入指令.*weave-planning/)).toBeTruthy();
+    expect(screen.getByText(/已准备.*review-code/)).toBeTruthy();
+    expect(screen.queryByText(/已交付.*review-code/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '重试' }));
+    await waitFor(() => expect(streamAgentRunMock).toHaveBeenCalled());
+    expect(streamAgentRunMock.mock.calls[0]?.[0]).toEqual({
+      sessionId: sessionIds.local,
+      userMessage: {
+        role: 'user',
+        content: [
+          { type: 'text', text: '前文' },
+          { type: 'image', mediaType: 'image/png', data: 'aGVsbG8=' },
+          { type: 'text', text: '后文' },
+        ],
+      },
+      provider: 'mock',
+      model: 'original-model',
+      useProviderDefaults: false,
+      temperature: 0.2,
+      maxTokens: 777,
+      reasoningEffort: 'low',
+      permissionMode: 'ask',
+      skills: [planningRef],
+    });
+  });
+});
+
+it('disables exact retry for legacy history that lacks original request settings', async () => {
+  await renderApp();
+  fireEvent.click(screen.getByRole('button', { name: /Foundation 设计/ }));
+  await screen.findByText('历史项目回答');
+  const retry = screen.getByRole('button', { name: '重试' }) as HTMLButtonElement;
+  expect(retry.disabled).toBe(true);
+  expect(retry.title).toContain('未记录原始请求设置');
+});
+
+it('preserves unaccepted Skill picks when the Server rejects the submission', async () => {
+  const base = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (input, init) =>
+    /\/sessions\/[^/]+\/skills$/.test(String(input))
+      ? Response.json(skillCatalog())
+      : base(input, init),
+  );
+  streamAgentRunMock.mockRejectedValue(new AgentStreamError('skill-source-changed', '技能已变化'));
+  await renderApp();
+  fireEvent.click(screen.getByRole('button', { name: '选择技能' }));
+  const picker = await screen.findByRole('dialog', { name: '技能' });
+  fireEvent.click(await within(picker).findByRole('checkbox', { name: /weave-planning/ }));
+  fireEvent.click(within(picker).getByRole('button', { name: '关闭技能' }));
+  fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '验证拒绝' } });
+  fireEvent.click(screen.getByRole('button', { name: '发送' }));
+  await screen.findByText(/技能已变化/);
+  expect(screen.getByRole('button', { name: '移除技能 weave-planning' })).toBeTruthy();
+});
+
+it('leaves next-turn Skill selections intact when delayed transport acceptance belongs to an earlier revision', async () => {
+  const base = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (input, init) =>
+    /\/sessions\/[^/]+\/skills$/.test(String(input))
+      ? Response.json(skillCatalog())
+      : base(input, init),
+  );
+  let accept: () => void = () => undefined;
+  streamAgentRunMock.mockImplementation(
+    (_request, handlers) =>
+      new Promise<void>(() => {
+        accept = () => handlers.onAccepted?.();
+      }),
+  );
+  await renderApp();
+  fireEvent.click(screen.getByRole('button', { name: '选择技能' }));
+  let picker = await screen.findByRole('dialog', { name: '技能' });
+  fireEvent.click(await within(picker).findByRole('checkbox', { name: /weave-planning/ }));
+  fireEvent.click(within(picker).getByRole('button', { name: '关闭技能' }));
+  fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '第一轮快照' } });
+  fireEvent.click(screen.getByRole('button', { name: '发送' }));
+  fireEvent.click(screen.getByRole('button', { name: '选择技能' }));
+  picker = await screen.findByRole('dialog', { name: '技能' });
+  fireEvent.click(await within(picker).findByRole('checkbox', { name: /review-code/ }));
+  fireEvent.click(within(picker).getByRole('button', { name: '关闭技能' }));
+  act(() => accept());
+  expect(screen.getByRole('button', { name: '移除技能 review-code' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: '移除技能 weave-planning' })).toBeNull();
+  expect(streamAgentRunMock.mock.calls[0]?.[0].skills).toEqual([planningRef]);
+});
+
+it('keeps requested and failed Skill facts on the exact user card after a pre-model error', async () => {
+  const base = fetchMock.getMockImplementation()!;
+  let fail = false;
+  const returned = () => ({
+    ...sessionDetail(sessionIds.local, '本地 Agent 演示', [
+      { role: 'user', turnId: 'failed-skill', content: [{ type: 'text', text: '同文问题' }] },
+    ]),
+    turns: [
+      {
+        turnId: 'failed-skill',
+        userMessageId: `${sessionIds.local}-message-1`,
+        status: 'failed',
+        startedAt: new Date(Date.now() + 1000).toISOString(),
+        request: { provider: 'mock', model: 'weave-local-demo', permissionMode: 'ask' },
+        skills: {
+          requested: [planningRef],
+          applications: [],
+          failures: [
+            {
+              skill: planningRef,
+              stage: 'selection',
+              code: 'skill-source-changed',
+              toolCallId: 'model-read-failed',
+            },
+          ],
+        },
+      },
+    ],
+  });
+  fetchMock.mockImplementation(async (input, init) => {
+    if (/\/sessions\/[^/]+\/skills$/.test(String(input))) return Response.json(skillCatalog());
+    if (fail && String(input) === `/sessions/${sessionIds.local}`) return Response.json(returned());
+    return base(input, init);
+  });
+  streamAgentRunMock.mockImplementation(async () => {
+    fail = true;
+    throw new AgentStreamError('skill-source-changed', '原引用过期');
+  });
+  await renderApp();
+  fireEvent.click(screen.getByRole('button', { name: '选择技能' }));
+  const picker = await screen.findByRole('dialog', { name: '技能' });
+  fireEvent.click(await within(picker).findByRole('checkbox', { name: /weave-planning/ }));
+  fireEvent.click(within(picker).getByRole('button', { name: '关闭技能' }));
+  fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '同文问题' } });
+  fireEvent.click(screen.getByRole('button', { name: '发送' }));
+  expect(await screen.findByText(/未生效.*weave-planning.*内容已变化/)).toBeTruthy();
+  expect(screen.queryByText(/已加入指令.*weave-planning/)).toBeNull();
+});
+
+it('captures Provider sampling defaults in new immutable submissions for later exact retry', async () => {
+  fetchMock = createWorkspaceFetchMock({
+    providers: [
+      {
+        id: 'mock',
+        label: '采样模型',
+        type: 'mock',
+        defaultModel: 'sampling',
+        hasApiKey: false,
+        editable: false,
+        temperature: 0.4,
+        maxTokens: 1024,
+      },
+    ],
+    defaultProvider: 'mock',
+    canManage: false,
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  streamAgentRunMock.mockImplementation(async (_request, handlers) =>
+    handlers.onEvent({ type: 'completed', turnId: 'sampling-turn' }),
+  );
+  await renderApp();
+  fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '记录采样参数' } });
+  fireEvent.click(screen.getByRole('button', { name: '发送' }));
+  await waitFor(() => expect(streamAgentRunMock).toHaveBeenCalled());
+  expect(streamAgentRunMock.mock.calls[0]?.[0]).toMatchObject({
+    temperature: 0.4,
+    maxTokens: 1024,
+  });
+});
+
+it('disables exact retry for history whose sampling still follows mutable Provider defaults', async () => {
+  const base = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (input, init) => {
+    if (String(input) === `/sessions/${sessionIds.local}`)
+      return Response.json({
+        ...sessionDetail(sessionIds.local, '本地 Agent 演示', [
+          {
+            role: 'user',
+            turnId: 'old-defaults',
+            content: [{ type: 'text', text: '未固定默认值' }],
+          },
+          {
+            role: 'assistant',
+            turnId: 'old-defaults',
+            content: [{ type: 'text', text: '旧设置回答' }],
+          },
+        ]),
+        turns: [
+          {
+            turnId: 'old-defaults',
+            userMessageId: `${sessionIds.local}-message-1`,
+            status: 'completed',
+            startedAt: '2026-11-22T00:00:00Z',
+            request: { provider: 'mock', model: 'old-model', permissionMode: 'ask' },
+          },
+        ],
+      });
+    return base(input, init);
+  });
+  await renderApp();
+  await screen.findByText('旧设置回答');
+  const retry = screen.getByRole('button', { name: '重试' }) as HTMLButtonElement;
+  expect(retry.disabled).toBe(true);
+  expect(retry.title).toContain('未记录');
 });

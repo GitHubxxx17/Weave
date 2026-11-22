@@ -2,9 +2,10 @@ import { z } from 'zod';
 import { commandNamePattern } from './commands.js';
 import { pluginEventTypePattern } from './event-type.js';
 import { isValidVersionRange } from './version-range.js';
+import { skillNamePattern } from './skills.js';
 
 /** Capabilities that a trusted plugin may register through Plugin Context. */
-export type PluginCapability = 'tool' | 'llm-provider' | 'prompt' | 'event' | 'command';
+export type PluginCapability = 'tool' | 'llm-provider' | 'prompt' | 'event' | 'command' | 'skill';
 
 /**
  * How a plugin is hosted. The kernel only records it; hosts and loaders decide
@@ -35,6 +36,8 @@ export interface PluginContributes {
   readonly events?: readonly string[] | undefined;
   /** Slash command names added through `weave.commands`. */
   readonly commands?: readonly string[] | undefined;
+  /** Instruction bundle names added through `weave.skills`. */
+  readonly skills?: readonly string[] | undefined;
   /** Ids of the hooks the plugin listens to through `env.onHook`. */
   readonly hooks?: readonly string[] | undefined;
   /** Ids of the services the plugin provides. */
@@ -42,7 +45,8 @@ export interface PluginContributes {
 }
 
 /** The `contributes` keys whose names arrive through a governed extension point. */
-export type ContributedNameKey = 'tools' | 'providers' | 'promptSections' | 'events' | 'commands';
+export type ContributedNameKey =
+  'tools' | 'providers' | 'promptSections' | 'events' | 'commands' | 'skills';
 
 /** Declarative identity and capability metadata for one Weave plugin. */
 export interface PluginManifest {
@@ -62,7 +66,14 @@ export interface PluginManifest {
 
 const pluginIdSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 const versionSchema = z.string().regex(/^\d+\.\d+\.\d+$/);
-const pluginCapabilitySchema = z.enum(['tool', 'llm-provider', 'prompt', 'event', 'command']);
+const pluginCapabilitySchema = z.enum([
+  'tool',
+  'llm-provider',
+  'prompt',
+  'event',
+  'command',
+  'skill',
+]);
 const pluginHostSchema = z.enum(['in-process', 'mcp', 'subprocess']);
 
 const serviceIdPattern = '[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*';
@@ -116,6 +127,7 @@ const requiredCapabilities: ReadonlyArray<readonly [ContributedNameKey, PluginCa
   ['promptSections', 'prompt'],
   ['events', 'event'],
   ['commands', 'command'],
+  ['skills', 'skill'],
 ];
 
 /** Validates the structural shape of a Plugin Manifest. */
@@ -154,6 +166,10 @@ export const pluginManifestSchema: z.ZodType<PluginManifest> = z
         promptSections: nameListSchema.optional(),
         events: eventTypeListSchema.optional(),
         commands: commandNameListSchema.optional(),
+        skills: z
+          .array(z.string().max(64).regex(skillNamePattern))
+          .refine(hasUniqueEntries, { message: 'Contributed names must be unique' })
+          .optional(),
         hooks: nameListSchema.optional(),
         services: z
           .array(serviceIdSchema)
