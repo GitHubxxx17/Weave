@@ -164,6 +164,7 @@ export function ManagedPluginDialog({
   const active = useRef(false);
   const pending = useRef(false);
   const warningId = useId();
+  const immediateDescriptionId = useId();
   const [immediate, setImmediate] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] =
@@ -342,14 +343,19 @@ export function ManagedPluginDialog({
           <label className="plugin-immediate-choice">
             <input
               type="checkbox"
+              aria-describedby={immediateDescriptionId}
               checked={immediate}
               onChange={(event) => setImmediate(event.target.checked)}
               disabled={!canSubmit}
             />
-            立即生效（取消涉及此插件的进行中回合）
+            立即生效（可能取消所有进行中的回合）
           </label>
+          <p className="plugin-dialog-note" id={immediateDescriptionId}>
+            默认让已有回合继续。勾选后，如果此插件仍在任一保留代际中，会取消 Server
+            中所有会话在当前代和已退役代进行中的回合，包括与此插件无关的回合和当前界面不可见会话中的回合。
+          </p>
           <p className="plugin-dialog-note">
-            默认让已有回合继续。立即生效会取消涉及此插件的当前代及退役代回合。
+            已保存的状态无需改变时，也可以勾选「立即生效」并再次确认，请求取消进行中的回合。
           </p>
         </>
       ) : null}

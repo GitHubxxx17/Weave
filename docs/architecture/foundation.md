@@ -1,6 +1,6 @@
 # Weave Foundation Architecture
 
-Planned Stage 6.3 extends Studio's App-owned plugin catalog and management
+Stage 6.3 extends Studio's App-owned plugin catalog and management
 gate with the existing managed installer API. It pairs the manual, MCP and
 managed catalog observations, preserves confirmed authority heads, and keeps
 exact undecided requests in App memory for explicit retry. Candidate import,
@@ -10,7 +10,8 @@ a purpose-validated native folder chooser and first binding for its default
 plugin root. Custom directory overrides retain the existing Server path and
 binding rules. See the
 [Studio design](../superpowers/specs/2026-11-22-studio-plugin-installer-design.md)
-and [implementation plan](../superpowers/plans/2026-11-22-studio-plugin-installer.md).
+and [implementation plan](../superpowers/plans/2026-11-22-studio-plugin-installer.md),
+plus [usage and development-process validation](../learning/2026-11-22-studio-plugin-installer.md).
 
 Stage 6.2d adds a loopback HTTP installer for already bundled local ESM
 directories when Server startup owns the registered store. The installer
@@ -27,7 +28,7 @@ can leave a reusable artifact without a durable decision. Application
 continues after a postcommit disconnect, and replay after restart returns
 the saved decision with application status unknown. The cached catalog
 remains available after observed store ownership loss while Server is
-reachable. Studio and Desktop verification belongs to Stage 6.3. See
+reachable. Stage 6.3 adds the Studio and Desktop management surface. See
 the [installer design](../superpowers/specs/2026-11-22-managed-plugin-installer-api-design.md)
 and [implementation plan](../superpowers/plans/2026-11-22-managed-plugin-installer-api.md).
 

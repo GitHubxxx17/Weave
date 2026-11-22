@@ -102,12 +102,12 @@ function installFetch({
   };
 }
 
-function renderPanel(store = createPluginCatalogStore()) {
+function renderPanel(store = createPluginCatalogStore(), hasRunningSessions = true) {
   return render(
     <StrictMode>
       <PluginCatalogProvider store={store}>
         <button data-plugin-tab="">插件标签</button>
-        <PluginsPanel hasRunningSessions />
+        <PluginsPanel hasRunningSessions={hasRunningSessions} />
       </PluginCatalogProvider>
     </StrictMode>,
   );
@@ -282,6 +282,39 @@ describe('Studio managed plugins', () => {
     expect(row.getByText('published-tool')).toBeTruthy();
     expect(screen.queryByText('Published kernel row')).toBeNull();
     expect(screen.getByText('Manual row')).toBeTruthy();
+  });
+
+  it('uses the selected digest and import sequence for the current version and enable review', async () => {
+    const network = installFetch({
+      managed: () => ({
+        ...managedCatalog,
+        plugins: [
+          {
+            ...managedPlugin,
+            candidates: [
+              { ...secondCandidate, importSequence: firstCandidate.importSequence },
+              firstCandidate,
+            ],
+            selection: firstSelection,
+            trust: { digest: firstDigest, enabled: false },
+            active: null,
+          },
+        ],
+      }),
+    });
+    renderPanel();
+    const row = await managedRow();
+    const selection = within(row.getByText('当前选择').parentElement!);
+    expect(selection.getByText('v1.0.0 · 导入序号 1')).toBeTruthy();
+
+    fireEvent.click(row.getByRole('button', { name: '启用' }));
+    const dialog = within(screen.getByRole('dialog', { name: `启用插件「${managedPluginId}」` }));
+    expect(dialog.getByText('v1.0.0')).toBeTruthy();
+    expect(dialog.getByText(firstDigest)).toBeTruthy();
+    expect(
+      within(dialog.getByRole('region', { name: '插件声明' })).getByText('notes.writer'),
+    ).toBeTruthy();
+    expect(network.writes()).toHaveLength(0);
   });
 
   it.each(['activate', 'rollback'] as const)(
@@ -532,6 +565,170 @@ describe('Studio managed plugins', () => {
       }),
     ).toBeTruthy();
     expect(JSON.parse(String(network.writes()[0]?.[1].body))).toMatchObject({ immediate: false });
+  });
+
+  it.each([
+    {
+      kind: 'disable',
+      action: '停用',
+      selection: managedPlugin.selection,
+      trust: { digest: secondDigest, enabled: false },
+    },
+    { kind: 'revoke', action: '撤销信任', selection: managedPlugin.selection, trust: null },
+    { kind: 'uninstall', action: '卸载', selection: null, trust: null },
+  ] as const)(
+    'reviews a fresh immediate $kind after the normal decision is applied',
+    async ({ kind, action, selection, trust }) => {
+      const endpoint = `/plugins/managed/${managedPluginId}/${kind}`;
+      const afterNormalHeads = {
+        installSequence: kind === 'uninstall' ? 5 : 4,
+        trustSequence: 6,
+        operationSequence: 7,
+      };
+      let current: ManagedCatalog = managedCatalog;
+      const network = installFetch({
+        managed: () => current,
+        handle: (path, init) => {
+          if (path !== endpoint) return;
+          const body = JSON.parse(String(init.body)) as {
+            requestId: string;
+            selectedDigest: string | null;
+            immediate: boolean;
+          };
+          const firstWrite = current === managedCatalog;
+          const heads = firstWrite
+            ? afterNormalHeads
+            : { ...afterNormalHeads, operationSequence: 8 };
+          current = {
+            ...managedCatalog,
+            heads,
+            plugins: [{ ...managedPlugin, selection, trust, active: null }],
+          };
+          return Response.json({
+            kind: 'committed',
+            decision: {
+              ...managedDecision({ kind, digest: body.selectedDigest, immediate: body.immediate }),
+              ...heads,
+              requestId: body.requestId,
+              changed: firstWrite,
+              selection,
+              trust,
+              installEventSequence:
+                firstWrite && kind === 'uninstall' ? heads.installSequence : null,
+              trustEventSequence: firstWrite ? heads.trustSequence : null,
+            },
+            current,
+            application: { status: 'applied', generation, active: null },
+          } satisfies ManagedMutationResponse);
+        },
+      });
+      renderPanel();
+      const row = await managedRow();
+      const confirmName = `确认${action}`;
+      const confirm = () => fireEvent.click(screen.getByRole('button', { name: confirmName }));
+      fireEvent.click(row.getByRole('button', { name: action }));
+      expect(screen.getByRole<HTMLInputElement>('checkbox', { name: /立即生效/ }).checked).toBe(
+        false,
+      );
+      confirm();
+      await screen.findByText('决定已保存');
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      await row.findByText('未发布');
+      expect(network.writes()).toHaveLength(1);
+
+      fireEvent.click(row.getByRole('button', { name: action }));
+      const immediate = screen.getByRole<HTMLInputElement>('checkbox', { name: /立即生效/ });
+      expect(immediate.checked).toBe(false);
+      fireEvent.click(immediate);
+      confirm();
+      const receipt = within(screen.getByRole('region', { name: '受管插件操作回执' }));
+      await receipt.findByText(/无变化/);
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+      const writes = network.writes();
+      expect(writes.map(([path, init]) => [path, init.method])).toEqual([
+        [endpoint, 'POST'],
+        [endpoint, 'POST'],
+      ]);
+      const [normal, followUp] = writes.map(([, init]) => JSON.parse(String(init.body)));
+      expect(normal).toEqual({
+        requestId: expect.any(String),
+        immediate: false,
+        selectedDigest: secondDigest,
+        expectedInstallSequence: managedCatalog.heads.installSequence,
+        expectedTrustSequence: managedCatalog.heads.trustSequence,
+      });
+      expect(followUp).toEqual({
+        requestId: expect.any(String),
+        immediate: true,
+        selectedDigest: selection?.digest ?? null,
+        expectedInstallSequence: afterNormalHeads.installSequence,
+        expectedTrustSequence: afterNormalHeads.trustSequence,
+      });
+      expect(followUp.requestId).not.toBe(normal.requestId);
+    },
+  );
+
+  it('blocks destructive actions on an uninstalled row while a shared catalog read is pending', async () => {
+    const current = {
+      ...managedCatalog,
+      plugins: [{ ...managedPlugin, selection: null, trust: null, active: null }],
+    };
+    const pending = pendingResponse();
+    let holdRead = false;
+    const network = installFetch({
+      managed: () => current,
+      handle: (path) => (holdRead && path === '/plugins/managed' ? pending.response : undefined),
+    });
+    const store = createPluginCatalogStore();
+    renderPanel(store);
+    const row = await managedRow();
+    const actions = ['停用', '撤销信任', '卸载'].map((name) =>
+      row.getByRole<HTMLButtonElement>('button', { name }),
+    );
+    expect(actions.map(({ disabled }) => disabled)).toEqual([false, false, false]);
+    expect(row.queryByRole('button', { name: '启用' })).toBeNull();
+
+    holdRead = true;
+    act(() => {
+      void store.refresh();
+    });
+    expect(actions.map(({ disabled }) => disabled)).toEqual([true, true, true]);
+    for (const button of actions) fireEvent.click(button);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(network.writes()).toHaveLength(0);
+
+    await act(async () => pending.finish(Response.json(current)));
+    await waitFor(() =>
+      expect(actions.map(({ disabled }) => disabled)).toEqual([false, false, false]),
+    );
+  });
+
+  it('discloses conditional Server-wide cancellation and preserves confirmation keyboard controls', async () => {
+    const network = installFetch();
+    renderPanel(createPluginCatalogStore(), false);
+    const row = await managedRow();
+    const trigger = row.getByRole('button', { name: '停用' });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const dialog = within(screen.getByRole('dialog'));
+    const cancel = dialog.getByRole('button', { name: '取消' });
+    const body = dialog.getByRole('region', { name: '审查内容' });
+    const immediate = dialog.getByRole<HTMLInputElement>('checkbox', {
+      name: /立即生效.*可能取消所有进行中的回合/,
+      description:
+        /插件仍在.*保留.*代际.*Server 中所有会话在当前代和已退役代进行中的回合.*与此插件无关.*当前界面不可见/,
+    });
+    expect(dialog.getByText(/已保存的状态无需改变.*立即生效.*再次确认/)).toBeTruthy();
+    expect(immediate.checked).toBe(false);
+    expect(document.activeElement).toBe(cancel);
+    fireEvent.keyDown(cancel, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(immediate);
+    fireEvent.keyDown(immediate, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(body);
+    fireEvent.keyDown(body, { key: 'Escape' });
+    expect(document.activeElement).toBe(trigger);
+    expect(network.writes()).toHaveLength(0);
   });
 
   it('retains a locally stale review after confirmation without sending a durable write', async () => {

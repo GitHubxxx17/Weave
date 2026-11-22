@@ -142,8 +142,11 @@ function ManagedReceipt({ receipt }: { readonly receipt: ManagedMutationResponse
 }
 
 function selectedCandidate(row: ManagedPlugin): ManagedCandidate | undefined {
+  const { selection } = row;
+  if (selection === null) return undefined;
   return row.candidates.find(
-    ({ importSequence }) => importSequence === row.selection?.candidateImportSequence,
+    ({ importSequence, digest }) =>
+      importSequence === selection.candidateImportSequence && digest === selection.digest,
   );
 }
 
@@ -262,36 +265,30 @@ function ManagedRow({
                 启用
               </button>
             ) : null}
-            {row.trust?.enabled === true ? (
-              <button
-                type="button"
-                className="secondary-button"
-                disabled={blocked}
-                onClick={() => reviewSelection('disable')}
-              >
-                停用
-              </button>
-            ) : null}
-            {row.trust === null ? null : (
-              <button
-                type="button"
-                className="secondary-button"
-                disabled={blocked}
-                onClick={() => reviewSelection('revoke')}
-              >
-                撤销信任
-              </button>
-            )}
-            {selection === null && row.active === null ? null : (
-              <button
-                type="button"
-                className="secondary-button"
-                disabled={blocked}
-                onClick={() => reviewSelection('uninstall')}
-              >
-                卸载
-              </button>
-            )}
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={blocked}
+              onClick={() => reviewSelection('disable')}
+            >
+              停用
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={blocked}
+              onClick={() => reviewSelection('revoke')}
+            >
+              撤销信任
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={blocked}
+              onClick={() => reviewSelection('uninstall')}
+            >
+              卸载
+            </button>
           </div>
           <section className="plugin-contributions" aria-label="候选历史">
             <h5>候选历史</h5>
