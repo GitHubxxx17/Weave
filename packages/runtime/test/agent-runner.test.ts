@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createLlmProviderRegistry, type LlmClient } from '@weave/llm';
-import type { LlmRequest, StreamEvent } from '@weave/protocol';
+import type { LlmRequest, Message, StreamEvent, ToolDefinition } from '@weave/protocol';
 import { z } from 'zod';
 import {
   createInMemorySessionEventStore,
@@ -20,6 +20,7 @@ import {
   type AgentRuntimeEvent,
   type LlmMiddleware,
 } from '../src/index.js';
+import { estimateMessageTokens, estimateToolsTokens } from '../src/context/token-estimate.js';
 
 async function collect(
   events: AsyncIterable<AgentRuntimeEvent>,
@@ -2408,6 +2409,170 @@ describe('Agent Runner contracts', () => {
 });
 
 describe('Agent Runner context management', () => {
+  it.each(['failed', 'completed'] as const)(
+    'uses durable %s status rather than guessing from tool result text',
+    async (status) => {
+      const store = createInMemorySessionEventStore();
+      const content = `${status === 'failed' ? '不存在。' : 'error documentation。'}${'详'.repeat(500)}`;
+      await store.append('session-1', [
+        { type: 'session.created', payload: { title: 'History' } },
+        {
+          type: 'message.created',
+          payload: {
+            messageId: 'old-u',
+            message: { role: 'user', content: [{ type: 'text', text: 'old' }] },
+          },
+        },
+        { type: 'turn.started', payload: { turnId: 'old', userMessageId: 'old-u' } },
+        { type: 'step.started', payload: { turnId: 'old', stepId: 'tool', kind: 'tool' } },
+        {
+          type: 'tool-call.created',
+          payload: {
+            turnId: 'old',
+            stepId: 'tool',
+            toolCall: { id: 'c', name: 'read', arguments: '{}' },
+          },
+        },
+        {
+          type: 'message.created',
+          payload: {
+            messageId: 'old-call',
+            message: {
+              role: 'assistant',
+              content: [],
+              toolCalls: [{ id: 'c', name: 'read', arguments: '{}' }],
+            },
+          },
+        },
+        {
+          type: 'tool-result.created',
+          payload: {
+            turnId: 'old',
+            stepId: 'tool',
+            toolCallId: 'c',
+            name: 'read',
+            content,
+            truncated: false,
+            status,
+          },
+        },
+        {
+          type: 'message.created',
+          payload: {
+            messageId: 'old-result',
+            message: { role: 'tool', toolCallId: 'c', content: [{ type: 'text', text: content }] },
+          },
+        },
+        { type: 'step.completed', payload: { turnId: 'old', stepId: 'tool', status } },
+        { type: 'turn.completed', payload: { turnId: 'old', status: 'completed' } },
+      ]);
+      const requests: LlmRequest[] = [];
+      const stream = vi.fn(recordingClient([{ type: 'finish', reason: 'stop' }], requests).stream);
+      const runner = createAgentRunner({
+        llm: { stream },
+        sessionStore: store,
+        context: {
+          defaultWindowTokens: 100,
+          reserveOutputTokens: 0,
+          marginRatio: 0,
+          maxToolResultTokens: 30,
+        },
+      });
+
+      if (status === 'failed') {
+        await expect(collect(runner.run(validRequest))).rejects.toMatchObject({
+          code: 'agent-context-overflow',
+        });
+        expect(stream).not.toHaveBeenCalled();
+      } else {
+        await collect(runner.run(validRequest));
+        expect(requests).toHaveLength(1);
+        const sentTool = requests[0]?.messages.find((message) => message.role === 'tool');
+        expect(sentTool?.content[0]).toMatchObject({ text: expect.stringContaining('省略') });
+      }
+      expect(
+        projectSession(await store.read('session-1')).messages.find(
+          ({ messageId }) => messageId === 'old-result',
+        )?.message.content[0],
+      ).toEqual({ type: 'text', text: content });
+      await store.close();
+    },
+  );
+
+  it.each(['image', 'current-text', 'historical-skeleton', 'tools-and-reserve'] as const)(
+    'rejects an over-budget %s request before calling the model',
+    async (scenario) => {
+      const store = createInMemorySessionEventStore();
+      if (scenario === 'historical-skeleton') {
+        await store.append('session-1', [
+          { type: 'session.created', payload: { title: 'History' } },
+          ...Array.from({ length: 40 }, (_, index): NewSessionEvent[] => [
+            {
+              type: 'message.created',
+              payload: {
+                messageId: `u-${index}`,
+                message: { role: 'user', content: [{ type: 'text', text: `旧问题 ${index}` }] },
+              },
+            },
+            {
+              type: 'message.created',
+              payload: {
+                messageId: `a-${index}`,
+                message: { role: 'assistant', content: [{ type: 'text', text: '长'.repeat(500) }] },
+              },
+            },
+          ]).flat(),
+        ]);
+      }
+      const registry = createToolRegistry();
+      registry.register({
+        name: 'test',
+        description: 'd'.repeat(400),
+        parameters: {},
+        inputSchema: z.object({}),
+        execute: () => 'ok',
+      });
+      const requests: LlmRequest[] = [];
+      const stream = vi.fn(recordingClient([{ type: 'finish', reason: 'stop' }], requests).stream);
+      const runner = createAgentRunner({
+        llm: { stream },
+        sessionStore: store,
+        context: {
+          defaultWindowTokens: 200,
+          reserveOutputTokens: scenario === 'tools-and-reserve' ? 100 : 0,
+          marginRatio: 0,
+        },
+        ...(scenario !== 'tools-and-reserve'
+          ? {}
+          : {
+              instructions: () => 'rules',
+              toolRegistry: registry,
+              toolPipeline: createToolPipeline({ registry }),
+            }),
+      });
+      const userMessage: AgentRunRequest['userMessage'] = {
+        role: 'user',
+        content:
+          scenario === 'image'
+            ? [{ type: 'image', mediaType: 'image/png', data: 'aGVsbG8=' }]
+            : [{ type: 'text', text: scenario === 'current-text' ? '长'.repeat(500) : 'q' }],
+      };
+
+      await expect(collect(runner.run({ ...validRequest, userMessage }))).rejects.toMatchObject({
+        code: 'agent-context-overflow',
+      });
+      expect(stream).not.toHaveBeenCalled();
+      expect(requests).toEqual([]);
+      const projection = projectSession(await store.read('session-1'));
+      expect(projection.turns.at(-1)).toMatchObject({
+        status: 'failed',
+        steps: [{ status: 'failed' }],
+      });
+      expect(projection.messages.at(-1)?.message).toEqual(userMessage);
+      await store.close();
+    },
+  );
+
   it('emits a context event before the model stream with a well-formed breakdown', async () => {
     const store = createInMemorySessionEventStore();
     const runner = createAgentRunner({
@@ -2816,6 +2981,140 @@ describe('Agent Runner LLM middleware', () => {
     { type: 'text-delta', text: '你好' },
     { type: 'finish', reason: 'stop' },
   ];
+
+  it.each(['messages', 'content', 'tool-calls', 'tool-parameters'] as const)(
+    'isolates checked middleware %s from mutation before lazy provider consumption',
+    async (scenario) => {
+      const store = createInMemorySessionEventStore();
+      const requests: LlmRequest[] = [];
+      const text = { type: 'text' as const, text: 'small' };
+      const toolCall = { id: 'old', name: 'read', arguments: '{}' };
+      const parameters = { type: 'object', description: 'small' };
+      const messages: Message[] = [
+        { role: 'user', content: [text] },
+        { role: 'assistant', content: [], toolCalls: [toolCall] },
+      ];
+      const tools: ToolDefinition[] = [{ name: 'read', description: 'read', parameters }];
+      const runner = createAgentRunner({
+        llm: recordingClient(answer, requests),
+        sessionStore: store,
+        context: { defaultWindowTokens: 200, reserveOutputTokens: 0, marginRatio: 0 },
+        llmMiddleware: (call, next) => {
+          const stream = next({ ...call, request: { ...call.request, messages, tools } });
+          if (scenario === 'messages')
+            messages.push({ role: 'user', content: [{ type: 'text', text: '长'.repeat(1000) }] });
+          if (scenario === 'content') text.text = '长'.repeat(1000);
+          if (scenario === 'tool-calls') toolCall.arguments = '长'.repeat(1000);
+          if (scenario === 'tool-parameters') parameters.description = '长'.repeat(1000);
+          return stream;
+        },
+      });
+
+      await collect(runner.run(validRequest));
+
+      expect(requests).toHaveLength(1);
+      const actual = requests[0]!;
+      const sent = actual.messages.reduce(
+        (total, message) => total + estimateMessageTokens(message),
+        estimateToolsTokens(actual.tools),
+      );
+      expect(sent).toBeLessThanOrEqual(200);
+      expect(JSON.stringify(actual)).not.toContain('长'.repeat(1000));
+      expect(projectSession(await store.read('session-1')).turns[0]?.status).toBe('completed');
+      await store.close();
+    },
+  );
+
+  it.each([-1000, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    'rejects invalid middleware output reserve %s before calling a custom client',
+    async (maxTokens) => {
+      const store = createInMemorySessionEventStore();
+      const requests: LlmRequest[] = [];
+      const stream = vi.fn(recordingClient(answer, requests).stream);
+      const runner = createAgentRunner({
+        llm: { stream },
+        sessionStore: store,
+        context: { defaultWindowTokens: 200, reserveOutputTokens: 0, marginRatio: 0 },
+        llmMiddleware: (call, next) => next({ ...call, request: { ...call.request, maxTokens } }),
+      });
+
+      await expect(collect(runner.run(validRequest))).rejects.toMatchObject({
+        code: 'agent-stream-protocol',
+      });
+      expect(stream).not.toHaveBeenCalled();
+      expect(projectSession(await store.read('session-1')).turns[0]?.status).toBe('failed');
+      await store.close();
+    },
+  );
+
+  it.each(['image', 'tools', 'reserve', 'provider-default-reserve'] as const)(
+    'rejects a middleware %s change that exceeds the final request budget',
+    async (scenario) => {
+      const store = createInMemorySessionEventStore();
+      const requests: LlmRequest[] = [];
+      const stream = vi.fn(recordingClient(answer, requests).stream);
+      const registry = createLlmProviderRegistry([
+        {
+          id: 'mock',
+          label: 'Mock',
+          type: 'mock',
+          client: { stream },
+          maxTokens: 100,
+          contextWindowTokens: 200,
+        },
+      ]);
+      const runner = createAgentRunner({
+        llmRegistry: registry,
+        sessionStore: store,
+        context: { marginRatio: 0 },
+        llmMiddleware: (call, next) => {
+          const { maxTokens: _maxTokens, ...withoutMaxTokens } = call.request;
+          void _maxTokens;
+          return next({
+            ...call,
+            request: {
+              ...(scenario === 'provider-default-reserve' ? withoutMaxTokens : call.request),
+              ...(scenario === 'image'
+                ? {
+                    messages: [
+                      ...call.request.messages,
+                      {
+                        role: 'user' as const,
+                        content: [
+                          { type: 'image' as const, mediaType: 'image/png', data: 'aGVsbG8=' },
+                        ],
+                      },
+                    ],
+                  }
+                : {}),
+              ...(scenario === 'tools'
+                ? { tools: [{ name: 'large', description: '长'.repeat(200), parameters: {} }] }
+                : {}),
+              ...(scenario === 'reserve' ? { maxTokens: 200 } : {}),
+              ...(scenario === 'provider-default-reserve'
+                ? {
+                    messages: [
+                      ...call.request.messages,
+                      {
+                        role: 'user' as const,
+                        content: [{ type: 'text' as const, text: '长'.repeat(100) }],
+                      },
+                    ],
+                  }
+                : {}),
+            },
+          });
+        },
+      });
+
+      await expect(collect(runner.run(validRequest))).rejects.toMatchObject({
+        code: 'agent-context-overflow',
+      });
+      expect(stream).not.toHaveBeenCalled();
+      expect(projectSession(await store.read('session-1')).turns[0]?.status).toBe('failed');
+      await store.close();
+    },
+  );
 
   async function run(
     llmMiddleware: LlmMiddleware | undefined,

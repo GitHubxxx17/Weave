@@ -14,6 +14,17 @@ but unavailable for restoration. This is cooperative process serialization, not 
 CAS or a multi-file transaction, and excludes shell/MCP effects. Contracts are
 recorded before implementation in the [safe undo design](../superpowers/specs/2026-11-23-safe-turn-undo-design.md).
 
+Runtime context assembly enforces an estimated request budget over the final
+system, tools and message content, including images, skeletons and truncation
+markers. It preserves complete user content and failure text; if its faithful
+candidate exceeds the usable budget, Runner fails before calling the model.
+Middleware rewrites are validated and deeply snapshotted before the final
+budget check, so lazy provider consumption uses the exact isolated request
+that was checked. Invalid rewrites fail at the Runtime protocol boundary.
+This is a heuristic estimate, not a provider tokenizer guarantee. The revised
+[context contract](../superpowers/specs/2026-11-18-agent-context-management-design.md)
+defines the accounting and minimum-candidate behavior.
+
 Weave-maintained Skills ship as self-contained schema-2 instruction data. Server
 assigns official discovery attribution only to code-owned exact GitHub source and
 full manifest identities; operator index metadata grants no maintainership or
