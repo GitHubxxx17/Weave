@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -66,42 +66,15 @@ describe('workspace file snapshot capture', () => {
   });
 });
 
-describe('restoreFileSnapshot', () => {
-  it('rewrites the original, deletes created files and skips missing ones', async () => {
+describe('legacy restore compatibility', () => {
+  it('keeps old snapshots readable but cannot use them as safe restore evidence', async () => {
     const root = await createWorkspace();
-    const workspace = createWorkspacePolicy({ root });
-
-    await writeFile(join(root, 'README.md'), 'changed', 'utf8');
-    const restored = await restoreFileSnapshot(
+    await writeFile(join(root, 'README.md'), 'changed');
+    const result = await restoreFileSnapshot(
       { path: 'README.md', existedBefore: true, previousContent: 'Hello Weave' },
-      workspace,
+      createWorkspacePolicy({ root }),
     );
-    expect(restored).toBe('restored');
-    expect(await readFile(join(root, 'README.md'), 'utf8')).toBe('Hello Weave');
-
-    await writeFile(join(root, 'src/created.ts'), 'x', 'utf8');
-    const deleted = await restoreFileSnapshot(
-      { path: 'src/created.ts', existedBefore: false, previousContent: '' },
-      workspace,
-    );
-    expect(deleted).toBe('deleted');
-    await expect(stat(join(root, 'src/created.ts'))).rejects.toBeDefined();
-
-    const skipped = await restoreFileSnapshot(
-      { path: 'src/never.ts', existedBefore: false, previousContent: '' },
-      workspace,
-    );
-    expect(skipped).toBe('skipped');
-  });
-
-  it('refuses a path outside the workspace root', async () => {
-    const root = await createWorkspace();
-    const workspace = createWorkspacePolicy({ root });
-    await expect(
-      restoreFileSnapshot(
-        { path: '../escape.ts', existedBefore: true, previousContent: 'x' },
-        workspace,
-      ),
-    ).rejects.toBeDefined();
+    expect(result).toMatchObject({ status: 'unavailable' });
+    expect(await readFile(join(root, 'README.md'), 'utf8')).toBe('changed');
   });
 });

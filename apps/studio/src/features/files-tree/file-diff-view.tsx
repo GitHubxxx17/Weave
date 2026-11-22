@@ -128,3 +128,55 @@ export function FileDiffView({ projectId, path }: FileDiffViewProps): ReactEleme
     </div>
   );
 }
+
+/** Captured turn contents, independent of the working tree or Git base. */
+export function CapturedFileDiffView({
+  path,
+  oldContent,
+  newContent,
+  existedBefore,
+}: {
+  readonly path: string;
+  readonly oldContent: string;
+  readonly newContent: string;
+  readonly existedBefore: boolean;
+}): ReactElement {
+  const [prepared, setPrepared] = useState<Prepared | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let active = true;
+    setPrepared(null);
+    setError('');
+    void prepareDiff({
+      path,
+      oldContent,
+      newContent,
+      changed: oldContent !== newContent,
+      tracked: existedBefore,
+    })
+      .then((next) => {
+        if (active) setPrepared(next);
+      })
+      .catch(() => {
+        if (active) setError('无法渲染文件 Diff');
+      });
+    return () => {
+      active = false;
+    };
+  }, [path, oldContent, newContent, existedBefore]);
+  if (error) return <p role="alert">{error}</p>;
+  if (!prepared) return <p>加载 Diff…</p>;
+  return (
+    <div className="file-diff" aria-label={`${path} 本轮 Diff`}>
+      <DiffView
+        diffFile={prepared.diffFile}
+        registerHighlighter={prepared.highlighter}
+        diffViewMode={DiffModeEnum.Unified}
+        diffViewTheme="light"
+        diffViewHighlight
+        diffViewWrap
+        diffViewFontSize={12}
+      />
+    </div>
+  );
+}

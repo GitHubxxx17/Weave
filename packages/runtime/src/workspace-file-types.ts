@@ -34,6 +34,7 @@ export interface WriteFileResult {
   readonly path: string;
   /** Number of UTF-8 bytes written. */
   readonly bytesWritten: number;
+  readonly undoUnavailableReason?: string | undefined;
   /** Whether an existing file was replaced. */
   readonly overwritten: boolean;
   /** Workspace-relative directories created for the file, when any were missing. */
@@ -58,6 +59,7 @@ export interface EditFileResult {
   readonly path: string;
   /** Number of replaced occurrences. */
   readonly replacements: number;
+  readonly undoUnavailableReason?: string | undefined;
   /** Lines present only after the edit. */
   readonly linesAdded: number;
   /** Lines present only before the edit. */
@@ -102,7 +104,28 @@ export type WorkspaceSource =
     };
 
 /** A pre-write snapshot of a workspace file, used to undo the change. */
+export interface WorkspaceFileWriteIntent {
+  readonly sessionId?: string | undefined;
+  readonly snapshotId: string;
+  readonly turnId: string;
+  readonly toolCallId: string;
+  readonly rootIdentity: string;
+  readonly path: string;
+}
+export interface WorkspaceFileWriteOutcome extends WorkspaceFileWriteIntent {
+  readonly status: 'succeeded' | 'failed';
+  readonly captureStatus: 'captured' | 'unavailable';
+  readonly afterContent?: string | undefined;
+  readonly afterDigest?: string | undefined;
+  readonly fileIdentity?: string | undefined;
+  readonly reason?: string | undefined;
+}
 export interface WorkspaceFileSnapshot {
+  readonly snapshotId?: string | undefined;
+  readonly turnId?: string | undefined;
+  readonly toolCallId?: string | undefined;
+  readonly rootIdentity?: string | undefined;
+  readonly beforeDigest?: string | undefined;
   readonly sessionId?: string | undefined;
   /** Path relative to the Workspace root (posix). */
   readonly path: string;
@@ -113,6 +136,11 @@ export interface WorkspaceFileSnapshot {
 
 /** Optional hook invoked before `write_file`/`edit_file` change a file. */
 export interface WorkspaceFileSnapshotHook {
+  /** Durable barrier: failure rejects the write before mutation. */
+  readonly onFileWriteIntent?:
+    ((intent: WorkspaceFileWriteIntent) => void | Promise<void>) | undefined;
+  readonly onFileWriteOutcome?:
+    ((outcome: WorkspaceFileWriteOutcome) => void | Promise<void>) | undefined;
   /** Records the pre-write original. A failure here must not block the write. */
   readonly onFileSnapshot?: ((snapshot: WorkspaceFileSnapshot) => void | Promise<void>) | undefined;
 }
