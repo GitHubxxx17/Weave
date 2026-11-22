@@ -39,6 +39,7 @@ import {
 import {
   appendRecordedTrustEventTx,
   createRecordedTrustEvent,
+  ManagedReviewRequiredError,
   PluginTrustStoreError,
   validateTrustInput,
 } from './plugin-trust-sqlite.js';
@@ -326,10 +327,7 @@ export function createSqlitePluginAuthorityDatabase(
         return transaction('BEGIN IMMEDIATE', () => {
           const before = readAuthoritySnapshotTx(database);
           if (before.installations.some((record) => record.pluginId === event.pluginId)) {
-            throw new PluginTrustStoreError(
-              'plugin-trust-invalid',
-              'Managed plugin trust requires the combined managed API',
-            );
+            throw new ManagedReviewRequiredError();
           }
           if (before.heads.trustSequence >= Number.MAX_SAFE_INTEGER) {
             throw new PluginAuthorityError(

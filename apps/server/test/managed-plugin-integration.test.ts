@@ -83,6 +83,10 @@ const stickyTrustIssue = {
   code: 'plugin-trust-invalid',
   message: 'Managed plugin trust requires the combined managed API',
 };
+const stickyHttpIssue = {
+  code: 'plugin-managed-review-required',
+  message: 'Use the managed plugin review to change this plugin.',
+};
 
 function ownershipLoss() {
   return new PluginStoreOwnershipError('plugin-store-ownership-lost', 'Private lease failure');
@@ -270,8 +274,8 @@ describe('joint managed, manual and MCP Generation', () => {
       ] as const) {
         const response = await app.request('/plugins/notes/' + path, request);
         expect({ status: response.status, body: await response.json() }).toEqual({
-          status: 400,
-          body: { error: stickyTrustIssue },
+          status: 409,
+          body: { error: stickyHttpIssue },
         });
       }
       expect(f.authority.snapshotSync()).toEqual(before);
@@ -380,8 +384,8 @@ describe('joint managed, manual and MCP Generation', () => {
       release.resolve();
       const result = await response;
       expect({ status: result.status, body: await result.json() }).toEqual({
-        status: 400,
-        body: { error: stickyTrustIssue },
+        status: 409,
+        body: { error: stickyHttpIssue },
       });
       expect(append).not.toHaveBeenCalled();
       expect(await override.events()).toEqual(prior);

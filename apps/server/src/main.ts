@@ -17,6 +17,7 @@ import {
   type ServerLocalPluginHost,
 } from './local-plugin-host.js';
 import type { ExtensionCoordinator } from './extension-coordinator.js';
+import { assertManualPluginIdSync } from './local-extension-source.js';
 import type { ManagedPluginInstaller } from './managed-plugin-installer.js';
 import {
   acquireManagedPluginStartup,
@@ -299,6 +300,9 @@ export async function startServer(
           generationSnapshot: coordinator.generationSnapshot,
           commandCatalog: () => listServerCommands(runtime),
           ...(pluginHost === undefined ? {} : { pluginManager: pluginHost }),
+          ...(installer === undefined ? {} : { managedPluginInstaller: installer }),
+          assertManualPluginIdSync: (id) =>
+            assertManualPluginIdSync(startup.authority.snapshotSync, id),
           ...(mcpManager === undefined ? {} : { mcpManager }),
           ...(studioOrigin === undefined ? {} : { studioOrigin }),
         }).fetch,

@@ -26,7 +26,7 @@ import {
 } from './extension-types.js';
 import type { ServerLocalPluginHost } from './local-plugin-host.js';
 import type { PluginAuthorityDatabase } from './plugin-authority-types.js';
-import { PluginTrustStoreError } from './plugin-trust-sqlite.js';
+import { ManagedReviewRequiredError } from './plugin-trust-sqlite.js';
 
 export const localExtensionSourceId = 'local-esm';
 const sourceId = localExtensionSourceId;
@@ -44,10 +44,7 @@ export function assertManualPluginIdSync(
   id: string,
 ): void {
   if (readAuthoritySync().installations.some(({ pluginId }) => pluginId === id)) {
-    throw new PluginTrustStoreError(
-      'plugin-trust-invalid',
-      'Managed plugin trust requires the combined managed API',
-    );
+    throw new ManagedReviewRequiredError();
   }
 }
 

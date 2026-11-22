@@ -267,12 +267,12 @@ export class PluginAuthorityError extends Error {
   }
 }
 
-const pluginIdSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
-const digestSchema = z.string().regex(/^[0-9a-f]{64}$/);
-const opaqueIdSchema = z.string().min(1).max(200);
-const headSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+export const pluginIdSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+export const digestSchema = z.string().regex(/^[0-9a-f]{64}$/);
+export const opaqueIdSchema = z.string().min(1).max(200);
+export const headSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const linkSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
-const intentSchema = z.enum(['activate', 'rollback']);
+export const intentSchema = z.enum(['activate', 'rollback']);
 const commandKindSchema = z.enum([
   'import',
   'activate',
@@ -286,7 +286,7 @@ const expectedHeadsShape = {
   expectedInstallSequence: headSchema,
   expectedTrustSequence: headSchema,
 };
-const artifactManifestSchema = pluginManifestSchema.refine(
+export const artifactManifestSchema = pluginManifestSchema.refine(
   (manifest) => manifest.contributes !== undefined && manifest.permissions !== undefined,
   { message: 'Managed artifacts require contributes and permissions declarations' },
 );

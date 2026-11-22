@@ -17,13 +17,18 @@ import {
 import { pluginWriteGuard } from './plugin-write-guard.js';
 import { PluginHostError, type ReloadResult } from '@weave/plugin-host';
 import { PluginTrustStoreError } from './plugin-trust-store.js';
+import { ManagedReviewRequiredError } from './plugin-trust-sqlite.js';
 import type { ExtensionGenerationSnapshot } from './extension-types.js';
+import { registerManagedPluginRoutes } from './managed-plugin-api.js';
+import type { ManagedPluginInstaller } from './managed-plugin-installer.js';
 
 /** Dependencies of the plugin catalog and local plugin control plane. */
 export interface PluginAppOptions {
   readonly pluginCatalog?: (() => readonly PluginListItem[]) | undefined;
   readonly commandCatalog?: (() => readonly CommandListItem[]) | undefined;
   readonly pluginManager?: ServerPluginManager | undefined;
+  readonly managedPluginInstaller?: ManagedPluginInstaller | undefined;
+  readonly assertManualPluginIdSync?: ((id: string) => void) | undefined;
   readonly studioOrigin?: string | undefined;
   readonly generationSnapshot?: (() => ExtensionGenerationSnapshot) | undefined;
 }
@@ -70,6 +75,12 @@ function respondError(context: Context, error: unknown): Response {
   if (error instanceof PluginRequestError) {
     status = 400;
     issue = { code: error.code, message: error.message };
+  } else if (error instanceof ManagedReviewRequiredError) {
+    status = 409;
+    issue = {
+      code: 'plugin-managed-review-required',
+      message: 'Use the managed plugin review to change this plugin.',
+    };
   } else if (error instanceof PluginHostError || error instanceof PluginTrustStoreError) {
     issue = { code: error.code, message: error.message };
     switch (issue.code) {
@@ -113,6 +124,7 @@ function listPlugins(options: PluginAppOptions) {
 /** Registers cached catalog reads and guarded management writes without invoking tools. */
 export function registerPluginRoutes(app: Hono, options: PluginAppOptions): void {
   app.use('/plugins/*', pluginWriteGuard(options.studioOrigin));
+  registerManagedPluginRoutes(app, options.managedPluginInstaller);
   app.get('/plugins', (context) => {
     try {
       return context.json(listPlugins(options));
@@ -126,10 +138,11 @@ export function registerPluginRoutes(app: Hono, options: PluginAppOptions): void
 
   const mutate = async (
     context: Context,
-    operation: (manager: ServerPluginManager) => Promise<ReloadResult>,
+    operation: (manager: ServerPluginManager | undefined) => Promise<ReloadResult | undefined>,
   ): Promise<Response> => {
     try {
-      if (options.pluginManager === undefined) {
+      const result = await operation(options.pluginManager);
+      if (result === undefined) {
         return context.json(
           pluginErrorResponseSchema.parse({
             error: {
@@ -140,7 +153,6 @@ export function registerPluginRoutes(app: Hono, options: PluginAppOptions): void
           404,
         );
       }
-      const result = await operation(options.pluginManager);
       // Capture current desired state and catalog together after awaiting the decision.
       return context.json(pluginMutationResponseSchema.parse({ ...listPlugins(options), result }));
     } catch (error: unknown) {
@@ -152,8 +164,18 @@ export function registerPluginRoutes(app: Hono, options: PluginAppOptions): void
     if (!parsed.success) throw new PluginRequestError('Invalid plugin id');
     return parsed.data;
   };
+  function manualMutation(
+    manager: ServerPluginManager | undefined,
+    id: string,
+    operation: (manager: ServerPluginManager) => Promise<ReloadResult>,
+  ): Promise<ReloadResult> | undefined {
+    if (manager !== undefined) return operation(manager);
+    options.assertManualPluginIdSync?.(id);
+    return undefined;
+  }
   app.post('/plugins/reload', (context) =>
     mutate(context, async (manager) => {
+      if (manager === undefined) return undefined;
       noImmediate(context);
       await readBody(context, emptyBodySchema, true);
       return manager.reload();
@@ -164,15 +186,15 @@ export function registerPluginRoutes(app: Hono, options: PluginAppOptions): void
       noImmediate(context);
       const id = pluginId(context);
       const body = await readBody(context, trustBodySchema);
-      return manager.trust(id, body.digest);
+      return manualMutation(manager, id, (live) => live.trust(id, body.digest));
     }),
   );
   app.delete('/plugins/:id/trust', (context) =>
     mutate(context, async (manager) => {
       const id = pluginId(context);
-      const options = immediate(context);
+      const timing = immediate(context);
       await readBody(context, emptyBodySchema, true);
-      return manager.revoke(id, options);
+      return manualMutation(manager, id, (live) => live.revoke(id, timing));
     }),
   );
   app.post('/plugins/:id/enable', (context) =>
@@ -180,15 +202,15 @@ export function registerPluginRoutes(app: Hono, options: PluginAppOptions): void
       const id = pluginId(context);
       noImmediate(context);
       await readBody(context, emptyBodySchema, true);
-      return manager.setEnabled(id, true);
+      return manualMutation(manager, id, (live) => live.setEnabled(id, true));
     }),
   );
   app.post('/plugins/:id/disable', (context) =>
     mutate(context, async (manager) => {
       const id = pluginId(context);
-      const options = immediate(context);
+      const timing = immediate(context);
       await readBody(context, emptyBodySchema, true);
-      return manager.setEnabled(id, false, options);
+      return manualMutation(manager, id, (live) => live.setEnabled(id, false, timing));
     }),
   );
 }
