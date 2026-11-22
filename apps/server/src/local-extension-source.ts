@@ -3,6 +3,7 @@ import {
   createLocalPluginSource,
   eligibleLocalSourceCandidates,
   ExplicitLocalAuthorityError,
+  inspectLocalPluginDeclarationClaims,
   localSourceCandidateIdentity,
   PluginHostError,
   projectLocalPluginSnapshot,
@@ -69,7 +70,6 @@ export function createLocalExtensionSource(
   let stickyIds: ReadonlySet<string> = new Set();
   let adopting = false;
   const pendingRawPreparations = new Set<AbortController>();
-  const reservedIds = new Set(options.discovery.reservedIds);
   // The ESM lifecycle captures cleanup errors so plugin code cannot interrupt
   // rollback. Collect them after draining both rejected and published attempts.
   const cleanupErrors: unknown[] = [];
@@ -155,15 +155,6 @@ export function createLocalExtensionSource(
     return () => {
       for (const preparation of pending) preparation.abort(reason);
     };
-  }
-
-  function mayReadManagedSync(id: string): boolean {
-    const { discovery } = source.snapshot();
-    return (
-      !reservedIds.has(id) &&
-      !discovery.truncated &&
-      !discovery.candidates.some((candidate) => candidate.manifest?.id === id)
-    );
   }
 
   async function recheckManaged(
@@ -318,7 +309,9 @@ export function createLocalExtensionSource(
     snapshot,
     adoptExplicitSelectionSync,
     withdrawExplicitSelectionSync,
-    mayReadManagedSync,
+    mayReadManagedSync: (id: string) => source.mayReadManagedSync(id),
+    inspectDeclarationClaims: (signal: AbortSignal) =>
+      inspectLocalPluginDeclarationClaims(options.discovery, signal),
     async discoveredPluginIds() {
       await source.refresh();
       return Object.freeze([

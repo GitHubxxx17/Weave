@@ -1,5 +1,5 @@
-import type { Dirent } from 'node:fs';
-import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises';
+import { constants, type Dirent, type Stats } from 'node:fs';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import {
@@ -89,14 +89,23 @@ export interface DiscoveryResult {
   readonly truncated: boolean;
 }
 
-const defaultMaxCandidates = 200;
+/** Parsed manual declarations and whether the observation covered the namespace. */
+export interface LocalPluginDeclarationClaims {
+  readonly pluginIds: readonly string[];
+  readonly complete: boolean;
+}
 
-function isMissing(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    'code' in error &&
-    (error.code === 'ENOENT' || error.code === 'ENOTDIR')
-  );
+/** Internal discovery evidence before applying ID policy. */
+export interface LocalPluginDeclarationScan extends DiscoveryResult {
+  readonly complete: boolean;
+}
+
+const defaultMaxCandidates = 200;
+const descriptorReadFlags =
+  constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
+
+function hasCode(error: unknown, code: string): boolean {
+  return error instanceof Error && 'code' in error && error.code === code;
 }
 
 function compareBytes(left: string, right: string): number {
@@ -111,49 +120,81 @@ function issueOf(error: unknown): LocalPluginIssue {
 }
 
 /** Whether `target`, followed through any links, is a directory. */
-async function pointsToDirectory(target: string): Promise<boolean> {
+async function pointsToDirectory(target: string, signal?: AbortSignal): Promise<boolean> {
+  signal?.throwIfAborted();
   try {
-    return (await stat(target)).isDirectory();
+    return (await fs.stat(target)).isDirectory();
   } catch {
     return false;
+  } finally {
+    signal?.throwIfAborted();
   }
 }
 
-/** Whether the directory has an entry named like a descriptor, whatever it is. */
-async function holdsDescriptor(directory: string): Promise<boolean> {
-  try {
-    await lstat(path.join(directory, descriptorFileName));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** Reads the descriptor text, or `undefined` when the directory has none. */
-async function readDescriptorText(directory: string): Promise<string | undefined> {
-  const file = path.join(directory, descriptorFileName);
-  let info;
-  try {
-    info = await lstat(file);
-  } catch (error: unknown) {
-    if (isMissing(error)) {
-      return undefined;
-    }
-    throw error;
-  }
+function assertRegularDescriptor(info: Stats): void {
   if (!info.isFile()) {
     throw new PluginHostError(
       'plugin-invalid-descriptor',
       `${descriptorFileName} must be a regular file, not a link or a directory`,
     );
   }
-  if (info.size > maxDescriptorBytes) {
-    throw new PluginHostError(
-      'plugin-invalid-descriptor',
-      `${descriptorFileName} is larger than ${String(maxDescriptorBytes / 1024)} KB`,
-    );
+}
+
+function oversizedDescriptor(): PluginHostError {
+  return new PluginHostError(
+    'plugin-invalid-descriptor',
+    `${descriptorFileName} is larger than ${String(maxDescriptorBytes / 1024)} KB`,
+  );
+}
+
+async function readDescriptorText(
+  file: string,
+  info: Stats,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  signal?.throwIfAborted();
+  assertRegularDescriptor(info);
+  if (info.size > maxDescriptorBytes) throw oversizedDescriptor();
+
+  let handle;
+  try {
+    handle = await fs.open(file, descriptorReadFlags);
+  } catch (error: unknown) {
+    signal?.throwIfAborted();
+    if (hasCode(error, 'ENOENT')) return undefined;
+    throw error;
   }
-  return readFile(file, 'utf8');
+  let readFailure: { readonly error: unknown } | undefined;
+  try {
+    signal?.throwIfAborted();
+    const opened = await handle.stat();
+    signal?.throwIfAborted();
+    assertRegularDescriptor(opened);
+    // Reserve one extra byte to distinguish a full-size descriptor from growth.
+    const buffer = Buffer.allocUnsafe(maxDescriptorBytes + 1);
+    let offset = 0;
+    while (offset < buffer.length) {
+      signal?.throwIfAborted();
+      const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset);
+      signal?.throwIfAborted();
+      if (bytesRead === 0) return buffer.toString('utf8', 0, offset);
+      offset += bytesRead;
+    }
+    throw oversizedDescriptor();
+  } catch (error: unknown) {
+    readFailure = { error };
+    throw error;
+  } finally {
+    await handle.close().catch((cleanup: unknown) => {
+      signal?.throwIfAborted();
+      const cause = readFailure ? new AggregateError([readFailure.error, cleanup]) : cleanup;
+      throw new PluginHostError(
+        'plugin-unreadable',
+        describeError(readFailure ? readFailure.error : cleanup),
+        { cause },
+      );
+    });
+  }
 }
 
 /** Why the plugin cannot run on this host, if it cannot. */
@@ -199,9 +240,9 @@ export async function resolveEntry(
     new PluginHostError('plugin-entry-invalid', message, { pluginId });
   let info;
   try {
-    info = await lstat(candidate);
+    info = await fs.lstat(candidate);
   } catch (error: unknown) {
-    if (isMissing(error)) {
+    if (hasCode(error, 'ENOENT') || hasCode(error, 'ENOTDIR')) {
       throw invalid(`Entry "${descriptor.entry}" does not exist in the plugin directory`);
     }
     throw error;
@@ -209,7 +250,10 @@ export async function resolveEntry(
   if (!info.isFile()) {
     throw invalid(`Entry "${descriptor.entry}" is not a regular file`);
   }
-  const [realDirectory, realEntry] = await Promise.all([realpath(directory), realpath(candidate)]);
+  const [realDirectory, realEntry] = await Promise.all([
+    fs.realpath(directory),
+    fs.realpath(candidate),
+  ]);
   if (!realEntry.startsWith(realDirectory + path.sep)) {
     throw invalid(`Entry "${descriptor.entry}" resolves outside the plugin directory`);
   }
@@ -228,23 +272,12 @@ function invalidCandidate(
   return { status: 'invalid', id, directory, manifest, issue: issueOf(error) };
 }
 
-/** Reads one plugin directory. `undefined` means it has no descriptor, so it is not a plugin. */
-async function inspect(
+/** Validate compatibility and payload after the declaration has been observed. */
+async function inspectPayload(
   directory: string,
-  name: string,
+  descriptor: PluginDescriptor,
   options: DiscoverOptions,
-): Promise<LocalPluginCandidate | undefined> {
-  let descriptor: PluginDescriptor;
-  try {
-    const text = await readDescriptorText(directory);
-    if (text === undefined) {
-      return undefined;
-    }
-    descriptor = parseDescriptor(text);
-  } catch (error: unknown) {
-    return invalidCandidate(name, directory, error);
-  }
-
+): Promise<LocalPluginCandidate> {
   const { manifest } = descriptor;
   const incompatible = incompatibility(manifest, options.hostVersion);
   if (incompatible !== undefined) {
@@ -318,70 +351,127 @@ function applyIdRules(
  */
 export async function discoverLocalPlugins(options: DiscoverOptions): Promise<DiscoveryResult> {
   const declarations = await scanLocalPluginDeclarations(options);
-  return declarations.exists
-    ? finalizeLocalPluginDiscovery(declarations, new Set(options.reservedIds ?? []))
-    : declarations;
+  return finalizeLocalPluginDiscovery(
+    declarations,
+    new Set(declarations.exists ? options.reservedIds : undefined),
+  );
 }
 
 export function finalizeLocalPluginDiscovery(
-  declarations: DiscoveryResult,
+  { directory, exists, candidates, truncated }: DiscoveryResult,
   reservedIds: ReadonlySet<string>,
 ): DiscoveryResult {
-  return { ...declarations, candidates: applyIdRules(declarations.candidates, reservedIds) };
+  return { directory, exists, candidates: applyIdRules(candidates, reservedIds), truncated };
 }
 
 /** Captures the inspected declarations before applying any ID policy. */
 export async function scanLocalPluginDeclarations(
   options: DiscoverOptions,
-): Promise<DiscoveryResult> {
+): Promise<LocalPluginDeclarationScan> {
   assertHostVersion(options.hostVersion);
-  const root = path.resolve(options.directory);
-  const maxCandidates = options.maxCandidates ?? defaultMaxCandidates;
-
-  let entries: Dirent[];
-  try {
-    entries = await readdir(root, { withFileTypes: true });
-  } catch (error: unknown) {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-      return { directory: root, exists: false, candidates: [], truncated: false };
-    }
-    throw new PluginHostError(
-      'plugin-unreadable',
-      `Cannot read the plugins directory ${root}: ${describeError(error)}`,
-      { cause: error },
+  const { directory, exists, truncated, complete, observations, rootIssue } =
+    await observeLocalPluginDeclarations(options);
+  if (rootIssue !== undefined) throw rootIssue;
+  const candidates: LocalPluginCandidate[] = [];
+  for (const observation of observations) {
+    candidates.push(
+      'descriptor' in observation
+        ? await inspectPayload(observation.directory, observation.descriptor, options)
+        : observation,
     );
   }
+  return { directory, exists, candidates, truncated, complete };
+}
+
+/** Reads descriptor claims without resolving, hashing or executing plugin payloads. */
+export async function inspectLocalPluginDeclarationClaims(
+  options: DiscoverOptions,
+  signal?: AbortSignal,
+): Promise<LocalPluginDeclarationClaims> {
+  const { observations, complete } = await observeLocalPluginDeclarations(options, signal);
+  signal?.throwIfAborted();
+  const ids = new Set<string>();
+  for (const observation of observations) {
+    if ('descriptor' in observation) ids.add(observation.descriptor.manifest.id);
+  }
+  return { pluginIds: [...ids], complete };
+}
+
+type DescriptorObservation =
+  { readonly directory: string; readonly descriptor: PluginDescriptor } | InvalidLocalPlugin;
+
+interface DeclarationObservations {
+  readonly directory: string;
+  readonly exists: boolean;
+  readonly truncated: boolean;
+  readonly complete: boolean;
+  readonly observations: readonly DescriptorObservation[];
+  readonly rootIssue?: PluginHostError;
+}
+
+async function observeLocalPluginDeclarations(
+  options: DiscoverOptions,
+  signal?: AbortSignal,
+): Promise<DeclarationObservations> {
+  signal?.throwIfAborted();
+  const root = path.resolve(options.directory);
+  const maxCandidates = options.maxCandidates ?? defaultMaxCandidates;
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(root, { withFileTypes: true });
+  } catch (error: unknown) {
+    signal?.throwIfAborted();
+    const missing = hasCode(error, 'ENOENT');
+    return {
+      directory: root,
+      exists: false,
+      truncated: false,
+      complete: missing,
+      observations: [],
+      ...(missing
+        ? {}
+        : {
+            rootIssue: new PluginHostError(
+              'plugin-unreadable',
+              `Cannot read the plugins directory ${root}: ${describeError(error)}`,
+              { cause: error },
+            ),
+          }),
+    };
+  }
+  signal?.throwIfAborted();
 
   // A link to a directory is not followed, but it is reported: a developer
   // who links a checkout in should be told why it is not loaded.
-  const subdirectories: { readonly name: string; readonly link: boolean }[] = [];
+  const plugins: { readonly name: string; readonly info?: Stats }[] = [];
+  let complete = true;
+  entries.sort((left, right) => compareBytes(left.name, right.name));
   for (const entry of entries) {
-    if (entry.name.startsWith('.')) {
-      continue;
-    }
+    signal?.throwIfAborted();
+    if (entry.name.startsWith('.')) continue;
+    const directory = path.join(root, entry.name);
     if (entry.isDirectory()) {
-      subdirectories.push({ name: entry.name, link: false });
-    } else if (entry.isSymbolicLink() && (await pointsToDirectory(path.join(root, entry.name)))) {
-      subdirectories.push({ name: entry.name, link: true });
-    }
-  }
-  subdirectories.sort((left, right) => compareBytes(left.name, right.name));
-
-  // Only a directory with a descriptor is a plugin. A link is listed without
-  // looking inside it.
-  const plugins: { readonly name: string; readonly link: boolean }[] = [];
-  for (const subdirectory of subdirectories) {
-    if (subdirectory.link || (await holdsDescriptor(path.join(root, subdirectory.name)))) {
-      plugins.push(subdirectory);
+      try {
+        const info = await fs.lstat(path.join(directory, descriptorFileName));
+        signal?.throwIfAborted();
+        plugins.push({ name: entry.name, info });
+      } catch (error: unknown) {
+        signal?.throwIfAborted();
+        // Keep the legacy no-row behavior if the descriptor could not be observed.
+        if (!hasCode(error, 'ENOENT')) complete = false;
+      }
+    } else if (entry.isSymbolicLink() && (await pointsToDirectory(directory, signal))) {
+      plugins.push({ name: entry.name });
     }
   }
   const truncated = plugins.length > maxCandidates;
 
-  const found: LocalPluginCandidate[] = [];
-  for (const { name, link } of plugins.slice(0, maxCandidates)) {
+  const observations: DescriptorObservation[] = [];
+  for (const { name, info } of plugins.slice(0, maxCandidates)) {
+    signal?.throwIfAborted();
     const directory = path.join(root, name);
-    if (link) {
-      found.push(
+    if (info === undefined) {
+      observations.push(
         invalidCandidate(
           name,
           directory,
@@ -393,16 +483,24 @@ export async function scanLocalPluginDeclarations(
       );
       continue;
     }
-    const candidate = await inspect(directory, name, options);
-    if (candidate !== undefined) {
-      found.push(candidate);
+    try {
+      const text = await readDescriptorText(path.join(directory, descriptorFileName), info, signal);
+      signal?.throwIfAborted();
+      if (text !== undefined) observations.push({ directory, descriptor: parseDescriptor(text) });
+    } catch (error: unknown) {
+      signal?.throwIfAborted();
+      if (!(error instanceof PluginHostError) || error.code !== 'plugin-invalid-descriptor') {
+        complete = false;
+      }
+      observations.push(invalidCandidate(name, directory, error));
     }
   }
 
   return {
     directory: root,
     exists: true,
-    candidates: found,
+    observations,
     truncated,
+    complete: complete && !truncated,
   };
 }

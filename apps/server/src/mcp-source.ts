@@ -36,7 +36,11 @@ import type {
 
 const sourceId = 'mcp';
 const capacity = 32;
-const emptyLog: McpAuthorityLog = { sequence: 0, events: [], records: [] };
+const emptyLog: McpAuthorityLog = {
+  sequence: 0,
+  events: Object.freeze([]),
+  records: Object.freeze([]),
+};
 const unavailable = {
   code: 'mcp-connect-failed',
   message: 'The MCP service could not be initialized.',
@@ -75,6 +79,12 @@ export interface McpExtensionSourceOptions {
 
 function pluginId(id: string): string {
   return `mcp-${id}`;
+}
+
+function declaredIds(log: McpAuthorityLog): readonly string[] {
+  return log.records
+    .filter((record) => !record.removed)
+    .map((record) => pluginId(record.config.id));
 }
 
 function identity(record: McpAuthorityRecord): string {
@@ -154,6 +164,7 @@ export function createMcpExtensionSource(options: McpExtensionSourceOptions): {
   register: ExtensionSourceFactory;
   facade(coordinator: ExtensionCoordinator): ServerMcpManager;
   declaredPluginIds(): readonly string[];
+  inspectDeclaredPluginIds(signal: AbortSignal): Promise<readonly string[]>;
   setDeniedPluginIdsSync(ids: ReadonlySet<string>): void;
   refresh(): Promise<void>;
   close(): Promise<void>;
@@ -208,10 +219,18 @@ export function createMcpExtensionSource(options: McpExtensionSourceOptions): {
     }
     observer?.(sourceId, { snapshot: current, affectedIds: [...affectedIds], immediate });
   }
-  function declaredPluginIds(): readonly string[] {
-    return log.records
-      .filter((record) => !record.removed)
-      .map((record) => pluginId(record.config.id));
+  async function inspectDeclaredPluginIds(signal: AbortSignal): Promise<readonly string[]> {
+    signal.throwIfAborted();
+    ensureOpen();
+    const knownPrefix = log.events;
+    let observed: McpAuthorityLog;
+    try {
+      observed = await options.store.read({ knownPrefix });
+    } finally {
+      signal.throwIfAborted();
+      ensureOpen();
+    }
+    return declaredIds(validateMcpAuthorityLog(observed, knownPrefix));
   }
   function setDeniedPluginIdsSync(ids: ReadonlySet<string>): void {
     const before = eligibleIdentities();
@@ -457,7 +476,8 @@ export function createMcpExtensionSource(options: McpExtensionSourceOptions): {
 
   return {
     register,
-    declaredPluginIds,
+    declaredPluginIds: () => declaredIds(log),
+    inspectDeclaredPluginIds,
     setDeniedPluginIdsSync,
     refresh,
     close,

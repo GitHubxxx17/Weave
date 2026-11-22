@@ -1,4 +1,5 @@
 import { rm, writeFile } from 'node:fs/promises';
+import fs from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import * as pluginHost from '@weave/plugin-host';
@@ -254,6 +255,55 @@ describe('selected managed authority', () => {
       await host.coordinator.reload();
       expect(f.readOwned).not.toHaveBeenCalled();
       expect(host.coordinator.snapshot().members).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it('withdraws managed readiness and skips selected artifact reads on an incomplete ordinary scan', async () => {
+    const onKernelSetup = vi.fn();
+    const f = await createRealManagedCompositionFixture({ onKernelSetup });
+    try {
+      await f.seedManaged('notes', 'managed');
+      await f.seedManual('healthy', 'manual');
+      const blocked = await f.seedManual('unreadable', 'manual', false);
+      const host = f.compose();
+      await host.coordinator.reload();
+      const current = f.runtime.serverHost.controller()!.current();
+      const lstat = fs.lstat;
+      const descriptor = join(blocked.directory, 'weave-plugin.json');
+      const denied = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      const fault = vi.spyOn(fs, 'lstat').mockImplementation((file, options) => {
+        if (file === descriptor) return Promise.reject(denied);
+        return lstat(file, options);
+      });
+      onKernelSetup.mockImplementationOnce(() => {
+        throw new Error('failed manual-only assembly');
+      });
+      f.readOwned.mockClear();
+      try {
+        await host.coordinator.reload().catch(() => undefined);
+        expect(f.readOwned).not.toHaveBeenCalled();
+        expect(host.localSource!.snapshot().eligible).toMatchObject([{ pluginId: 'healthy' }]);
+        expect(host.coordinator.generationSnapshot().acceptingRuns).toBe(false);
+        expect(f.runtime.serverHost.controller()!.current()).toBe(current);
+        await expect(f.runTool('notes')).rejects.toMatchObject({
+          code: 'plugin-generation-blocked',
+        });
+
+        await host.coordinator.reload();
+        expect(f.readOwned).not.toHaveBeenCalled();
+        expect(host.coordinator.snapshot().members).toMatchObject([{ pluginId: 'healthy' }]);
+        expect(host.coordinator.generationSnapshot().acceptingRuns).toBe(true);
+      } finally {
+        fault.mockRestore();
+      }
+      await host.coordinator.reload();
+      expect(f.readOwned).toHaveBeenCalled();
+      expect(host.coordinator.snapshot().members).toMatchObject([
+        { pluginId: 'healthy' },
+        { pluginId: 'notes' },
+      ]);
     } finally {
       await f.close();
     }
@@ -591,6 +641,40 @@ describe('selected managed authority', () => {
       expect(await host.localSource!.discoveredPluginIds()).toEqual(['manual']);
       expect(f.readOwned).not.toHaveBeenCalled();
       expect(f.readMcp).not.toHaveBeenCalled();
+    } finally {
+      await f.close();
+    }
+  });
+
+  it('inspects fresh manual declarations without refreshing live authority or admission', async () => {
+    const f = await createRealManagedCompositionFixture();
+    try {
+      await f.seedManaged('notes', 'managed');
+      const readTrust = vi.fn(f.authority.trust.events);
+      const host = f.compose({ localTrustStore: { ...f.authority.trust, events: readTrust } });
+      await host.coordinator.reload();
+      const before = host.localSource!.snapshot();
+      const generation = host.coordinator.snapshot();
+      const admission = host.coordinator.generationSnapshot();
+      await f.seedManual('notes', 'colliding manual declaration', false);
+      f.readOwned.mockClear();
+      f.readMcp.mockClear();
+      f.readAuthoritySync.mockClear();
+      readTrust.mockClear();
+
+      await expect(
+        host.localSource!.inspectDeclarationClaims(new AbortController().signal),
+      ).resolves.toEqual({
+        pluginIds: ['notes'],
+        complete: true,
+      });
+      expect(host.localSource!.snapshot()).toEqual(before);
+      expect(host.coordinator.snapshot()).toEqual(generation);
+      expect(host.coordinator.generationSnapshot()).toEqual(admission);
+      expect(f.readOwned).not.toHaveBeenCalled();
+      expect(f.readMcp).not.toHaveBeenCalled();
+      expect(f.readAuthoritySync).not.toHaveBeenCalled();
+      expect(readTrust).not.toHaveBeenCalled();
     } finally {
       await f.close();
     }

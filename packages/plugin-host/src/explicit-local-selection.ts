@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { pluginManifestSchema, type PluginManifest } from '@weave/plugin';
 import { z } from 'zod';
 
-import type { DiscoveryResult } from './discovery.js';
+import type { LocalPluginDeclarationScan } from './discovery.js';
 import { compareIds, eligibleLocalPlugins, identity } from './host-state.js';
 import type {
   ExplicitLocalSelectionInput,
@@ -94,25 +94,35 @@ export const explicitLocalSelectionInputSchema = z
     }
   });
 
+export function manualNamespaceAllowsManaged(
+  id: string,
+  declarations: LocalPluginDeclarationScan | undefined,
+  reservedIds: ReadonlySet<string>,
+): boolean {
+  return (
+    declarations !== undefined &&
+    declarations.complete &&
+    !declarations.truncated &&
+    !reservedIds.has(id) &&
+    // An invalid entry or digest still leaves its parsed manifest's declaration intact.
+    !declarations.candidates.some((candidate) => candidate.manifest?.id === id)
+  );
+}
+
 export function eligibleManagedLocalCandidates(
   explicit: Pick<ExplicitLocalSelectionInput, 'selections' | 'deniedIds'>,
-  declarations: DiscoveryResult | undefined,
+  declarations: LocalPluginDeclarationScan | undefined,
   reservedIds: ReadonlySet<string>,
   trust: ReadonlyMap<string, PluginTrustRecord>,
 ): ManagedLocalCandidate[] {
-  if (declarations === undefined || declarations.truncated) return [];
-
-  // An invalid entry or digest still leaves a parsed manifest's declaration intact.
-  const claimed = new Set([...reservedIds, ...explicit.deniedIds]);
-  for (const candidate of declarations.candidates) {
-    if (candidate.manifest !== undefined) claimed.add(candidate.manifest.id);
-  }
+  const denied = new Set(explicit.deniedIds);
   return explicit.selections
     .flatMap(({ manifest, digest, activationSequence, ready }): ManagedLocalCandidate[] => {
       const record = trust.get(manifest.id);
       if (
         ready === undefined ||
-        claimed.has(manifest.id) ||
+        denied.has(manifest.id) ||
+        !manualNamespaceAllowsManaged(manifest.id, declarations, reservedIds) ||
         !record?.enabled ||
         record.digest !== digest ||
         !isDeepStrictEqual(normalizeManifest(record.manifest), manifest)

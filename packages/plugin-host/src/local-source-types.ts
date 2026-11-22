@@ -126,6 +126,8 @@ export interface LocalPluginSourceOptions {
 
 export interface LocalPluginSourceController {
   snapshot(): LocalPluginSourceSnapshot;
+  /** Whether the latest ordinary manual scan allows reading a managed ID. */
+  mayReadManagedSync(id: string): boolean;
   adoptExplicitSelectionSync(input: ExplicitLocalSelectionInput): LocalPluginSourceSnapshot;
   refresh(): Promise<LocalPluginSourceSnapshot>;
   mutate(

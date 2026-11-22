@@ -20,13 +20,14 @@ export type { PluginDescriptor } from './descriptor.js';
 export { computeDirectoryDigest, defaultDigestLimits } from './digest.js';
 export type { DigestLimits, DigestOptions, DirectoryDigest } from './digest.js';
 
-export { discoverLocalPlugins } from './discovery.js';
+export { discoverLocalPlugins, inspectLocalPluginDeclarationClaims } from './discovery.js';
 export type {
   DiscoverOptions,
   DiscoveryResult,
   IncompatibleLocalPlugin,
   InvalidLocalPlugin,
   LocalPluginCandidate,
+  LocalPluginDeclarationClaims,
   LocalPluginIssue,
   ReadyLocalPlugin,
 } from './discovery.js';
