@@ -10,3 +10,11 @@ export function DeclarativeSkillPayload(): ReactElement {
     </p>
   );
 }
+
+export function PluginPanelDisclosure(): ReactElement {
+  return (
+    <p className="plugin-note">
+      右侧面板由宿主渲染；表单仅准备可编辑文本，需您点击发送。兼容的历史事件不证明其生成版本。
+    </p>
+  );
+}

@@ -1792,3 +1792,76 @@ describe('Server extension coordination', () => {
     }
   });
 });
+
+describe('cached panel UI coordinator authority', () => {
+  it('captures cached authority without probing and withdraws even immediate:false', async () => {
+    const source = new FixtureSource('panel-source');
+    const { runtime, coordinator } = await fixture(source);
+    try {
+      await coordinator.reload();
+      const capture = coordinator.captureCurrentUiSync();
+      expect(capture.available).toBe(true);
+      source.onSnapshot = () => {
+        throw new Error('UI capture must not probe source');
+      };
+      expect(coordinator.captureCurrentUiSync().generationId).toBe(capture.generationId);
+      expect(() => coordinator.assertCurrentUiSync(capture)).not.toThrow();
+      source.onSnapshot = undefined;
+      source.publish(source.stageDecision(undefined, false));
+      expect(capture.signal.aborted).toBe(true);
+      expect(coordinator.captureCurrentUiSync().available).toBe(false);
+      expect(() => coordinator.assertCurrentUiSync(capture)).toThrow();
+    } finally {
+      await coordinator.dispose();
+      await disposeServerPlugins(runtime);
+      await runtime.stop();
+    }
+  });
+  it('rotates same-generation stamps but preserves current legality on ordinary failed candidates', async () => {
+    const source = new FixtureSource('panel-source');
+    const { runtime, coordinator } = await fixture(source);
+    try {
+      await coordinator.reload();
+      const old = coordinator.captureCurrentUiSync();
+      source.publish(source.stageValidatedSequence());
+      expect(old.signal.aborted).toBe(true);
+      const current = coordinator.captureCurrentUiSync();
+      expect(current.available).toBe(true);
+      source.prepareFailure = new Error('candidate failure');
+      await coordinator.reload({ force: true }).catch(() => undefined);
+      expect(coordinator.captureCurrentUiSync().authorityEpoch).toBe(current.authorityEpoch);
+      expect(() => coordinator.assertCurrentUiSync(current)).not.toThrow();
+      source.publish(source.stageDecision(undefined));
+      await coordinator.reload({ force: true }).catch(() => undefined);
+      expect(coordinator.captureCurrentUiSync().available).toBe(false);
+    } finally {
+      await coordinator.dispose();
+      await disposeServerPlugins(runtime);
+      await runtime.stop();
+    }
+  });
+});
+
+describe('UI management invalidation', () => {
+  it('rotates baseline-only UI authority on ownership loss/adoption failure and close', async () => {
+    const { runtime, coordinator } = await fixture();
+    try {
+      const first = coordinator.captureCurrentUiSync();
+      coordinator.blockManagedAdoptionFailureSync('local', new Set());
+      expect(first.signal.aborted).toBe(true);
+      const second = coordinator.captureCurrentUiSync();
+      coordinator.blockManagedOwnershipLossSync();
+      expect(second.signal.aborted).toBe(true);
+      const third = coordinator.captureCurrentUiSync();
+      coordinator.blockManagedOwnershipLossSync();
+      expect(coordinator.captureCurrentUiSync().authorityEpoch).toBe(third.authorityEpoch);
+      coordinator.beginOwnedDrainSync();
+      expect(third.signal.aborted).toBe(true);
+      expect(coordinator.captureCurrentUiSync().available).toBe(false);
+    } finally {
+      await coordinator.dispose();
+      await disposeServerPlugins(runtime);
+      await runtime.stop();
+    }
+  });
+});

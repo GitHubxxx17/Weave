@@ -14,6 +14,7 @@ import type { PluginApprovalBroker } from './approval-view.js';
 import { pluginCommandSchema, type PluginCommand } from './commands.js';
 import { defineExtensionPoint, type ExtensionPoint } from './extension-point.js';
 import { defineHook, type Hook, type PolicyVote } from './hook.js';
+import { cloneDeclarativePanel, type PanelsExtensionApi } from './panels.js';
 import { PluginError } from './plugin-errors.js';
 import type { PluginEventDefinition, PluginEventReader } from './plugin-events.js';
 import { defineServiceRef, type ServiceRef } from './service.js';
@@ -259,6 +260,30 @@ export const commandsExtensionPoint: ExtensionPoint<CommandsExtensionApi> = defi
           );
         }
         return check(parsed.data.name, () => api.addCommand(Object.freeze(parsed.data)));
+      },
+    }),
+  },
+});
+
+/** Detached host-rendered right panels, with host-assigned contributor identity. */
+export const panelsExtensionPoint: ExtensionPoint<PanelsExtensionApi> = defineExtensionPoint({
+  id: 'weave.studio.panels',
+  governed: {
+    capability: 'panel',
+    key: 'panels',
+    guard: (api, check, pluginId) => ({
+      addPanel(definition) {
+        let panel;
+        try {
+          panel = cloneDeclarativePanel(definition);
+        } catch (cause: unknown) {
+          throw new PluginError(
+            'plugin-invalid-definition',
+            `Plugin "${pluginId}" contributed an invalid panel`,
+            { cause, pluginId },
+          );
+        }
+        return check(panel.id, () => api.addPanel(Object.freeze({ ...panel, pluginId })));
       },
     }),
   },

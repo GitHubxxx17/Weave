@@ -74,7 +74,7 @@ export const managedManifestSchema = z
       .readonly()
       .optional(),
     capabilities: z
-      .array(z.enum(['tool', 'llm-provider', 'prompt', 'event', 'command', 'skill']))
+      .array(z.enum(['tool', 'llm-provider', 'prompt', 'event', 'command', 'skill', 'panel']))
       .min(1)
       .readonly(),
     contributes: z
@@ -85,6 +85,7 @@ export const managedManifestSchema = z
         events: declarationNames,
         commands: declarationNames,
         skills: declarationNames,
+        panels: declarationNames,
         hooks: declarationNames,
         services: declarationNames,
       })

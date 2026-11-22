@@ -57,6 +57,12 @@ import { useAutoScroll } from '../features/conversation/use-auto-scroll.js';
 import { MarkdownMessage } from '../features/conversation/markdown-message.js';
 import { ToolStep } from '../features/conversation/tool-step.js';
 import { MessageFooter } from '../features/conversation/message-footer.js';
+import {
+  useComposerDraft,
+  type DraftCapture,
+  type DraftMigrationTicket,
+} from '../features/composer/use-composer-draft.js';
+import { usePluginPanels } from '../features/panel/use-plugin-panels.js';
 import { PanelContainer } from '../features/panel/panel-container.js';
 import { createPluginCatalogStore } from '../features/plugins/plugin-catalog-store.js';
 import {
@@ -790,8 +796,6 @@ export function App(): ReactElement {
 
 function StudioApp(): ReactElement {
   const pluginStore = usePluginCatalogStore();
-  const [messageInput, setMessageInput] = useState('');
-  const [pendingImages, setPendingImages] = useState<readonly PendingImage[]>([]);
   const [previewImage, setPreviewImage] = useState<{
     readonly mediaType: string;
     readonly data: string;
@@ -870,16 +874,28 @@ function StudioApp(): ReactElement {
   const errorMessage = activeRunState.errorMessage;
   const activeSessionIdRef = useRef('');
   const messageInputRef = useRef<HTMLTextAreaElement | null>(null);
-  const commandPicker = useCommandPicker({
-    draft: messageInput,
-    setDraft: setMessageInput,
-    inputRef: messageInputRef,
-  });
   const directoryInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const activeProject = projects.find((project) => project.id === activeProjectId);
   const sessions = activeProject?.sessions ?? [];
   const activeSession = sessions.find((session) => session.id === activeSessionId);
+  const composerDraft = useComposerDraft({
+    sessionId: activeSessionId,
+    projectId: activeProjectId,
+    rootKey: activeProject?.folderPath ?? '',
+    inputRef: messageInputRef,
+  });
+  const messageInput = composerDraft.draft.text;
+  const pendingImages = composerDraft.draft.images as readonly PendingImage[];
+  const setMessageInput = composerDraft.setText;
+  const setPendingImages = composerDraft.setImages<PendingImage>;
+  const commandPicker = useCommandPicker({
+    draft: messageInput,
+    setDraft: setMessageInput,
+    inputRef: messageInputRef,
+    onSelect: composerDraft.resetLiteral,
+  });
+  const pluginPanels = usePluginPanels(pluginStore, composerDraft.invalidatePanel);
   const sessionSkills = useSessionSkills(
     activeSessionId,
     `${activeProjectId}:${activeProject?.folderPath ?? ''}`,
@@ -1413,6 +1429,7 @@ function StudioApp(): ReactElement {
     readonly projectId: string;
     readonly sessionId: string;
     readonly session: StudioSession;
+    readonly migrationTicket?: DraftMigrationTicket | null;
   };
 
   function activateSession(projectId: string, session: StudioSession): void {
@@ -1428,6 +1445,7 @@ function StudioApp(): ReactElement {
   async function createSessionForProject(
     projectId: string,
     projectIfMissing?: StudioProject,
+    submissionDraft?: DraftCapture,
   ): Promise<ActiveSessionContext | null> {
     try {
       const detail = await workspaceApi.createSession(projectId);
@@ -1446,9 +1464,22 @@ function StudioApp(): ReactElement {
             : candidate,
         );
       });
-      activateSession(projectId, newSession);
-      resetTransientState();
-      return { projectId, sessionId: newSession.id, session: newSession };
+      const migrationTicket =
+        submissionDraft === undefined
+          ? null
+          : composerDraft.migrateProvisional(
+              submissionDraft,
+              newSession.id,
+              projectId,
+              projectIfMissing?.folderPath ??
+                projects.find((p) => p.id === projectId)?.folderPath ??
+                '',
+            );
+      if (submissionDraft === undefined || migrationTicket !== null) {
+        activateSession(projectId, newSession);
+        resetTransientState();
+      }
+      return { projectId, sessionId: newSession.id, session: newSession, migrationTicket };
     } catch (error: unknown) {
       setNotice(workspaceErrorMessage(error));
       return null;
@@ -1469,7 +1500,9 @@ function StudioApp(): ReactElement {
    * Returns the active session, creating the initial local project/session when needed.
    * The returned IDs are used immediately so a first message does not depend on React state timing.
    */
-  async function ensureSessionForMessage(): Promise<ActiveSessionContext | null> {
+  async function ensureSessionForMessage(
+    submissionDraft: DraftCapture,
+  ): Promise<ActiveSessionContext | null> {
     const activeContext = getActiveSessionContext();
     if (activeContext !== null) {
       return activeContext;
@@ -1477,7 +1510,7 @@ function StudioApp(): ReactElement {
 
     const project = projects.find((candidate) => candidate.id === activeProjectId);
     if (project !== undefined) {
-      return createSessionForProject(project.id);
+      return createSessionForProject(project.id, undefined, submissionDraft);
     }
 
     try {
@@ -1489,7 +1522,7 @@ function StudioApp(): ReactElement {
         ...toStudioProject({ ...createdProject, sessions: [] }),
         sessions: [],
       };
-      return createSessionForProject(project.id, project);
+      return createSessionForProject(project.id, project, submissionDraft);
     } catch (error: unknown) {
       setNotice(workspaceErrorMessage(error));
       return null;
@@ -1501,12 +1534,15 @@ function StudioApp(): ReactElement {
    * (the previous Turn stays in history) without touching the draft input.
    */
   async function submitMessage(retry?: AgentSubmissionSnapshot): Promise<void> {
+    const submittedDraft = composerDraft.capture();
     const typed = messageInput.trim();
     // A draft that invokes a slash command is sent as the command's prompt, so
     // the message shown and stored is the text the model receives.
     const text =
       retry === undefined
-        ? commandPicker.expand(typed)
+        ? composerDraft.draft.literalSend
+          ? typed
+          : commandPicker.expand(typed)
         : retry.userMessage.content
             .filter((part) => part.type === 'text')
             .map((part) => part.text)
@@ -1544,7 +1580,7 @@ function StudioApp(): ReactElement {
     const retrySession = retryProject?.sessions.find((session) => session.id === retry?.sessionId);
     const sessionContext =
       retry === undefined
-        ? (getActiveSessionContext() ?? (await ensureSessionForMessage()))
+        ? (getActiveSessionContext() ?? (await ensureSessionForMessage(submittedDraft)))
         : retryProject === undefined || retrySession === undefined
           ? null
           : { projectId: retryProject.id, sessionId: retrySession.id, session: retrySession };
@@ -1659,10 +1695,7 @@ function StudioApp(): ReactElement {
           : project,
       ),
     );
-    if (retry === undefined) {
-      setMessageInput('');
-      setPendingImages([]);
-    }
+
     if (shouldPersistTitle) {
       void workspaceApi.renameSession(sessionId, generatedTitle).catch(() => undefined);
     }
@@ -1676,8 +1709,13 @@ function StudioApp(): ReactElement {
     const accept = (): void => {
       if (accepted) return;
       accepted = true;
-      if (retry === undefined)
+      if (retry === undefined) {
         sessionSkills.clearSent(sessionId, selectedRevision, submission.skills);
+        composerDraft.clearSubmittedDraftIfCurrent(
+          submittedDraft,
+          'migrationTicket' in sessionContext ? (sessionContext.migrationTicket ?? null) : null,
+        );
+      }
     };
     try {
       await streamAgentRun(
@@ -2462,12 +2500,14 @@ function StudioApp(): ReactElement {
     if (imageFiles.length === 0) {
       return;
     }
+    const imageOwner = composerDraft.owner;
     const read = await Promise.all(
       imageFiles.map(async (file) => {
         const { mediaType, data } = await readImageFile(file);
         return { id: createId('img'), name: file.name, mediaType, data };
       }),
     );
+    if (!composerDraft.isOwnerCurrent(imageOwner)) return;
     const added = read.filter((image) => image.data !== '');
     if (added.length === 0) {
       return;
@@ -3195,6 +3235,11 @@ function StudioApp(): ReactElement {
                   }
                 : {})}
             />
+            {composerDraft.draft.literalSend ? (
+              <p className="composer-prepared-status" role="status">
+                已准备文本，请检查并点击发送
+              </p>
+            ) : null}
             {pendingImages.length > 0 ? (
               <div className="composer-attachments" aria-label="待发送图片">
                 {pendingImages.map((image) => (
@@ -3834,6 +3879,8 @@ function StudioApp(): ReactElement {
       ) : null}
 
       <PanelContainer
+        pluginPanels={pluginPanels}
+        composerDraft={composerDraft}
         routeHidden={activeView !== 'studio'}
         collapsed={!isActivityPanelOpen}
         width={panelWidth}

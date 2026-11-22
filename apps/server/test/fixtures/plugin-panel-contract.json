@@ -1,0 +1,182 @@
+{
+  "catalog": {
+    "schemaVersion": 1,
+    "serverEpoch": "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS",
+    "generation": 1,
+    "authorityEpoch": 1,
+    "acceptingRuns": true,
+    "panels": [
+      {
+        "panelId": "plugin:quality-report/report",
+        "panelRef": "RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR",
+        "pluginId": "quality-report",
+        "pluginName": "质量报告",
+        "pluginVersion": "1.0.0",
+        "state": "available",
+        "definition": {
+          "schemaVersion": 1,
+          "id": "report",
+          "title": "质量报告",
+          "description": "查看当前会话最近的质量报告，准备下一轮检查。",
+          "icon": "checklist",
+          "placement": "right",
+          "sources": [
+            {
+              "id": "report",
+              "eventType": "quality-report/report",
+              "payloadVersion": 1
+            }
+          ],
+          "blocks": [
+            {
+              "id": "heading",
+              "type": "heading",
+              "text": "最近的质量报告"
+            },
+            {
+              "id": "score",
+              "type": "metric",
+              "label": "评分",
+              "value": {
+                "binding": {
+                  "source": "report",
+                  "path": ["score"]
+                }
+              },
+              "unit": "/100"
+            },
+            {
+              "id": "summary",
+              "type": "text",
+              "value": {
+                "binding": {
+                  "source": "report",
+                  "path": ["summary"]
+                }
+              }
+            },
+            {
+              "id": "checks",
+              "type": "table",
+              "rows": {
+                "source": "report",
+                "path": ["checks"]
+              },
+              "columns": [
+                {
+                  "id": "name",
+                  "title": "检查",
+                  "path": ["name"]
+                },
+                {
+                  "id": "status",
+                  "title": "状态",
+                  "path": ["status"]
+                }
+              ]
+            },
+            {
+              "id": "prepare",
+              "type": "form",
+              "fields": [
+                {
+                  "id": "target",
+                  "type": "text",
+                  "label": "检查范围",
+                  "required": true,
+                  "default": "当前修改"
+                },
+                {
+                  "id": "include-tests",
+                  "type": "boolean",
+                  "label": "包含相关测试",
+                  "default": true
+                }
+              ],
+              "submit": {
+                "type": "prepare-command",
+                "command": "quality-report",
+                "label": "准备到对话"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "data": {
+    "schemaVersion": 1,
+    "serverEpoch": "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS",
+    "generation": 1,
+    "authorityEpoch": 1,
+    "panelRef": "RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR",
+    "panelId": "plugin:quality-report/report",
+    "sessionId": "panel-contract",
+    "lastSequence": 2,
+    "state": "ready",
+    "sources": [
+      {
+        "id": "report",
+        "eventType": "quality-report/report",
+        "payloadVersion": 1,
+        "state": "ready",
+        "latest": {
+          "sequence": 2,
+          "occurredAt": "2026-11-22T00:00:00.000Z",
+          "payloadVersion": 1
+        }
+      }
+    ],
+    "blocks": [
+      {
+        "id": "score",
+        "type": "metric",
+        "cell": {
+          "state": "ready",
+          "value": 88
+        }
+      },
+      {
+        "id": "summary",
+        "type": "text",
+        "cell": {
+          "state": "ready",
+          "value": "<img src=x onerror=alert(1)> remains text"
+        }
+      },
+      {
+        "id": "checks",
+        "type": "table",
+        "state": "ready",
+        "rows": [
+          [
+            {
+              "state": "ready",
+              "value": "Explicit fixture evidence"
+            },
+            {
+              "state": "ready",
+              "value": "pass"
+            }
+          ]
+        ],
+        "totalRows": 1,
+        "truncatedRows": 0
+      }
+    ]
+  },
+  "prepared": {
+    "schemaVersion": 1,
+    "serverEpoch": "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS",
+    "generation": 1,
+    "authorityEpoch": 1,
+    "panelRef": "RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR",
+    "panelId": "plugin:quality-report/report",
+    "sessionId": "panel-contract",
+    "lastSequence": 2,
+    "formId": "prepare",
+    "command": "quality-report",
+    "text": "请根据以下选项检查当前项目质量。先核对实际可用工具并收集证据；执行命令遵循当前工作区和审批。不要把未运行的测试标为通过。有足够证据时调用 quality_report 记录分数、总结与检查状态。\n\n{\"target\":\"src\",\"include-tests\":true}",
+    "requiresUserSend": true
+  }
+}

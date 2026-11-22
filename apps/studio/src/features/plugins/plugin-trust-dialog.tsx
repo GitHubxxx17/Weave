@@ -7,6 +7,7 @@ import { isDeclarativeSkillManifest } from './managed-plugin-types.js';
 import {
   declarativeSkillDisclosure,
   DeclarativeSkillPayload,
+  PluginPanelDisclosure,
 } from './plugin-payload-description.js';
 
 const warning =
@@ -20,6 +21,7 @@ const declarationLabels: Readonly<Record<string, string>> = {
   events: '会话事件',
   commands: '命令',
   skills: '技能',
+  panels: '右侧面板',
   hooks: '钩子',
   services: '服务',
   permissions: '权限',
@@ -150,6 +152,7 @@ export function PluginTrustDialog({
       }
     >
       {declarative ? <DeclarativeSkillPayload /> : null}
+      {review.manifest.capabilities?.includes('panel') ? <PluginPanelDisclosure /> : null}
       <div className="plugin-review-identity">
         <dl>
           <div>

@@ -36,6 +36,7 @@ const declarationCategories: readonly PluginDeclarationCategory[] = [
   'events',
   'commands',
   'skills',
+  'panels',
   'hooks',
   'services',
   'permissions',

@@ -1,3 +1,10 @@
+import {
+  freezePanel,
+  type CurrentUiAuthority,
+  type CurrentUiObservation,
+  type HostUiMemberIdentity,
+} from './plugin-panel-types.js';
+import { PanelError } from './plugin-panel-errors.js';
 import { PluginError, type KernelPlugin } from '@weave/plugin';
 import {
   ExplicitLocalAuthorityError,
@@ -85,7 +92,7 @@ export type OwnedDrainOutcome =
   | { readonly kind: 'drained'; readonly cleanupCauses: readonly unknown[] }
   | { readonly kind: 'incomplete'; readonly cause: unknown };
 
-export interface ExtensionCoordinator {
+export interface ExtensionCoordinator extends CurrentUiAuthority {
   readonly runner: ServerGenerationController['runner'];
   generationSnapshot(): ExtensionGenerationSnapshot;
   observeAuthorityBatchSync(changes: ReadonlyMap<string, ExtensionAuthorityChange>): void;
@@ -213,6 +220,73 @@ export function createExtensionCoordinator(
   const cleanupErrors: unknown[] = [];
   const lifetime = new AbortController();
   const authorityStamps = new Map<string, ExtensionSourceStamp>();
+  const cachedAuthority = new Map<string, ExtensionSourceSnapshot>();
+  const uiListeners = new Set<() => void>();
+  let authorityEpoch = 1;
+  let uiSignal = new AbortController();
+  let memberGenerationId = controller.current().id;
+  function invalidateUiSync(): void {
+    const previous = uiSignal;
+    authorityEpoch += 1;
+    const nextSignal = new AbortController();
+    uiSignal = nextSignal;
+    previous.abort(new PanelError('panel-unavailable'));
+    for (const listener of uiListeners) {
+      if (uiSignal !== nextSignal) break;
+      try {
+        listener();
+      } catch {
+        /* Host observations are isolated. */
+      }
+    }
+  }
+  function currentUiAvailable(): boolean {
+    return (
+      !closed &&
+      blocked === undefined &&
+      ownershipBlock === undefined &&
+      memberGenerationId === controller.current().id &&
+      members.every(
+        (member) =>
+          cachedAuthority.get(member.sourceId)?.eligible.some((item) => matches(item, member)) ===
+          true,
+      )
+    );
+  }
+  function captureCurrentUiSync(): CurrentUiObservation {
+    const identities: HostUiMemberIdentity[] = [
+      ...options.host.hostUiMembersSync(),
+      ...members.map((member) => ({
+        kind: 'source' as const,
+        pluginId: member.pluginId,
+        sourceId: member.sourceId,
+        identity: member.identity,
+        ...originOf(member),
+        ...(member.instanceId === undefined ? {} : { instanceId: member.instanceId }),
+        ...(member.managedIdentity === undefined
+          ? {}
+          : { managedIdentity: structuredClone(member.managedIdentity) }),
+      })),
+    ];
+    return Object.freeze({
+      generationId: memberGenerationId,
+      authorityEpoch,
+      available: currentUiAvailable(),
+      members: freezePanel(identities),
+      signal: uiSignal.signal,
+    });
+  }
+  function assertCurrentUiSync(capture: CurrentUiObservation): void {
+    if (
+      !currentUiAvailable() ||
+      capture.signal.aborted ||
+      capture.authorityEpoch !== authorityEpoch ||
+      capture.generationId !== memberGenerationId ||
+      capture.generationId !== controller.current().id
+    )
+      throw new PanelError('panel-unavailable');
+  }
+  const unsubscribePublication = options.host.subscribePublicationSync(() => invalidateUiSync());
   const activeByGeneration = new Map<number, readonly ExtensionMember[]>();
   let desiredRevision = 0;
   let members: readonly ExtensionMember[] = [];
@@ -220,6 +294,7 @@ export function createExtensionCoordinator(
   let error: LocalPluginIssue | undefined;
   let blocked: PluginHostError | undefined;
   let ownershipBlock: PluginHostError | undefined;
+  let uiOwnershipLost = false;
   let running: Promise<void> | undefined;
   let closing: Promise<void> | undefined;
   let ownedDrain: Promise<OwnedDrainOutcome> | undefined;
@@ -228,11 +303,17 @@ export function createExtensionCoordinator(
   let preparing: AbortController | undefined;
 
   function blockManagedOwnershipLossSync(): void {
-    if (ownershipBlock !== undefined || !members.some(({ origin }) => origin === 'managed')) return;
+    if (uiOwnershipLost) return;
+    uiOwnershipLost = true;
+    if (ownershipBlock !== undefined || !members.some(({ origin }) => origin === 'managed')) {
+      invalidateUiSync();
+      return;
+    }
     ownershipBlock = new PluginHostError(
       'plugin-generation-blocked',
       'Managed plugin store ownership was lost',
     );
+    invalidateUiSync();
     if (!closed) controller.blockNewRuns(ownershipBlock);
   }
 
@@ -241,6 +322,7 @@ export function createExtensionCoordinator(
       'plugin-generation-blocked',
       'Extension trust changed; new runs wait for a compliant generation',
     );
+    invalidateUiSync();
     controller.blockNewRuns(ownershipBlock ?? blocked);
   }
 
@@ -255,6 +337,7 @@ export function createExtensionCoordinator(
       )
     )
       blockForChangedAuthority();
+    else invalidateUiSync();
   }
 
   function observeAuthorityBatchSync(changes: ReadonlyMap<string, ExtensionAuthorityChange>): void {
@@ -265,12 +348,14 @@ export function createExtensionCoordinator(
       const stamp = change.snapshot.stamp;
       const previous = authorityStamps.get(sourceId);
       if (previous !== undefined && sameStamp(previous, stamp)) continue;
-      authorityStamps.set(sourceId, stamp);
+      authorityStamps.set(sourceId, { ...stamp });
+      cachedAuthority.set(sourceId, freezePanel(structuredClone(change.snapshot)));
       desiredRevision += 1;
       changed.set(sourceId, change.snapshot);
       immediate ||= change.immediate && change.affectedIds.length > 0;
     }
     if (changed.size === 0) return;
+    invalidateUiSync();
     const unauthorized = members.some(
       (member) =>
         changed.get(member.sourceId)?.eligible.some((item) => matches(item, member)) === false,
@@ -290,7 +375,9 @@ export function createExtensionCoordinator(
     throw new Error('Extension source ids must be unique');
   }
   for (const source of sources) {
-    authorityStamps.set(source.id, source.snapshot().stamp);
+    const snapshot = freezePanel(structuredClone(source.snapshot()));
+    authorityStamps.set(source.id, snapshot.stamp);
+    cachedAuthority.set(source.id, snapshot);
   }
   const mcpAuthoritySource = options.mcpFirstAuthority
     ? sources.find((source) => source.id === 'mcp')
@@ -431,7 +518,17 @@ export function createExtensionCoordinator(
   }
 
   function captureAuthority(): ReadonlyMap<ExtensionSource, ExtensionSourceSnapshot> {
-    return new Map(sources.map((source) => [source, source.snapshot()]));
+    return new Map(
+      sources.map((source) => {
+        const snapshot = freezePanel(structuredClone(source.snapshot()));
+        const previous = authorityStamps.get(source.id);
+        if (previous === undefined || !sameStamp(previous, snapshot.stamp))
+          observeAuthorityBatchSync(
+            new Map([[source.id, { snapshot, affectedIds: [], immediate: false }]]),
+          );
+        return [source, snapshot];
+      }),
+    );
   }
 
   async function cleanup(operation: () => void | Promise<void>): Promise<boolean> {
@@ -447,6 +544,8 @@ export function createExtensionCoordinator(
   function closeAdmissionSync(cancelActiveRuns: boolean): void {
     if (closed) return;
     closed = true;
+    invalidateUiSync();
+    unsubscribePublication();
     const reason = disposed();
     blocked = reason;
     controller.blockNewRuns(reason);
@@ -785,11 +884,16 @@ export function createExtensionCoordinator(
                 }
                 activeByGeneration.set(next.id, nextMembers);
                 candidate = undefined;
-                members = nextMembers;
-                failed = [...failures];
-                error = undefined;
-                blocked = undefined;
-                if (ownershipBlock !== undefined) controller.blockNewRuns(ownershipBlock);
+                // Retirement and publication listeners may synchronously publish C during B.
+                // B still owns its normal retirement, but cannot overwrite C's current binding.
+                if (controller.current().id === next.id) members = freezePanel(nextMembers);
+                if (controller.current().id === next.id) memberGenerationId = next.id;
+                if (controller.current().id === next.id) failed = [...failures];
+                if (controller.current().id === next.id) error = undefined;
+                if (controller.current().id === next.id) blocked = undefined;
+                if (controller.current().id === next.id && ownershipBlock !== undefined)
+                  controller.blockNewRuns(ownershipBlock);
+                if (controller.current().id === next.id) invalidateUiSync();
               }
             }
           }
@@ -902,6 +1006,14 @@ export function createExtensionCoordinator(
 
   return {
     runner: controller.runner,
+    captureCurrentUiSync,
+    assertCurrentUiSync,
+    subscribeUiInvalidationSync(listener) {
+      uiListeners.add(listener);
+      return () => {
+        uiListeners.delete(listener);
+      };
+    },
     generationSnapshot,
     observeAuthorityBatchSync,
     blockManagedOwnershipLossSync,

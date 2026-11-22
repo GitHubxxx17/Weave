@@ -1,3 +1,10 @@
+import { randomBytes } from 'node:crypto';
+import { assertPanelCatalogLimits } from './plugin-panel-catalog.js';
+import {
+  freezePanel,
+  type HostPublicationSnapshot,
+  type HostUiMemberIdentity,
+} from './plugin-panel-types.js';
 import { type LlmProviderRegistry } from '@weave/llm';
 import {
   adaptLegacyPlugin,
@@ -65,6 +72,10 @@ export interface ServerHost {
   releaseProviderClaim(id: string): void;
   nextGenerationId(): number;
   controller(): ServerGenerationController | undefined;
+  currentPublicationSync(): HostPublicationSnapshot | undefined;
+  subscribePublicationSync(listener: (snapshot: HostPublicationSnapshot) => void): () => void;
+  hostUiMembersSync(): readonly HostUiMemberIdentity[];
+  initializeHostUiMembersSync(ids: readonly string[]): void;
   commit(generation: ServerGeneration, options?: { immediate?: boolean }): GenerationCommit;
   publish(generation: ServerGeneration, options?: { immediate?: boolean }): Promise<void>;
   plugins(): readonly PluginListItem[];
@@ -96,6 +107,11 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
   const registered: AdaptedLegacyPlugin[] = [];
   let controller: ServerGenerationController | undefined;
   let generationId = 0;
+  let publication: HostPublicationSnapshot | undefined;
+  let baseline: readonly HostUiMemberIdentity[] = [];
+  let baselineInitialized = false;
+  const baselineId = randomBytes(24).toString('base64url');
+  const listeners = new Set<(snapshot: HostPublicationSnapshot) => void>();
   const reservedProviders = new Set<string>();
   const claimedProviders = new Set<string>();
   let disposePromise: Promise<void> | undefined;
@@ -137,6 +153,26 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
 
   const commit: ServerHost['commit'] = (generation, options) => {
     if (disposePromise !== undefined) throw new Error('Server host is disposed');
+    const panels = generation.resources.panels ?? [];
+    assertPanelCatalogLimits(panels);
+    const nextPublication = freezePanel({
+      generationId: generation.id,
+      publicationId: randomBytes(24).toString('base64url'),
+      panels,
+    });
+    function published(result: GenerationCommit): GenerationCommit {
+      if (controller?.current().id !== generation.id) return result;
+      publication = nextPublication;
+      for (const listener of listeners) {
+        if (controller.current().id !== generation.id) break;
+        try {
+          listener(nextPublication);
+        } catch {
+          /* Observation cannot undo a commit. */
+        }
+      }
+      return result;
+    }
     for (const descriptor of generation.resources.pluginProviderRegistry.list()) {
       if (
         providerRegistry.getDescriptor(descriptor.id) !== undefined ||
@@ -153,7 +189,7 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
         );
       }
     }
-    if (controller !== undefined) return controller.commit(generation, options);
+    if (controller !== undefined) return published(controller.commit(generation, options));
     if (!Number.isSafeInteger(generation.id) || generation.id <= 0) {
       throw new Error('Generation ids must increase monotonically');
     }
@@ -178,7 +214,7 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
     };
     controller = { ...underlying, runner };
     locked = true;
-    return { retirement: Promise.resolve() };
+    return published({ retirement: Promise.resolve() });
   };
 
   return {
@@ -259,6 +295,27 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
     },
     nextGenerationId: () => ++generationId,
     controller: () => controller,
+    currentPublicationSync: () => (disposePromise === undefined ? publication : undefined),
+    hostUiMembersSync: () => baseline,
+    initializeHostUiMembersSync(ids) {
+      if (controller !== undefined) throw new Error('Host baseline must precede publication');
+      if (baselineInitialized) {
+        const previous = baseline.map((member) => member.pluginId);
+        if (JSON.stringify(previous) !== JSON.stringify([...new Set(ids)]))
+          throw new Error('Host baseline cannot be expanded after initialization');
+        return;
+      }
+      baselineInitialized = true;
+      baseline = freezePanel(
+        [...new Set(ids)].map((pluginId) => ({ kind: 'host' as const, pluginId, baselineId })),
+      );
+    },
+    subscribePublicationSync(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
     commit,
     async publish(generation, publishOptions) {
       await commit(generation, publishOptions).retirement;

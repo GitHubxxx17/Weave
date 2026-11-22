@@ -17,6 +17,7 @@ export const pluginDeclarationsSchema = z
     events: nameListSchema.optional(),
     commands: nameListSchema.optional(),
     skills: nameListSchema.optional(),
+    panels: nameListSchema.optional(),
     hooks: nameListSchema.optional(),
     services: nameListSchema.optional(),
   })
@@ -104,6 +105,7 @@ export const pluginListItemSchema = z
         events: nameListSchema.default([]).readonly(),
         commands: nameListSchema.default([]).readonly(),
         skills: nameListSchema.optional(),
+        panels: nameListSchema.optional(),
         hooks: nameListSchema.default([]).readonly(),
         services: nameListSchema,
       })

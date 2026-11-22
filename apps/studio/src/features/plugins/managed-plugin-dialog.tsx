@@ -15,6 +15,7 @@ import { isDeclarativeSkillManifest } from './managed-plugin-types.js';
 import {
   declarativeSkillDisclosure,
   DeclarativeSkillPayload,
+  PluginPanelDisclosure,
 } from './plugin-payload-description.js';
 
 type ManagedTarget = ManagedMutationResponse['decision']['target'];
@@ -58,6 +59,7 @@ const contributionLabels = [
   ['events', '会话事件'],
   ['commands', '命令'],
   ['skills', '技能'],
+  ['panels', '右侧面板'],
   ['hooks', '钩子'],
   ['services', '服务'],
 ] as const;
@@ -299,6 +301,7 @@ export function ManagedPluginDialog({
       }
     >
       {declarative ? <DeclarativeSkillPayload /> : null}
+      {manifest?.capabilities.includes('panel') ? <PluginPanelDisclosure /> : null}
       <div className="plugin-review-identity managed-identity">
         <dl>
           <div>
