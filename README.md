@@ -73,6 +73,13 @@ pnpm check
 package builds through the root toolchain. A package can be targeted directly,
 for example `pnpm --filter @weave/protocol test`.
 
+`pnpm studio:benchmark` builds Studio and measures synthetic 100/1000/5000-message
+conversations in a fresh local Chrome browser per sample. It requires an installed
+`playwright-cli` and Chrome, writes raw observations to `dist/performance/`, and
+does not open real projects or call a model. See the
+[Studio performance baseline](docs/learning/2026-11-23-studio-performance-baseline.md)
+for setup, metric definitions, recorded samples and measurement limits.
+
 The Turbo typecheck and test tasks build their upstream workspace packages
 first. This keeps a clean checkout independent of ignored `dist/` artifacts
 and makes the same validation sequence work locally and in GitHub Actions.
