@@ -1,6 +1,7 @@
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { writeDeclarativeSkillFixture } from './support/declarative-skill-fixture.js';
 import type { GithubPluginAcquirer } from '@weave/plugin-host';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -183,6 +184,48 @@ describe('marketplace index generation', () => {
 });
 
 describe('preparing a marketplace submission', () => {
+  it('inspects a fixed no-entry Skill source and preserves its full manifest in schema-1 submissions', async () => {
+    const { root } = await fixture();
+    const payload = join(root, 'skills-plugin');
+    const actual = await writeDeclarativeSkillFixture(payload, { id: 'community-notes' });
+    let released = false;
+    const acquirer: GithubPluginAcquirer = {
+      async withSource(selected, use) {
+        expect(selected).toEqual(source());
+        try {
+          return await use(payload, new AbortController().signal);
+        } finally {
+          released = true;
+        }
+      },
+    };
+    const result = await prepareMarketplaceSubmission(
+      {
+        name: 'Notes',
+        description: 'Workspace notes',
+        publisher: 'Independent developer',
+        tags: ['notes'],
+        source: source(),
+      },
+      { acquirer },
+    );
+    expect(result.releases).toEqual([{ manifest: actual, source: source() }]);
+    expect(released).toBe(true);
+    await writeFile(join(payload, 'skills/review/SKILL.md'), 'invalid Skill document');
+    await expect(
+      prepareMarketplaceSubmission(
+        {
+          name: 'Notes',
+          description: 'Workspace notes',
+          publisher: 'Independent developer',
+          tags: ['notes'],
+          source: source(),
+        },
+        { acquirer },
+      ),
+    ).rejects.toThrow();
+  });
+
   it('reads the acquired descriptor without importing executable plugin code', async () => {
     const { root } = await fixture();
     const payload = join(root, 'plugin');
@@ -211,6 +254,31 @@ describe('preparing a marketplace submission', () => {
     };
     expect(await prepareMarketplaceSubmission(request, { acquirer })).toEqual(submission());
     expect(settled).toBe(true);
+  });
+
+  it('prepares engine-declaring releases offline without inventing a host compatibility version', async () => {
+    const { root } = await fixture();
+    const payload = join(root, 'engine-skills');
+    const actual = await writeDeclarativeSkillFixture(payload, {
+      id: 'community-notes',
+      engines: { weave: '>=1.0.0' },
+    });
+    const acquirer: GithubPluginAcquirer = {
+      async withSource(_source, use) {
+        return use(payload, new AbortController().signal);
+      },
+    };
+    const result = await prepareMarketplaceSubmission(
+      {
+        name: 'Notes',
+        description: 'Workspace notes',
+        publisher: 'Independent developer',
+        tags: [],
+        source: source(),
+      },
+      { acquirer },
+    );
+    expect(result.releases[0]?.manifest).toEqual(actual);
   });
 
   it('rejects noncanonical sources before acquiring and validates actual manifest declarations', async () => {

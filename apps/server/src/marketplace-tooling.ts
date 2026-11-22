@@ -1,11 +1,8 @@
 import { lstat, opendir } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
-  defaultDigestLimits,
-  descriptorFileName,
   githubPluginSourceSchema,
-  maxDescriptorBytes,
-  parseDescriptor,
+  inspectPluginPayload,
   type GithubPluginAcquirer,
 } from '@weave/plugin-host';
 import { z } from 'zod';
@@ -141,12 +138,7 @@ export async function prepareMarketplaceSubmission(
   const request = requestSchema.parse(input);
   return acquirer.withSource(request.source, async (directory, signal) => {
     signal.throwIfAborted();
-    const descriptor = parseDescriptor(
-      new TextDecoder('utf-8', { fatal: true }).decode(
-        await readMarketplaceFile(join(directory, descriptorFileName), maxDescriptorBytes),
-      ),
-    );
-    await readMarketplaceFile(join(directory, descriptor.entry), defaultDigestLimits.maxBytes);
+    const { descriptor } = await inspectPluginPayload(directory, { signal });
     signal.throwIfAborted();
     return validateSubmission({
       id: descriptor.manifest.id,

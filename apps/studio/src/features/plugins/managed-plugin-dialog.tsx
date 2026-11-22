@@ -11,6 +11,11 @@ import { PluginDialog, pluginDialogError } from './plugin-dialog.js';
 import type { ManagedAttemptOutcome, ManagedRejection } from './plugin-catalog-store.js';
 import { pluginImpact } from './plugin-review.js';
 import type { PluginDeclarations } from './plugin-types.js';
+import { isDeclarativeSkillManifest } from './managed-plugin-types.js';
+import {
+  declarativeSkillDisclosure,
+  DeclarativeSkillPayload,
+} from './plugin-payload-description.js';
 
 type ManagedTarget = ManagedMutationResponse['decision']['target'];
 
@@ -231,7 +236,8 @@ export function ManagedPluginDialog({
   const locallyStale =
     result?.kind === 'not-sent' && result.error.code === 'plugin-managed-review-stale';
   const destructive = kind === 'disable' || kind === 'revoke' || kind === 'uninstall';
-  const confirmsCode = kind === 'activate' || kind === 'enable';
+  const confirmsActivation = kind === 'activate' || kind === 'enable';
+  const declarative = isDeclarativeSkillManifest(manifest);
   const action = managedAction(review);
   const canSubmit = !blocked && !submitting && !expired && !locallyStale;
   const submit = async (): Promise<void> => {
@@ -263,15 +269,16 @@ export function ManagedPluginDialog({
   return (
     <PluginDialog
       title={`${action}插件「${pluginId}」`}
-      {...(confirmsCode ? { descriptionId: warningId } : {})}
+      {...(confirmsActivation ? { descriptionId: warningId } : {})}
       cancelRef={cancelRef}
       onCancel={onCancel}
       getFallbackFocus={getFallbackFocus}
       fixedContent={
-        confirmsCode ? (
+        confirmsActivation ? (
           <p className="plugin-dialog-warning" id={warningId}>
-            插件代码拥有与 Weave
-            相同的系统权限，可访问文件、网络和会话内容。下方权限由插件声明。仅信任来源明确的插件。
+            {declarative
+              ? declarativeSkillDisclosure
+              : '插件代码拥有与 Weave 相同的系统权限，可访问文件、网络和会话内容。下方权限由插件声明。仅信任来源明确的插件。'}
           </p>
         ) : undefined
       }
@@ -291,6 +298,7 @@ export function ManagedPluginDialog({
         </>
       }
     >
+      {declarative ? <DeclarativeSkillPayload /> : null}
       <div className="plugin-review-identity managed-identity">
         <dl>
           <div>

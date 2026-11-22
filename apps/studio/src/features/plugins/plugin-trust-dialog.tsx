@@ -3,6 +3,11 @@ import { useEffect, useId, useMemo, useRef, useState, type ReactElement } from '
 import { PluginApiError } from './plugin-api.js';
 import { PluginDialog, pluginDialogError } from './plugin-dialog.js';
 import { diffManifestDeclarations, pluginImpact, type PluginReview } from './plugin-review.js';
+import { isDeclarativeSkillManifest } from './managed-plugin-types.js';
+import {
+  declarativeSkillDisclosure,
+  DeclarativeSkillPayload,
+} from './plugin-payload-description.js';
 
 const warning =
   '信任后，这个插件的代码会以和 Weave 相同的权限在你的电脑上运行。它可以读写你能访问的文件、联网、读取所有会话内容。下面是插件自己的声明，Weave 无法限制进程内插件的实际行为。只信任你了解其来源的插件。';
@@ -93,6 +98,7 @@ export function PluginTrustDialog({
     [review],
   );
   const canSubmit = !busy && !submitting && !stale;
+  const declarative = isDeclarativeSkillManifest(review.manifest);
   const submit = async (): Promise<void> => {
     if (!canSubmit || submitted.current) return;
     submitted.current = true;
@@ -129,7 +135,7 @@ export function PluginTrustDialog({
       getFallbackFocus={getFallbackFocus}
       fixedContent={
         <p className="plugin-dialog-warning" id={warningId}>
-          {warning}
+          {declarative ? declarativeSkillDisclosure : warning}
         </p>
       }
       actions={
@@ -143,6 +149,7 @@ export function PluginTrustDialog({
         </>
       }
     >
+      {declarative ? <DeclarativeSkillPayload /> : null}
       <div className="plugin-review-identity">
         <dl>
           <div>
@@ -185,7 +192,7 @@ export function PluginTrustDialog({
             </span>
           </p>
           {changes.length === 0 ? (
-            <p>声明没有变化，但代码已更新</p>
+            <p>{declarative ? '声明没有变化，但文本包内容已更新' : '声明没有变化，但代码已更新'}</p>
           ) : (
             changes.map((change) => (
               <div key={change.category}>

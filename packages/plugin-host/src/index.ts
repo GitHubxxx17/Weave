@@ -5,6 +5,7 @@ export { createPluginArtifactStore } from './artifact-store.js';
 export { PluginArtifactError, pluginArtifactSourceIdentitySchema } from './artifact-types.js';
 export type {
   PluginArtifact,
+  PluginPayload,
   PluginArtifactErrorCode,
   PluginArtifactSourceIdentity,
   PluginArtifactStore,
@@ -16,6 +17,8 @@ export type {
 
 export { descriptorFileName, maxDescriptorBytes, parseDescriptor } from './descriptor.js';
 export type { PluginDescriptor } from './descriptor.js';
+export { inspectPluginPayload } from './payload-inspector.js';
+export type { InspectPluginPayloadOptions } from './payload-inspector.js';
 
 export { computeDirectoryDigest, defaultDigestLimits } from './digest.js';
 export type { DigestLimits, DigestOptions, DirectoryDigest } from './digest.js';

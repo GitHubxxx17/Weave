@@ -18,7 +18,8 @@ Loop, the shared Tool Pipeline, the Approval HTTP control plane, the Agent
 HTTP/SSE adapter, the first Studio Agent Chat workspace, multi-Provider
 routing, the typed Plugin Kernel, local ESM plugin trust/management, and local
 stdio MCP tools, immutable GitHub plugin acquisition, multiple marketplace
-indexes, and the Skills selection/resource/history flow are implemented. Studio manages local launch configurations,
+indexes, the Skills selection/resource/history flow, and no-entry Skills text
+packages are implemented. Studio manages local launch configurations,
 canonical trust reviews, enable/disable/revoke/remove decisions, and explicit
 extension reloads through the Server control plane.
 `@weave/protocol`, `@weave/llm`, `@weave/session`, `@weave/runtime`,
@@ -37,8 +38,9 @@ See [local MCP setup and lifecycle](docs/learning/2026-11-21-local-mcp.md)
 for the Studio workflow, launch configuration format, trust boundaries, and
 troubleshooting. See [Skills usage and authoring](docs/learning/2026-11-22-skills.md)
 for per-session selection, exact retry, progressive resource reads and supported
-`SKILL.md` metadata. Skill-only installable packages and custom panel SDK remain
-the next independent distribution and extension topics.
+`SKILL.md` metadata. See [installable Skills text packages](docs/learning/2026-11-22-declarative-skill-packages.md)
+for the no-build format and maintained coding example. Developer authoring tools
+and custom panel SDK remain the next independent extension topics.
 
 The Stage 6.1 [local plugin artifact store](docs/learning/2026-11-21-plugin-artifact-store.md)
 provides bounded, non-executing directory copies at fixed content-addressed paths.
@@ -89,7 +91,7 @@ weave/
 │   ├── runtime/      # Service assembly, Agent Runner, and Tool Pipeline
 │   ├── plugin/       # Typed Plugin Kernel, SDK, hooks, and extension points
 │   ├── plugin-builtins/ # Built-in plugins and the MCP tool adapter
-│   ├── plugin-host/  # Local ESM discovery, trust, loading, generation controller
+│   ├── plugin-host/  # ESM/Skills payload discovery, trust, loading, generations
 │   └── mcp-client/   # Bounded local stdio MCP transport and frozen catalog
 ├── docs/              # Architecture, ADR, and learning material
 └── root tooling       # pnpm, Turbo, TypeScript, ESLint, Prettier, Vitest
@@ -290,8 +292,9 @@ The detailed learning guide is
 
 ### Local plugin installation
 
-Open **插件市场** in Studio's left navigation, then **已安装**, to import an already bundled local ESM plugin
-directory into a bound managed store. Import prepares a candidate. Activation
+Open **插件市场** in Studio's left navigation, then **已安装**, to import a bundled
+local ESM plugin or declarative Skills text package into a bound managed store.
+Import prepares a candidate. Activation
 requires a separate review before Server loads that version.
 
 On Desktop, use the native folder picker to select the bundled directory.

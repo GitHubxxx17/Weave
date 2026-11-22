@@ -135,7 +135,10 @@ const official = [
 export const maxPluginMarketplaceBytes = 512 * 1024;
 
 function compatible(manifest: PluginManifest, hostVersion: string): 'compatible' | 'incompatible' {
-  if (manifest.apiVersion !== pluginApiVersion || (manifest.host ?? 'in-process') !== 'in-process')
+  if (
+    manifest.apiVersion !== pluginApiVersion ||
+    !['in-process', 'declarative'].includes(manifest.host ?? 'in-process')
+  )
     return 'incompatible';
   try {
     assertEngineSupported(manifest, hostVersion);

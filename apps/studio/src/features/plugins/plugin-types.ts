@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { extensionGenerationSchema } from '../mcp/mcp-types.js';
+import { managedManifestSchema } from './managed-plugin-types.js';
 
 const nameListSchema = z.array(z.string()).readonly();
 const digestSchema = z.string().regex(/^[0-9a-f]{64}$/);
@@ -23,20 +24,33 @@ export const pluginDeclarationsSchema = z
 export type PluginDeclarations = z.infer<typeof pluginDeclarationsSchema>;
 
 /** Display projections deliberately accept future declaration and version strings. */
-export const pluginManifestProjectionSchema = z
-  .object({
-    id: z.string(),
-    name: z.string(),
-    version: z.string(),
-    apiVersion: z.string(),
-    description: z.string().optional(),
-    host: z.string().optional(),
-    capabilities: nameListSchema,
-    engines: z.object({ weave: z.string() }).readonly().optional(),
-    contributes: pluginDeclarationsSchema.optional(),
-    permissions: nameListSchema.optional(),
-  })
-  .readonly();
+export const pluginManifestProjectionSchema = z.preprocess(
+  (value, context) => {
+    if (
+      typeof value === 'object' &&
+      value !== null &&
+      'host' in value &&
+      value.host === 'declarative' &&
+      !managedManifestSchema.safeParse(value).success
+    )
+      context.addIssue({ code: 'custom', message: 'Invalid declarative Skill package manifest' });
+    return value;
+  },
+  z
+    .object({
+      id: z.string(),
+      name: z.string(),
+      version: z.string(),
+      apiVersion: z.string(),
+      description: z.string().optional(),
+      host: z.string().optional(),
+      capabilities: nameListSchema,
+      engines: z.object({ weave: z.string() }).readonly().optional(),
+      contributes: pluginDeclarationsSchema.optional(),
+      permissions: nameListSchema.optional(),
+    })
+    .readonly(),
+);
 export type PluginManifestProjection = z.infer<typeof pluginManifestProjectionSchema>;
 
 export const localPluginMetadataSchema = z

@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
-import { pluginManifestSchema, type PluginManifest } from '@weave/plugin';
+import { pluginManifestSchema, skillContributionSchema, type PluginManifest } from '@weave/plugin';
 import { z } from 'zod';
 
 import type { LocalPluginDeclarationScan } from './discovery.js';
@@ -24,22 +24,35 @@ function normalizeManifest(manifest: PluginManifest): PluginManifest {
 }
 
 const normalizedManifestSchema = pluginManifestSchema.transform(normalizeManifest);
+const readyBase = z.strictObject({
+  status: z.literal('ready'),
+  id: localPluginIdSchema,
+  manifest: normalizedManifestSchema,
+  digest: localPluginDigestSchema,
+  directory: absolutePath,
+});
+const readySchema = z
+  .union([
+    readyBase.extend({ kind: z.literal('entry').optional(), entry: absolutePath }),
+    readyBase.extend({
+      kind: z.literal('skills'),
+      skills: z.array(skillContributionSchema).min(1).max(16),
+    }),
+  ])
+  .superRefine((ready, context) => {
+    if ((ready.kind === 'skills') !== (ready.manifest.host === 'declarative'))
+      context.addIssue({
+        code: 'custom',
+        message: 'Ready payload kind must agree with manifest host',
+      });
+  });
 
 const explicitSelectionSchema = z
   .strictObject({
     manifest: normalizedManifestSchema,
     digest: localPluginDigestSchema,
     activationSequence: z.number().int().positive(),
-    ready: z
-      .strictObject({
-        status: z.literal('ready'),
-        id: localPluginIdSchema,
-        manifest: normalizedManifestSchema,
-        digest: localPluginDigestSchema,
-        directory: absolutePath,
-        entry: absolutePath,
-      })
-      .optional(),
+    ready: readySchema.optional(),
     issue: z.strictObject({ code: z.string(), message: z.string() }).optional(),
   })
   .superRefine(({ manifest, digest, ready, issue }, context) => {

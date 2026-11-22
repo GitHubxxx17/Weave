@@ -23,9 +23,7 @@ import {
   type PluginArtifactStore,
   type PluginArtifactStoreOptions,
 } from './artifact-types.js';
-import { parseDescriptor } from './descriptor.js';
-import { incompatibility, resolveEntry } from './discovery.js';
-import { PluginHostError } from './errors.js';
+import { inspectCheckedPluginPayload } from './payload-inspector.js';
 import { HostQueue } from './host-queue.js';
 
 const storeOptionsSchema = z.strictObject({
@@ -322,52 +320,17 @@ export function createPluginArtifactStore(
     abort: AbortSignal | undefined,
     precise = false,
   ): Promise<PluginArtifact> {
-    const { digest, bytes, files, descriptorText, paths } = await checkPayload(payload, abort, {
+    const checked = await checkPayload(payload, abort, {
       reviewed: precise,
+      collectContents: true,
     });
-    if (descriptorText === undefined) {
-      throw new PluginArtifactError('plugin-artifact-invalid', 'The plugin descriptor is missing');
-    }
-    try {
-      const descriptor = parseDescriptor(descriptorText);
-      const { manifest } = descriptor;
-      const incompatible = incompatibility(manifest, config.hostVersion);
-      if (incompatible !== undefined) {
-        throw new PluginArtifactError(
-          'plugin-artifact-invalid',
-          `The plugin is incompatible (${incompatible.code})`,
-          {
-            cause: incompatible,
-          },
-        );
-      }
-      if (reservedIds.has(manifest.id)) {
-        throw new PluginArtifactError(
-          'plugin-artifact-invalid',
-          'The plugin declares a reserved ID',
-        );
-      }
-      const entry = await resolveEntry(payload, descriptor, manifest.id);
-      if (!paths.has(path.relative(payload, entry).split(path.sep).join('/'))) {
-        throw new PluginArtifactError(
-          'plugin-artifact-invalid',
-          'The plugin entry is outside the digested files',
-        );
-      }
-      abort?.throwIfAborted();
-      return freezeTree({ directory: payload, entry, descriptor, digest, bytes, files });
-    } catch (error: unknown) {
-      if (error instanceof PluginHostError && !isAbort(error, abort)) {
-        throw new PluginArtifactError(
-          'plugin-artifact-invalid',
-          `The plugin descriptor or entry is invalid (${error.code})`,
-          {
-            cause: error,
-          },
-        );
-      }
-      throw error;
-    }
+    const artifact = await inspectCheckedPluginPayload(payload, checked, {
+      hostVersion: config.hostVersion,
+      signal: abort,
+    });
+    if (reservedIds.has(artifact.descriptor.manifest.id))
+      throw new PluginArtifactError('plugin-artifact-invalid', 'The plugin declares a reserved ID');
+    return artifact;
   }
 
   async function validatePublishedPayload(
@@ -576,11 +539,17 @@ export function createPluginArtifactStore(
         }
         published = true;
         const directory = path.join(object, 'payload');
-        const entry = path.join(
-          directory,
-          path.relative(finalArtifact.directory, finalArtifact.entry),
-        );
-        result = Object.freeze({ ...finalArtifact, directory, entry });
+        result =
+          finalArtifact.kind === 'skills'
+            ? Object.freeze({ ...finalArtifact, directory })
+            : Object.freeze({
+                ...finalArtifact,
+                directory,
+                entry: path.join(
+                  directory,
+                  path.relative(finalArtifact.directory, finalArtifact.entry),
+                ),
+              });
       }
     } catch (error: unknown) {
       try {

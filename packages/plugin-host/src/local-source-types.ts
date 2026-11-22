@@ -7,6 +7,7 @@ import type {
   ReadyLocalPlugin,
 } from './discovery.js';
 import type { ActiveLocalPlugin } from './host-types.js';
+import type { PluginPayload } from './artifact-types.js';
 import type {
   PluginTrustRecord,
   PluginTrustStore,
@@ -41,7 +42,7 @@ export interface ExplicitLocalCandidateChecks {
   verify(
     candidate: ManagedLocalCandidate,
     signal: AbortSignal,
-  ): Promise<Pick<ReadyLocalPlugin, 'entry' | 'digest'>>;
+  ): Promise<PluginPayload & { readonly digest: string }>;
   assertReadySync(candidate: ManagedLocalCandidate): undefined;
 }
 

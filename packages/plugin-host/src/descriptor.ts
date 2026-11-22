@@ -12,13 +12,22 @@ export const descriptorFileName = 'weave-plugin.json';
 export const maxDescriptorBytes = 64 * 1024;
 
 /** The checked content of a plugin's `weave-plugin.json`. */
-export interface PluginDescriptor {
+export interface EntryPluginDescriptor {
   readonly schemaVersion: 1;
   /** The entry module, relative to the plugin directory: normalised and `/`-separated. */
   readonly entry: string;
   /** What the user is asked to trust. It comes from this file, never from running the plugin. */
   readonly manifest: PluginManifest;
 }
+
+export interface SkillsPluginDescriptor {
+  readonly schemaVersion: 2;
+  readonly kind: 'skills';
+  readonly manifest: PluginManifest;
+  readonly entry?: never;
+}
+
+export type PluginDescriptor = EntryPluginDescriptor | SkillsPluginDescriptor;
 
 /** Why `entry` cannot name a module inside the plugin directory, or `undefined` when it can. */
 function entryProblem(entry: string): string | undefined {
@@ -55,13 +64,19 @@ const entrySchema = z
     }
   });
 
-const descriptorSchema = z
+const entryDescriptorSchema = z
   .object({
     schemaVersion: z.literal(1),
     entry: entrySchema,
     manifest: pluginManifestSchema,
   })
   .strict();
+
+const skillsDescriptorSchema = z.strictObject({
+  schemaVersion: z.literal(2),
+  kind: z.literal('skills'),
+  manifest: pluginManifestSchema,
+});
 
 function summarize(error: z.ZodError): string {
   return error.issues
@@ -95,7 +110,12 @@ export function parseDescriptor(text: string): PluginDescriptor {
     );
   }
 
-  const parsed = descriptorSchema.safeParse(json);
+  // Keep legacy error paths and normalization byte-compatible.
+  const parsed = (
+    typeof json === 'object' && json !== null && 'schemaVersion' in json && json.schemaVersion === 2
+      ? skillsDescriptorSchema
+      : entryDescriptorSchema
+  ).safeParse(json);
   if (!parsed.success) {
     throw new PluginHostError(
       'plugin-invalid-descriptor',
@@ -104,7 +124,7 @@ export function parseDescriptor(text: string): PluginDescriptor {
     );
   }
 
-  const { manifest, entry } = parsed.data;
+  const { manifest } = parsed.data;
   const undeclared = (['contributes', 'permissions'] as const).filter(
     (key) => manifest[key] === undefined,
   );
@@ -116,5 +136,32 @@ export function parseDescriptor(text: string): PluginDescriptor {
     );
   }
 
-  return { schemaVersion: 1, entry: path.posix.normalize(entry), manifest };
+  if (parsed.data.schemaVersion === 2) {
+    const names = manifest.contributes?.skills;
+    if (
+      manifest.host !== 'declarative' ||
+      manifest.capabilities.length !== 1 ||
+      manifest.capabilities[0] !== 'skill' ||
+      manifest.permissions?.length !== 0 ||
+      names === undefined ||
+      names.length < 1 ||
+      names.length > 16 ||
+      Object.keys(manifest.contributes ?? {}).some((key) => key !== 'skills')
+    ) {
+      throw new PluginHostError(
+        'plugin-invalid-descriptor',
+        'Skill packages require declarative host, only skill capability/contributions, 1–16 Skills and empty permissions',
+        { pluginId: manifest.id },
+      );
+    }
+    return { schemaVersion: 2, kind: 'skills', manifest };
+  }
+  if (manifest.host === 'declarative') {
+    throw new PluginHostError(
+      'plugin-invalid-descriptor',
+      'An executable descriptor cannot claim a declarative host',
+      { pluginId: manifest.id },
+    );
+  }
+  return { schemaVersion: 1, entry: path.posix.normalize(parsed.data.entry), manifest };
 }

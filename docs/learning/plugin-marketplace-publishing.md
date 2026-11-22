@@ -16,8 +16,10 @@ explicit source review and separate trust/activation flow.
 ## Prepare the plugin
 
 Build the plugin in the developer repository before requesting collection. The
-selected directory must contain a strict `weave-plugin.json` and an already
-bundled `.js` or `.mjs` entry. The descriptor must include the full manifest,
+selected directory must contain a strict `weave-plugin.json` and either an already
+bundled schema-1 `.js`/`.mjs` entry or a schema-2 declarative Skills payload with
+no entry. See [Skills text packages](2026-11-22-declarative-skill-packages.md)
+for its layout, data bounds and example. The descriptor must include the full manifest,
 including `contributes` and `permissions`, even when either is empty. Installation
 never installs npm dependencies, builds source code or runs lifecycle scripts.
 Follow [local plugin design](../superpowers/specs/2026-11-20-plugin-host-design.md) and the existing
@@ -63,8 +65,9 @@ pnpm marketplace:entry --input /absolute/path/to/request.json --output marketpla
 ```
 
 The helper downloads only the explicit pinned source through Weave's bounded
-GitHub acquirer. It reads the actual descriptor and checks that the entry file is
-present. It does not import the entry, run the plugin, install it or grant trust.
+GitHub acquirer. It validates the actual descriptor and compatible payload,
+including a real entry for ESM or all declared Skill text bundles. It does not
+import an entry, run the plugin, install it or grant trust.
 The manifest ID determines the submission filename; choose the output name to
 match that ID. Existing output files are never overwritten. A GitHub API limit or
 network failure produces an error and no submission. No Git credentials or API

@@ -11,7 +11,11 @@ import {
   ManagedRecoveryDialog,
   managedRecoveryText,
 } from './managed-plugin-dialog.js';
-import { githubPluginSourceInputSchema } from './managed-plugin-types.js';
+import {
+  githubPluginSourceInputSchema,
+  isDeclarativeSkillManifest,
+} from './managed-plugin-types.js';
+import { DeclarativeSkillPayload } from './plugin-payload-description.js';
 import type {
   ManagedCandidate,
   ManagedCatalogObservation,
@@ -306,6 +310,9 @@ function ManagedRow({
                   className="managed-candidate"
                 >
                   <span>v{candidate.manifest.version}</span>
+                  {isDeclarativeSkillManifest(candidate.manifest) ? (
+                    <DeclarativeSkillPayload />
+                  ) : null}
                   <span>
                     导入序号 {candidate.importSequence} ·{' '}
                     {candidate.provenance === 'github' ? 'GitHub 仓库' : '本地目录'} ·{' '}

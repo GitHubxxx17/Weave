@@ -11,6 +11,7 @@ import {
   managedGeneration,
   managedPreview,
 } from './support/managed-plugin-fixtures.js';
+import { declarativeManifest } from './support/declarative-plugin-fixtures.js';
 
 const source = {
   repository: 'https://github.com/developer/plugin',
@@ -195,6 +196,61 @@ describe('plugin marketplace page', () => {
             manifest: { ...preview.candidate.manifest, permissions: ['network:request'] },
           },
         }),
+    });
+    await selectRelease();
+    fireEvent.click(screen.getByRole('button', { name: '预览插件' }));
+    expect(await screen.findByRole('alert')).toHaveProperty(
+      'textContent',
+      expect.stringContaining('实际插件声明与市场版本不一致'),
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(network.writes()).toHaveLength(1);
+  });
+
+  it('shows a text package in marketplace details and preserves its exact review handoff', async () => {
+    const discovery = {
+      ...catalog,
+      entries: [
+        {
+          ...community,
+          releases: [{ manifest: declarativeManifest, source, compatibility: 'compatible' }],
+        },
+      ],
+    };
+    const network = setup({
+      discovery,
+      preview: () =>
+        Response.json({
+          ...preview,
+          candidate: { ...preview.candidate, manifest: declarativeManifest },
+        }),
+    });
+    await selectRelease();
+    expect(network.writes()).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: '预览插件' }));
+    const dialog = within(await screen.findByRole('dialog'));
+    expect(dialog.getByText('Skills 文本包')).toBeTruthy();
+    expect(dialog.getByText('无可执行入口')).toBeTruthy();
+    expect(dialog.getByText('review-change')).toBeTruthy();
+    expect(dialog.getByText(source.commit)).toBeTruthy();
+    expect(dialog.getByText('导入会保存候选版本。激活与授信需要单独确认。')).toBeTruthy();
+    expect(network.writes()).toHaveLength(1);
+  });
+
+  it('blocks a text-package release from being replaced by a skill-contributing executable preview', async () => {
+    const executable = { ...declarativeManifest, host: 'in-process' };
+    const network = setup({
+      discovery: {
+        ...catalog,
+        entries: [
+          {
+            ...community,
+            releases: [{ manifest: declarativeManifest, source, compatibility: 'compatible' }],
+          },
+        ],
+      },
+      preview: () =>
+        Response.json({ ...preview, candidate: { ...preview.candidate, manifest: executable } }),
     });
     await selectRelease();
     fireEvent.click(screen.getByRole('button', { name: '预览插件' }));
