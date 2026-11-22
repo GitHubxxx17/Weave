@@ -33,9 +33,14 @@ contextBridge.exposeInMainWorld('weaveDesktop', {
   serverUrl,
   /** How the window draws its title bar, so Studio can lay out drag regions. */
   windowChrome,
+  pluginDirectoryPicker: true as const,
   /** Opens the system folder dialog; resolves to null when the user cancels. */
-  pickDirectory: (): Promise<{ path: string; name: string } | null> =>
-    ipcRenderer.invoke(pickDirectoryChannel),
+  pickDirectory: (
+    purpose?: 'project' | 'plugin-import',
+  ): Promise<{ path: string; name: string } | null> =>
+    purpose === undefined
+      ? ipcRenderer.invoke(pickDirectoryChannel)
+      : ipcRenderer.invoke(pickDirectoryChannel, purpose),
   /** User-driven terminal controlled from the Studio renderer. */
   terminal: {
     create: (options: {

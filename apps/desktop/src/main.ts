@@ -10,6 +10,7 @@ import {
   type OpenDialogOptions,
 } from 'electron';
 import { startServer } from '@weave/server/main';
+import { z } from 'zod';
 import { createDesktopConfig, type DesktopConfig } from './desktop-config.js';
 import { createElectronProviderSecretCodec } from './provider-secret-codec.js';
 import { registerTerminalHost, type TerminalHost } from './terminal.js';
@@ -62,6 +63,7 @@ export function createDesktopFetch(): typeof globalThis.fetch {
 
 /** IPC channel used by the Preload `pickDirectory()` bridge. */
 export const pickDirectoryChannel = 'weave:pick-directory';
+const pickerArgsSchema = z.union([z.tuple([]), z.tuple([z.enum(['project', 'plugin-import'])])]);
 
 /** A folder the user explicitly chose in the system dialog. */
 export interface PickedDirectory {
@@ -78,6 +80,7 @@ export interface PickedDirectory {
 export async function handlePickDirectory(
   event: IpcMainInvokeEvent,
   studioOrigin: string,
+  ...pickerArgs: unknown[]
 ): Promise<PickedDirectory | null> {
   let senderOrigin: string | undefined;
   try {
@@ -88,10 +91,14 @@ export async function handlePickDirectory(
   if (senderOrigin !== studioOrigin) {
     return null;
   }
-  const options: OpenDialogOptions = {
-    title: '选择项目文件夹',
-    properties: ['openDirectory', 'createDirectory'],
-  };
+  const parsed = pickerArgsSchema.safeParse(pickerArgs);
+  if (!parsed.success) {
+    return null;
+  }
+  const isPluginImport = parsed.data[0] === 'plugin-import';
+  const options: OpenDialogOptions = isPluginImport
+    ? { title: '选择已打包的插件文件夹', properties: ['openDirectory'] }
+    : { title: '选择项目文件夹', properties: ['openDirectory', 'createDirectory'] };
   const window = BrowserWindow.fromWebContents(event.sender);
   const result =
     window === null
@@ -101,12 +108,15 @@ export async function handlePickDirectory(
   if (result.canceled || folderPath === undefined) {
     return null;
   }
-  return { path: folderPath, name: basename(folderPath) };
+  const folderName = basename(folderPath);
+  return { path: folderPath, name: isPluginImport ? folderName || folderPath : folderName };
 }
 
 function registerDesktopIpc(config: DesktopConfig): void {
   ipcMain.removeHandler(pickDirectoryChannel);
-  ipcMain.handle(pickDirectoryChannel, (event) => handlePickDirectory(event, config.studioOrigin));
+  ipcMain.handle(pickDirectoryChannel, (event, ...pickerArgs: unknown[]) =>
+    handlePickDirectory(event, config.studioOrigin, ...pickerArgs),
+  );
 }
 
 function getErrorMessage(error: unknown): string {
@@ -200,6 +210,10 @@ export async function startDesktopServer(
   const server = await startServer(0, {
     databaseFile: config.databaseFile,
     dataDirectory: config.userDataDirectory,
+    pluginsDirectory: config.pluginsDirectory,
+    ...(config.allowInitialManagedPluginBinding
+      ? { managedPluginStore: { initialBinding: 'allow-unbound' } }
+      : {}),
     studioOrigin: config.studioOrigin,
     providerSecretCodec,
     fetch: createDesktopFetch(),
