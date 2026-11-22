@@ -54,16 +54,16 @@ Root owns the real HTTP/SSE acceptance in `apps/server/test/official-skills.test
 - [x] Modify only source resource -> new digest/bundle; old exact ref stale after activation while held old turn retains old resource; disable/revoke newturn unavailable; rollback restores old identity. Restart after deleting source keeps immutable content/history. Reuse actual public management helpers; no DB/authority bypass.
 - [x] Update official guide, Foundation, marketplace design and old MCP/declarative CLI usage docs. Record source references, exact evidence and first release still pending until real content commit exists.
 - [x] Independent whole-branch review plus focused fixloops, then pnpmcheck and marketplacecheck. Browser verification uses the actual first release in Task5; earlier UI tests use explicitly marked fixtures.
-- [ ] Commit/push exact topic, PRattach, CI, SHA-guarded squashmerge and remote branch deletion. No user-facing stop between sequence tasks.
+- [x] Content/mechanism PR #98 passed CI and squash-merged as `5809b6a8fe2d987735a3dbd782df1bff1fd5af43`; remote feature branch deleted.
 
 ## Task 5 — separate real pinned release
 
 Fresh `feat/official-skills-marketplace-release` from actual latestmain after content merge. Root-owned, distinct PR.
 
-- [ ] Read actual full main squash SHA and descriptor from committed `plugins/official/weave-official-skills`. This SHA is the payload pin; not the future index PR SHA.
-- [ ] Register reviewed exact source+full parsed manifest in protected host family FIRST. Shared admission otherwise rejects marketplace:entry. This creates no acquisition bypass and no indexed card yet.
-- [ ] Run real `pnpm marketplace:entry` using canonical repo/full SHA/subdir and actual GitHub acquirer; inspect output and exact pinned content. On transient rate limit use authenticated existing source tools if available without leaking tokens or persistently changing auth; never fake success.
-- [ ] Add derived submission, deterministic index; `marketplace:generate`, `marketplace:check`, focused identity tests, fullcheck as affected. Actual browser default officialcard needs install, preview/import remains inert, independent activation, Skillpicker fourentries. Record real network evidence separate from offline fixtures.
+- [x] Read actual full main squash SHA and descriptor from committed `plugins/official/weave-official-skills`. This SHA is the payload pin; not the future index PR SHA.
+- [x] Register reviewed exact source+full parsed manifest in protected host family FIRST. Shared admission otherwise rejects marketplace:entry. This creates no acquisition bypass and no indexed card yet.
+- [x] Run real `pnpm marketplace:entry` using canonical repo/full SHA/subdir and actual GitHub acquirer; inspect output and exact pinned content. On transient rate limit use authenticated existing source tools if available without leaking tokens or persistently changing auth; never fake success.
+- [x] Add derived submission and deterministic index; marketplace generate/check, actual identity tests and fullcheck pass. Browser default official card/source handoff/failed-remote-preview isolation verified; same-commit local payload covers inert import, separate activation and four Skills. Remote browser install remains externally blocked, explicitly recorded below and in the release guide.
 - [ ] Review, commit/push/PR/CI/squash. Report content mergeSHA, payload pin, index mergeSHA, real installation/delivery evidence and limitations. Packaged index is not an external deployedmarketplace.
 
 ## Shared-interface and self-consistency scan
@@ -78,3 +78,10 @@ Fresh `feat/official-skills-marketplace-release` from actual latestmain after co
 | 3 / 5 | Official package downloadable | UI testfixtures only until realrelease; release branch browser verifies actual source. |
 | 4 / 5 | Local validation vs network release | Local acceptance cannot stand in for actual pinned acquisition. |
 | 0-5 each | Own tests match behavior and no privilege change | Meaningful behavior assertions; shared pipeline/trust remain existing boundaries. |
+
+
+Task 5 验收补充：实际 CLI 固定来源获取成功并生成默认目录；浏览器的远程预览因
+公网连接失败、超时及随后匿名配额阻断，未完成远程导入。默认卡片/来源交接/错误
+状态/窄屏通过，同提交本地包完成导入、独立激活、四项技能、显式选择与重启记录。
+详细证据与限制见独立[发行计划](2026-11-22-official-skills-release.md)及
+[使用指南](../../learning/2026-11-22-official-skills.md)。

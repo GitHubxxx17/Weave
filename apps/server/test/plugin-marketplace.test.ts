@@ -419,7 +419,12 @@ describe('static community marketplace', () => {
       const body = await response.json();
       expect(body.communityStatus).toBe('ready');
       expect(body.indexSource.id).toBe('weave');
-      expect(body.entries.filter((entry: { kind: string }) => entry.kind === 'github')).toEqual([]);
+      expect(
+        body.entries.filter((entry: { kind: string }) => entry.kind === 'github'),
+      ).toMatchObject([{ id: 'weave-official-skills', category: 'official', kind: 'github' }]);
+      expect(body.entries.some((entry: { id: string }) => entry.id === 'community-notes')).toBe(
+        false,
+      );
     } finally {
       await disabled.stop();
     }
