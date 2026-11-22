@@ -10,6 +10,7 @@ import {
 import { createPluginCatalogStore } from '../src/features/plugins/plugin-catalog-store.js';
 import { PluginsPanel } from '../src/features/plugins/plugins-panel.js';
 import type { PluginListItem } from '../src/features/plugins/plugin-types.js';
+import { disabledManagedCatalog } from './support/disabled-managed-catalog.js';
 import type {
   McpManagementSnapshot,
   McpServerConfig,
@@ -66,6 +67,13 @@ const json = (value: unknown, status = 200): Response =>
   new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
 const disabledMcp = (): Response =>
   json({ error: { code: 'mcp-management-disabled', message: 'disabled' } }, 404);
+function installFetchWithDisabledManaged(fetchMock: typeof fetch): void {
+  vi.stubGlobal(
+    'fetch',
+    (input: RequestInfo | URL, init?: RequestInit) =>
+      disabledManagedCatalog(input, init) ?? fetchMock(input, init),
+  );
+}
 function setup(records: readonly McpServerRecord[], plugins: readonly PluginListItem[] = []) {
   let snapshot: McpManagementSnapshot = { authoritySequence: 7, generation, servers: records };
   const requests: { path: string; method: string; body: unknown }[] = [];
@@ -79,7 +87,7 @@ function setup(records: readonly McpServerRecord[], plugins: readonly PluginList
     });
     return path === '/mcp' ? json(snapshot) : json({ plugins, generation: snapshot.generation });
   });
-  vi.stubGlobal('fetch', fetchMock);
+  installFetchWithDisabledManaged(fetchMock);
   const store = createPluginCatalogStore();
   const view = render(
     <PluginCatalogProvider store={store}>
@@ -160,8 +168,7 @@ describe('MCP management panel', () => {
   });
 
   it('shows orphan MCP registry entries as read-only diagnostics even on the legacy fallback', async () => {
-    vi.stubGlobal(
-      'fetch',
+    installFetchWithDisabledManaged(
       vi.fn(async (input: RequestInfo | URL) =>
         String(input) === '/mcp' ? disabledMcp() : json({ plugins: [registry('mcp-orphan')] }),
       ),
@@ -496,8 +503,7 @@ describe('MCP management panel', () => {
     };
     let unavailable = false;
     let finish!: (response: Response) => void;
-    vi.stubGlobal(
-      'fetch',
+    installFetchWithDisabledManaged(
       vi.fn(async (input: RequestInfo | URL) => {
         if (unavailable && String(input) === '/mcp')
           return new Promise<Response>((resolve) => {
@@ -583,8 +589,7 @@ describe('MCP management panel', () => {
       const pending = new Promise<Response>((resolve) => {
         finish = resolve;
       });
-      vi.stubGlobal(
-        'fetch',
+      installFetchWithDisabledManaged(
         vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
           init?.method === 'POST'
             ? pending

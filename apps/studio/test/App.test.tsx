@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentStreamError, streamAgentRun } from '../src/features/agent/agent-stream.js';
 import { App } from '../src/app/App.js';
 import type { AgentStreamHandlers } from '../src/features/agent/agent-types.js';
+import { disabledManagedCatalog } from './support/disabled-managed-catalog.js';
 
 vi.mock('../src/features/agent/agent-stream.js', async () => {
   const actual = await vi.importActual<typeof import('../src/features/agent/agent-stream.js')>(
@@ -192,6 +193,8 @@ function createWorkspaceFetchMock(
     const url = String(input);
     const method = init?.method ?? 'GET';
     const requestPath = new URL(url, 'http://weave.local').pathname;
+    const managed = disabledManagedCatalog(requestPath, init);
+    if (managed !== undefined) return managed;
     if (requestPath === '/mcp' && method === 'GET') {
       return new Response(
         JSON.stringify({ error: { code: 'mcp-management-disabled', message: 'MCP disabled' } }),
@@ -496,7 +499,10 @@ describe('Studio Agent Chat', () => {
       const pluginCalls = fetchMock.mock.calls.filter(([input]) =>
         String(input).includes('/plugins'),
       );
-      expect(pluginCalls.map(([, init]) => init?.method ?? 'GET')).toEqual(['GET']);
+      expect(pluginCalls.map(([input, init]) => [String(input), init?.method])).toEqual([
+        ['/plugins', 'GET'],
+        ['/plugins/managed', 'GET'],
+      ]);
       expect(screen.queryByRole('dialog')).toBeNull();
     },
   );
@@ -1426,7 +1432,7 @@ describe('Studio Agent Chat', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        if (String(input).includes('/plugins')) {
+        if (String(input) === '/plugins' || String(input) === '/plugins/reload') {
           return new Response(
             JSON.stringify(
               init?.method === 'POST'

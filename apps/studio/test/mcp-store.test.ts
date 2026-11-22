@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPluginCatalogStore } from '../src/features/plugins/plugin-catalog-store.js';
 import { createMcpReview } from '../src/features/mcp/mcp-review.js';
+import { disabledManagedCatalog } from './support/disabled-managed-catalog.js';
 const digest = 'a'.repeat(64);
 const config = {
   schemaVersion: 1 as const,
@@ -37,7 +38,9 @@ const mutation = (generation = gen(2), authoritySequence = 2) => ({
 const response = (value: unknown, status = 200) =>
   new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
 function mock(handler: (path: string, init: RequestInit) => Response | Promise<Response>) {
-  const fetchMock = vi.fn((input, init) => handler(String(input), init ?? {}));
+  const fetchMock = vi.fn(
+    (input, init) => disabledManagedCatalog(input, init) ?? handler(String(input), init ?? {}),
+  );
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
 }
@@ -55,7 +58,7 @@ describe('joint plugin and MCP catalog', () => {
     const fetchMock = mock((path) => (path === '/plugins' ? response(plugin()) : pending));
     const store = createPluginCatalogStore();
     const initial = store.ensureLoaded();
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
     expect(store.getSnapshot().catalog).toBeUndefined();
     finish(response(mcp()));
     await initial;
@@ -77,6 +80,7 @@ describe('joint plugin and MCP catalog', () => {
       code: 'catalog-generation-mismatch',
     });
     expect(reads).toBe(6);
+    expect(fetchMock).toHaveBeenCalledTimes(9);
     expect(fetchMock.mock.calls.every(([, init]) => init.method === 'GET')).toBe(true);
     expect(store.getSnapshot()).toMatchObject({
       consistency: { kind: 'unavailable', reason: 'generation-mismatch' },
@@ -122,7 +126,7 @@ describe('joint plugin and MCP catalog', () => {
       code: 'catalog-invalid-generation',
     });
     expect(store.getSnapshot().consistency).toEqual({ kind: 'unavailable', reason: 'protocol' });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
   it('uses MCP full reload without ESM and a single cross-source write gate', async () => {
     let finish!: (value: Response) => void;
@@ -293,7 +297,7 @@ describe('joint plugin and MCP catalog', () => {
         consistency: { kind: 'ready' },
       });
       expect(fetchMock.mock.calls.filter(([, init]) => init.method !== 'GET')).toHaveLength(1);
-      expect(fetchMock.mock.calls.filter(([, init]) => init.method === 'GET')).toHaveLength(4);
+      expect(fetchMock.mock.calls.filter(([, init]) => init.method === 'GET')).toHaveLength(6);
     },
   );
   it('retains plugin mutation generation as the seed for its paired MCP read', async () => {

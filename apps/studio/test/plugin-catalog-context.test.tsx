@@ -11,6 +11,7 @@ import {
   usePluginCatalogStore,
 } from '../src/features/plugins/plugin-catalog-context.js';
 import { createPluginCatalogStore } from '../src/features/plugins/plugin-catalog-store.js';
+import { disabledManagedCatalog } from './support/disabled-managed-catalog.js';
 
 const digest = 'a'.repeat(64);
 const row = {
@@ -46,10 +47,12 @@ function response(payload: unknown, status = 200) {
 function legacyFetch(
   pluginFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
 ) {
-  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
-    String(input) === '/mcp'
-      ? response({ error: { code: 'mcp-management-disabled', message: 'disabled' } }, 404)
-      : pluginFetch(input, init),
+  const fetchMock = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) =>
+      disabledManagedCatalog(input, init) ??
+      (String(input) === '/mcp'
+        ? response({ error: { code: 'mcp-management-disabled', message: 'disabled' } }, 404)
+        : pluginFetch(input, init)),
   );
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
@@ -91,7 +94,7 @@ describe('plugin catalog React context', () => {
         </PluginCatalogProvider>
       </StrictMode>,
     );
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
     expect(screen.getByLabelText('catalog').textContent).toBe('loading:shared');
     await act(async () => {
       resolve(response({ plugins: [row] }));
@@ -101,8 +104,9 @@ describe('plugin catalog React context', () => {
     expect(fetchMock.mock.calls.map(([path, init]) => [path, init])).toEqual([
       ['/plugins', { method: 'GET' }],
       ['/mcp', { method: 'GET' }],
+      ['/plugins/managed', { method: 'GET' }],
     ]);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it('counts only local pending-trust and changed rows and hides zero', async () => {
@@ -139,7 +143,7 @@ describe('plugin catalog React context', () => {
       await store.trust('echo', digest);
     });
     expect(screen.queryByLabelText(/个插件待审阅/)).toBeNull();
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(6);
   });
 
   it('keeps shared GET alive after the provider unmounts and reuses its cached result', async () => {
@@ -156,7 +160,7 @@ describe('plugin catalog React context', () => {
         <CatalogProbe />
       </PluginCatalogProvider>,
     );
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
     view.unmount();
     resolve(response({ plugins: [row] }));
     await store.ensureLoaded();
@@ -166,7 +170,7 @@ describe('plugin catalog React context', () => {
       </PluginCatalogProvider>,
     );
     expect(screen.getByLabelText('catalog').textContent).toBe('pending-trust:shared');
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(fetchMock.mock.calls[0][1].signal).toBeUndefined();
   });
 
@@ -192,7 +196,7 @@ describe('plugin catalog React context', () => {
     act(() => {
       operation = store.trust('echo', digest);
     });
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
     view.unmount();
     resolve(
       response({
@@ -210,7 +214,7 @@ describe('plugin catalog React context', () => {
     );
     expect(screen.getByLabelText('catalog').textContent).toBe('loaded:shared');
     expect(screen.queryByLabelText(/个插件待审阅/)).toBeNull();
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(6);
   });
 
   it('catches the published startup error without retrying provider replay', async () => {
@@ -230,7 +234,7 @@ describe('plugin catalog React context', () => {
       </StrictMode>,
     );
     await screen.findByText('plugin-host-closed:shared');
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(screen.queryByLabelText(/个插件待审阅/)).toBeNull();
   });
 });
