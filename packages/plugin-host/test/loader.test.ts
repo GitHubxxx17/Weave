@@ -57,7 +57,11 @@ async function commandsOf(plugin: KernelPlugin): Promise<PluginCommand[]> {
   await kernel.register(plugin);
   await kernel.seal();
   const commands: PluginCommand[] = [];
-  kernel.extensions.collect(commandsExtensionPoint, { addCommand: (c) => commands.push(c) });
+  kernel.extensions.collect(commandsExtensionPoint, {
+    addCommand: (c) => {
+      commands.push(c);
+    },
+  });
   await kernel.dispose();
   return commands;
 }

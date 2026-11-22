@@ -1,9 +1,11 @@
 import {
   approvalBrokerRef,
+  createPluginSessionStore,
   createRestrictedApprovalBroker,
   definePlugin,
   sessionStoreRef,
   type KernelPlugin,
+  type PluginEventRegistry,
 } from '@weave/plugin';
 import { type ApprovalBroker, type SessionEventStore } from '@weave/runtime';
 
@@ -11,6 +13,8 @@ export interface HostServicesOptions {
   /** The host's real broker. Plugins get a view of it that cannot decide requests. */
   readonly approvalBroker?: ApprovalBroker | undefined;
   readonly sessionStore?: SessionEventStore | undefined;
+  /** The same Generation's event registry, required whenever sessionStore is supplied. */
+  readonly pluginEvents?: PluginEventRegistry | undefined;
 }
 
 /**
@@ -25,9 +29,16 @@ export interface HostServicesOptions {
  * Plugins never get the broker itself. `weave.approval.broker` is a view with
  * `request`, `get`, `list` and `subscribe`, made here so a host cannot hand out
  * the full broker by mistake. The host's own approval API keeps the real one.
+ *
+ * Host resolution retains the raw Session store. Plugin consumers receive a
+ * writer bound to their kernel identity and the associated event registry;
+ * neither a direct use nor a service dependency can write another owner's facts.
  */
 export function hostServicesPlugin(options: HostServicesOptions): KernelPlugin {
-  const { approvalBroker, sessionStore } = options;
+  const { approvalBroker, sessionStore, pluginEvents } = options;
+  if (sessionStore !== undefined && pluginEvents === undefined) {
+    throw new TypeError('A Session store requires its associated plugin event registry');
+  }
   const services = [
     ...(approvalBroker === undefined ? [] : [approvalBrokerRef.id]),
     ...(sessionStore === undefined ? [] : [sessionStoreRef.id]),
@@ -49,8 +60,12 @@ export function hostServicesPlugin(options: HostServicesOptions): KernelPlugin {
         const view = createRestrictedApprovalBroker(approvalBroker);
         env.provide(approvalBrokerRef, { factory: () => view });
       }
-      if (sessionStore !== undefined) {
-        env.provide(sessionStoreRef, { factory: () => sessionStore });
+      if (sessionStore !== undefined && pluginEvents !== undefined) {
+        env.provide(sessionStoreRef, {
+          factory: () => sessionStore,
+          forConsumer: (store, { pluginId }) =>
+            createPluginSessionStore(store, pluginEvents, pluginId),
+        });
       }
     },
   });

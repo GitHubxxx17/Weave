@@ -194,7 +194,9 @@ describe('host services', () => {
   it('hands out the session store the host owns, not a copy', async () => {
     const sessionStore = {} as SessionEventStore;
     const kernel = createPluginKernel();
-    await kernel.register(hostServicesPlugin({ sessionStore }));
+    await kernel.register(
+      hostServicesPlugin({ sessionStore, pluginEvents: createPluginEventRegistry() }),
+    );
 
     const generation = await kernel.seal();
 

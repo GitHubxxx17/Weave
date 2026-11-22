@@ -389,7 +389,9 @@ const notes = noteAdded.project(await store.read(sessionId)); // 有 project 时
 - `schema` 的输出就是被存的内容：多余字段按 schema 的规则处理（zod 默认剔除）。`parse` 之后再走一遍 JSON 往返，因此内存 Store 与 SQLite Store 保存和读回的值一致；存不成 JSON 对象的 payload 报 `plugin-event-invalid`。
 - 投影是纯函数的折叠：`apply(state, { sequence, occurredAt, payload })`。它只看自己类型的事件，**不再符合当前 schema 的旧事件被跳过**，不会让会话投影失败；日志只增不改，所以插件的 schema 要自己兼容想继续看到的旧形状。
 
-**受限的 Session Store。** 插件通过 `weave.session.store` 拿到的不再是宿主的 Store，而是 `createPluginSessionStore(store, registry)`：
+**受限的 Session Store。** 当前按 [ADR 0009](../../adr/0009-plugin-consumer-ownership.md)
+提供 `createPluginSessionStore(store, registry, pluginId)`，owner 必填，由 builtin
+对直接使用和 factory deps 按实际调用插件构造：
 
 - `read` 原样透传（含内核事件，这与之前一致）。
 - `append` 对每个事件先 `parse`：不是已注册的插件事件类型就报 `plugin-event-unknown`，**所有内核事件类型一律拒绝**，所以插件无法伪造回合、消息或工具结果；payload 不合 schema 报 `plugin-event-invalid`。一批里任何一个事件被拒，整批不写。

@@ -309,7 +309,9 @@ describe('governed seams', () => {
 
     expect(() =>
       kernel.extensions.collect(toolsExtensionPoint, {
-        addTool: (definition) => added.push(definition.name),
+        addTool: (definition) => {
+          added.push(definition.name);
+        },
       }),
     ).toThrowError(expect.objectContaining({ code: 'plugin-contributes-exceeds-manifest' }));
     expect(added).toEqual(['listed']);
@@ -342,7 +344,9 @@ describe('governed seams', () => {
 
     expect(() =>
       kernel.extensions.collect(llmProvidersExtensionPoint, {
-        addProvider: (registration) => added.push(registration.id),
+        addProvider: (registration) => {
+          added.push(registration.id);
+        },
       }),
     ).toThrowError(expect.objectContaining({ code: 'plugin-contributes-exceeds-manifest' }));
     expect(added).toEqual(['listed']);
@@ -369,7 +373,9 @@ describe('governed seams', () => {
 
     expect(() =>
       kernel.extensions.collect(promptSectionsExtensionPoint, {
-        addSection: (section) => added.push(section.id),
+        addSection: (section) => {
+          added.push(section.id);
+        },
       }),
     ).toThrowError(expect.objectContaining({ code: 'plugin-contributes-exceeds-manifest' }));
     expect(added).toEqual(['listed']);
@@ -392,7 +398,9 @@ describe('governed seams', () => {
     const added: string[] = [];
 
     kernel.extensions.collect(toolsExtensionPoint, {
-      addTool: (definition) => added.push(definition.name),
+      addTool: (definition) => {
+        added.push(definition.name);
+      },
     });
 
     expect(added).toEqual(['one', 'two']);

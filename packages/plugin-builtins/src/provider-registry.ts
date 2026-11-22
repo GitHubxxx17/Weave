@@ -45,7 +45,7 @@ export function createProviderRegistryPlugin(
                 options.existing === 'skip' &&
                 registry.getDescriptor(registration.id) !== undefined
               ) {
-                return;
+                return false;
               }
               registry.register(registration);
             },

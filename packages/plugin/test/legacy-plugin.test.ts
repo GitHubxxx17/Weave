@@ -52,9 +52,15 @@ async function collectNames(
   await kernel.seal();
   const tools: string[] = [];
   const providers: string[] = [];
-  kernel.extensions.collect(toolsExtensionPoint, { addTool: (tool) => tools.push(tool.name) });
+  kernel.extensions.collect(toolsExtensionPoint, {
+    addTool: (tool) => {
+      tools.push(tool.name);
+    },
+  });
   kernel.extensions.collect(llmProvidersExtensionPoint, {
-    addProvider: (registration) => providers.push(registration.id),
+    addProvider: (registration) => {
+      providers.push(registration.id);
+    },
   });
   return { tools, providers };
 }

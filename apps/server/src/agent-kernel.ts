@@ -7,7 +7,6 @@ import {
   type AttributedSkillContribution,
   createPluginEventRegistry,
   createPluginKernel,
-  createPluginSessionStore,
   definePlugin,
   llmProviderRegistryRef,
   PluginError,
@@ -135,7 +134,8 @@ export async function assembleAgentKernel(
     createEventRegistryPlugin({ registry: pluginEvents }),
     hostServicesPlugin({
       approvalBroker,
-      sessionStore: createPluginSessionStore(sessionStore, pluginEvents),
+      sessionStore,
+      pluginEvents,
     }),
   ];
   const serverToolHost = definePlugin({
@@ -229,6 +229,8 @@ export async function assembleAgentKernel(
     }
     await kernel.register(serverToolHost);
     for (const plugin of assembly.kernelPlugins ?? []) {
+      const manifest = plugin.manifest;
+      const pluginId = manifest.id;
       let disposal: Promise<void> | undefined;
       const dispose = (): Promise<void> => {
         disposal ??= Promise.resolve().then(() => plugin.dispose?.());
@@ -239,17 +241,13 @@ export async function assembleAgentKernel(
       // Borrowed legacy contributions above deliberately have no such disposer.
       try {
         await kernel.register({
-          manifest: plugin.manifest,
+          manifest,
           setup: (env) => plugin.setup(env),
           dispose,
         });
       } catch (error: unknown) {
         await dispose().catch(() => undefined);
-        throw attributePluginError(
-          error,
-          plugin.manifest.id,
-          `Plugin "${plugin.manifest.id}" registration failed`,
-        );
+        throw attributePluginError(error, pluginId, `Plugin "${pluginId}" registration failed`);
       }
     }
 
@@ -277,7 +275,9 @@ export async function assembleAgentKernel(
     // sections directly and orders them; `createAgentInstructions` appends them.
     const collected: PromptSection[] = [];
     kernel.extensions.collect(promptSectionsExtensionPoint, {
-      addSection: (section) => collected.push(section),
+      addSection: (section) => {
+        collected.push(section);
+      },
     });
     const promptSections = Object.freeze(
       appliedPromptSections([...collected].sort((left, right) => left.order - right.order)),
@@ -296,7 +296,7 @@ export async function assembleAgentKernel(
             .map((info) => info.manifest.id);
           throw new PluginError(
             'plugin-registration-conflict',
-            `Command "${command.name}" is contributed by more than one plugin (${owners.join(', ')})`,
+            `Command "${command.name}" already belongs to ${owners.join(', ')}; additional contribution rejected`,
           );
         }
         commandsByName.set(command.name, command);
@@ -312,7 +312,9 @@ export async function assembleAgentKernel(
 
     const skills: AttributedSkillContribution[] = [];
     kernel.extensions.collect(skillsExtensionPoint, {
-      addSkill: (skill) => skills.push(attributedSkillContributionSchema.parse(skill)),
+      addSkill: (skill) => {
+        skills.push(attributedSkillContributionSchema.parse(skill));
+      },
     });
 
     // Every owner has collected by now, so what each plugin contributed is known.

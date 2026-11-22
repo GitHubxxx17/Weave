@@ -110,7 +110,9 @@ describe('weave.prompt.sections', () => {
     await kernel.seal();
     const sections: PromptSection[] = [];
     kernel.extensions.collect(promptSectionsExtensionPoint, {
-      addSection: (section) => sections.push(section),
+      addSection: (section) => {
+        sections.push(section);
+      },
     });
     return sections;
   }

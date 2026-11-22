@@ -40,7 +40,7 @@ export function createToolRegistryPlugin(options: ToolRegistryPluginOptions = {}
           context.collect(toolsExtensionPoint, {
             addTool: (tool) => {
               if (options.existing === 'skip' && registry.get(tool.name) !== undefined) {
-                return;
+                return false;
               }
               registry.register(tool);
             },

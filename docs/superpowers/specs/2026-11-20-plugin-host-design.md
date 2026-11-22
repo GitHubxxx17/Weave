@@ -541,7 +541,11 @@ trustSequence、当前代状态和 active 元数据，不序列化 runner、kern
 
 `createRestrictedApprovalBroker(broker)` 返回只含 `request`、`get`、`list`、`subscribe` 的冻结视图，类型是 `PluginApprovalBroker`，`approvalBrokerRef` 的类型随之改为它。`hostServicesPlugin` 在内部做这层包装：宿主传进去的仍是真正的 broker，插件拿到的永远是视图，调用方不会忘记。Tool Pipeline 只调用 `request`（取消和超时通过传入的 `signal` 和 `timeoutMs` 由 broker 自己处理），所以 `@weave/runtime` 的 `ToolPipelineOptions.approvalBroker` 放宽为 `Pick<ApprovalBroker, 'request'>`。这是只放宽类型的改动，行为不变，内置的使用方不受影响。HTTP 审批接口直接用 Runtime 里真正的 broker。这只是 API 形状，不是边界，进程内插件仍然可以直接 `import` 别的东西，但它防住了按内核 API 写的越权，也是将来进程外插件会用的形状。
 
-`sessionStoreRef` 已经是受限的：宿主传给 `hostServicesPlugin` 的是 `createPluginSessionStore(store, pluginEvents)`，只接受插件注册过的事件，核心事件写不进去。这一层由宿主装配（`apps/server/src/agent-kernel.ts`），因为它需要宿主的事件注册表；4.4 把装配搬进宿主时保持不变。
+此处的初始 Session Store 装配已由 [ADR 0009](../../adr/0009-plugin-consumer-ownership.md)
+替代：宿主传给 `hostServicesPlugin` 的是原始 `sessionStore` 和 `pluginEvents`，
+builtin 按实际调用插件提供 owner-bound writer，涵盖直接使用和 factory deps。
+`createPluginSessionStore(store, pluginEvents, pluginId)` 的 owner 现在必填；
+不能再使用所有插件共享的 writer。
 
 ## 10. Server
 

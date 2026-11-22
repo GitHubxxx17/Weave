@@ -104,7 +104,9 @@ it('uses bounded artifact verification and registers a real ESM plugin with the 
   await kernel.seal();
   const commands: PluginCommand[] = [];
   kernel.extensions.collect(commandsExtensionPoint, {
-    addCommand: (command) => commands.push(command),
+    addCommand: (command) => {
+      commands.push(command);
+    },
   });
   expect(commands).toEqual([{ name: 'hello', title: 'Hello', prompt: 'Hi' }]);
   expect(await phases()).toEqual(['evaluate', 'factory', 'setup']);
