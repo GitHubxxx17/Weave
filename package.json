@@ -28,6 +28,7 @@
     "test": "turbo run test",
     "build": "turbo run build",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "studio:benchmark": "pnpm --filter @weave/studio build && node apps/server/test/performance/run.mjs",
     "marketplace:generate": "pnpm --filter @weave/server... build && node apps/server/dist/marketplace-cli.js generate",
     "marketplace:check": "pnpm --filter @weave/server... build && node apps/server/dist/marketplace-cli.js check",
     "marketplace:entry": "pnpm --filter @weave/server... build && node apps/server/dist/marketplace-cli.js entry",
