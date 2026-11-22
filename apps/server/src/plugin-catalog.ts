@@ -37,7 +37,9 @@ export const pluginListItemSchema = z.object({
   error: pluginIssueSchema.optional(),
   local: localPluginMetadataSchema.optional(),
   host: z.enum(['in-process', 'mcp', 'subprocess', 'declarative']),
-  capabilities: z.array(z.enum(['tool', 'llm-provider', 'prompt', 'event', 'command', 'skill'])),
+  capabilities: z.array(
+    z.enum(['tool', 'llm-provider', 'prompt', 'event', 'command', 'skill', 'panel']),
+  ),
   engines: z.object({ weave: z.string() }).optional(),
   contributes: z
     .object({
@@ -47,6 +49,7 @@ export const pluginListItemSchema = z.object({
       events: nameListSchema.optional(),
       commands: nameListSchema.optional(),
       skills: nameListSchema.optional(),
+      panels: nameListSchema.optional(),
       hooks: nameListSchema.optional(),
       services: nameListSchema.optional(),
     })
@@ -59,6 +62,7 @@ export const pluginListItemSchema = z.object({
     events: nameListSchema,
     commands: nameListSchema,
     skills: nameListSchema.default([]),
+    panels: nameListSchema.default([]),
     hooks: nameListSchema,
     services: nameListSchema,
   }),
@@ -103,6 +107,7 @@ function declared(contributes: PluginContributes): NonNullable<PluginListItem['c
     ...(contributes.events === undefined ? {} : { events: [...contributes.events] }),
     ...(contributes.commands === undefined ? {} : { commands: [...contributes.commands] }),
     ...(contributes.skills === undefined ? {} : { skills: [...contributes.skills] }),
+    ...(contributes.panels === undefined ? {} : { panels: [...contributes.panels] }),
     ...(contributes.hooks === undefined ? {} : { hooks: [...contributes.hooks] }),
     ...(contributes.services === undefined ? {} : { services: [...contributes.services] }),
   };
@@ -130,6 +135,7 @@ export function describePlugin(info: PluginInfo, origin: PluginOrigin): PluginLi
       events: [...contributed.events],
       commands: [...contributed.commands],
       skills: [...contributed.skills],
+      panels: [...contributed.panels],
       hooks: [...contributed.hooks],
       services: [...contributed.services],
     },
@@ -188,6 +194,7 @@ export function projectPluginCatalog(
         events: [],
         commands: [],
         skills: [],
+        panels: [],
         hooks: [],
         services: [],
       },

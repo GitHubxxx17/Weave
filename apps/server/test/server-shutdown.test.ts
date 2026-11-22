@@ -347,3 +347,41 @@ describe('Server shutdown', () => {
     expect(shutdown.stop()).toBe(stopped);
   });
 });
+
+describe('panel read shutdown ownership', () => {
+  it('closes panel admission before consumers and drains store reads before runtime Session close', async () => {
+    const gate = Promise.withResolvers<void>();
+    const order: string[] = [];
+    const options = cleanupOptions(() => ({
+      panelService: {
+        closeSync() {
+          order.push('panel-close');
+        },
+        async drain() {
+          order.push('panel-drain');
+          await gate.promise;
+          order.push('panel-settled');
+        },
+      },
+      coordinator: {
+        async dispose() {
+          order.push('coordinator-dispose');
+        },
+      } as unknown as ServerShutdownResources,
+    }));
+    options.stopRuntime.mockImplementation(async () => {
+      order.push('session-close');
+    });
+    const shutdown = createServerShutdown(options);
+    const stop = shutdown.stop();
+    for (let i = 0; i < 15 && !order.includes('panel-drain'); i++) await Promise.resolve();
+    expect(order[0]).toBe('panel-close');
+    expect(order).toContain('coordinator-dispose');
+    expect(options.stopRuntime).not.toHaveBeenCalled();
+    gate.resolve();
+    await stop;
+    expect(order.indexOf('panel-settled')).toBeLessThan(order.indexOf('session-close'));
+    await shutdown.stop();
+    expect(options.stopRuntime).toHaveBeenCalledTimes(1);
+  });
+});

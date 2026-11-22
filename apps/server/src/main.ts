@@ -1,3 +1,5 @@
+import { createPanelService } from './plugin-panel-service.js';
+import type { PanelService } from './plugin-panel-types.js';
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { serve, type ServerType } from '@hono/node-server';
@@ -159,6 +161,7 @@ export async function startServer(
   let mcpManager: ServerMcpManager | undefined;
   let pluginHost: ServerLocalPluginHost | undefined;
   let coordinator: ExtensionCoordinator | undefined;
+  let panelService: PanelService | undefined;
   let installer: ManagedPluginInstaller | undefined;
   let pluginMarketplaceManager: PluginMarketplaceManager | undefined;
   let server: ServerType | undefined;
@@ -166,6 +169,7 @@ export async function startServer(
     resources: () => ({
       server,
       coordinator,
+      panelService,
       authority,
       owned,
       installer,
@@ -307,6 +311,11 @@ export async function startServer(
     pluginHost = extensions.pluginHost;
     mcpManager = extensions.mcpManager;
     await coordinator.reload();
+    panelService = createPanelService({
+      host: runtime.serverHost,
+      authority: coordinator,
+      sessionStore: runtime.get(runtime.serverHost.sessionStoreService),
+    });
     assertStartupOwnership();
 
     let resolveListening!: () => void;
@@ -319,6 +328,7 @@ export async function startServer(
       {
         fetch: createApp(runtime, {
           approvalBrokerService,
+          panelService,
           agentRunner: coordinator.runner,
           projectStore: projects,
           sessionService,

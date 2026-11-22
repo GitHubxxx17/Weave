@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "entry": "index.mjs",
+  "manifest": {
+    "id": "quality-report",
+    "name": "质量报告",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "capabilities": ["tool", "event", "command", "panel"],
+    "contributes": {
+      "tools": ["quality_report"],
+      "events": ["quality-report/report"],
+      "commands": ["quality-report"],
+      "panels": ["report"]
+    },
+    "permissions": ["service:weave.session.store"]
+  }
+}

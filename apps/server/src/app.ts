@@ -1,3 +1,8 @@
+import {
+  registerPanelGuards,
+  registerPanelRoutes,
+  type PanelAppOptions,
+} from './plugin-panel-api.js';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { z } from 'zod';
@@ -43,7 +48,8 @@ export interface AppOptions
     McpAppOptions,
     PluginMarketplaceAppOptions,
     ProviderAppOptions,
-    SkillAppOptions {
+    SkillAppOptions,
+    PanelAppOptions {
   /**
    * Exact browser origin allowed to call the local control plane.
    *
@@ -62,6 +68,8 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
     context.header('Cache-Control', 'no-store');
     await next();
   });
+
+  registerPanelGuards(app, options ?? {});
 
   if (studioOrigin !== undefined) {
     app.use(
@@ -93,6 +101,7 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
   registerSkillRoutes(app, options ?? {});
   registerProviderRoutes(app, options ?? {});
   registerPluginRoutes(app, options ?? {});
+  registerPanelRoutes(app, options ?? {});
   registerPluginMarketplaceRoutes(app, options ?? {});
   registerMcpRoutes(app, options ?? {});
 

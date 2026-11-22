@@ -165,6 +165,7 @@ describe('GET /plugins', () => {
           hooks: [],
           services: [],
           skills: [],
+          panels: [],
         },
       });
       expect(byId.get('note-kernel')).toEqual({
@@ -192,6 +193,7 @@ describe('GET /plugins', () => {
           hooks: ['weave.tools.result'],
           services: [],
           skills: [],
+          panels: [],
         },
       });
     } finally {

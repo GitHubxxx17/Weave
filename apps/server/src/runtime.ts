@@ -154,6 +154,7 @@ export async function createServerAgentRunner(
   if (pending !== undefined) return pending;
   const creation = (async (): Promise<AgentRunner> => {
     const candidate = await assembleServerGeneration(runtime, options);
+    host.initializeHostUiMembersSync(candidate.resources.plugins.map((plugin) => plugin.id));
     try {
       await replaceServerGeneration(runtime, candidate);
     } catch (error: unknown) {

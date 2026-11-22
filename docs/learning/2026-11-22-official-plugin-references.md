@@ -364,3 +364,12 @@ Weave 可采用“发现详情和已安装真实能力分开”“选择固定�
 GitHub tree 的完整 commit 已保存在 `/tmp/harness-official-tree.json`、`/tmp/kimi-official-tree.json`、`/tmp/kimi-code-official-tree.json`；本报告引用的已读文本保存在 `/tmp/weave-official-reference/`，文件名以项目名和双下划线编码路径。复用缓存避免重复访问；新增许可证、Office 工具、Desktop、Kimi 市场和共享 UI 通过 pinned GitHub contents API/raw 成功取得。
 
 部分 raw 请求超时后改用官方 contents API 得到相同固定提交的文本。曾猜测的 Kimi `packages/agent-core-v2/src/features/plugin/marketplace.ts` 返回 404，没有把该路径用作证据；市场结论来自实际存在的 CLI loader、app constants、shared UI 和 KAP schemas。未运行 Harness/Kimi 应用、未调用其账号服务、未证明二进制或第三方 SaaS 的跨产品兼容性。本报告的产品建议均为 Weave 的取舍，不能继承它们的 OS 沙箱、权限或安全保证。
+
+## Declarative panel scope
+
+The custom-panel slice adopts the already pinned references’ separation of
+discovery, installation, activation and current execution authority. It does not
+claim that Codex, Kiro, Harness or Kimi expose this exact panel SDK. Weave chooses
+closed host-rendered JSON and prepare-only native forms, with no arbitrary
+renderer code or inherited sandbox guarantee. Exact choices and upstream commit
+evidence are retained in the [panel design](../superpowers/specs/2026-11-22-plugin-panels-design.md).

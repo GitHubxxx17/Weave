@@ -36,6 +36,7 @@ const kindLabels: Record<ContributedNameKey | 'services' | 'hooks', string> = {
   events: 'event',
   commands: 'command',
   skills: 'skill',
+  panels: 'panel',
   hooks: 'hook',
   services: 'service',
 };
@@ -82,7 +83,10 @@ export function assertNameDeclared(
   key: ContributedNameKey | 'services' | 'hooks',
   name: string,
 ): void {
-  if (contributes === undefined || contributes[key]?.includes(name) === true) {
+  if (
+    (contributes === undefined && key !== 'panels') ||
+    contributes?.[key]?.includes(name) === true
+  ) {
     return;
   }
   throw new PluginError(

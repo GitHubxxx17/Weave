@@ -1,5 +1,15 @@
 # Weave Foundation Architecture
 
+Declarative custom panels add governed closed JSON in Plugin, immutable current-only
+binding and durable-prefix projection in Server, and independent HTTP validation
+and native rendering in Studio. Marketplace stays in left navigation; stable
+plugin tabs join the right panel system. Forms prepare editable command text for
+explicit Send. Reads execute no plugin callbacks and retain no Generation pins;
+Session lifecycle follows the observed prefix, with bounded retained projections
+rather than a new store-level memory or deletion guarantee. The contracts are
+recorded before code in [ADR 0010](../adr/0010-declarative-plugin-panels.md) and the
+[panel design](../superpowers/specs/2026-11-22-plugin-panels-design.md).
+
 The plugin ownership repair binds service consumer views to frozen kernel
 identities and records only accepted governed contributions. Standard Session
 writers reject foreign namespaces through both direct use and factory deps;

@@ -14,6 +14,7 @@ import { expandSlashCommand, insertCommand, matchCommands, slashQuery } from './
 export interface CommandPickerOptions {
   /** The composer's draft. */
   readonly draft: string;
+  readonly onSelect?: () => void;
   readonly setDraft: (draft: string) => void;
   readonly inputRef: RefObject<HTMLTextAreaElement | null>;
 }
@@ -88,6 +89,7 @@ export function useCommandPicker(options: CommandPickerOptions): CommandPicker {
   function select(command: SlashCommand): void {
     const { text, caret } = insertCommand(command);
     setDismissedDraft(text);
+    options.onSelect?.();
     setDraft(text);
     setCaretRequest({ caret });
   }

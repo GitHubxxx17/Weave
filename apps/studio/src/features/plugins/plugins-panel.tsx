@@ -42,6 +42,7 @@ const capabilityLabels: Readonly<Record<string, string>> = {
   event: '会话事件',
   command: '命令',
   skill: '技能',
+  panel: '右侧面板',
 };
 const hostLabels: Readonly<Record<string, string>> = { mcp: 'MCP', subprocess: '子进程' };
 const permissionLabels: Readonly<Record<string, string>> = {
@@ -57,6 +58,7 @@ const contributionLabels: readonly (readonly [keyof PluginDeclarations, string])
   ['events', '会话事件'],
   ['commands', '命令'],
   ['skills', '技能'],
+  ['panels', '右侧面板'],
   ['hooks', '钩子'],
   ['services', '服务'],
 ];

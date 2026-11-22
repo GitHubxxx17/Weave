@@ -2,6 +2,9 @@ import { type LlmProviderRegistry } from '@weave/llm';
 import {
   approvalBrokerRef,
   commandsExtensionPoint,
+  panelsExtensionPoint,
+  attributedPanelSchema,
+  type AttributedPanel,
   skillsExtensionPoint,
   attributedSkillContributionSchema,
   type AttributedSkillContribution,
@@ -51,6 +54,8 @@ import {
 import { describePlugin, type CommandListItem, type PluginListItem } from './plugin-catalog.js';
 import { appliedPromptSections, type AppliedPromptSection } from './prompt-audit.js';
 import { serverHostVersion } from './host-version.js';
+import { bindPanelCatalog } from './plugin-panel-catalog.js';
+import type { BoundPanelDefinition } from './plugin-panel-types.js';
 
 export interface AgentKernelAssembly {
   /** Product version used consistently for manifest engine compatibility. */
@@ -89,6 +94,7 @@ export interface AssembledAgentKernel {
   /** The slash commands plugins contributed, in registration order, as `GET /commands` lists them. */
   readonly commands: readonly CommandListItem[];
   readonly skills: readonly AttributedSkillContribution[];
+  readonly panels: readonly BoundPanelDefinition[];
 }
 
 /**
@@ -317,6 +323,19 @@ export async function assembleAgentKernel(
       },
     });
 
+    const panelContributions: AttributedPanel[] = [];
+    kernel.extensions.collect(panelsExtensionPoint, {
+      addPanel: (panel) => {
+        panelContributions.push(attributedPanelSchema.parse(panel));
+      },
+    });
+    const panels = bindPanelCatalog(
+      panelContributions,
+      generation.plugins(),
+      new Set(pluginEvents.list().map((event) => event.type)),
+      commands,
+    );
+
     // Every owner has collected by now, so what each plugin contributed is known.
     const plugins = generation
       .plugins()
@@ -338,6 +357,7 @@ export async function assembleAgentKernel(
       plugins,
       commands,
       skills: Object.freeze(skills),
+      panels,
     };
   } catch (error: unknown) {
     await kernel.dispose().catch(() => undefined);

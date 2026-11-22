@@ -177,6 +177,8 @@ export class ExtensionRegistry {
       );
     }
     const skillNames = new Set<string>();
+    const panelNames = new Set<string>();
+    const pendingPanels = new Set<string>();
     const pendingSkills = new Set<string>();
     for (const entry of list) {
       let active = true;
@@ -185,7 +187,16 @@ export class ExtensionRegistry {
         // change its capability or declaration policy.
         assertCapability(point, entry);
         const result: unknown = (entry.fn as Contributor<T>)(
-          this.#guarded(point, api, entry, skillNames, pendingSkills, () => active),
+          this.#guarded(
+            point,
+            api,
+            entry,
+            skillNames,
+            pendingSkills,
+            panelNames,
+            pendingPanels,
+            () => active,
+          ),
         );
         active = false;
         if (observeThenable(result))
@@ -227,6 +238,8 @@ export class ExtensionRegistry {
     entry: ContributionEntry,
     skillNames: Set<string>,
     pendingSkills: Set<string>,
+    panelNames: Set<string>,
+    pendingPanels: Set<string>,
     active: () => boolean,
   ): T {
     const governed = point.governed;
@@ -253,8 +266,27 @@ export class ExtensionRegistry {
               { pluginId: entry.pluginId },
             );
         }
+        if (governed.key === 'panels') {
+          if (panelNames.has(identity) || pendingPanels.has(identity))
+            throw new PluginError(
+              'plugin-invalid-definition',
+              `Plugin "${entry.pluginId}" contributed panel "${name}" twice`,
+              { pluginId: entry.pluginId },
+            );
+          const ownerPrefix = `${entry.pluginId}/`;
+          const count = [...panelNames, ...pendingPanels].filter((value) =>
+            value.startsWith(ownerPrefix),
+          ).length;
+          if (count >= 8)
+            throw new PluginError(
+              'plugin-invalid-definition',
+              'A plugin may contribute at most eight panels',
+              { pluginId: entry.pluginId },
+            );
+        }
         if (accept === undefined) return;
         if (governed.key === 'skills') pendingSkills.add(identity);
+        if (governed.key === 'panels') pendingPanels.add(identity);
         let result: unknown;
         try {
           result = accept();
@@ -266,9 +298,11 @@ export class ExtensionRegistry {
             );
         } finally {
           if (governed.key === 'skills') pendingSkills.delete(identity);
+          if (governed.key === 'panels') pendingPanels.delete(identity);
         }
         if (result === false) return false;
         if (governed.key === 'skills') skillNames.add(identity);
+        if (governed.key === 'panels') panelNames.add(identity);
         this.#record(entry.pluginId, governed.key, name);
       },
       entry.pluginId,
@@ -302,6 +336,7 @@ export class ExtensionRegistry {
       events: [...(byKind?.get('events') ?? [])],
       commands: [...(byKind?.get('commands') ?? [])],
       skills: [...(byKind?.get('skills') ?? [])],
+      panels: [...(byKind?.get('panels') ?? [])],
     };
   }
 

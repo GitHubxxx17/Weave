@@ -1,4 +1,10 @@
 import { z } from 'zod';
+import {
+  attributedPanelSchema,
+  cloneDeclarativePanel,
+  declarativePanelSchema,
+  panelLimits,
+} from './panels.js';
 import { pluginApiVersion } from './constants.js';
 import { defineExtensionPoint } from './extension-point.js';
 import { defineHook } from './hook.js';
@@ -8,6 +14,7 @@ import {
   commandsExtensionPoint,
   llmProvidersExtensionPoint,
   llmRequestHook,
+  panelsExtensionPoint,
   pluginEventsRef,
   promptSectionsExtensionPoint,
   sessionStoreRef,
@@ -71,6 +78,12 @@ export interface PluginSdk {
   readonly promptSectionsExtensionPoint: typeof promptSectionsExtensionPoint;
   readonly toolsExtensionPoint: typeof toolsExtensionPoint;
 
+  readonly panelsExtensionPoint: typeof panelsExtensionPoint;
+  readonly panelLimits: typeof panelLimits;
+  readonly declarativePanelSchema: typeof declarativePanelSchema;
+  readonly attributedPanelSchema: typeof attributedPanelSchema;
+  readonly cloneDeclarativePanel: typeof cloneDeclarativePanel;
+
   // Hooks.
   readonly llmRequestHook: typeof llmRequestHook;
   readonly toolAroundHook: typeof toolAroundHook;
@@ -84,6 +97,11 @@ export interface PluginSdk {
 export function createPluginSdk(): PluginSdk {
   return Object.freeze({
     apiVersion: pluginApiVersion,
+    panelsExtensionPoint,
+    panelLimits,
+    declarativePanelSchema,
+    attributedPanelSchema,
+    cloneDeclarativePanel,
     z,
     defineServiceRef,
     defineExtensionPoint,

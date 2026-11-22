@@ -5,7 +5,8 @@ import { isValidVersionRange } from './version-range.js';
 import { skillNamePattern } from './skills.js';
 
 /** Capabilities that a trusted plugin may register through Plugin Context. */
-export type PluginCapability = 'tool' | 'llm-provider' | 'prompt' | 'event' | 'command' | 'skill';
+export type PluginCapability =
+  'tool' | 'llm-provider' | 'prompt' | 'event' | 'command' | 'skill' | 'panel';
 
 /**
  * How a plugin is hosted. The kernel only records it; hosts and loaders decide
@@ -38,6 +39,8 @@ export interface PluginContributes {
   readonly commands?: readonly string[] | undefined;
   /** Instruction bundle names added through `weave.skills`. */
   readonly skills?: readonly string[] | undefined;
+  /** Local right-panel IDs added through `weave.studio.panels`. */
+  readonly panels?: readonly string[] | undefined;
   /** Ids of the hooks the plugin listens to through `env.onHook`. */
   readonly hooks?: readonly string[] | undefined;
   /** Ids of the services the plugin provides. */
@@ -46,7 +49,7 @@ export interface PluginContributes {
 
 /** The `contributes` keys whose names arrive through a governed extension point. */
 export type ContributedNameKey =
-  'tools' | 'providers' | 'promptSections' | 'events' | 'commands' | 'skills';
+  'tools' | 'providers' | 'promptSections' | 'events' | 'commands' | 'skills' | 'panels';
 
 /** Declarative identity and capability metadata for one Weave plugin. */
 export interface PluginManifest {
@@ -73,6 +76,7 @@ const pluginCapabilitySchema = z.enum([
   'event',
   'command',
   'skill',
+  'panel',
 ]);
 const pluginHostSchema = z.enum(['in-process', 'mcp', 'subprocess', 'declarative']);
 
@@ -128,6 +132,7 @@ const requiredCapabilities: ReadonlyArray<readonly [ContributedNameKey, PluginCa
   ['events', 'event'],
   ['commands', 'command'],
   ['skills', 'skill'],
+  ['panels', 'panel'],
 ];
 
 /** Validates the structural shape of a Plugin Manifest. */
@@ -170,6 +175,11 @@ export const pluginManifestSchema: z.ZodType<PluginManifest> = z
           .array(z.string().max(64).regex(skillNamePattern))
           .refine(hasUniqueEntries, { message: 'Contributed names must be unique' })
           .optional(),
+        panels: z
+          .array(z.string().min(1).max(64).regex(commandNamePattern))
+          .max(8)
+          .refine(hasUniqueEntries, { message: 'Contributed names must be unique' })
+          .optional(),
         hooks: nameListSchema.optional(),
         services: z
           .array(serviceIdSchema)
@@ -201,6 +211,12 @@ export const pluginManifestSchema: z.ZodType<PluginManifest> = z
         message:
           'Declarative hosts require only the skill capability, 1–16 declared Skills and empty permissions',
       });
+    }
+    if (
+      manifest.capabilities.includes('panel') &&
+      (manifest.id.length > 64 || manifest.name.length > 120 || manifest.version.length > 64)
+    ) {
+      context.addIssue({ code: 'custom', message: 'Panel owner metadata exceeds its limit' });
     }
     for (const [key, capability] of requiredCapabilities) {
       const names = manifest.contributes?.[key];

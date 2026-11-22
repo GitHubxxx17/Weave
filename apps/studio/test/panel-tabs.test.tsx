@@ -142,14 +142,14 @@ describe('PanelContainer multi-tab', () => {
     expect(screen.getAllByRole('tab', { name: '用量' })).toHaveLength(1);
   });
 
-  it('persists opened tabs to the v2 layout key', () => {
+  it('persists opened tabs only to the v3 layout key', () => {
     renderPanel();
     addPanel('终端');
 
-    const raw = localStorage.getItem('weave.studio.panelTabs.v2');
+    const raw = localStorage.getItem('weave.studio.panelTabs.v3');
     expect(raw).not.toBeNull();
-    const stored = JSON.parse(raw ?? '{}') as { tabs: { kind: string }[] };
-    expect(stored.tabs.some((tab) => tab.kind === 'terminal')).toBe(true);
+    const stored = JSON.parse(raw ?? '{}') as { tabs: { kind: string; builtinKind: string }[] };
+    expect(stored.tabs.some((tab) => tab.builtinKind === 'terminal')).toBe(true);
   });
 
   it('reorders tabs by dragging one before another and persists the order', () => {
@@ -172,10 +172,10 @@ describe('PanelContainer multi-tab', () => {
     expect(order[0]).toBe('上下文');
     expect(order[1]).toBe('概览');
 
-    const layout = JSON.parse(localStorage.getItem('weave.studio.panelTabs.v2') ?? '{}') as {
-      tabs: { kind: string }[];
+    const layout = JSON.parse(localStorage.getItem('weave.studio.panelTabs.v3') ?? '{}') as {
+      tabs: { kind: string; builtinKind: string }[];
     };
-    expect(layout.tabs[0]?.kind).toBe('context');
+    expect(layout.tabs[0]?.builtinKind).toBe('context');
   });
 });
 
@@ -207,11 +207,12 @@ describe('panel layout migration', () => {
     expect(screen.queryByRole('button', { name: '关闭预览' })).toBeNull();
     expect(screen.queryByRole('button', { name: '关闭终端 2' })).toBeNull();
     fireEvent.click(screen.getByRole('tab', { name: '预览' }));
-    expect(JSON.parse(localStorage.getItem('weave.studio.panelTabs.v2') ?? '{}')).toEqual({
+    expect(JSON.parse(localStorage.getItem('weave.studio.panelTabs.v3') ?? '{}')).toEqual({
+      schemaVersion: 3,
       tabs: [
-        { id: 'terminal:shell-a', kind: 'terminal' },
-        { id: 'preview:site', kind: 'preview' },
-        { id: 'terminal:shell-b', kind: 'terminal' },
+        { id: 'terminal:shell-a', kind: 'builtin', builtinKind: 'terminal' },
+        { id: 'preview:site', kind: 'builtin', builtinKind: 'preview' },
+        { id: 'terminal:shell-b', kind: 'builtin', builtinKind: 'terminal' },
       ],
       pinned: ['preview:site', 'terminal:shell-b'],
       active: 'preview:site',
@@ -268,4 +269,23 @@ describe('panel layout migration', () => {
     expect(screen.getByRole('separator', { name: '调整面板宽度' })).toBeTruthy();
     expect(document.querySelector('.preview-panel iframe')).toBe(frame);
   });
+});
+
+it('scrolls the active tab into view after adding a panel', () => {
+  const previous = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
+  const scroll = vi.fn();
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+    configurable: true,
+    value: scroll,
+  });
+  try {
+    renderPanel();
+    addPanel('预览');
+    const active = screen.getByRole('tab', { name: '预览' });
+    expect(scroll.mock.instances).toContain(active);
+    expect(scroll).toHaveBeenLastCalledWith({ block: 'nearest', inline: 'nearest' });
+  } finally {
+    if (previous === undefined) Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView');
+    else Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', previous);
+  }
 });

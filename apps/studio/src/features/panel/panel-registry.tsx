@@ -24,7 +24,7 @@ import { TerminalPanel } from './terminal-panel.js';
 import { FileTreePanel } from '../files-tree/file-tree-panel.js';
 
 /** Every side-panel kind. */
-export type PanelKind =
+export type BuiltinPanelKind =
   | 'overview'
   | 'files'
   | 'explorer'
@@ -34,6 +34,8 @@ export type PanelKind =
   | 'plan'
   | 'preview'
   | 'terminal';
+
+export type PanelKind = BuiltinPanelKind;
 
 export interface PanelDescriptor {
   readonly kind: PanelKind;
@@ -157,8 +159,8 @@ const descriptorByKind = new Map(
   panelDescriptors.map((descriptor) => [descriptor.kind, descriptor]),
 );
 
-export function panelDescriptor(kind: PanelKind): PanelDescriptor | undefined {
-  return descriptorByKind.get(kind);
+export function panelDescriptor(kind: PanelKind | 'plugin'): PanelDescriptor | undefined {
+  return descriptorByKind.get(kind as PanelKind);
 }
 
 export function isPanelKind(value: string): value is PanelKind {

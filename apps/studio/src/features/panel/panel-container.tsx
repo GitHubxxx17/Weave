@@ -1,14 +1,14 @@
-import { useState, type ReactElement, type RefObject } from 'react';
+import { useEffect, useRef, useState, type ReactElement, type RefObject } from 'react';
 import { Check, PanelRight, Pin, PinOff, Plus, X } from 'lucide-react';
 
 import type { PanelContext } from './panel-data.js';
 import { PanelResizer } from './panel-resizer.js';
-import {
-  panelDescriptor,
-  panelDescriptors,
-  type PanelDescriptor,
-  type PanelKind,
-} from './panel-registry.js';
+import { panelDescriptor, panelDescriptors, type PanelDescriptor } from './panel-registry.js';
+import { ChartNoAxesCombined, Info, ListChecks, Table } from 'lucide-react';
+import type { ComposerDraftController } from '../composer/use-composer-draft.js';
+import type { PluginPanelsState } from './use-plugin-panels.js';
+import type { PluginPanelDescriptor } from './plugin-panel-types.js';
+import { DeclarativePluginPanel } from './declarative-plugin-panel.js';
 import { usePanelTabs, type PanelTab } from './use-panel-tabs.js';
 
 type OpenMenu = { readonly type: 'add' } | { readonly type: 'tab'; readonly id: string } | null;
@@ -22,20 +22,35 @@ interface DragState {
 
 interface LabeledTab {
   readonly tab: PanelTab;
-  readonly descriptor: PanelDescriptor | undefined;
+  readonly descriptor: (Omit<PanelDescriptor, 'kind'> & { readonly kind: string }) | undefined;
   /** Display label; a kind with several open tabs is numbered, e.g. `终端 2`. */
   readonly label: string;
 }
 
 /** Pairs each tab with its descriptor and a display label, numbering duplicates. */
-function labelTabs(tabs: readonly PanelTab[]): LabeledTab[] {
-  const counts = new Map<PanelKind, number>();
+function labelTabs(
+  tabs: readonly PanelTab[],
+  plugins: readonly PluginPanelDescriptor[] = [],
+): LabeledTab[] {
+  const counts = new Map<string, number>();
   for (const tab of tabs) {
     counts.set(tab.kind, (counts.get(tab.kind) ?? 0) + 1);
   }
-  const seen = new Map<PanelKind, number>();
+  const seen = new Map<string, number>();
   return tabs.map((tab) => {
-    const descriptor = panelDescriptor(tab.kind);
+    const plugin = plugins.find((p) => p.panelId === tab.id);
+    const descriptor =
+      tab.kind === 'plugin'
+        ? {
+            kind: 'plugin',
+            label: plugin?.definition.title ?? tab.panelId ?? tab.id,
+            Icon: pluginIcons[plugin?.definition.icon ?? 'info'],
+            defaultPinned: false,
+            comingSoon: false,
+            keepAlive: false,
+            multi: false,
+          }
+        : panelDescriptor(tab.kind);
     const ordinal = (seen.get(tab.kind) ?? 0) + 1;
     seen.set(tab.kind, ordinal);
     const base = descriptor?.label ?? tab.kind;
@@ -44,7 +59,11 @@ function labelTabs(tabs: readonly PanelTab[]): LabeledTab[] {
   });
 }
 
+const pluginIcons = { table: Table, chart: ChartNoAxesCombined, checklist: ListChecks, info: Info };
+
 export interface PanelContainerProps {
+  readonly pluginPanels?: PluginPanelsState;
+  readonly composerDraft?: ComposerDraftController;
   readonly context: PanelContext;
   readonly collapsed: boolean;
   /** Hide the whole panel on other product pages without disposing its live tabs. */
@@ -66,6 +85,8 @@ export interface PanelContainerProps {
  */
 export function PanelContainer({
   context,
+  pluginPanels,
+  composerDraft,
   collapsed,
   routeHidden = false,
   width,
@@ -75,11 +96,29 @@ export function PanelContainer({
   onCollapse,
 }: PanelContainerProps): ReactElement {
   const tabs = usePanelTabs();
+  const tablistRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!collapsed && !routeHidden) {
+      const active = tablistRef.current?.querySelector<HTMLButtonElement>(
+        '[role="tab"][aria-selected="true"]',
+      );
+      active?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    }
+  }, [tabs.layout.active, collapsed, routeHidden]);
   const [menu, setMenu] = useState<OpenMenu>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const activeTab = tabs.layout.tabs.find((tab) => tab.id === tabs.layout.active);
   const activeDescriptor = activeTab === undefined ? undefined : panelDescriptor(activeTab.kind);
 
+  const available = pluginPanels?.catalog?.panels ?? [];
+  const activePlugin =
+    activeTab?.kind === 'plugin' ? available.find((p) => p.panelId === activeTab.id) : undefined;
+  const panelVisible = !collapsed && !routeHidden && activePlugin?.state === 'available';
+  if (
+    composerDraft !== undefined &&
+    (activePlugin === undefined || pluginPanels?.catalog === undefined || !panelVisible)
+  )
+    composerDraft.invalidatePanel();
   return (
     <aside
       className="activity-panel"
@@ -105,8 +144,8 @@ export function PanelContainer({
         />
       ) : null}
       <div className="panel-tabbar">
-        <div className="panel-tablist" role="tablist" aria-label="面板标签">
-          {labelTabs(tabs.layout.tabs).map(({ tab, descriptor, label }) => {
+        <div ref={tablistRef} className="panel-tablist" role="tablist" aria-label="面板标签">
+          {labelTabs(tabs.layout.tabs, available).map(({ tab, descriptor, label }) => {
             if (descriptor === undefined) {
               return null;
             }
@@ -261,6 +300,33 @@ export function PanelContainer({
                     </button>
                   );
                 })}
+                {available.length > 0 ? (
+                  <div role="group" aria-label="插件面板">
+                    {available.map((panel) => {
+                      const Icon = pluginIcons[panel.definition.icon];
+                      return (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          key={panel.panelId}
+                          disabled={panel.state !== 'available'}
+                          onClick={() => {
+                            tabs.openPlugin(panel.panelId);
+                            setMenu(null);
+                          }}
+                        >
+                          <span className="menu-icon">
+                            <Icon aria-hidden="true" />
+                          </span>
+                          <span className="panel-add-label">{panel.definition.title}</span>
+                          <small>
+                            {panel.pluginName} · {panel.pluginId}
+                          </small>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -288,6 +354,28 @@ export function PanelContainer({
             </div>
           );
         })}
+        {activeTab?.kind === 'plugin' ? (
+          activePlugin !== undefined &&
+          pluginPanels?.catalog !== undefined &&
+          activePlugin.state === 'available' &&
+          composerDraft !== undefined ? (
+            <DeclarativePluginPanel
+              key={activeTab.id}
+              descriptor={activePlugin}
+              authority={pluginPanels.catalog}
+              owner={composerDraft.owner}
+              visible={panelVisible}
+              composer={composerDraft}
+              onUnavailable={pluginPanels.refresh}
+            />
+          ) : (
+            <p role="status">
+              {pluginPanels === undefined || pluginPanels.status === 'loading'
+                ? '正在解析插件面板'
+                : '插件面板不可用'}
+            </p>
+          )
+        ) : null}
         {activeDescriptor?.keepAlive === false
           ? (activeDescriptor.render?.(context, activeTab?.id ?? activeDescriptor.kind) ?? null)
           : null}

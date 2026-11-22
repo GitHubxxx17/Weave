@@ -45,6 +45,7 @@ export interface PluginContributed {
   /** Slash command names. */
   readonly commands: readonly string[];
   readonly skills: readonly string[];
+  readonly panels: readonly string[];
   /** Ids of the hooks the plugin subscribed to. */
   readonly hooks: readonly string[];
   readonly services: readonly string[];
@@ -210,6 +211,7 @@ export function createPluginKernel(options: PluginKernelOptions = {}): PluginKer
             events: Object.freeze(collected.events),
             commands: Object.freeze(collected.commands),
             skills: Object.freeze(collected.skills),
+            panels: Object.freeze(collected.panels),
             hooks: Object.freeze([...entry.usage.hooks]),
             services: Object.freeze([...entry.usage.provided]),
           }),

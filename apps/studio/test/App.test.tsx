@@ -545,8 +545,8 @@ describe('Studio Agent Chat', () => {
           fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/plugins')),
         ).toHaveLength(1),
       );
-      const pluginCalls = fetchMock.mock.calls.filter(([input]) =>
-        String(input).includes('/plugins'),
+      const pluginCalls = fetchMock.mock.calls.filter(
+        ([input]) => String(input).includes('/plugins') && String(input) !== '/plugins/panels',
       );
       expect(pluginCalls.map(([input, init]) => [String(input), init?.method])).toEqual([
         ['/plugins', 'GET'],
@@ -3510,4 +3510,359 @@ it('disables exact retry for history whose sampling still follows mutable Provid
   const retry = screen.getByRole('button', { name: '重试' }) as HTMLButtonElement;
   expect(retry.disabled).toBe(true);
   expect(retry.title).toContain('未记录');
+});
+
+describe('declarative panel App integration', () => {
+  const authority = { serverEpoch: 'a'.repeat(32), generation: 1, authorityEpoch: 1 };
+  const panelRef = 'b'.repeat(32);
+  const panelId = 'plugin:reporter/report';
+  const definition = {
+    schemaVersion: 1,
+    id: 'report',
+    title: 'Quality report',
+    icon: 'info',
+    placement: 'right',
+    sources: [],
+    blocks: [
+      {
+        id: 'form',
+        type: 'form',
+        fields: [{ id: 'target', type: 'text', label: 'Target', required: true, default: 'src' }],
+        submit: { type: 'prepare-command', command: 'report', label: 'Prepare report' },
+      },
+    ],
+  };
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+  function panelRoutes(
+    prepare: (sessionId: string) => Promise<Response>,
+    commands: readonly Record<string, unknown>[] = [],
+  ): void {
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input, init) => {
+      const path = String(input);
+      if (path === '/plugins/panels')
+        return Response.json({
+          ...authority,
+          schemaVersion: 1,
+          acceptingRuns: true,
+          panels: [
+            {
+              panelId,
+              panelRef,
+              pluginId: 'reporter',
+              pluginName: 'Reporter',
+              pluginVersion: '1.0.0',
+              state: 'available',
+              definition,
+            },
+          ],
+        });
+      const match = path.match(/^\/sessions\/([^/]+)\/plugin-panels\/[^/]+(\/prepare-command)?$/);
+      if (match)
+        return match[2]
+          ? prepare(match[1]!)
+          : Response.json({
+              ...authority,
+              schemaVersion: 1,
+              panelRef,
+              panelId,
+              sessionId: match[1],
+              lastSequence: 1,
+              state: 'ready',
+              sources: [],
+              blocks: [],
+            });
+      if (path === '/commands') return Response.json({ commands });
+      if (/\/sessions\/[^/]+\/skills$/.test(path)) return Response.json(skillCatalog());
+      return base(input, init);
+    });
+  }
+  function prepared(sessionId: string, text: string): Response {
+    return Response.json({
+      ...authority,
+      schemaVersion: 1,
+      panelId,
+      panelRef,
+      sessionId,
+      lastSequence: 1,
+      formId: 'form',
+      command: 'report',
+      text,
+      requiresUserSend: true,
+    });
+  }
+  async function openPanel(): Promise<void> {
+    fireEvent.click(screen.getByRole('button', { name: '添加面板' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Quality report/ }));
+    await screen.findByRole('button', { name: 'Prepare report' });
+  }
+  it('prepares into current edited draft with its image and Skill and sends literal text explicitly', async () => {
+    const pending = deferred<Response>();
+    panelRoutes(() => pending.promise);
+    streamAgentRunMock.mockImplementation(async (_request, handlers) => {
+      handlers.onAccepted?.();
+      handlers.onEvent({ type: 'completed', turnId: 'prepared-turn' });
+    });
+    await renderApp();
+    await openPanel();
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: 'first' } });
+    fireEvent.change(screen.getByLabelText('选择图片文件'), {
+      target: { files: [new File(['hello'], 'panel.png', { type: 'image/png' })] },
+    });
+    await screen.findByAltText('panel.png');
+    fireEvent.click(screen.getByRole('button', { name: '选择技能' }));
+    const picker = await screen.findByRole('dialog', { name: '技能' });
+    fireEvent.click(await within(picker).findByRole('checkbox', { name: /weave-planning/ }));
+    fireEvent.click(within(picker).getByRole('button', { name: '关闭技能' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare report' }));
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: 'first edited' } });
+    await act(async () => pending.resolve(prepared(sessionIds.local, 'prepared')));
+    expect((screen.getByLabelText('发送消息') as HTMLTextAreaElement).value).toBe(
+      'first edited\n\nprepared',
+    );
+    expect(screen.getByAltText('panel.png')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '移除技能 weave-planning' })).toBeTruthy();
+    expect(streamAgentRunMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(streamAgentRunMock).toHaveBeenCalled());
+    expect(streamAgentRunMock.mock.calls[0]?.[0]).toMatchObject({
+      skills: [planningRef],
+      userMessage: {
+        content: [
+          { type: 'text', text: 'first edited\n\nprepared' },
+          { type: 'image', data: 'aGVsbG8=' },
+        ],
+      },
+    });
+  });
+  it.each(['session', 'aba', 'route', 'collapse', 'tab'])(
+    'rejects ignored-abort prepare after %s transition',
+    async (transition) => {
+      const pending = deferred<Response>();
+      panelRoutes(() => pending.promise);
+      await renderApp();
+      await openPanel();
+      fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: 'keep' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Prepare report' }));
+      if (transition === 'session' || transition === 'aba') {
+        fireEvent.click(screen.getByRole('button', { name: /Session event store/ }));
+        if (transition === 'aba')
+          fireEvent.click(screen.getByRole('button', { name: /本地 Agent 演示/ }));
+      }
+      if (transition === 'route') {
+        fireEvent.click(screen.getByRole('button', { name: '插件市场' }));
+        fireEvent.click(screen.getByRole('button', { name: '工作台' }));
+      }
+      if (transition === 'collapse') {
+        fireEvent.click(screen.getByRole('button', { name: '收起上下文' }));
+        fireEvent.click(screen.getByRole('button', { name: '显示上下文' }));
+      }
+      if (transition === 'tab') {
+        fireEvent.click(screen.getByRole('tab', { name: '概览' }));
+        fireEvent.click(screen.getByRole('tab', { name: 'Quality report' }));
+      }
+      await act(async () => pending.resolve(prepared(sessionIds.local, 'stale')));
+      expect((screen.getByLabelText('发送消息') as HTMLTextAreaElement).value).toBe(
+        transition === 'session' ? '' : 'keep',
+      );
+      expect(streamAgentRunMock).not.toHaveBeenCalled();
+    },
+  );
+  it('does not re-expand prepared slash text after ordinary editing', async () => {
+    panelRoutes(
+      async () => prepared(sessionIds.local, '/old-command frozen'),
+      [
+        {
+          name: 'old-command',
+          title: 'Replacement',
+          prompt: 'replacement $ARGUMENTS',
+          pluginId: 'replacement',
+        },
+      ],
+    );
+    streamAgentRunMock.mockImplementation(async (_r, h) =>
+      h.onEvent({ type: 'completed', turnId: 'literal' }),
+    );
+    await renderApp();
+    await openPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare report' }));
+    await waitFor(() =>
+      expect((screen.getByLabelText('发送消息') as HTMLTextAreaElement).value).toBe(
+        '/old-command frozen',
+      ),
+    );
+    fireEvent.change(screen.getByLabelText('发送消息'), {
+      target: { value: '/old-command frozen edited' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(streamAgentRunMock).toHaveBeenCalled());
+    expect(streamAgentRunMock.mock.calls[0]?.[0].userMessage.content[0]).toEqual({
+      type: 'text',
+      text: '/old-command frozen edited',
+    });
+  });
+  it('discards delayed image decode after Session ownership changes', async () => {
+    let complete: (() => void) | undefined;
+    vi.stubGlobal(
+      'FileReader',
+      class {
+        result = 'data:image/png;base64,aGVsbG8=';
+        onload: (() => void) | null = null;
+        readAsDataURL() {
+          complete = () => this.onload?.();
+        }
+      },
+    );
+    await renderApp();
+    fireEvent.change(screen.getByLabelText('选择图片文件'), {
+      target: { files: [new File(['hello'], 'late.png', { type: 'image/png' })] },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Session event store/ }));
+    await act(async () => complete?.());
+    expect(screen.queryByAltText('late.png')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /本地 Agent 演示/ }));
+    expect(screen.queryByAltText('late.png')).toBeNull();
+  });
+  it.each(['mouse', 'keyboard'])(
+    'resets prepared literal mode on explicit %s command selection',
+    async (method) => {
+      panelRoutes(
+        async () => prepared(sessionIds.local, '/old-command frozen'),
+        [
+          {
+            name: 'old-command',
+            title: 'Replacement',
+            prompt: 'replacement $ARGUMENTS',
+            pluginId: 'replacement',
+          },
+        ],
+      );
+      streamAgentRunMock.mockImplementation(async (_r, h) =>
+        h.onEvent({ type: 'completed', turnId: 'selected' }),
+      );
+      await renderApp();
+      await openPanel();
+      fireEvent.click(screen.getByRole('button', { name: 'Prepare report' }));
+      await screen.findByText('已准备文本，请检查并点击发送', {
+        selector: '.composer-prepared-status',
+      });
+      const input = screen.getByLabelText('发送消息');
+      fireEvent.change(input, { target: { value: '/old-command' } });
+      const option = await screen.findByRole('option', { name: /Replacement/ });
+      if (method === 'mouse') fireEvent.mouseDown(option);
+      else fireEvent.keyDown(input, { key: 'Enter' });
+      expect(
+        screen.queryByText('已准备文本，请检查并点击发送', {
+          selector: '.composer-prepared-status',
+        }),
+      ).toBeNull();
+      fireEvent.change(input, { target: { value: '/old-command manual' } });
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await waitFor(() => expect(streamAgentRunMock).toHaveBeenCalled());
+      expect(streamAgentRunMock.mock.calls[0]?.[0].userMessage.content[0]).toEqual({
+        type: 'text',
+        text: 'replacement manual',
+      });
+    },
+  );
+});
+
+describe('provisional composer App sends', () => {
+  function deferred<T>() {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+  it.each(['unchanged', 'edited', 'switched'])(
+    'handles %s provisional ownership while Session creation waits',
+    async (mode) => {
+      fetchMock = createWorkspaceFetchMock(undefined, { emptyProject: true });
+      const base = fetchMock.getMockImplementation()!;
+      const pending = deferred<Response>();
+      let creationStarted = false;
+      fetchMock.mockImplementation(async (input, init) => {
+        if (String(input) === '/projects/project-empty/sessions' && init?.method === 'POST') {
+          creationStarted = true;
+          return pending.promise;
+        }
+        return base(input, init);
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      streamAgentRunMock.mockImplementation(async (_r, h) => {
+        h.onAccepted?.();
+        h.onEvent({ type: 'completed', turnId: 'provisional' });
+      });
+      await renderApp();
+      fireEvent.click(screen.getByRole('button', { name: '项目' }));
+      fireEvent.click(screen.getByRole('button', { name: '打开项目 Orbit' }));
+      fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: 'captured' } });
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await waitFor(() => expect(creationStarted).toBe(true));
+      if (mode === 'edited')
+        fireEvent.change(screen.getByLabelText('发送消息'), {
+          target: { value: 'new provisional draft' },
+        });
+      if (mode === 'switched') {
+        fireEvent.click(screen.getByRole('button', { name: /本地 Agent 演示/ }));
+        fireEvent.change(screen.getByLabelText('发送消息'), {
+          target: { value: 'other session draft' },
+        });
+      }
+      await act(async () =>
+        pending.resolve(Response.json(sessionDetail('session-created-delayed', 'Delayed'))),
+      );
+      await waitFor(() => expect(streamAgentRunMock).toHaveBeenCalled());
+      expect(streamAgentRunMock.mock.calls[0]?.[0]).toMatchObject({
+        sessionId: 'session-created-delayed',
+        userMessage: { content: [{ type: 'text', text: 'captured' }] },
+      });
+      expect((screen.getByLabelText('发送消息') as HTMLTextAreaElement).value).toBe(
+        mode === 'unchanged'
+          ? ''
+          : mode === 'edited'
+            ? 'new provisional draft'
+            : 'other session draft',
+      );
+      if (mode === 'unchanged')
+        expect(
+          screen.getByRole('button', { name: /Delayed/ }).closest('.session-tree-item')
+            ?.className ?? '',
+        ).toContain('active');
+      if (mode === 'edited')
+        expect(
+          screen.queryByRole('button', { name: /Delayed/ })?.closest('.session-tree-item')
+            ?.className ?? '',
+        ).not.toContain('active');
+    },
+  );
+  it('preserves text and image edits received before stream acceptance', async () => {
+    let accept: (() => void) | undefined;
+    const stream = deferred<void>();
+    streamAgentRunMock.mockImplementation(async (_r, h) => {
+      accept = () => h.onAccepted?.();
+      await stream.promise;
+      h.onEvent({ type: 'completed', turnId: 'delayed-accept' });
+    });
+    await renderApp();
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: 'captured' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(accept).toBeDefined());
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: 'newer' } });
+    fireEvent.change(screen.getByLabelText('选择图片文件'), {
+      target: { files: [new File(['hello'], 'newer.png', { type: 'image/png' })] },
+    });
+    await screen.findByAltText('newer.png');
+    await act(async () => accept?.());
+    expect((screen.getByLabelText('发送消息') as HTMLTextAreaElement).value).toBe('newer');
+    expect(screen.getByAltText('newer.png')).toBeTruthy();
+    await act(async () => stream.resolve());
+  });
 });

@@ -1,3 +1,4 @@
+import type { PanelService } from './plugin-panel-types.js';
 import type { ServerType } from '@hono/node-server';
 import type { ExtensionCoordinator } from './extension-coordinator.js';
 import type { ManagedPluginInstaller } from './managed-plugin-installer.js';
@@ -6,6 +7,7 @@ import type { PluginAuthorityDatabase } from './plugin-authority-types.js';
 import type { PluginMarketplaceManager } from './plugin-marketplace-manager.js';
 
 export interface ServerShutdownResources {
+  readonly panelService?: Pick<PanelService, 'closeSync' | 'drain'> | undefined;
   readonly server?: ServerType | undefined;
   readonly coordinator?: ExtensionCoordinator | undefined;
   readonly installer?:
@@ -106,8 +108,16 @@ export function createServerShutdown(options: ServerShutdownOptions): ServerShut
 
   async function run(retryRelease: boolean): Promise<readonly unknown[]> {
     resources ??= options.resources();
-    const { server, coordinator, installer, owned, authority, pluginMarketplaceManager } =
-      resources;
+    const {
+      server,
+      coordinator,
+      installer,
+      owned,
+      authority,
+      pluginMarketplaceManager,
+      panelService,
+    } = resources;
+    panelService?.closeSync();
     installer?.closeSync();
     pluginMarketplaceManager?.closeSync();
     // Start HTTP close before cancellation. Its completion can depend on Agent SSE.
@@ -151,6 +161,7 @@ export function createServerShutdown(options: ServerShutdownOptions): ServerShut
       }
       const httpOutcome = await httpClose;
       if (httpOutcome !== undefined && !httpOutcome.ok) cleanupCauses.push(httpOutcome.cause);
+      if (panelService !== undefined) await record(() => panelService.drain());
       await record(options.stopRuntime);
       await record(options.closeProjectStore);
       await record(options.closeProviderSettingsStore);

@@ -418,3 +418,26 @@ describe('diffManifests', () => {
     });
   });
 });
+
+describe('panel declaration trust review', () => {
+  it('reports panel additions and removals as declaration changes', () => {
+    const before = manifest({ capabilities: ['panel'], contributes: { panels: ['old'] } });
+    const after = manifest({ capabilities: ['panel'], contributes: { panels: ['report'] } });
+    expect(diffManifests(before, after)).toMatchObject({
+      changed: true,
+      contributes: { panels: { added: ['report'], removed: ['old'] } },
+    });
+    expect(diffManifests(after, manifest())).toMatchObject({
+      changed: true,
+      contributes: { panels: { added: [], removed: ['report'] } },
+    });
+    expect(
+      pluginTrustEventSchema.safeParse({
+        kind: 'trusted',
+        pluginId: 'notes',
+        digest: digestA,
+        manifest: after,
+      }).success,
+    ).toBe(true);
+  });
+});

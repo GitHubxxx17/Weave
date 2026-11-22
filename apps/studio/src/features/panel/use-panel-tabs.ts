@@ -1,27 +1,9 @@
 import { useCallback, useMemo, useState } from 'react';
-import { z } from 'zod';
+import { normalizePanelLayout, type SavedPanelLayout } from './panel-layout.js';
 
-import {
-  defaultPanelKinds,
-  isPanelKind,
-  panelDescriptor,
-  type PanelKind,
-} from './panel-registry.js';
+import { panelDescriptor, type PanelKind } from './panel-registry.js';
 
-const storageKey = 'weave.studio.panelTabs.v2';
-
-// Validate stored structure before filtering obsolete and future kinds individually.
-const storedTabSchema = z.object({
-  id: z.string().min(1).max(256),
-  kind: z.string().min(1).max(128),
-});
-
-const storedLayoutSchema = z.object({
-  tabs: z.array(storedTabSchema).max(128),
-  pinned: z.array(z.string().max(256)).max(128),
-  active: z.string().max(256),
-});
-
+const storageKey = 'weave.studio.panelTabs.v3';
 /**
  * One open tab. A single-instance kind uses `id === kind`; a multi-instance
  * kind (terminal, preview) gets a unique id so two tabs of the same kind each
@@ -29,7 +11,8 @@ const storedLayoutSchema = z.object({
  */
 export interface PanelTab {
   readonly id: string;
-  readonly kind: PanelKind;
+  readonly kind: PanelKind | 'plugin';
+  readonly panelId?: string;
 }
 
 export interface PanelLayout {
@@ -49,73 +32,47 @@ function newTabId(kind: PanelKind): string {
   return `${kind}:${unique}`;
 }
 
-function defaultLayout(): PanelLayout {
-  const tabs = defaultPanelKinds.map((kind) => ({ id: kind, kind }));
+function toRuntime(saved: SavedPanelLayout): PanelLayout {
   return {
-    tabs,
-    pinned: tabs.map((tab) => tab.id),
-    active: tabs[0]?.id ?? 'overview',
+    tabs: saved.tabs.map((tab) =>
+      tab.kind === 'plugin'
+        ? { id: tab.id, kind: 'plugin', panelId: tab.panelId }
+        : { id: tab.id, kind: tab.builtinKind },
+    ),
+    pinned: saved.pinned,
+    active: saved.active,
   };
 }
-
-/**
- * Drops unknown/coming-soon kinds, collapses accidental duplicate
- * single-instance tabs, and repairs the pinned set and active id so a stored
- * layout is always usable.
- */
-function normalize(layout: {
-  readonly tabs: readonly { readonly id: string; readonly kind: string }[];
-  readonly pinned: readonly string[];
-  readonly active: string;
-}): PanelLayout {
-  const seenIds = new Set<string>();
-  const seenSingletonKinds = new Set<PanelKind>();
-  const tabs: PanelTab[] = [];
-  for (const tab of layout.tabs) {
-    if (!isPanelKind(tab.kind)) continue;
-    const descriptor = panelDescriptor(tab.kind);
-    if (descriptor === undefined || descriptor.comingSoon || seenIds.has(tab.id)) {
-      continue;
-    }
-    if (!descriptor.multi) {
-      // Single-instance kinds always use id === kind and appear at most once.
-      if (seenSingletonKinds.has(tab.kind)) {
-        continue;
-      }
-      seenSingletonKinds.add(tab.kind);
-      seenIds.add(tab.kind);
-      tabs.push({ id: tab.kind, kind: tab.kind });
-      continue;
-    }
-    seenIds.add(tab.id);
-    tabs.push({ id: tab.id, kind: tab.kind });
-  }
-  if (tabs.length === 0) return defaultLayout();
-  const safeTabs = tabs;
-  const ids = new Set(safeTabs.map((tab) => tab.id));
-  const pinned = [...new Set(layout.pinned)].filter((id) => ids.has(id));
-  const active = ids.has(layout.active) ? layout.active : (safeTabs[0]?.id ?? 'overview');
-  return { tabs: safeTabs, pinned, active };
+function toSaved(layout: PanelLayout): SavedPanelLayout {
+  return {
+    schemaVersion: 3,
+    tabs: layout.tabs.map((tab) =>
+      tab.kind === 'plugin'
+        ? { id: tab.id, kind: 'plugin', panelId: tab.panelId ?? tab.id }
+        : { id: tab.id, kind: 'builtin', builtinKind: tab.kind },
+    ),
+    pinned: layout.pinned,
+    active: layout.active,
+  };
 }
-
+function normalize(layout: PanelLayout): PanelLayout {
+  return toRuntime(normalizePanelLayout(toSaved(layout), null));
+}
 function readLayout(): PanelLayout {
-  try {
-    const raw = globalThis.localStorage?.getItem(storageKey);
-    if (raw === null || raw === undefined) {
-      return defaultLayout();
+  function read(key: string): unknown {
+    try {
+      return JSON.parse(globalThis.localStorage?.getItem(key) ?? 'null') as unknown;
+    } catch {
+      return null;
     }
-    const parsed = storedLayoutSchema.safeParse(JSON.parse(raw));
-    return parsed.success ? normalize(parsed.data) : defaultLayout();
-  } catch {
-    return defaultLayout();
   }
+  return toRuntime(normalizePanelLayout(read(storageKey), read('weave.studio.panelTabs.v2')));
 }
-
 function saveLayout(layout: PanelLayout): void {
   try {
-    globalThis.localStorage?.setItem(storageKey, JSON.stringify(layout));
+    globalThis.localStorage?.setItem(storageKey, JSON.stringify(toSaved(layout)));
   } catch {
-    // Storage can be unavailable (private mode, quota); the layout still applies.
+    /* Storage is optional. */
   }
 }
 
@@ -128,6 +85,7 @@ export interface PanelTabsController {
    * created otherwise; a multi-instance kind always opens a new tab.
    */
   readonly open: (kind: PanelKind) => void;
+  readonly openPlugin: (panelId: string) => void;
   readonly close: (id: string) => void;
   readonly togglePin: (id: string) => void;
   /** Moves `draggedId` to just before or after `targetId` in the tab order. */
@@ -163,15 +121,32 @@ export function usePanelTabs(): PanelTabsController {
           setLayout({ ...layout, active: existing.id });
           return;
         }
+        if (layout.tabs.length >= 128) return;
         setLayout({ ...layout, tabs: [...layout.tabs, { id: kind, kind }], active: kind });
         return;
       }
+      if (layout.tabs.length >= 128) return;
       const tab = { id: newTabId(kind), kind };
       setLayout({ ...layout, tabs: [...layout.tabs, tab], active: tab.id });
     },
     [layout, setLayout],
   );
 
+  const openPlugin = useCallback(
+    (panelId: string) => {
+      const existing = layout.tabs.find((t) => t.id === panelId);
+      if (existing === undefined && layout.tabs.length >= 128) return;
+      setLayout({
+        ...layout,
+        tabs:
+          existing === undefined
+            ? [...layout.tabs, { id: panelId, kind: 'plugin', panelId }]
+            : layout.tabs,
+        active: panelId,
+      });
+    },
+    [layout, setLayout],
+  );
   const close = useCallback(
     (id: string) => {
       if (layout.pinned.includes(id) || !layout.tabs.some((tab) => tab.id === id)) {
@@ -220,7 +195,7 @@ export function usePanelTabs(): PanelTabsController {
   );
 
   return useMemo(
-    () => ({ layout, activate, open, close, togglePin, reorder }),
-    [layout, activate, open, close, togglePin, reorder],
+    () => ({ layout, activate, open, openPlugin, close, togglePin, reorder }),
+    [layout, activate, open, openPlugin, close, togglePin, reorder],
   );
 }

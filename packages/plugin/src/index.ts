@@ -1,3 +1,21 @@
+export {
+  panelLimits,
+  declarativePanelSchema,
+  attributedPanelSchema,
+  cloneDeclarativePanel,
+} from './panels.js';
+export type {
+  DeclarativePanel,
+  PanelBlock,
+  FormField,
+  Binding,
+  Value,
+  PanelSource,
+  Scalar,
+  DataPath,
+  PanelsExtensionApi,
+  AttributedPanel,
+} from './panels.js';
 export { pluginApiVersion } from './constants.js';
 export { assertEngineSupported, assertHostVersion } from './declaration.js';
 
@@ -120,6 +138,7 @@ export {
   llmProviderRegistryRef,
   llmProvidersExtensionPoint,
   llmRequestHook,
+  panelsExtensionPoint,
   pluginEventsRef,
   promptSectionsExtensionPoint,
   sessionStoreRef,
