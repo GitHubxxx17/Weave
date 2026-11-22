@@ -140,7 +140,7 @@ const body = JSON.stringify({
 
 - Modify `apps/studio/src/features/plugins/plugin-catalog-store.ts`.
 - Create `apps/studio/src/features/plugins/plugin-catalog-observation.ts` and `apps/studio/test/managed-plugin-store.test.ts`.
-- Update route-aware fetch fixtures in `apps/studio/test/plugin-catalog-store.test.ts`, `apps/studio/test/plugin-catalog-context.test.tsx`, `apps/studio/test/mcp-store.test.ts`, `apps/studio/test/mcp-panel.test.tsx`, `apps/studio/test/mcp-dialogs.test.tsx`, `apps/studio/test/plugins-panel.test.tsx`, `apps/studio/test/plugin-dialogs.test.tsx` and `apps/studio/test/App.test.tsx` wherever the App or Provider fetches catalogs; answer exact `/plugins/managed` GET for pre-existing scenarios without altering their write counts. Share a narrow disabled observation fixture if used by multiple files.
+- Update route-aware fetch fixtures in `apps/studio/test/plugin-catalog-store.test.ts`, `apps/studio/test/plugin-catalog-context.test.tsx`, `apps/studio/test/mcp-store.test.ts`, `apps/studio/test/mcp-panel.test.tsx`, `apps/studio/test/mcp-dialogs.test.tsx`, `apps/studio/test/plugins-panel.test.tsx`, `apps/studio/test/plugin-dialogs.test.tsx` and `apps/studio/test/App.test.tsx` and `apps/studio/test/panel-tabs.test.tsx` wherever the App or Provider fetches catalogs; answer exact `/plugins/managed` GET for pre-existing scenarios without altering their write counts. Share a narrow disabled observation fixture if used by multiple files.
 
 **Interfaces**
 
