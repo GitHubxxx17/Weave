@@ -4856,9 +4856,17 @@ body:has(.panel-resizer-active) {
 
   .workspace-nav {
     display: flex;
+    flex: 0 0 54px;
     min-height: 54px;
     flex-direction: row;
     padding: 8px 10px;
+    overflow-x: auto;
+  }
+
+  /* The mobile panel overlays content below the persistent navigation row. */
+  .activity-panel {
+    top: 54px;
+    height: calc(100dvh - 54px);
   }
 
   .workspace-nav .brand-mark {
@@ -4882,6 +4890,8 @@ body:has(.panel-resizer-active) {
     flex-direction: row;
     gap: 4px;
     padding: 5px 7px;
+    flex-shrink: 0;
+    white-space: nowrap;
   }
 
   .workspace-nav-button small {
@@ -5770,4 +5780,47 @@ body:has(.panel-resizer-active) {
   font-size: 0.62rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Route visibility keeps chat and live panel instances mounted without reserving columns. */
+.chat-column[hidden],
+.session-rail[hidden],
+.activity-panel[hidden] {
+  display: none;
+}
+
+.studio-shell.studio-shell-marketplace {
+  grid-template-columns: 64px minmax(0, 1fr);
+}
+
+.workspace-nav-marketplace {
+  position: relative;
+}
+
+.workspace-nav-marketplace > .plugin-pending-badge {
+  position: absolute;
+  top: 3px;
+  right: 1px;
+}
+
+[data-window-chrome='hidden-inset'] .studio-shell.studio-shell-marketplace {
+  grid-template-columns: 76px minmax(0, 1fr);
+}
+
+@media (max-width: 1180px) {
+  .studio-shell.studio-shell-marketplace {
+    grid-template-columns: 60px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 700px) {
+  .studio-shell-marketplace > .workspace-nav {
+    flex: 0 0 auto;
+    overflow-x: auto;
+  }
+
+  .studio-shell-marketplace > .workspace-nav .workspace-nav-button {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
 }

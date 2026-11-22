@@ -1,5 +1,13 @@
 # Weave Foundation Architecture
 
+Stage 6.5 index extension adopts multiple cached marketplace sources and a
+repository-maintained directory with deterministic submission tooling. Server
+owns HTTPS discovery and append-only source settings; Studio uses guarded HTTP.
+Discovery never grants trust or executes code. Fixed GitHub releases continue
+through the existing preview, immutable import and separate activation flow.
+The approved cross-package contract and pinned Harness reference are in the
+[indexes design](../superpowers/specs/2026-11-22-plugin-marketplace-indexes-design.md).
+
 Stage 6.4 adds public GitHub acquisition at a complete commit and optional
 subdirectory. `plugin-host` validates bounded Git commit/tree metadata and raw
 blob content inside a callback-scoped private scratch directory. Server preserves
@@ -639,6 +647,24 @@ cancellation state machine.
 ## Layer Boundaries
 
 ### Product references
+
+On 2026-11-22 the marketplace index extension additionally checked Harness master
+`d98f5d68519215da48f3002da2cb9c9d2068d81d`. Its
+[static index guide](https://github.com/deepseek-ai/deepseek-harness/blob/d98f5d68519215da48f3002da2cb9c9d2068d81d/docs/user/guide/plugin-market.zh.md)
+and [generator](https://github.com/deepseek-ai/deepseek-harness/blob/d98f5d68519215da48f3002da2cb9c9d2068d81d/apps/plugin-market-generator/README.zh.md)
+support independently hosted discovery. Weave adopts multiple index sources and
+fixed installation targets, and adds its own checked-in default community
+directory and GitHub PR workflow. It keeps inert import and separate activation,
+and does not adopt pnpm execution or imply publisher certification. The
+[indexes contract](../superpowers/specs/2026-11-22-plugin-marketplace-indexes-design.md)
+records the Server/Studio and developer-tool boundaries.
+
+Stage 6.5's [marketplace contract](../superpowers/specs/2026-11-22-plugin-marketplace-design.md)
+adds a read-only Server static discovery index and a dedicated Studio page in the
+left navigation. Catalog discovery uses the existing reviewed GitHub importer;
+it has no trust or execution authority. The right panel remains for runtime
+activity and future separately governed custom plugin panels. Marketplace
+navigation preserves App-owned management state, chat and live panel instances.
 
 Weave benchmarks Codex, Kiro and DeepSeek Harness across product behavior,
 architecture and verification. References inform explicit decisions within

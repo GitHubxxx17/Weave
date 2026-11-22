@@ -2,7 +2,7 @@
 
 import { createRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 
 import { PanelContainer } from '../src/features/panel/panel-container.js';
 import { PluginCatalogProvider } from '../src/features/plugins/plugin-catalog-context.js';
@@ -59,20 +59,25 @@ function panelContext(): PanelContext {
   };
 }
 
-function renderPanel() {
-  return render(
+function panelElement(routeHidden = false) {
+  return (
     <PluginCatalogProvider store={createPluginCatalogStore()}>
       <PanelContainer
         context={panelContext()}
         collapsed={false}
+        routeHidden={routeHidden}
         width={360}
         shellRef={createRef<HTMLElement>()}
         conversationRef={createRef<HTMLElement>()}
         onResize={vi.fn()}
         onCollapse={vi.fn()}
       />
-    </PluginCatalogProvider>,
+    </PluginCatalogProvider>
   );
+}
+
+function renderPanel() {
+  return render(panelElement());
 }
 
 /** Opens the add menu and clicks the panel with the given label. */
@@ -174,136 +179,93 @@ describe('PanelContainer multi-tab', () => {
   });
 });
 
-const managedCatalog = {
-  plugins: [],
-  local: {
-    directory: '/plugins',
-    exists: true,
-    truncated: false,
-    trustSequence: 0,
-    generation: { id: 1, acceptingRuns: true, plugins: [] },
-  },
-};
-
-describe('plugin activation boundary', () => {
-  it('only reads on restored mount and every activation while explicit reload writes once', async () => {
+describe('panel layout migration', () => {
+  it('drops legacy and future kinds without resetting surviving ids, order or pins', () => {
     localStorage.setItem(
       'weave.studio.panelTabs.v2',
-      JSON.stringify({ tabs: [{ id: 'plugins', kind: 'plugins' }], active: 'plugins', pinned: [] }),
-    );
-    const methods: string[] = [];
-    installFetchWithDisabledManaged(
-      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-        if (String(_input) === '/mcp') return disabledMcp();
-        const method = init?.method ?? 'GET';
-        methods.push(method);
-        return new Response(
-          JSON.stringify(
-            method === 'GET'
-              ? managedCatalog
-              : { ...managedCatalog, result: { generation: 1, unchanged: true, failed: [] } },
-          ),
-          { status: 200 },
-        );
+      JSON.stringify({
+        tabs: [
+          { id: 'terminal:shell-a', kind: 'terminal' },
+          { id: 'plugins', kind: 'plugins' },
+          { id: 'preview:site', kind: 'preview' },
+          { id: 'future:one', kind: 'future-panel' },
+          { id: 'terminal:shell-b', kind: 'terminal' },
+        ],
+        pinned: ['plugins', 'preview:site', 'terminal:shell-b', 'future:one'],
+        active: 'plugins',
       }),
     );
     renderPanel();
-    await screen.findByText('0 个');
-    expect(methods).toEqual(['GET']);
-    fireEvent.click(screen.getByRole('tab', { name: '插件' }));
-    await waitFor(() => expect(methods).toEqual(['GET', 'GET']));
-    await waitFor(() =>
-      expect(
-        (screen.getByRole('button', { name: '刷新插件列表' }) as HTMLButtonElement).disabled,
-      ).toBe(false),
-    );
-    addPanel('插件');
-    await waitFor(() => expect(methods).toEqual(['GET', 'GET', 'GET']));
-    expect(screen.getAllByRole('tab', { name: '插件' })).toHaveLength(1);
-    await waitFor(() =>
-      expect(
-        (screen.getByRole('button', { name: '刷新插件列表' }) as HTMLButtonElement).disabled,
-      ).toBe(false),
-    );
-    fireEvent.click(screen.getByRole('button', { name: '关闭插件' }));
-    addPanel('插件');
-    await waitFor(() => expect(methods).toEqual(['GET', 'GET', 'GET', 'GET']));
-    fireEvent.click(screen.getByRole('button', { name: '刷新插件列表' }));
-    await waitFor(() => expect(methods).toEqual(['GET', 'GET', 'GET', 'GET', 'POST']));
+    const tablist = screen.getByRole('tablist', { name: '面板标签' });
+    expect(
+      within(tablist)
+        .getAllByRole('tab')
+        .map((tab) => tab.textContent),
+    ).toEqual(['终端 1', '预览', '终端 2']);
+    expect(screen.getByRole('tab', { name: '终端 1' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('button', { name: '关闭终端 1' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '关闭预览' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '关闭终端 2' })).toBeNull();
+    fireEvent.click(screen.getByRole('tab', { name: '预览' }));
+    expect(JSON.parse(localStorage.getItem('weave.studio.panelTabs.v2') ?? '{}')).toEqual({
+      tabs: [
+        { id: 'terminal:shell-a', kind: 'terminal' },
+        { id: 'preview:site', kind: 'preview' },
+        { id: 'terminal:shell-b', kind: 'terminal' },
+      ],
+      pinned: ['preview:site', 'terminal:shell-b'],
+      active: 'preview:site',
+    });
   });
 
-  it('shares a pending-review badge between the add menu and plugin tab', async () => {
-    const manifest = {
-      id: 'new-plugin',
-      name: 'New Plugin',
-      version: '1.0.0',
-      apiVersion: '1',
-      capabilities: [],
-    };
-    const plugins = [
-      {
-        ...manifest,
-        origin: 'local',
-        host: 'in-process',
-        state: 'pending-trust',
-        provides: {
-          tools: [],
-          providers: [],
-          promptSections: [],
-          events: [],
-          commands: [],
-          hooks: [],
-          services: [],
-        },
-        local: {
-          directory: '/plugins/new-plugin',
-          digest: 'a'.repeat(64),
-          enabled: false,
-          manifest,
-        },
-      },
-    ];
-    installFetchWithDisabledManaged(
-      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
-        String(_input) === '/mcp'
-          ? disabledMcp()
-          : new Response(
-              JSON.stringify(
-                init?.method === 'POST'
-                  ? { ...managedCatalog, result: { generation: 1, unchanged: false, failed: [] } }
-                  : { ...managedCatalog, plugins },
-              ),
-              { status: 200 },
-            ),
-      ),
+  it('preserves an active surviving tab and falls back to defaults when no tabs survive', () => {
+    localStorage.setItem(
+      'weave.studio.panelTabs.v2',
+      JSON.stringify({
+        tabs: [
+          { id: 'plugins', kind: 'plugins' },
+          { id: 'preview:saved', kind: 'preview' },
+        ],
+        pinned: [],
+        active: 'preview:saved',
+      }),
+    );
+    const panel = renderPanel();
+    expect(screen.getByRole('tab', { name: '预览' }).getAttribute('aria-selected')).toBe('true');
+    panel.unmount();
+    localStorage.setItem(
+      'weave.studio.panelTabs.v2',
+      JSON.stringify({
+        tabs: [{ id: 'plugins', kind: 'plugins' }],
+        pinned: ['plugins'],
+        active: 'plugins',
+      }),
     );
     renderPanel();
+    expect(screen.getByRole('tab', { name: '概览' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.queryByRole('tab', { name: '插件' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '关闭概览' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: '添加面板' }));
-    await screen.findByLabelText('1 个插件待审阅');
-    fireEvent.click(screen.getByRole('menuitem', { name: /插件/ }));
-    expect(screen.getByRole('tab', { name: /插件/ }).textContent).toContain('1');
-    await waitFor(() => expect(screen.getByLabelText('1 个插件待审阅')).toBeTruthy());
+    expect(screen.queryByRole('menuitem', { name: '插件' })).toBeNull();
+    expect(screen.getByRole('menuitem', { name: /终端/ })).toBeTruthy();
   });
 
-  it('keeps old-server explicit activation and refresh on GET', async () => {
-    const methods: string[] = [];
-    installFetchWithDisabledManaged(
-      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-        if (String(_input) === '/mcp') return disabledMcp();
-        methods.push(init?.method ?? 'GET');
-        return new Response(JSON.stringify({ plugins: [] }), { status: 200 });
-      }),
-    );
-    renderPanel();
-    await waitFor(() => expect(methods).toEqual(['GET']));
-    addPanel('插件');
-    await waitFor(() => expect(methods).toEqual(['GET', 'GET']));
-    await waitFor(() =>
-      expect(
-        (screen.getByRole('button', { name: '刷新插件列表' }) as HTMLButtonElement).disabled,
-      ).toBe(false),
-    );
-    fireEvent.click(screen.getByRole('button', { name: '刷新插件列表' }));
-    await waitFor(() => expect(methods).toEqual(['GET', 'GET', 'GET']));
+  it('hides route-inactive panels and their resizer while retaining live preview nodes', () => {
+    const panel = renderPanel();
+    addPanel('预览');
+    const preview = screen.getByRole('region', { name: '预览' });
+    fireEvent.change(within(preview).getByRole('textbox', { name: '预览网址' }), {
+      target: { value: 'localhost:5173' },
+    });
+    fireEvent.click(within(preview).getByRole('button', { name: '打开' }));
+    const frame = preview.querySelector('iframe');
+    panel.rerender(panelElement(true));
+    expect(screen.queryByRole('complementary', { name: '运行活动' })).toBeNull();
+    expect(screen.queryByRole('separator', { name: '调整面板宽度' })).toBeNull();
+    expect(document.querySelector('.preview-panel iframe')).toBe(frame);
+    panel.rerender(panelElement(false));
+    expect(screen.getByRole('tab', { name: '预览' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('separator', { name: '调整面板宽度' })).toBeTruthy();
+    expect(document.querySelector('.preview-panel iframe')).toBe(frame);
   });
 });

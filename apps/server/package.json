@@ -22,7 +22,8 @@
     "build": "tsc -p tsconfig.json",
     "lint": "eslint src test",
     "test": "vitest run --root ../.. --config vitest.config.ts apps/server/test",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "marketplace": "node dist/marketplace-cli.js"
   },
   "dependencies": {
     "@weave/llm": "workspace:*",

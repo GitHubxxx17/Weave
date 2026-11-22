@@ -32,6 +32,7 @@ import {
   PanelRightOpen,
   Pencil,
   Plus,
+  Puzzle,
   Search,
   SendHorizontal,
   Settings,
@@ -54,7 +55,12 @@ import { ToolStep } from '../features/conversation/tool-step.js';
 import { MessageFooter } from '../features/conversation/message-footer.js';
 import { PanelContainer } from '../features/panel/panel-container.js';
 import { createPluginCatalogStore } from '../features/plugins/plugin-catalog-store.js';
-import { PluginCatalogProvider } from '../features/plugins/plugin-catalog-context.js';
+import {
+  PluginCatalogProvider,
+  PluginPendingBadge,
+  usePluginCatalogStore,
+} from '../features/plugins/plugin-catalog-context.js';
+import { PluginMarketplacePage } from '../features/plugins/plugin-marketplace-page.js';
 import { useSidePanelWidth } from '../features/panel/panel-resizer.js';
 import { contextWarnThreshold, latestContext } from '../features/panel/panel-data.js';
 import { formatTokens, sumUsage } from '../features/conversation/turn-stats.js';
@@ -101,7 +107,7 @@ type SessionRunHandle = {
 
 const idleRunState: SessionRunState = { status: 'idle', errorMessage: null };
 
-type ProductView = 'studio' | 'projects' | 'history' | 'archived' | 'settings';
+type ProductView = 'studio' | 'projects' | 'history' | 'archived' | 'settings' | 'marketplace';
 type OpenMenu = 'project' | 'more' | 'context' | 'permission' | 'model' | null;
 
 type ChatMessage = {
@@ -378,7 +384,10 @@ const statusLabels: Record<RunStatus, string> = {
   cancelled: '已取消',
 };
 
-const viewLabels: Record<Exclude<ProductView, 'studio'>, { title: string; description: string }> = {
+const viewLabels: Record<
+  Exclude<ProductView, 'studio' | 'marketplace'>,
+  { title: string; description: string }
+> = {
   projects: {
     title: '项目',
     description: '每个项目对应一个本地文件夹，并包含多个 Agent 会话',
@@ -761,6 +770,7 @@ export function App(): ReactElement {
 }
 
 function StudioApp(): ReactElement {
+  const pluginStore = usePluginCatalogStore();
   const [messageInput, setMessageInput] = useState('');
   const [pendingImages, setPendingImages] = useState<readonly PendingImage[]>([]);
   const [previewImage, setPreviewImage] = useState<{
@@ -2021,6 +2031,7 @@ function StudioApp(): ReactElement {
     setActiveView(view);
     setOpenMenu(null);
     setNotice(null);
+    if (view === 'marketplace') void pluginStore.refresh().catch(() => undefined);
   }
 
   function openProviderForm(provider?: ProviderDescriptor): void {
@@ -2379,7 +2390,7 @@ function StudioApp(): ReactElement {
   return (
     <main
       ref={shellRef}
-      className={`studio-shell studio-shell-fixed${activeView === 'studio' && !isActivityPanelOpen ? ' studio-shell-panel-collapsed' : ''}${activeView !== 'studio' && activeView !== 'settings' ? ' studio-shell-context-collapsed' : ''}${activeView === 'settings' ? ' studio-shell-settings' : ''}`}
+      className={`studio-shell studio-shell-fixed${activeView === 'studio' && !isActivityPanelOpen ? ' studio-shell-panel-collapsed' : ''}${activeView !== 'studio' && activeView !== 'settings' ? ' studio-shell-context-collapsed' : ''}${activeView === 'settings' ? ' studio-shell-settings' : ''}${activeView === 'marketplace' ? ' studio-shell-marketplace' : ''}`}
       style={{ '--panel-width': `${panelWidth}px` } as CSSProperties}
     >
       {openMenu !== null ? (
@@ -2412,6 +2423,18 @@ function StudioApp(): ReactElement {
           >
             <FolderKanban aria-hidden="true" />
             <small>项目</small>
+          </button>
+          <button
+            className={`workspace-nav-button workspace-nav-marketplace${activeView === 'marketplace' ? ' workspace-nav-button-active' : ''}`}
+            type="button"
+            aria-label="插件市场"
+            aria-current={activeView === 'marketplace' ? 'page' : undefined}
+            data-plugin-navigation=""
+            onClick={() => selectProductView('marketplace')}
+          >
+            <Puzzle aria-hidden="true" />
+            <small>插件市场</small>
+            <PluginPendingBadge />
           </button>
           <button
             className={`workspace-nav-button${activeView === 'history' ? ' workspace-nav-button-active' : ''}`}
@@ -2483,7 +2506,12 @@ function StudioApp(): ReactElement {
           </div>
         </aside>
       ) : (
-        <aside className="session-rail" aria-label="会话列表">
+        <aside
+          className="session-rail"
+          aria-label="会话列表"
+          hidden={activeView === 'marketplace'}
+          inert={activeView === 'marketplace'}
+        >
           <div className={`menu-anchor${openMenu === 'project' ? ' menu-anchor-open' : ''}`}>
             <button
               className="project-switcher"
@@ -2692,576 +2720,582 @@ function StudioApp(): ReactElement {
         </aside>
       )}
 
-      {activeView === 'studio' ? (
-        <section className="chat-column" aria-label="智能对话" ref={chatColumnRef}>
-          <header className="chat-header">
-            <div className="breadcrumb">
-              <span>{activeProject?.folderName ?? 'weave'}</span>
-              <span className="breadcrumb-divider" aria-hidden="true">
-                /
-              </span>
-              <strong>{activeSession?.title ?? '未命名会话'}</strong>
-            </div>
-            <div className="header-actions">
-              <div className={`menu-anchor${openMenu === 'more' ? ' menu-anchor-open' : ''}`}>
-                <button
-                  className="icon-button"
-                  type="button"
-                  aria-label="更多操作"
-                  title="更多操作"
-                  aria-expanded={openMenu === 'more'}
-                  onClick={() => toggleMenu('more')}
-                >
-                  <MoreHorizontal aria-hidden="true" />
-                </button>
-                {openMenu === 'more' ? (
-                  <div className="popup-menu popup-menu-right" role="menu" aria-label="会话操作">
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => showNotice(`会话标识：${activeSessionId}`)}
-                    >
-                      <span className="menu-icon">
-                        <Copy aria-hidden="true" />
-                      </span>
-                      复制会话标识
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        clearActiveRunState();
-                        showNotice('运行状态已清空');
-                      }}
-                    >
-                      <span className="menu-icon">
-                        <Trash2 aria-hidden="true" />
-                      </span>
-                      清空运行状态
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-              {!isActivityPanelOpen ? (
-                <button
-                  className="icon-button"
-                  type="button"
-                  aria-label="显示上下文"
-                  title="显示上下文"
-                  onClick={() => setIsActivityPanelOpen(true)}
-                >
-                  <PanelRightOpen aria-hidden="true" />
-                </button>
+      <section
+        className="chat-column"
+        aria-label="智能对话"
+        ref={chatColumnRef}
+        hidden={activeView !== 'studio'}
+        inert={activeView !== 'studio'}
+      >
+        <header className="chat-header">
+          <div className="breadcrumb">
+            <span>{activeProject?.folderName ?? 'weave'}</span>
+            <span className="breadcrumb-divider" aria-hidden="true">
+              /
+            </span>
+            <strong>{activeSession?.title ?? '未命名会话'}</strong>
+          </div>
+          <div className="header-actions">
+            <div className={`menu-anchor${openMenu === 'more' ? ' menu-anchor-open' : ''}`}>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="更多操作"
+                title="更多操作"
+                aria-expanded={openMenu === 'more'}
+                onClick={() => toggleMenu('more')}
+              >
+                <MoreHorizontal aria-hidden="true" />
+              </button>
+              {openMenu === 'more' ? (
+                <div className="popup-menu popup-menu-right" role="menu" aria-label="会话操作">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => showNotice(`会话标识：${activeSessionId}`)}
+                  >
+                    <span className="menu-icon">
+                      <Copy aria-hidden="true" />
+                    </span>
+                    复制会话标识
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      clearActiveRunState();
+                      showNotice('运行状态已清空');
+                    }}
+                  >
+                    <span className="menu-icon">
+                      <Trash2 aria-hidden="true" />
+                    </span>
+                    清空运行状态
+                  </button>
+                </div>
               ) : null}
             </div>
-          </header>
-
-          <div className="conversation-viewport">
-            <div
-              className="message-list conversation-scroll"
-              aria-label="Agent 工作流"
-              aria-live="polite"
-              ref={conversationScroll.ref}
-              onScroll={conversationScroll.onScroll}
-            >
-              {messages.length === 0 ? (
-                <div className="empty-chat">
-                  <div className="empty-orbit" aria-hidden="true">
-                    <Sparkles aria-hidden="true" />
-                  </div>
-                  <p className="empty-kicker">WEAVE</p>
-                  <h3>今天想完成什么？</h3>
-                  <p>当前项目 {activeProject?.name ?? 'Weave'} · 本地运行时已连接</p>
-                  <div className="suggestion-list" aria-label="对话示例">
-                    <button type="button" onClick={() => fillSuggestion('介绍一下 Weave 的架构')}>
-                      <Sparkles aria-hidden="true" />
-                      介绍一下 Weave 的架构
-                    </button>
-                    <button type="button" onClick={() => fillSuggestion('帮我梳理当前项目状态')}>
-                      <TerminalSquare aria-hidden="true" />
-                      梳理当前项目状态
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                messages.map((message) => {
-                  const isLatestAssistant =
-                    message.role === 'assistant' && message.id === latestAssistantId;
-                  const hasProcess =
-                    message.role === 'assistant' &&
-                    (message.reasoning !== '' ||
-                      message.tools.length > 0 ||
-                      (isLatestAssistant && status === 'streaming'));
-
-                  return (
-                    <article
-                      className={`timeline-item timeline-item-${message.role}`}
-                      id={`message-${message.id}`}
-                      key={message.id}
-                    >
-                      <div className="timeline-content">
-                        <div className="message-meta">
-                          {message.role === 'assistant' ? (
-                            <span className="message-avatar" aria-hidden="true">
-                              <Sparkles />
-                            </span>
-                          ) : null}
-                          {message.role === 'user' ? '你' : 'Weave Agent'}
-                          <time dateTime={message.occurredAt}>
-                            {formatMessageTime(message.occurredAt)}
-                          </time>
-                        </div>
-                        {hasProcess ? (
-                          <details
-                            className="message-process"
-                            role="group"
-                            aria-label="本轮过程"
-                            open={expandedMessageIds.includes(message.id)}
-                            onToggle={(event) => {
-                              const isOpen = event.currentTarget.open;
-                              setExpandedMessageIds((current) =>
-                                isOpen
-                                  ? current.includes(message.id)
-                                    ? current
-                                    : [...current, message.id]
-                                  : current.filter((id) => id !== message.id),
-                              );
-                            }}
-                          >
-                            <summary>
-                              <ChevronRight className="disclosure-icon" aria-hidden="true" />
-                              <span className="message-process-title">
-                                <TerminalSquare aria-hidden="true" />
-                                {message.tools.length > 0
-                                  ? `${message.tools.length} 次工具调用`
-                                  : '思考过程'}
-                              </span>
-                              {isLatestAssistant && status === 'streaming' ? (
-                                <span className="message-process-state message-process-state-live">
-                                  <LoaderCircle className="spin-icon" aria-hidden="true" />
-                                  进行中
-                                </span>
-                              ) : (
-                                <span className="message-process-state">已完成</span>
-                              )}
-                            </summary>
-                            <div className="message-process-content">
-                              {message.reasoning !== '' ? (
-                                <section className="message-process-section" aria-label="思考内容">
-                                  <div className="message-process-heading">
-                                    <span>思考</span>
-                                    {isLatestAssistant && status === 'streaming' ? (
-                                      <span className="message-process-live">实时</span>
-                                    ) : null}
-                                  </div>
-                                  <p className="message-process-text">{message.reasoning}</p>
-                                </section>
-                              ) : null}
-                              {message.tools.length > 0 ? (
-                                <section className="message-process-section" aria-label="工具步骤">
-                                  <div className="message-process-heading">
-                                    <span>工具调用</span>
-                                    <span>{message.tools.length} 次</span>
-                                  </div>
-                                  <div className="message-process-tools">
-                                    {message.tools.map((tool) => (
-                                      <ToolStep tool={tool} key={tool.toolCallId} />
-                                    ))}
-                                  </div>
-                                </section>
-                              ) : null}
-                              {message.reasoning === '' && message.tools.length === 0 ? (
-                                <p className="message-process-placeholder">Agent 正在准备回复…</p>
-                              ) : null}
-                            </div>
-                          </details>
-                        ) : null}
-                        <div className="message">
-                          {message.role === 'assistant' && message.text !== '' ? (
-                            <MarkdownMessage text={message.text} />
-                          ) : message.text !== '' || message.role === 'assistant' ? (
-                            <p>
-                              {message.text ||
-                                getAssistantPlaceholder(
-                                  status,
-                                  isLatestAssistant,
-                                  message.role === 'assistant' && message.reasoning !== '',
-                                )}
-                            </p>
-                          ) : null}
-                          {message.role === 'user' && (message.images?.length ?? 0) > 0 ? (
-                            <div className="message-images">
-                              {(message.images ?? []).map((image, index) => (
-                                <button
-                                  key={`${message.id}-${index}`}
-                                  type="button"
-                                  className="message-image-button"
-                                  aria-label="放大查看图片"
-                                  onClick={() => setPreviewImage(image)}
-                                >
-                                  <img
-                                    className="message-image"
-                                    src={`data:${image.mediaType};base64,${image.data}`}
-                                    alt="已发送的图片"
-                                  />
-                                </button>
-                              ))}
-                            </div>
-                          ) : null}
-                        </div>
-                        {message.role === 'assistant' &&
-                        message.turnId !== undefined &&
-                        lastReplyIdByTurn.get(message.turnId) === message.id &&
-                        !(isLatestAssistant && status === 'streaming') ? (
-                          <MessageFooter
-                            turn={turnById.get(message.turnId)}
-                            timeLabel={formatMessageTime(message.occurredAt)}
-                            text={message.text}
-                            canRetry={message.turnId === lastTurnId}
-                            disabled={status === 'streaming'}
-                            onRetry={() => retryLastTurn()}
-                            onQuote={() => quoteReply(message.text)}
-                          />
-                        ) : null}
-                      </div>
-                    </article>
-                  );
-                })
-              )}
-            </div>
-            {!conversationScroll.isAtBottom && messages.length > 0 ? (
+            {!isActivityPanelOpen ? (
               <button
-                className="scroll-to-bottom"
+                className="icon-button"
                 type="button"
-                aria-label="回到底部"
-                onClick={() => conversationScroll.scrollToBottom()}
+                aria-label="显示上下文"
+                title="显示上下文"
+                onClick={() => setIsActivityPanelOpen(true)}
               >
-                <ArrowDown aria-hidden="true" />
-                {status === 'streaming' ? '有新内容' : '回到底部'}
+                <PanelRightOpen aria-hidden="true" />
               </button>
             ) : null}
           </div>
+        </header>
 
-          <form className="composer" onSubmit={handleSubmit}>
-            <ApprovalPanel
-              pending={approvals.pending.filter(
-                (approval) =>
-                  approval.sessionId === undefined || approval.sessionId === activeSessionId,
-              )}
-              onDecide={approvals.decide}
-              onInspectToolCall={inspectToolCall}
-            />
-            <div className="composer-box">
-              {commandPicker.open ? (
-                <CommandPickerList
-                  commands={commandPicker.items}
-                  activeIndex={commandPicker.activeIndex}
-                  onSelect={commandPicker.select}
-                  onHover={commandPicker.setActiveIndex}
-                />
-              ) : null}
-              <label className="sr-only" htmlFor="message-input">
-                发送消息
-              </label>
-              <textarea
-                id="message-input"
-                name="message"
-                rows={2}
-                ref={messageInputRef}
-                value={messageInput}
-                onChange={(event) => setMessageInput(event.target.value)}
-                onKeyDown={handleMessageKeyDown}
-                onPaste={handleComposerPaste}
-                placeholder="给 Agent 分配一个任务…"
-                {...(commandPicker.open
-                  ? {
-                      'aria-controls': commandPickerListId,
-                      'aria-activedescendant': commandOptionId(
-                        commandPicker.items[commandPicker.activeIndex]?.name ?? '',
-                      ),
-                    }
-                  : {})}
-              />
-              {pendingImages.length > 0 ? (
-                <div className="composer-attachments" aria-label="待发送图片">
-                  {pendingImages.map((image) => (
-                    <span className="composer-attachment" key={image.id}>
-                      <img
-                        className="composer-attachment-thumb"
-                        src={`data:${image.mediaType};base64,${image.data}`}
-                        alt={image.name}
-                      />
-                      <button
-                        type="button"
-                        aria-label={`移除图片 ${image.name}`}
-                        onClick={() => removePendingImage(image.id)}
-                      >
-                        <X aria-hidden="true" />
-                      </button>
-                    </span>
-                  ))}
+        <div className="conversation-viewport">
+          <div
+            className="message-list conversation-scroll"
+            aria-label="Agent 工作流"
+            aria-live="polite"
+            ref={conversationScroll.ref}
+            onScroll={conversationScroll.onScroll}
+          >
+            {messages.length === 0 ? (
+              <div className="empty-chat">
+                <div className="empty-orbit" aria-hidden="true">
+                  <Sparkles aria-hidden="true" />
                 </div>
-              ) : null}
-              <div className="composer-toolbar">
-                <div className="composer-tools">
-                  <div
-                    className={`menu-anchor${openMenu === 'context' ? ' menu-anchor-open' : ''}`}
+                <p className="empty-kicker">WEAVE</p>
+                <h3>今天想完成什么？</h3>
+                <p>当前项目 {activeProject?.name ?? 'Weave'} · 本地运行时已连接</p>
+                <div className="suggestion-list" aria-label="对话示例">
+                  <button type="button" onClick={() => fillSuggestion('介绍一下 Weave 的架构')}>
+                    <Sparkles aria-hidden="true" />
+                    介绍一下 Weave 的架构
+                  </button>
+                  <button type="button" onClick={() => fillSuggestion('帮我梳理当前项目状态')}>
+                    <TerminalSquare aria-hidden="true" />
+                    梳理当前项目状态
+                  </button>
+                </div>
+              </div>
+            ) : (
+              messages.map((message) => {
+                const isLatestAssistant =
+                  message.role === 'assistant' && message.id === latestAssistantId;
+                const hasProcess =
+                  message.role === 'assistant' &&
+                  (message.reasoning !== '' ||
+                    message.tools.length > 0 ||
+                    (isLatestAssistant && status === 'streaming'));
+
+                return (
+                  <article
+                    className={`timeline-item timeline-item-${message.role}`}
+                    id={`message-${message.id}`}
+                    key={message.id}
                   >
-                    <button
-                      className="composer-tool-button"
-                      type="button"
-                      aria-label="添加上下文"
-                      aria-expanded={openMenu === 'context'}
-                      onClick={() => toggleMenu('context')}
-                    >
-                      <Plus aria-hidden="true" />
-                    </button>
-                    {openMenu === 'context' ? (
-                      <div
-                        className="popup-menu popup-menu-composer"
-                        role="menu"
-                        aria-label="添加上下文"
-                      >
-                        {contextOptions.map(([label, Icon]) => (
-                          <button
-                            type="button"
-                            role="menuitem"
-                            key={label}
-                            onClick={() => chooseContext(label)}
-                          >
-                            <span className="menu-icon">
-                              <Icon aria-hidden="true" />
-                            </span>
-                            {label}
-                            {selectedContexts.includes(label) ? (
-                              <Check className="menu-check" aria-hidden="true" />
-                            ) : null}
-                          </button>
-                        ))}
+                    <div className="timeline-content">
+                      <div className="message-meta">
+                        {message.role === 'assistant' ? (
+                          <span className="message-avatar" aria-hidden="true">
+                            <Sparkles />
+                          </span>
+                        ) : null}
+                        {message.role === 'user' ? '你' : 'Weave Agent'}
+                        <time dateTime={message.occurredAt}>
+                          {formatMessageTime(message.occurredAt)}
+                        </time>
                       </div>
-                    ) : null}
-                  </div>
-                  <div
-                    className={`menu-anchor${openMenu === 'permission' ? ' menu-anchor-open' : ''}`}
-                  >
-                    <button
-                      className="permission-button"
-                      type="button"
-                      aria-expanded={openMenu === 'permission'}
-                      onClick={() => toggleMenu('permission')}
-                    >
-                      {permissionOptions.find((option) => option.value === permissionMode)?.label ??
-                        '常规'}
-                      <ChevronDown aria-hidden="true" />
-                    </button>
-                    {openMenu === 'permission' ? (
-                      <div
-                        className="popup-menu popup-menu-composer"
-                        role="menu"
-                        aria-label="权限模式"
-                      >
-                        {permissionOptions.map((option) => (
-                          <button
-                            type="button"
-                            role="menuitem"
-                            key={option.value}
-                            className={
-                              option.danger === true ? 'permission-option-danger' : undefined
-                            }
-                            onClick={() => {
-                              setPermissionMode(option.value);
-                              setOpenMenu(null);
-                            }}
-                          >
-                            <span className="menu-icon">
-                              <option.icon aria-hidden="true" />
+                      {hasProcess ? (
+                        <details
+                          className="message-process"
+                          role="group"
+                          aria-label="本轮过程"
+                          open={expandedMessageIds.includes(message.id)}
+                          onToggle={(event) => {
+                            const isOpen = event.currentTarget.open;
+                            setExpandedMessageIds((current) =>
+                              isOpen
+                                ? current.includes(message.id)
+                                  ? current
+                                  : [...current, message.id]
+                                : current.filter((id) => id !== message.id),
+                            );
+                          }}
+                        >
+                          <summary>
+                            <ChevronRight className="disclosure-icon" aria-hidden="true" />
+                            <span className="message-process-title">
+                              <TerminalSquare aria-hidden="true" />
+                              {message.tools.length > 0
+                                ? `${message.tools.length} 次工具调用`
+                                : '思考过程'}
                             </span>
-                            <span className="provider-menu-copy">
-                              <strong>{option.label}</strong>
-                              <small>{option.description}</small>
-                            </span>
-                            {permissionMode === option.value ? (
-                              <Check className="menu-check" aria-hidden="true" />
+                            {isLatestAssistant && status === 'streaming' ? (
+                              <span className="message-process-state message-process-state-live">
+                                <LoaderCircle className="spin-icon" aria-hidden="true" />
+                                进行中
+                              </span>
+                            ) : (
+                              <span className="message-process-state">已完成</span>
+                            )}
+                          </summary>
+                          <div className="message-process-content">
+                            {message.reasoning !== '' ? (
+                              <section className="message-process-section" aria-label="思考内容">
+                                <div className="message-process-heading">
+                                  <span>思考</span>
+                                  {isLatestAssistant && status === 'streaming' ? (
+                                    <span className="message-process-live">实时</span>
+                                  ) : null}
+                                </div>
+                                <p className="message-process-text">{message.reasoning}</p>
+                              </section>
                             ) : null}
-                          </button>
-                        ))}
+                            {message.tools.length > 0 ? (
+                              <section className="message-process-section" aria-label="工具步骤">
+                                <div className="message-process-heading">
+                                  <span>工具调用</span>
+                                  <span>{message.tools.length} 次</span>
+                                </div>
+                                <div className="message-process-tools">
+                                  {message.tools.map((tool) => (
+                                    <ToolStep tool={tool} key={tool.toolCallId} />
+                                  ))}
+                                </div>
+                              </section>
+                            ) : null}
+                            {message.reasoning === '' && message.tools.length === 0 ? (
+                              <p className="message-process-placeholder">Agent 正在准备回复…</p>
+                            ) : null}
+                          </div>
+                        </details>
+                      ) : null}
+                      <div className="message">
+                        {message.role === 'assistant' && message.text !== '' ? (
+                          <MarkdownMessage text={message.text} />
+                        ) : message.text !== '' || message.role === 'assistant' ? (
+                          <p>
+                            {message.text ||
+                              getAssistantPlaceholder(
+                                status,
+                                isLatestAssistant,
+                                message.role === 'assistant' && message.reasoning !== '',
+                              )}
+                          </p>
+                        ) : null}
+                        {message.role === 'user' && (message.images?.length ?? 0) > 0 ? (
+                          <div className="message-images">
+                            {(message.images ?? []).map((image, index) => (
+                              <button
+                                key={`${message.id}-${index}`}
+                                type="button"
+                                className="message-image-button"
+                                aria-label="放大查看图片"
+                                onClick={() => setPreviewImage(image)}
+                              >
+                                <img
+                                  className="message-image"
+                                  src={`data:${image.mediaType};base64,${image.data}`}
+                                  alt="已发送的图片"
+                                />
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
                       </div>
-                    ) : null}
-                  </div>
+                      {message.role === 'assistant' &&
+                      message.turnId !== undefined &&
+                      lastReplyIdByTurn.get(message.turnId) === message.id &&
+                      !(isLatestAssistant && status === 'streaming') ? (
+                        <MessageFooter
+                          turn={turnById.get(message.turnId)}
+                          timeLabel={formatMessageTime(message.occurredAt)}
+                          text={message.text}
+                          canRetry={message.turnId === lastTurnId}
+                          disabled={status === 'streaming'}
+                          onRetry={() => retryLastTurn()}
+                          onQuote={() => quoteReply(message.text)}
+                        />
+                      ) : null}
+                    </div>
+                  </article>
+                );
+              })
+            )}
+          </div>
+          {!conversationScroll.isAtBottom && messages.length > 0 ? (
+            <button
+              className="scroll-to-bottom"
+              type="button"
+              aria-label="回到底部"
+              onClick={() => conversationScroll.scrollToBottom()}
+            >
+              <ArrowDown aria-hidden="true" />
+              {status === 'streaming' ? '有新内容' : '回到底部'}
+            </button>
+          ) : null}
+        </div>
+
+        <form className="composer" onSubmit={handleSubmit}>
+          <ApprovalPanel
+            pending={approvals.pending.filter(
+              (approval) =>
+                approval.sessionId === undefined || approval.sessionId === activeSessionId,
+            )}
+            onDecide={approvals.decide}
+            onInspectToolCall={inspectToolCall}
+          />
+          <div className="composer-box">
+            {commandPicker.open ? (
+              <CommandPickerList
+                commands={commandPicker.items}
+                activeIndex={commandPicker.activeIndex}
+                onSelect={commandPicker.select}
+                onHover={commandPicker.setActiveIndex}
+              />
+            ) : null}
+            <label className="sr-only" htmlFor="message-input">
+              发送消息
+            </label>
+            <textarea
+              id="message-input"
+              name="message"
+              rows={2}
+              ref={messageInputRef}
+              value={messageInput}
+              onChange={(event) => setMessageInput(event.target.value)}
+              onKeyDown={handleMessageKeyDown}
+              onPaste={handleComposerPaste}
+              placeholder="给 Agent 分配一个任务…"
+              {...(commandPicker.open
+                ? {
+                    'aria-controls': commandPickerListId,
+                    'aria-activedescendant': commandOptionId(
+                      commandPicker.items[commandPicker.activeIndex]?.name ?? '',
+                    ),
+                  }
+                : {})}
+            />
+            {pendingImages.length > 0 ? (
+              <div className="composer-attachments" aria-label="待发送图片">
+                {pendingImages.map((image) => (
+                  <span className="composer-attachment" key={image.id}>
+                    <img
+                      className="composer-attachment-thumb"
+                      src={`data:${image.mediaType};base64,${image.data}`}
+                      alt={image.name}
+                    />
+                    <button
+                      type="button"
+                      aria-label={`移除图片 ${image.name}`}
+                      onClick={() => removePendingImage(image.id)}
+                    >
+                      <X aria-hidden="true" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            <div className="composer-toolbar">
+              <div className="composer-tools">
+                <div className={`menu-anchor${openMenu === 'context' ? ' menu-anchor-open' : ''}`}>
                   <button
                     className="composer-tool-button"
                     type="button"
-                    aria-label="添加图片"
-                    onClick={() => imageInputRef.current?.click()}
+                    aria-label="添加上下文"
+                    aria-expanded={openMenu === 'context'}
+                    onClick={() => toggleMenu('context')}
                   >
-                    <ImagePlus aria-hidden="true" />
+                    <Plus aria-hidden="true" />
                   </button>
-                  <input
-                    className="sr-only"
-                    ref={imageInputRef}
-                    type="file"
-                    accept="image/*"
-                    aria-label="选择图片文件"
-                    multiple
-                    onChange={(event) => {
-                      void addImageFiles(event.target.files);
-                      event.target.value = '';
-                    }}
-                  />
-                  {selectedContexts.map((context) => (
-                    <span className="context-chip" key={context}>
-                      {context}
-                      <button
-                        type="button"
-                        aria-label={`移除${context}`}
-                        onClick={() =>
-                          setSelectedContexts((current) =>
-                            current.filter((item) => item !== context),
-                          )
-                        }
-                      >
-                        <X aria-hidden="true" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-                <div className="composer-controls">
-                  {currentContext !== undefined ? (
-                    <button
-                      type="button"
-                      className={`composer-context${
-                        currentContext.ratio >= contextWarnThreshold ? ' composer-context-warn' : ''
-                      }`}
-                      aria-label={`上下文窗口占用 ${Math.round(
-                        currentContext.ratio * 100,
-                      )}%，点击查看详情`}
-                      title={`上下文窗口 ${Math.round(currentContext.ratio * 100)}% · ${formatTokens(
-                        currentContext.sentTokens,
-                      )} / ${formatTokens(currentContext.windowTokens)} tokens${
-                        currentContext.trimmed ? ' · 已压缩' : ''
-                      }`}
-                      onClick={() => setIsActivityPanelOpen(true)}
+                  {openMenu === 'context' ? (
+                    <div
+                      className="popup-menu popup-menu-composer"
+                      role="menu"
+                      aria-label="添加上下文"
                     >
-                      <span className="composer-context-track" aria-hidden="true">
-                        <span
-                          className="composer-context-fill"
-                          style={{ width: `${Math.round(currentContext.ratio * 100)}%` }}
-                        />
-                      </span>
-                      <span className="composer-context-value">
-                        {Math.round(currentContext.ratio * 100)}%
-                      </span>
-                    </button>
+                      {contextOptions.map(([label, Icon]) => (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          key={label}
+                          onClick={() => chooseContext(label)}
+                        >
+                          <span className="menu-icon">
+                            <Icon aria-hidden="true" />
+                          </span>
+                          {label}
+                          {selectedContexts.includes(label) ? (
+                            <Check className="menu-check" aria-hidden="true" />
+                          ) : null}
+                        </button>
+                      ))}
+                    </div>
                   ) : null}
-                  <div className={`menu-anchor${openMenu === 'model' ? ' menu-anchor-open' : ''}`}>
-                    <button
-                      className="model-button"
-                      type="button"
-                      aria-expanded={openMenu === 'model'}
-                      aria-label="模型与强度"
-                      onClick={() => toggleMenu('model')}
+                </div>
+                <div
+                  className={`menu-anchor${openMenu === 'permission' ? ' menu-anchor-open' : ''}`}
+                >
+                  <button
+                    className="permission-button"
+                    type="button"
+                    aria-expanded={openMenu === 'permission'}
+                    onClick={() => toggleMenu('permission')}
+                  >
+                    {permissionOptions.find((option) => option.value === permissionMode)?.label ??
+                      '常规'}
+                    <ChevronDown aria-hidden="true" />
+                  </button>
+                  {openMenu === 'permission' ? (
+                    <div
+                      className="popup-menu popup-menu-composer"
+                      role="menu"
+                      aria-label="权限模式"
                     >
-                      <span className="model-button-label">
-                        {selectedProvider?.label ?? selectedModel}
-                      </span>
-                      <span className="model-button-strength">
-                        ·{' '}
-                        {reasoningEffortOptions.find((option) => option.value === reasoningEffort)
-                          ?.label ?? '默认'}
-                      </span>
-                      <ChevronDown aria-hidden="true" />
+                      {permissionOptions.map((option) => (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          key={option.value}
+                          className={
+                            option.danger === true ? 'permission-option-danger' : undefined
+                          }
+                          onClick={() => {
+                            setPermissionMode(option.value);
+                            setOpenMenu(null);
+                          }}
+                        >
+                          <span className="menu-icon">
+                            <option.icon aria-hidden="true" />
+                          </span>
+                          <span className="provider-menu-copy">
+                            <strong>{option.label}</strong>
+                            <small>{option.description}</small>
+                          </span>
+                          {permissionMode === option.value ? (
+                            <Check className="menu-check" aria-hidden="true" />
+                          ) : null}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+                <button
+                  className="composer-tool-button"
+                  type="button"
+                  aria-label="添加图片"
+                  onClick={() => imageInputRef.current?.click()}
+                >
+                  <ImagePlus aria-hidden="true" />
+                </button>
+                <input
+                  className="sr-only"
+                  ref={imageInputRef}
+                  type="file"
+                  accept="image/*"
+                  aria-label="选择图片文件"
+                  multiple
+                  onChange={(event) => {
+                    void addImageFiles(event.target.files);
+                    event.target.value = '';
+                  }}
+                />
+                {selectedContexts.map((context) => (
+                  <span className="context-chip" key={context}>
+                    {context}
+                    <button
+                      type="button"
+                      aria-label={`移除${context}`}
+                      onClick={() =>
+                        setSelectedContexts((current) => current.filter((item) => item !== context))
+                      }
+                    >
+                      <X aria-hidden="true" />
                     </button>
-                    {openMenu === 'model' ? (
-                      <div
-                        className="popup-menu popup-menu-composer popup-menu-right"
-                        role="menu"
-                        aria-label="选择模型"
-                      >
-                        {providerSettings.providers.map((provider) => (
-                          <button
-                            type="button"
-                            role="menuitem"
-                            aria-label={provider.label}
-                            key={provider.id}
-                            onClick={() => chooseProvider(provider)}
-                          >
-                            <span className="menu-icon">
-                              <Bot aria-hidden="true" />
-                            </span>
-                            <span className="provider-menu-copy">
-                              <strong>{provider.label}</strong>
-                              {provider.defaultModel !== undefined ? (
-                                <small>{provider.defaultModel}</small>
-                              ) : null}
-                            </span>
-                            {selectedProviderId === provider.id ? (
-                              <Check className="menu-check" aria-hidden="true" />
+                  </span>
+                ))}
+              </div>
+              <div className="composer-controls">
+                {currentContext !== undefined ? (
+                  <button
+                    type="button"
+                    className={`composer-context${
+                      currentContext.ratio >= contextWarnThreshold ? ' composer-context-warn' : ''
+                    }`}
+                    aria-label={`上下文窗口占用 ${Math.round(
+                      currentContext.ratio * 100,
+                    )}%，点击查看详情`}
+                    title={`上下文窗口 ${Math.round(currentContext.ratio * 100)}% · ${formatTokens(
+                      currentContext.sentTokens,
+                    )} / ${formatTokens(currentContext.windowTokens)} tokens${
+                      currentContext.trimmed ? ' · 已压缩' : ''
+                    }`}
+                    onClick={() => setIsActivityPanelOpen(true)}
+                  >
+                    <span className="composer-context-track" aria-hidden="true">
+                      <span
+                        className="composer-context-fill"
+                        style={{ width: `${Math.round(currentContext.ratio * 100)}%` }}
+                      />
+                    </span>
+                    <span className="composer-context-value">
+                      {Math.round(currentContext.ratio * 100)}%
+                    </span>
+                  </button>
+                ) : null}
+                <div className={`menu-anchor${openMenu === 'model' ? ' menu-anchor-open' : ''}`}>
+                  <button
+                    className="model-button"
+                    type="button"
+                    aria-expanded={openMenu === 'model'}
+                    aria-label="模型与强度"
+                    onClick={() => toggleMenu('model')}
+                  >
+                    <span className="model-button-label">
+                      {selectedProvider?.label ?? selectedModel}
+                    </span>
+                    <span className="model-button-strength">
+                      ·{' '}
+                      {reasoningEffortOptions.find((option) => option.value === reasoningEffort)
+                        ?.label ?? '默认'}
+                    </span>
+                    <ChevronDown aria-hidden="true" />
+                  </button>
+                  {openMenu === 'model' ? (
+                    <div
+                      className="popup-menu popup-menu-composer popup-menu-right"
+                      role="menu"
+                      aria-label="选择模型"
+                    >
+                      {providerSettings.providers.map((provider) => (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          aria-label={provider.label}
+                          key={provider.id}
+                          onClick={() => chooseProvider(provider)}
+                        >
+                          <span className="menu-icon">
+                            <Bot aria-hidden="true" />
+                          </span>
+                          <span className="provider-menu-copy">
+                            <strong>{provider.label}</strong>
+                            {provider.defaultModel !== undefined ? (
+                              <small>{provider.defaultModel}</small>
                             ) : null}
-                          </button>
-                        ))}
-                        <div className="menu-divider" />
-                        <div className="model-strength" role="group" aria-label="模型强度">
-                          <div className="model-strength-head">
-                            <span>强度</span>
-                            <small>
-                              {reasoningEffortOptions.find(
-                                (option) => option.value === reasoningEffort,
-                              )?.label ?? '默认'}
-                            </small>
-                          </div>
-                          <input
-                            type="range"
-                            className="model-strength-slider"
-                            min={0}
-                            max={reasoningEffortOptions.length - 1}
-                            step={1}
-                            value={Math.max(
-                              0,
-                              reasoningEffortOptions.findIndex(
-                                (option) => option.value === reasoningEffort,
-                              ),
-                            )}
-                            aria-label="模型强度"
-                            onChange={(event) =>
-                              setReasoningEffort(
-                                reasoningEffortOptions[Number(event.target.value)]?.value ??
-                                  'medium',
-                              )
-                            }
-                          />
-                          <div className="model-strength-scale" aria-hidden="true">
-                            <span>更快</span>
-                            <span>更聪明</span>
-                          </div>
+                          </span>
+                          {selectedProviderId === provider.id ? (
+                            <Check className="menu-check" aria-hidden="true" />
+                          ) : null}
+                        </button>
+                      ))}
+                      <div className="menu-divider" />
+                      <div className="model-strength" role="group" aria-label="模型强度">
+                        <div className="model-strength-head">
+                          <span>强度</span>
+                          <small>
+                            {reasoningEffortOptions.find(
+                              (option) => option.value === reasoningEffort,
+                            )?.label ?? '默认'}
+                          </small>
+                        </div>
+                        <input
+                          type="range"
+                          className="model-strength-slider"
+                          min={0}
+                          max={reasoningEffortOptions.length - 1}
+                          step={1}
+                          value={Math.max(
+                            0,
+                            reasoningEffortOptions.findIndex(
+                              (option) => option.value === reasoningEffort,
+                            ),
+                          )}
+                          aria-label="模型强度"
+                          onChange={(event) =>
+                            setReasoningEffort(
+                              reasoningEffortOptions[Number(event.target.value)]?.value ?? 'medium',
+                            )
+                          }
+                        />
+                        <div className="model-strength-scale" aria-hidden="true">
+                          <span>更快</span>
+                          <span>更聪明</span>
                         </div>
                       </div>
-                    ) : null}
-                  </div>
-                  {status === 'streaming' ? (
-                    <button
-                      className="send-button send-button-cancel"
-                      type="button"
-                      onClick={cancelRun}
-                      aria-label="停止运行"
-                    >
-                      <Square aria-hidden="true" />
-                    </button>
-                  ) : (
-                    <button
-                      className="send-button"
-                      type="submit"
-                      disabled={messageInput.trim() === '' && pendingImages.length === 0}
-                      aria-label="发送"
-                    >
-                      <SendHorizontal aria-hidden="true" />
-                    </button>
-                  )}
+                    </div>
+                  ) : null}
                 </div>
+                {status === 'streaming' ? (
+                  <button
+                    className="send-button send-button-cancel"
+                    type="button"
+                    onClick={cancelRun}
+                    aria-label="停止运行"
+                  >
+                    <Square aria-hidden="true" />
+                  </button>
+                ) : (
+                  <button
+                    className="send-button"
+                    type="submit"
+                    disabled={messageInput.trim() === '' && pendingImages.length === 0}
+                    aria-label="发送"
+                  >
+                    <SendHorizontal aria-hidden="true" />
+                  </button>
+                )}
               </div>
             </div>
-          </form>
-        </section>
-      ) : (
+          </div>
+        </form>
+      </section>
+      {activeView === 'marketplace' ? (
+        <PluginMarketplacePage
+          hasRunningSessions={Object.values(runStateBySession).some(
+            (run) => run.status === 'streaming',
+          )}
+        />
+      ) : activeView !== 'studio' ? (
         <section
           className={activeView === 'settings' ? 'product-view product-view-settings' : 'page-view'}
           aria-label={viewLabels[activeView].title}
@@ -3574,43 +3608,42 @@ function StudioApp(): ReactElement {
             )}
           </div>
         </section>
-      )}
-
-      {activeView === 'studio' ? (
-        <PanelContainer
-          collapsed={!isActivityPanelOpen}
-          width={panelWidth}
-          shellRef={shellRef}
-          conversationRef={chatColumnRef}
-          onResize={setPanelWidth}
-          onCollapse={() => setIsActivityPanelOpen(false)}
-          context={{
-            statusKey: status,
-            projectId: activeProjectId,
-            statusLabel: statusLabels[status],
-            isRunning: status === 'streaming',
-            hasRunningSessions: Object.values(runStateBySession).some(
-              (run) => run.status === 'streaming',
-            ),
-            sessionLabel: getSessionLabel(activeSessionId),
-            folderPath: activeProject?.folderPath,
-            modelLabel: formatModelLabel(
-              selectedProvider?.label ?? selectedProviderId,
-              selectedModel,
-            ),
-            turns,
-            messages,
-            errorMessage,
-            formatTime: formatMessageTime,
-            onSetFolder: () => {
-              if (activeProject !== undefined) {
-                openFolderDialog(activeProject);
-              }
-            },
-            onJumpToMessage: jumpToMessage,
-          }}
-        />
       ) : null}
+
+      <PanelContainer
+        routeHidden={activeView !== 'studio'}
+        collapsed={!isActivityPanelOpen}
+        width={panelWidth}
+        shellRef={shellRef}
+        conversationRef={chatColumnRef}
+        onResize={setPanelWidth}
+        onCollapse={() => setIsActivityPanelOpen(false)}
+        context={{
+          statusKey: status,
+          projectId: activeProjectId,
+          statusLabel: statusLabels[status],
+          isRunning: status === 'streaming',
+          hasRunningSessions: Object.values(runStateBySession).some(
+            (run) => run.status === 'streaming',
+          ),
+          sessionLabel: getSessionLabel(activeSessionId),
+          folderPath: activeProject?.folderPath,
+          modelLabel: formatModelLabel(
+            selectedProvider?.label ?? selectedProviderId,
+            selectedModel,
+          ),
+          turns,
+          messages,
+          errorMessage,
+          formatTime: formatMessageTime,
+          onSetFolder: () => {
+            if (activeProject !== undefined) {
+              openFolderDialog(activeProject);
+            }
+          },
+          onJumpToMessage: jumpToMessage,
+        }}
+      />
       {notice !== null ? (
         <div className="studio-notice" role="status">
           {notice}

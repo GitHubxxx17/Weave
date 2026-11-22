@@ -66,7 +66,15 @@ dependency is required for local-directory acquisition.
    using the existing App-owned management write gate.
 4. **6.4 GitHub:** acquisition pinned to a full commit, with provenance; no builds
    or implicit trust. Its network and archive contract precedes implementation.
-5. **6.5 Catalog:** a static discovery index that uses the same installer.
+5. **6.5 Catalog:** a static discovery index in a dedicated left-navigation
+   marketplace page, using the same installer and separate human activation.
+   Official bundled plugins and community releases have explicit provenance;
+   community publishers cannot assign official labels. See the
+   [marketplace contract](../superpowers/specs/2026-11-22-plugin-marketplace-design.md).
+   The approved [index extension](../superpowers/specs/2026-11-22-plugin-marketplace-indexes-design.md)
+   adds cached HTTPS sources, explicit refresh, append-only source configuration
+   and a repository-maintained directory generated from reviewed submissions.
+   Source attribution and catalog inclusion grant no execution or publisher trust.
 
 Stage 6.4's [GitHub acquisition contract](../superpowers/specs/2026-11-22-github-plugin-acquisition-design.md)
 uses bounded Git tree metadata and verified raw blobs, rather than archives or Git

@@ -12,6 +12,10 @@ import { createWorkspaceRootResolver } from './workspace-root.js';
 import { createServerLlmProviders } from './llm-providers.js';
 import { serverHostVersion } from './host-version.js';
 import {
+  createPluginMarketplaceManager,
+  type PluginMarketplaceManager,
+} from './plugin-marketplace-manager.js';
+import {
   createServerExtensionCoordinator,
   type ClosablePluginTrustStore,
   type ServerLocalPluginHost,
@@ -96,6 +100,10 @@ export interface StartServerOptions {
   /** `false` disables the local ESM source while preserving managed ID reservations. */
   readonly pluginsDirectory?: string | false;
   readonly managedPluginStore?: ManagedPluginStoreOptions;
+  /** Operator-owned discovery snapshot; false ignores environment configuration. */
+  readonly pluginMarketplaceCatalogFile?: string | false;
+  /** Anonymous index transport override; independent of model provider fetch. */
+  readonly pluginMarketplaceFetch?: typeof globalThis.fetch;
   /** Optional trust persistence override, owned by the Server once accepted. */
   readonly pluginTrustStore?: ClosablePluginTrustStore;
   /** MCP persistence remains enabled independently of ESM discovery and is Server-owned. */
@@ -149,9 +157,17 @@ export async function startServer(
   let pluginHost: ServerLocalPluginHost | undefined;
   let coordinator: ExtensionCoordinator | undefined;
   let installer: ManagedPluginInstaller | undefined;
+  let pluginMarketplaceManager: PluginMarketplaceManager | undefined;
   let server: ServerType | undefined;
   const shutdown = createServerShutdown({
-    resources: () => ({ server, coordinator, authority, owned, installer }),
+    resources: () => ({
+      server,
+      coordinator,
+      authority,
+      owned,
+      installer,
+      pluginMarketplaceManager,
+    }),
     disposeHost: () => disposeServerPlugins(runtime),
     stopRuntime: () => runtime.stop(),
     closeProjectStore: () => projectStore?.close(),
@@ -210,6 +226,16 @@ export async function startServer(
     }) satisfies ServerAgentRunnerOptions;
     await createServerAgentRunner(runtime, runnerOptions);
     const baseline = runtime.serverHost.controller()!.current();
+    pluginMarketplaceManager = await createPluginMarketplaceManager({
+      settingsFile: `${databaseFile}.plugin-marketplace-sources.jsonl`,
+      operatorCatalogFile:
+        options.pluginMarketplaceCatalogFile ??
+        (options.environment ?? process.env).WEAVE_PLUGIN_MARKETPLACE_CATALOG,
+      reservedIds: baseline.resources.plugins.map(({ id }) => id),
+      ...(options.pluginMarketplaceFetch === undefined
+        ? {}
+        : { fetch: options.pluginMarketplaceFetch }),
+    });
     const startup = await acquireManagedPluginStartup(pluginStartup, {
       baselinePluginIds: baseline.resources.plugins.map(({ id }) => id),
       registerAuthority(value) {
@@ -297,6 +323,7 @@ export async function startServer(
           providerSettingsManager,
           canManageProviders: providerSettingsManager !== undefined,
           pluginCatalog: () => listServerPlugins(runtime),
+          pluginMarketplaceManager,
           generationSnapshot: coordinator.generationSnapshot,
           commandCatalog: () => listServerCommands(runtime),
           ...(pluginHost === undefined ? {} : { pluginManager: pluginHost }),

@@ -149,6 +149,7 @@ export type ManagedDraft =
   | {
       readonly review: Extract<ManagedReview, { kind: 'import' }>;
       readonly github: GithubPluginSource;
+      readonly marketplacePublisher?: string;
     }
   | {
       readonly review: Exclude<ManagedReview, { kind: 'import' }>;
@@ -361,6 +362,9 @@ export function ManagedPluginDialog({
       </div>
       {'github' in draft && draft.github !== undefined ? (
         <ManagedGithubSource source={draft.github} />
+      ) : null}
+      {'marketplacePublisher' in draft ? (
+        <p className="plugin-dialog-note">市场发布者：{draft.marketplacePublisher}（目录署名）</p>
       ) : null}
       {expiresAt === undefined ? null : (
         <p className="plugin-dialog-note">

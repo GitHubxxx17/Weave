@@ -7,7 +7,11 @@ import { AgentStreamError, streamAgentRun } from '../src/features/agent/agent-st
 import { App } from '../src/app/App.js';
 import type { AgentStreamHandlers } from '../src/features/agent/agent-types.js';
 import { disabledManagedCatalog } from './support/disabled-managed-catalog.js';
-import { managedCatalog, managedPluginId } from './support/managed-plugin-fixtures.js';
+import {
+  managedCatalog,
+  managedPluginId,
+  managedPreview,
+} from './support/managed-plugin-fixtures.js';
 
 vi.mock('../src/features/agent/agent-stream.js', async () => {
   const actual = await vi.importActual<typeof import('../src/features/agent/agent-stream.js')>(
@@ -19,6 +23,30 @@ vi.mock('../src/features/agent/agent-stream.js', async () => {
     streamAgentRun: vi.fn(),
   };
 });
+
+const terminalMocks = vi.hoisted(() => ({
+  instance: {
+    cols: 80,
+    rows: 24,
+    loadAddon: vi.fn(),
+    open: vi.fn(),
+    write: vi.fn(),
+    dispose: vi.fn(),
+    onData: vi.fn(() => ({ dispose: vi.fn() })),
+  },
+}));
+vi.mock('@xterm/xterm', () => ({
+  Terminal: class {
+    constructor() {
+      return terminalMocks.instance;
+    }
+  },
+}));
+vi.mock('@xterm/addon-fit', () => ({
+  FitAddon: class {
+    fit(): void {}
+  },
+}));
 
 const streamAgentRunMock = vi.mocked(streamAgentRun);
 
@@ -206,6 +234,14 @@ function createWorkspaceFetchMock(
       return new Response(JSON.stringify({ plugins: [] }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (requestPath === '/plugins/marketplace' && method === 'GET') {
+      return Response.json({
+        schemaVersion: 1,
+        hostVersion: '0.0.0',
+        communityStatus: 'unconfigured',
+        entries: [],
       });
     }
     if (requestPath === '/commands') {
@@ -458,6 +494,11 @@ function createWorkspaceFetchMock(
 
 let fetchMock = createWorkspaceFetchMock();
 
+function openInstalledPlugins(): void {
+  fireEvent.click(screen.getByRole('button', { name: '插件市场' }));
+  fireEvent.click(screen.getByRole('tab', { name: '已安装' }));
+}
+
 async function renderApp(): Promise<void> {
   render(<App />);
   await waitFor(() => expect(screen.getByRole('region', { name: '智能对话' })).toBeTruthy());
@@ -475,6 +516,7 @@ afterEach(() => {
   localStorage.clear();
   Reflect.deleteProperty(window, 'showDirectoryPicker');
   Reflect.deleteProperty(window, 'weaveDesktop');
+  vi.unstubAllGlobals();
 });
 
 describe('Studio Agent Chat', () => {
@@ -508,81 +550,324 @@ describe('Studio Agent Chat', () => {
     },
   );
 
-  it('preserves the plugin catalog while settings unmounts and remounts the panel', async () => {
+  it('refreshes marketplace observations with GET only on every navigation and leaves reload explicit', async () => {
     await renderApp();
-    fireEvent.click(screen.getByRole('button', { name: '添加面板' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: '插件' }));
-    await screen.findByRole('region', { name: '插件' });
-    await waitFor(() =>
-      expect(
-        (screen.getByRole('button', { name: '刷新插件列表' }) as HTMLButtonElement).disabled,
-      ).toBe(false),
+    const catalogReads = (): number =>
+      fetchMock.mock.calls.filter(([input]) => String(input) === '/plugins').length;
+    expect(catalogReads()).toBe(1);
+    fireEvent.click(screen.getByRole('button', { name: '插件市场' }));
+    await waitFor(() => expect(catalogReads()).toBe(2));
+    expect(screen.getByRole('button', { name: '插件市场' }).getAttribute('aria-current')).toBe(
+      'page',
     );
-    const before = fetchMock.mock.calls.filter(([input]) =>
-      String(input).includes('/plugins'),
-    ).length;
-    fireEvent.click(screen.getByRole('button', { name: '设置' }));
-    expect(screen.queryByRole('region', { name: '插件' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: '工作台' }));
+    expect(screen.queryByRole('complementary', { name: '会话列表' })).toBeNull();
+    fireEvent.click(screen.getByRole('tab', { name: '已安装' }));
     await screen.findByRole('region', { name: '插件' });
+    fireEvent.click(screen.getByRole('button', { name: '工作台' }));
+    expect(screen.queryByRole('region', { name: '插件' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '插件市场' }));
+    await waitFor(() => expect(catalogReads()).toBe(3));
     expect(
-      fetchMock.mock.calls.filter(([input]) => String(input).includes('/plugins')),
-    ).toHaveLength(before);
+      fetchMock.mock.calls
+        .filter(([input]) => String(input).startsWith('/plugins'))
+        .every(([, init]) => init?.method === 'GET'),
+    ).toBe(true);
   });
 
   it.each([false, true])(
-    'reopens a managed plugin panel with reads only (restored=%s)',
-    async (restored) => {
-      if (restored) {
-        localStorage.setItem(
-          'weave.studio.panelTabs.v2',
-          JSON.stringify({
-            tabs: [{ id: 'plugins', kind: 'plugins' }],
-            active: 'plugins',
-            pinned: [],
-          }),
-        );
-      }
+    'reloads extensions only from the explicit action (local management=%s)',
+    async (localManagement) => {
+      const baseFetch = fetchMock;
+      const local = {
+        directory: '/plugins',
+        exists: true,
+        truncated: false,
+        trustSequence: 0,
+        generation: { id: 1, acceptingRuns: true, plugins: [] },
+      };
+      const catalog = { plugins: [], ...(localManagement ? { local } : {}) };
       const routes = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-        if (init?.method === 'GET') {
-          if (String(input) === '/plugins/managed')
-            return Promise.resolve(Response.json(managedCatalog));
-          if (String(input) === '/plugins')
-            return Promise.resolve(
-              Response.json({ plugins: [], generation: managedCatalog.generation }),
-            );
-        }
-        return fetchMock(input, init);
+        if (String(input) === '/plugins') return Promise.resolve(Response.json(catalog));
+        if (String(input) === '/plugins/reload')
+          return Promise.resolve(
+            Response.json({ ...catalog, result: { generation: 1, unchanged: true, failed: [] } }),
+          );
+        return baseFetch(input, init);
       });
       vi.stubGlobal('fetch', routes);
-      const open = (): void => {
-        fireEvent.click(screen.getByRole('button', { name: '添加面板' }));
-        fireEvent.click(screen.getByRole('menuitem', { name: '插件' }));
-      };
       await renderApp();
-      if (!restored) open();
-      await screen.findByText(managedPluginId, { selector: '.plugin-name' });
-      const input = screen.getByRole<HTMLInputElement>('textbox', { name: '插件来源目录' });
-      fireEvent.change(input, { target: { value: '/local/source' } });
-      fireEvent.click(screen.getByRole('button', { name: '关闭插件' }));
-      expect(screen.queryByRole('region', { name: '受管插件' })).toBeNull();
-      open();
-      await screen.findByText(managedPluginId, { selector: '.plugin-name' });
-      expect(screen.getByRole<HTMLInputElement>('textbox', { name: '插件来源目录' }).value).toBe(
-        '',
-      );
+      openInstalledPlugins();
+      const reload = await screen.findByRole<HTMLButtonElement>('button', {
+        name: /重新发现并加载扩展/,
+      });
+      await waitFor(() => expect(reload.disabled).toBe(false));
       expect(
         routes.mock.calls
           .filter(([input]) => String(input).startsWith('/plugins'))
-          .map(([input, init]) => [String(input), init?.method]),
-      ).toEqual(
-        Array.from({ length: restored ? 2 : 3 }, () => [
-          ['/plugins', 'GET'],
-          ['/plugins/managed', 'GET'],
-        ]).flat(),
-      );
+          .every(([, init]) => init?.method === 'GET'),
+      ).toBe(true);
+      const before = routes.mock.calls.filter(([input]) => String(input) === '/plugins').length;
+      fireEvent.click(reload);
+      if (localManagement) {
+        await waitFor(() =>
+          expect(
+            routes.mock.calls.filter(
+              ([input, init]) => String(input) === '/plugins/reload' && init?.method === 'POST',
+            ),
+          ).toHaveLength(1),
+        );
+      } else {
+        await waitFor(() =>
+          expect(routes.mock.calls.filter(([input]) => String(input) === '/plugins')).toHaveLength(
+            before + 1,
+          ),
+        );
+        expect(
+          routes.mock.calls
+            .filter(([input]) => String(input).startsWith('/plugins'))
+            .every(([, init]) => init?.method === 'GET'),
+        ).toBe(true);
+      }
     },
   );
+
+  it('keeps managed plugin observations across marketplace navigation without keeping import forms mounted', async () => {
+    const routes = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'GET') {
+        if (String(input) === '/plugins/managed')
+          return Promise.resolve(Response.json(managedCatalog));
+        if (String(input) === '/plugins')
+          return Promise.resolve(
+            Response.json({ plugins: [], generation: managedCatalog.generation }),
+          );
+      }
+      return fetchMock(input, init);
+    });
+    vi.stubGlobal('fetch', routes);
+    await renderApp();
+    openInstalledPlugins();
+    await screen.findByText(managedPluginId, { selector: '.plugin-name' });
+    fireEvent.change(screen.getByRole('textbox', { name: '插件来源目录' }), {
+      target: { value: '/local/source' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '工作台' }));
+    expect(screen.queryByRole('region', { name: '受管插件' })).toBeNull();
+    openInstalledPlugins();
+    await screen.findByText(managedPluginId, { selector: '.plugin-name' });
+    expect(screen.getByRole<HTMLInputElement>('textbox', { name: '插件来源目录' }).value).toBe('');
+    expect(
+      routes.mock.calls
+        .filter(([input]) => String(input).startsWith('/plugins'))
+        .every(([, init]) => init?.method === 'GET'),
+    ).toBe(true);
+  });
+
+  it('retains the unresolved management gate and exact import request after leaving the marketplace', async () => {
+    const baseFetch = fetchMock;
+    const imports: RequestInit[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const path = new URL(String(input), 'http://weave.local').pathname;
+        if (path === '/plugins/managed' && init?.method === 'GET')
+          return Promise.resolve(Response.json(managedCatalog));
+        if (path === '/plugins' && init?.method === 'GET')
+          return Promise.resolve(
+            Response.json({ plugins: [], generation: managedCatalog.generation }),
+          );
+        if (path === '/plugins/managed/preview')
+          return Promise.resolve(
+            Response.json({
+              ...managedPreview,
+              expectedInstallSequence: 4,
+              expiresAt: '2099-01-01T00:00:00.000Z',
+            }),
+          );
+        if (path === '/plugins/managed/import') {
+          imports.push(init!);
+          return Promise.resolve(
+            Response.json(
+              { error: { code: 'plugin-authority-busy', message: '结果未知' } },
+              { status: 503 },
+            ),
+          );
+        }
+        return baseFetch(input, init);
+      }),
+    );
+    await renderApp();
+    openInstalledPlugins();
+    const path = await screen.findByRole('textbox', { name: '插件来源目录' });
+    await waitFor(() =>
+      expect(screen.getByRole<HTMLButtonElement>('button', { name: '预览插件' }).disabled).toBe(
+        false,
+      ),
+    );
+    fireEvent.change(path, { target: { value: '/local/source' } });
+    fireEvent.click(screen.getByRole('button', { name: '预览插件' }));
+    fireEvent.click(await screen.findByRole('button', { name: '确认导入' }));
+    await screen.findByRole('button', { name: '重试原请求' });
+    expect(imports).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: '工作台' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    openInstalledPlugins();
+    const retry = await screen.findByRole('button', { name: '重试原请求' });
+    await waitFor(() => expect((retry as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '预览插件' }).disabled).toBe(true);
+    expect(
+      screen.getByRole<HTMLButtonElement>('button', { name: /重新发现并加载扩展/ }).disabled,
+    ).toBe(true);
+    fireEvent.click(retry);
+    fireEvent.click(screen.getByRole('button', { name: '确认重试' }));
+    await waitFor(() => expect(imports).toHaveLength(2));
+    expect(imports[1]).toEqual(imports[0]);
+    expect(JSON.parse(String(imports[0]?.body)).requestId).toBeTruthy();
+  });
+
+  it('shows pending plugin reviews on the left marketplace entry', async () => {
+    const baseFetch = fetchMock;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === '/plugins')
+          return Promise.resolve(
+            Response.json({
+              plugins: [
+                {
+                  id: 'review-me',
+                  name: 'Review Me',
+                  version: '1.0.0',
+                  origin: 'local',
+                  host: 'in-process',
+                  state: 'pending-trust',
+                  capabilities: [],
+                  provides: {
+                    tools: [],
+                    providers: [],
+                    promptSections: [],
+                    events: [],
+                    commands: [],
+                    hooks: [],
+                    services: [],
+                  },
+                },
+              ],
+            }),
+          );
+        return baseFetch(input, init);
+      }),
+    );
+    await renderApp();
+    const nav = screen.getByRole('button', { name: '插件市场' });
+    expect(await within(nav).findByLabelText('1 个插件待审阅')).toBeTruthy();
+    expect(nav.hasAttribute('data-plugin-navigation')).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: '添加面板' }));
+    expect(screen.queryByRole('menuitem', { name: /插件/ })).toBeNull();
+  });
+
+  it('preserves the active conversation draft, stream and preview DOM across marketplace navigation', async () => {
+    let handlers: AgentStreamHandlers | undefined;
+    let signal: AbortSignal | undefined;
+    streamAgentRunMock.mockImplementation((_request, next, options) => {
+      handlers = next;
+      signal = options?.signal;
+      return new Promise<void>(() => undefined);
+    });
+    await renderApp();
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '后台继续运行' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(handlers).toBeDefined());
+    const draft = screen.getByLabelText<HTMLTextAreaElement>('发送消息');
+    fireEvent.change(draft, { target: { value: '返回后继续编辑' } });
+    const chat = screen.getByRole('region', { name: '智能对话' });
+    const workflow = screen.getByLabelText('Agent 工作流');
+    Object.defineProperties(workflow, {
+      scrollHeight: { configurable: true, value: 1000 },
+      clientHeight: { configurable: true, value: 100 },
+    });
+    workflow.scrollTop = 800;
+    fireEvent.scroll(workflow);
+    workflow.scrollTop = 137;
+    fireEvent.scroll(workflow);
+    fireEvent.click(screen.getByRole('button', { name: '添加面板' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '预览' }));
+    const preview = screen.getByRole('region', { name: '预览' });
+    fireEvent.change(within(preview).getByRole('textbox', { name: '预览网址' }), {
+      target: { value: 'localhost:5173' },
+    });
+    fireEvent.click(within(preview).getByRole('button', { name: '打开' }));
+    const frame = preview.querySelector('iframe');
+    fireEvent.keyDown(screen.getByRole('separator', { name: '调整面板宽度' }), {
+      key: 'ArrowLeft',
+    });
+    const layout = localStorage.getItem('weave.studio.panelTabs.v2');
+    const width = localStorage.getItem('weave.studio.sidePanelWidth');
+    fireEvent.click(screen.getByRole('button', { name: '插件市场' }));
+    expect(screen.queryByRole('region', { name: '智能对话' })).toBeNull();
+    expect(chat.isConnected).toBe(true);
+    expect(document.querySelector('#message-input')).toBe(draft);
+    expect(document.querySelector('.preview-panel iframe')).toBe(frame);
+    expect(signal?.aborted).toBe(false);
+    act(() => handlers?.onEvent({ type: 'text-delta', text: '市场浏览时仍然收到回复' }));
+    fireEvent.click(screen.getByRole('button', { name: '工作台' }));
+    expect(screen.getByRole('region', { name: '智能对话' })).toBe(chat);
+    expect(screen.getByLabelText('Agent 工作流')).toBe(workflow);
+    expect(workflow.scrollTop).toBe(137);
+    expect(screen.getByLabelText<HTMLTextAreaElement>('发送消息').value).toBe('返回后继续编辑');
+    expect(screen.getByRole('button', { name: '停止运行' })).toBeTruthy();
+    expect(screen.getByText('市场浏览时仍然收到回复')).toBeTruthy();
+    expect(document.querySelector('.preview-panel iframe')).toBe(frame);
+    expect(screen.getByRole('tab', { name: '预览' }).getAttribute('aria-selected')).toBe('true');
+    expect(localStorage.getItem('weave.studio.panelTabs.v2')).toBe(layout);
+    expect(localStorage.getItem('weave.studio.sidePanelWidth')).toBe(width);
+    expect(streamAgentRunMock).toHaveBeenCalledTimes(1);
+    expect(streamAgentRunMock.mock.calls[0]?.[0].sessionId).toBe(sessionIds.local);
+  });
+
+  it('retains the desktop terminal connection and output while the marketplace is open', async () => {
+    const terminal = {
+      create: vi.fn(async () => ({ id: 'term-market' })),
+      write: vi.fn(),
+      resize: vi.fn(),
+      dispose: vi.fn(),
+      onData: vi.fn<(listener: (payload: { id: string; data: string }) => void) => () => void>(
+        () => () => undefined,
+      ),
+      onExit: vi.fn(() => () => undefined),
+    };
+    window.weaveDesktop = { isDesktop: true, serverUrl: 'http://127.0.0.1:1', terminal };
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe(): void {}
+        unobserve(): void {}
+        disconnect(): void {}
+      },
+    );
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: '添加面板' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '终端' }));
+    await waitFor(() => expect(terminal.onData).toHaveBeenCalledTimes(1));
+    const surface = document.querySelector('.terminal-surface');
+    fireEvent.click(screen.getByRole('button', { name: '插件市场' }));
+    expect(terminal.dispose).not.toHaveBeenCalled();
+    act(() => terminal.onData.mock.calls[0]?.[0]({ id: 'term-market', data: '后台输出\r\n' }));
+    expect(terminalMocks.instance.write).toHaveBeenCalledWith('后台输出\r\n');
+    fireEvent.click(screen.getByRole('button', { name: '工作台' }));
+    expect(document.querySelector('.terminal-surface')).toBe(surface);
+    expect(terminal.create).toHaveBeenCalledTimes(1);
+    expect(terminal.dispose).not.toHaveBeenCalled();
+    expect(screen.getByRole('tab', { name: '终端' }).getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('keeps the panel collapse preference when returning from the marketplace', async () => {
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: '收起上下文' }));
+    fireEvent.click(screen.getByRole('button', { name: '插件市场' }));
+    fireEvent.click(screen.getByRole('button', { name: '工作台' }));
+    expect(screen.queryByRole('complementary', { name: '运行活动' })).toBeNull();
+    expect(screen.getByRole('button', { name: '显示上下文' })).toBeTruthy();
+  });
 
   it('renders the workspace with Chinese interface labels by default', async () => {
     await renderApp();
@@ -1509,8 +1794,7 @@ describe('Studio Agent Chat', () => {
     expect(screen.getByRole('button', { name: '停止运行' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /Session event store/ }));
     await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeTruthy());
-    fireEvent.click(screen.getByRole('button', { name: '添加面板' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: '插件' }));
+    openInstalledPlugins();
     await screen.findByText('Local Example', { selector: '.plugin-name' });
     fireEvent.click(screen.getByText('Local Example', { selector: '.plugin-name' }));
     const disable = screen.getByRole('button', { name: '停用' });
@@ -1518,6 +1802,7 @@ describe('Studio Agent Chat', () => {
     fireEvent.click(disable);
     expect(screen.getByRole('checkbox', { name: '立即生效（取消进行中的回合）' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    fireEvent.click(screen.getByRole('button', { name: '工作台' }));
     fireEvent.click(screen.getByRole('tab', { name: '概览' }));
     expect(within(screen.getByRole('region', { name: '概览' })).queryByText('运行中')).toBeNull();
   });
