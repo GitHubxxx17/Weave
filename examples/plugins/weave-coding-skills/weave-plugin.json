@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 2,
+  "kind": "skills",
+  "manifest": {
+    "id": "weave-coding-skills",
+    "name": "Weave Coding Skills",
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "description": "Review and verify coding changes using the workspace's existing tools.",
+    "host": "declarative",
+    "capabilities": ["skill"],
+    "contributes": {
+      "skills": ["review-change", "verify-change"]
+    },
+    "permissions": []
+  }
+}

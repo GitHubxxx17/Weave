@@ -27,6 +27,7 @@ import {
   secondCandidate,
   secondDigest,
 } from './support/managed-plugin-fixtures.js';
+import { declarativeManifest } from './support/declarative-plugin-fixtures.js';
 
 const generation = managedGeneration;
 const local = {
@@ -153,6 +154,24 @@ afterEach(() => {
 });
 
 describe('Studio managed plugins', () => {
+  it('identifies a declarative candidate in installed history before an explicit activation review', async () => {
+    const candidate = { ...firstCandidate, manifest: declarativeManifest };
+    const network = installFetch({
+      managed: () => ({
+        ...managedCatalog,
+        plugins: [
+          { ...managedPlugin, candidates: [candidate], selection: null, trust: null, active: null },
+        ],
+      }),
+    });
+    renderPanel();
+    const row = await managedRow();
+    const history = within(row.getByRole('region', { name: '候选历史' }));
+    expect(history.getByText('Skills 文本包')).toBeTruthy();
+    expect(history.getByText('无可执行入口')).toBeTruthy();
+    expect(network.writes()).toHaveLength(0);
+  });
+
   it('keeps the raw path and discards a late preview after the user edits the input', async () => {
     const first = pendingResponse();
     const second = pendingResponse();

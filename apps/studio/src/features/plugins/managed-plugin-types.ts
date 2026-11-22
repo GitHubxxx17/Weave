@@ -68,7 +68,7 @@ export const managedManifestSchema = z
     version: versionSchema,
     apiVersion: versionSchema,
     description: z.string().min(1).optional(),
-    host: z.enum(['in-process', 'mcp', 'subprocess']).optional(),
+    host: z.enum(['in-process', 'mcp', 'subprocess', 'declarative']).optional(),
     engines: z
       .strictObject({ weave: z.string().min(1) })
       .readonly()
@@ -101,8 +101,30 @@ export const managedManifestSchema = z
       )
       .readonly(),
   })
+  .superRefine((manifest, context) => {
+    if (manifest.host !== 'declarative') return;
+    const skills = manifest.contributes.skills;
+    if (
+      manifest.capabilities.length !== 1 ||
+      manifest.capabilities[0] !== 'skill' ||
+      manifest.permissions.length !== 0 ||
+      Object.keys(manifest.contributes).length !== 1 ||
+      skills === undefined ||
+      skills.length < 1 ||
+      skills.length > 16 ||
+      new Set(skills).size !== skills.length ||
+      skills.some((name) => name.length > 64 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name))
+    )
+      context.addIssue({ code: 'custom', message: 'Invalid declarative Skill package manifest' });
+  })
   .readonly();
 export type ManagedManifest = z.infer<typeof managedManifestSchema>;
+
+/** Only a fully validated text-package declaration earns the no-entry disclosure. */
+export function isDeclarativeSkillManifest(manifest: unknown): boolean {
+  const parsed = managedManifestSchema.safeParse(manifest);
+  return parsed.success && parsed.data.host === 'declarative';
+}
 
 const manifestSchema = managedManifestSchema;
 

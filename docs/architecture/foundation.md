@@ -1,13 +1,24 @@
 # Weave Foundation Architecture
 
+Declarative Skill packages extend installation with a strict schema-2 descriptor,
+`host:declarative` and no executable entry. The host reads bounded text snapshots
+and adapts them to the existing governed Skills seam; exact trust, independent
+activation, Generation retention and the shared Tool Pipeline remain authoritative.
+No authority format or marketplace version change is needed: reviewed full
+manifest plus directory digest already bind the payload type. See the
+[design and implementation plan](../superpowers/specs/2026-11-22-declarative-skill-packages-design.md)
+and [ADR 0007](../adr/0007-declarative-skill-packages.md), recorded before code.
+
 Skills provides protocol references, core Session facts, Runtime turn context and
 governed plugin contributions in an end-to-end Server/Studio vertical slice.
 The [Skills contract](../superpowers/specs/2026-11-22-skills-design.md) defines exact
 source and bundle identity, lazy resources through the shared Tool Pipeline,
 per-generation/per-turn pins and required audit. This is instruction data;
 execution and approval stay under existing Runtime policy. The [usage guide](../learning/2026-11-22-skills.md) covers authoring, selection,
-progressive resources, durable provenance and exact retries. Skill-only artifact
-distribution and custom panels remain separate following topics. Current verified Codex, Harness and Kimi
+progressive resources, durable provenance and exact retries. The
+[text-package guide](../learning/2026-11-22-declarative-skill-packages.md) covers
+no-entry distribution; developer CLI and custom panels remain separate following
+topics. Current verified Codex, Harness and Kimi
 references and official-content choices are recorded in the
 [reference audit](../learning/2026-11-22-official-plugin-references.md).
 

@@ -119,12 +119,27 @@ function identityChanged() {
 
 function matchesArtifact(artifact: PluginArtifact, candidate: ManagedCandidate): boolean {
   return (
+    (artifact.descriptor.schemaVersion === 2
+      ? artifact.kind === 'skills' && candidate.manifest.host === 'declarative'
+      : artifact.kind !== 'skills' && candidate.manifest.host !== 'declarative') &&
     artifact.digest === candidate.digest &&
     artifact.descriptor.manifest.id === candidate.pluginId &&
     artifact.files === candidate.files &&
     artifact.bytes === candidate.bytes &&
     canonicalJson(artifact.descriptor.manifest) === canonicalJson(candidate.manifest)
   );
+}
+
+/** Exact payload evidence; the legacy omitted kind always means an entry. */
+function samePayload(left: ReadyLocalPlugin, right: ReadyLocalPlugin): boolean {
+  if (left.kind === 'skills' || right.kind === 'skills') {
+    return (
+      left.kind === 'skills' &&
+      right.kind === 'skills' &&
+      canonicalJson(left.skills) === canonicalJson(right.skills)
+    );
+  }
+  return left.entry === right.entry;
 }
 
 interface CommittedAdoption {
@@ -531,7 +546,9 @@ export function createManagedPluginComposition(
           digest: artifact.digest,
           manifest: candidate.manifest,
           directory: artifact.directory,
-          entry: artifact.entry,
+          ...(artifact.kind === 'skills'
+            ? { kind: 'skills' as const, skills: artifact.skills }
+            : { kind: 'entry' as const, entry: artifact.entry }),
         },
       };
     } catch (cause: unknown) {
@@ -552,7 +569,7 @@ export function createManagedPluginComposition(
       ready !== undefined &&
       target.activationSequence === expected.activationSequence &&
       ready.digest === expected.digest &&
-      ready.entry === expected.entry &&
+      samePayload(ready, expected) &&
       ready.directory === expected.directory &&
       target.manifest === canonicalJson(expected.manifest)
     );
@@ -596,12 +613,16 @@ export function createManagedPluginComposition(
             digest: artifact.digest,
             manifest: target.candidate.manifest,
             directory: artifact.directory,
-            entry: artifact.entry,
+            ...(artifact.kind === 'skills'
+              ? { kind: 'skills' as const, skills: artifact.skills }
+              : { kind: 'entry' as const, entry: artifact.entry }),
           }
         : undefined;
     if (
       expected !== undefined &&
-      (ready?.entry !== expected.entry || ready?.directory !== expected.directory)
+      (ready === undefined ||
+        !samePayload(ready, expected) ||
+        ready.directory !== expected.directory)
     ) {
       ready = undefined;
     }
@@ -646,7 +667,9 @@ export function createManagedPluginComposition(
     async verify(candidate, signal) {
       const ready = await readSelected(candidate.id, signal, candidate);
       if (ready === undefined) throw identityChanged();
-      return { entry: ready.entry, digest: ready.digest };
+      return ready.kind === 'skills'
+        ? { kind: 'skills' as const, skills: ready.skills, digest: ready.digest }
+        : { kind: 'entry' as const, entry: ready.entry, digest: ready.digest };
     },
     assertReadySync(candidate) {
       return assertReadyEvidenceSync(() => {

@@ -14,6 +14,7 @@ import {
   maxPluginMarketplaceBytes,
   projectPluginMarketplace,
 } from '../src/plugin-marketplace.js';
+import { writeDeclarativeSkillFixture } from './support/declarative-skill-fixture.js';
 import { startServer } from '../src/main.js';
 
 const cleanup: Array<() => Promise<void>> = [];
@@ -57,6 +58,25 @@ function plugin() {
 const index = () => ({ schemaVersion: 1, plugins: [plugin()] });
 
 describe('GET /plugins/marketplace', () => {
+  it('keeps schema-1 discovery and reports a declarative Skill release as compatible', async () => {
+    const { directory } = await fileFixture('{}');
+    const manifest = await writeDeclarativeSkillFixture(join(directory, 'payload'), {
+      id: 'community-notes',
+    });
+    const value = index();
+    Object.assign(value.plugins[0]!.releases[0]!, { manifest });
+    const { file } = await fileFixture(value);
+    const response = projectPluginMarketplace(
+      await loadPluginMarketplaceCatalog(file),
+      [],
+      '1.0.0',
+    );
+    expect(response.schemaVersion).toBe(1);
+    expect(response.entries).toMatchObject([
+      { releases: [{ manifest, compatibility: 'compatible' }] },
+    ]);
+  });
+
   it('returns a read-only empty marketplace when no discovery catalog is configured', async () => {
     const runtime = createServerRuntime();
     const response = await createApp(runtime).request('/plugins/marketplace');

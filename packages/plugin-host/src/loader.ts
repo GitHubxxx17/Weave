@@ -5,6 +5,8 @@ import { isDeepStrictEqual } from 'node:util';
 import {
   createPluginSdk,
   definePlugin,
+  skillsExtensionPoint,
+  skillContributionSchema,
   type KernelPlugin,
   type PluginEnv,
   type PluginFactory,
@@ -16,6 +18,8 @@ import { z } from 'zod';
 import { computeDirectoryDigest, type DigestLimits } from './digest.js';
 import { describeError, ExplicitLocalAuthorityError, PluginHostError } from './errors.js';
 import type { ReadyLocalPlugin } from './discovery.js';
+import type { PluginPayload } from './artifact-types.js';
+import { inspectPluginPayload } from './payload-inspector.js';
 
 /** Options of {@link loadLocalPlugin}. */
 export interface LoadLocalPluginOptions {
@@ -30,17 +34,24 @@ export interface LoadLocalPluginOptions {
   /** Managed artifact verification and authority checks. Requires an attempt signal. */
   readonly explicitChecks?:
     | {
-        verify(signal: AbortSignal): Promise<Pick<ReadyLocalPlugin, 'entry' | 'digest'>>;
+        verify(signal: AbortSignal): Promise<PluginPayload & { readonly digest: string }>;
         assertReadySync(): undefined;
       }
     | undefined;
 }
 
 /** The part of a discovered plugin the loader needs. */
-export type LocalPluginSource = Pick<ReadyLocalPlugin, 'id' | 'directory' | 'entry' | 'manifest'>;
+export type LocalPluginSource = Pick<ReadyLocalPlugin, 'id' | 'directory' | 'manifest'> &
+  PluginPayload;
 
 const verifiedEntrySchema = z.strictObject({
+  kind: z.literal('entry').optional(),
   entry: z.string().refine(isAbsolute),
+  digest: z.string().regex(/^[0-9a-f]{64}$/),
+});
+const verifiedSkillsSchema = z.strictObject({
+  kind: z.literal('skills'),
+  skills: z.array(skillContributionSchema).min(1).max(16),
   digest: z.string().regex(/^[0-9a-f]{64}$/),
 });
 
@@ -131,6 +142,49 @@ export async function loadLocalPlugin(
   }
 
   signal?.throwIfAborted();
+  if (plugin.kind === 'skills') {
+    if (manifest.host !== 'declarative') throw changedIdentity();
+    assertExplicitReady();
+    if (explicitChecks !== undefined) {
+      if (signal === undefined)
+        throw new TypeError('Explicit local plugin checks require a signal');
+      const raw = await explicitChecks.verify(signal);
+      signal.throwIfAborted();
+      const verified = verifiedSkillsSchema.safeParse(raw);
+      if (
+        !verified.success ||
+        verified.data.digest !== options.trustedDigest ||
+        !isDeepStrictEqual(verified.data.skills, plugin.skills)
+      )
+        throw changedIdentity();
+    }
+    const artifact = await inspectPluginPayload(plugin.directory, {
+      signal,
+      limits: options.limits,
+    });
+    signal?.throwIfAborted();
+    if (
+      artifact.kind !== 'skills' ||
+      artifact.digest !== options.trustedDigest ||
+      !sameManifest(artifact.descriptor.manifest, manifest) ||
+      !isDeepStrictEqual(artifact.skills, plugin.skills)
+    )
+      throw changedIdentity();
+    assertExplicitReady();
+    return definePlugin({
+      manifest,
+      setup(env) {
+        signal?.throwIfAborted();
+        assertExplicitReady();
+        env.contribute(skillsExtensionPoint, (api) => {
+          // Admission authority is checked at setup. A retained Generation owns
+          // this immutable snapshot even after a newer selection replaces it.
+          for (const skill of artifact.skills) api.addSkill(skill);
+        });
+      },
+    });
+  }
+  if (manifest.host === 'declarative') throw changedIdentity();
   let entry = plugin.entry;
   let digest: string;
   if (explicitChecks === undefined) {
@@ -143,6 +197,7 @@ export async function loadLocalPlugin(
     if (signal === undefined) throw new TypeError('Explicit local plugin checks require a signal');
     const result = await explicitChecks.verify(signal);
     signal.throwIfAborted();
+    if (result.kind === 'skills') throw changedIdentity();
     const verified = verifiedEntrySchema.safeParse(result);
     if (!verified.success || verified.data.entry !== entry) throw changedIdentity();
     ({ entry, digest } = verified.data);

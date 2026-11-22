@@ -21,6 +21,8 @@ import { useMarketplaceSources } from './use-marketplace-sources.js';
 import { usePluginCatalogState, usePluginCatalogStore } from './plugin-catalog-context.js';
 import { PluginsPanel } from './plugins-panel.js';
 import { ManagedContributions, ManagedGithubSource } from './managed-plugin-dialog.js';
+import { isDeclarativeSkillManifest } from './managed-plugin-types.js';
+import { DeclarativeSkillPayload } from './plugin-payload-description.js';
 
 import './plugin-marketplace.css';
 
@@ -139,6 +141,7 @@ function MarketplaceDetail({
           </label>
           {release === undefined ? null : (
             <>
+              {isDeclarativeSkillManifest(release.manifest) ? <DeclarativeSkillPayload /> : null}
               <p
                 className={`marketplace-compatibility${release.compatibility === 'incompatible' ? ' marketplace-incompatible' : ''}`}
               >

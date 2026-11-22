@@ -47,6 +47,19 @@ const plugin = (
 });
 
 describe('declarative Skill contributions', () => {
+  it('recognizes only the bounded Skill-only shape for a declarative host', () => {
+    const data = manifest('reviewer', { host: 'declarative' });
+    expect(pluginManifestSchema.parse(data)).toEqual(data);
+    for (const invalid of [
+      { ...data, capabilities: ['skill', 'tool'] },
+      { ...data, permissions: undefined },
+      { ...data, permissions: ['network:request'] },
+      { ...data, contributes: { skills: [] } },
+      { ...data, contributes: { skills: ['review-code'], hooks: [] } },
+      { ...data, contributes: { skills: Array.from({ length: 17 }, (_, i) => `a-${i}`) } },
+    ])
+      expect(pluginManifestSchema.safeParse(invalid).success).toBe(false);
+  });
   it('extends API 1.0 additively and exposes the host seam through the SDK', () => {
     expect(pluginApiVersion).toBe('1.0.0');
     expect(createPluginSdk().skillsExtensionPoint).toBe(skillsExtensionPoint);

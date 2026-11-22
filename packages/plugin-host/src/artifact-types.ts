@@ -1,20 +1,28 @@
 import path from 'node:path';
 
-import { pluginManifestSchema, type PluginManifest } from '@weave/plugin';
+import { pluginManifestSchema, type PluginManifest, type SkillContribution } from '@weave/plugin';
 import { z } from 'zod';
 
 import type { PluginDescriptor } from './descriptor.js';
 
-export interface PluginArtifact {
+/** Old callers may omit the executable discriminator; absence never means data. */
+export type PluginPayload =
+  | { readonly kind?: 'entry' | undefined; readonly entry: string; readonly skills?: never }
+  | {
+      readonly kind: 'skills';
+      readonly skills: readonly SkillContribution[];
+      readonly entry?: never;
+    };
+
+export type PluginArtifact = PluginPayload & {
   readonly digest: string;
   /** The concrete payload directory. */
   readonly directory: string;
   /** The absolute path to the validated payload entry. */
-  readonly entry: string;
   readonly descriptor: PluginDescriptor;
   readonly files: number;
   readonly bytes: number;
-}
+};
 
 export interface PluginArtifactStoreOptions {
   /** The absolute path to the hidden managed store. */

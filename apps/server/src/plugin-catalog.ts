@@ -36,7 +36,7 @@ export const pluginListItemSchema = z.object({
   ]),
   error: pluginIssueSchema.optional(),
   local: localPluginMetadataSchema.optional(),
-  host: z.enum(['in-process', 'mcp', 'subprocess']),
+  host: z.enum(['in-process', 'mcp', 'subprocess', 'declarative']),
   capabilities: z.array(z.enum(['tool', 'llm-provider', 'prompt', 'event', 'command', 'skill'])),
   engines: z.object({ weave: z.string() }).optional(),
   contributes: z

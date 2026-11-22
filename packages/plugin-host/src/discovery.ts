@@ -1,6 +1,7 @@
 import { constants, type Dirent, type Stats } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import {
   assertEngineSupported,
@@ -18,6 +19,8 @@ import {
 } from './descriptor.js';
 import { computeDirectoryDigest, type DigestLimits } from './digest.js';
 import { describeError, PluginHostError } from './errors.js';
+import type { PluginPayload } from './artifact-types.js';
+import { inspectPluginPayload } from './payload-inspector.js';
 
 /** Why a plugin on disk cannot be used. */
 export interface LocalPluginIssue {
@@ -34,14 +37,13 @@ interface CandidateBase {
 }
 
 /** A plugin whose declaration and content were read and found sound. */
-export interface ReadyLocalPlugin extends CandidateBase {
-  readonly status: 'ready';
-  readonly manifest: PluginManifest;
-  /** The entry module: the real path of a regular file inside the directory. */
-  readonly entry: string;
-  /** The digest of the directory as it was when discovered. */
-  readonly digest: string;
-}
+export type ReadyLocalPlugin = CandidateBase &
+  PluginPayload & {
+    readonly status: 'ready';
+    readonly manifest: PluginManifest;
+    /** The digest of the directory as it was when discovered. */
+    readonly digest: string;
+  };
 
 /** A plugin that is well formed but cannot run on this host. */
 export interface IncompatibleLocalPlugin extends CandidateBase {
@@ -228,10 +230,10 @@ export function incompatibility(
     };
   }
   const host = manifest.host ?? 'in-process';
-  if (host !== 'in-process') {
+  if (host !== 'in-process' && host !== 'declarative') {
     return {
       code: 'plugin-host-unsupported',
-      message: `Plugin "${manifest.id}" runs as "${host}", which this host cannot load yet; only in-process plugins can be loaded`,
+      message: `Plugin "${manifest.id}" runs as "${host}", which this host cannot load yet; only in-process and declarative plugins can be loaded`,
     };
   }
   try {
@@ -251,7 +253,7 @@ export function incompatibility(
  */
 export async function resolveEntry(
   directory: string,
-  descriptor: PluginDescriptor,
+  descriptor: Extract<PluginDescriptor, { schemaVersion: 1 }>,
   pluginId: string,
 ): Promise<string> {
   const candidate = path.join(directory, ...descriptor.entry.split('/'));
@@ -304,6 +306,27 @@ async function inspectPayload(
   }
 
   try {
+    if (descriptor.schemaVersion === 2) {
+      const artifact = await inspectPluginPayload(directory, {
+        hostVersion: options.hostVersion,
+        limits: options.limits,
+      });
+      if (artifact.kind !== 'skills' || !isDeepStrictEqual(artifact.descriptor.manifest, manifest))
+        throw new PluginHostError(
+          'plugin-digest-mismatch',
+          'The descriptor changed during discovery',
+          { pluginId: manifest.id },
+        );
+      return {
+        status: 'ready',
+        id: manifest.id,
+        manifest,
+        directory,
+        digest: artifact.digest,
+        kind: 'skills',
+        skills: artifact.skills,
+      };
+    }
     const { digest } = await computeDirectoryDigest(directory, {
       limits: options.limits,
       pluginId: manifest.id,

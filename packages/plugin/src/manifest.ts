@@ -11,7 +11,7 @@ export type PluginCapability = 'tool' | 'llm-provider' | 'prompt' | 'event' | 'c
  * How a plugin is hosted. The kernel only records it; hosts and loaders decide
  * how to load a plugin from it and Studio shows it.
  */
-export type PluginHost = 'in-process' | 'mcp' | 'subprocess';
+export type PluginHost = 'in-process' | 'mcp' | 'subprocess' | 'declarative';
 
 /**
  * A permission a plugin declares. Only `service:<id>` is enforced by the
@@ -74,7 +74,7 @@ const pluginCapabilitySchema = z.enum([
   'command',
   'skill',
 ]);
-const pluginHostSchema = z.enum(['in-process', 'mcp', 'subprocess']);
+const pluginHostSchema = z.enum(['in-process', 'mcp', 'subprocess', 'declarative']);
 
 const serviceIdPattern = '[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*';
 const serviceIdSchema = z.string().regex(new RegExp(`^${serviceIdPattern}$`));
@@ -185,6 +185,23 @@ export const pluginManifestSchema: z.ZodType<PluginManifest> = z
   })
   .strict()
   .superRefine((manifest, context) => {
+    if (
+      manifest.host === 'declarative' &&
+      (manifest.capabilities.length !== 1 ||
+        manifest.capabilities[0] !== 'skill' ||
+        manifest.permissions?.length !== 0 ||
+        manifest.contributes?.skills === undefined ||
+        manifest.contributes.skills.length < 1 ||
+        manifest.contributes.skills.length > 16 ||
+        Object.keys(manifest.contributes).some((key) => key !== 'skills'))
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['host'],
+        message:
+          'Declarative hosts require only the skill capability, 1–16 declared Skills and empty permissions',
+      });
+    }
     for (const [key, capability] of requiredCapabilities) {
       const names = manifest.contributes?.[key];
       if (names !== undefined && names.length > 0 && !manifest.capabilities.includes(capability)) {

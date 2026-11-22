@@ -11,6 +11,7 @@ import {
   defaultDigestLimits,
   ignoredNames,
   type DirectoryDigest,
+  type DigestLimits,
 } from './digest.js';
 
 const maxDepth = 64;
@@ -28,11 +29,15 @@ interface PayloadEntry {
 export interface CheckedPayload extends DirectoryDigest {
   readonly descriptorText: string | undefined;
   readonly paths: ReadonlySet<string>;
+  readonly directories: readonly string[];
+  readonly contents?: ReadonlyMap<string, Buffer>;
 }
 
 interface CheckPayloadOptions {
   readonly destination?: string;
   readonly reviewed?: boolean;
+  readonly collectContents?: boolean;
+  readonly limits?: Partial<DigestLimits> | undefined;
 }
 
 function tooLarge(bound: string): PluginArtifactError {
@@ -76,6 +81,7 @@ async function listPayload(
   directory: string,
   signal: AbortSignal | undefined,
   reviewed: boolean,
+  limits: DigestLimits,
 ): Promise<{
   readonly files: PayloadEntry[];
   readonly directories: PayloadEntry[];
@@ -112,11 +118,11 @@ async function listPayload(
         }
         files.push(item);
         bytes += Number(stat.size);
-        if (files.length > defaultDigestLimits.maxFiles) {
-          throw tooLarge(`${defaultDigestLimits.maxFiles} files`);
+        if (files.length > limits.maxFiles) {
+          throw tooLarge(`${limits.maxFiles} files`);
         }
-        if (bytes > defaultDigestLimits.maxBytes) {
-          throw tooLarge(`${defaultDigestLimits.maxBytes / 1024 / 1024} MiB of file bytes`);
+        if (bytes > limits.maxBytes) {
+          throw tooLarge(`${limits.maxBytes / 1024 / 1024} MiB of file bytes`);
         }
       } else {
         throw new PluginArtifactError(
@@ -223,7 +229,12 @@ async function writeChunk(output: FileHandle, buffer: Buffer, size: number): Pro
 export async function checkPayload(
   directory: string,
   signal: AbortSignal | undefined,
-  { destination, reviewed = false }: CheckPayloadOptions = {},
+  {
+    destination,
+    reviewed = false,
+    collectContents = false,
+    limits: customLimits,
+  }: CheckPayloadOptions = {},
 ): Promise<CheckedPayload> {
   // A failed destination operation can have the same errno as source disappearance.
   async function observeSource<T>(observe: () => Promise<T>): Promise<T> {
@@ -243,8 +254,15 @@ export async function checkPayload(
   }
 
   signal?.throwIfAborted();
+  const limits = { ...defaultDigestLimits, ...customLimits };
+  if (
+    !Object.values(limits).every((value) => Number.isSafeInteger(value) && value >= 0) ||
+    limits.maxFiles > defaultDigestLimits.maxFiles ||
+    limits.maxBytes > defaultDigestLimits.maxBytes
+  )
+    throw new PluginArtifactError('plugin-artifact-invalid', 'Invalid payload limits');
   const { files, directories } = await observeSource(() =>
-    listPayload(directory, signal, reviewed),
+    listPayload(directory, signal, reviewed, limits),
   );
   if (destination !== undefined) {
     for (const entry of directories.slice(1)) {
@@ -257,6 +275,7 @@ export async function checkPayload(
   const buffer = Buffer.alloc(64 * 1024);
   let bytes = 0;
   let descriptorText: string | undefined;
+  const contents = new Map<string, Buffer>();
   for (const entry of files) {
     signal?.throwIfAborted();
     const handle = await observeSource(() => openSource(entry, signal));
@@ -267,6 +286,7 @@ export async function checkPayload(
         if (!sameFile(entry.stat, await stat())) throw sourceChanged();
         const hash = createHash('sha256');
         const descriptor: Buffer[] = [];
+        const captured: Buffer[] = [];
         const stream = async (output?: FileHandle): Promise<number> => {
           let size = 0;
           const expectedSize = Number(entry.stat.size);
@@ -281,6 +301,7 @@ export async function checkPayload(
             const chunk = buffer.subarray(0, bytesRead);
             hash.update(chunk);
             if (entry.relativePath === descriptorFileName) descriptor.push(Buffer.from(chunk));
+            if (collectContents) captured.push(Buffer.from(chunk));
             if (output !== undefined) await writeChunk(output, buffer, bytesRead);
           }
           if (size !== expectedSize || !sameFile(entry.stat, await stat())) {
@@ -300,6 +321,7 @@ export async function checkPayload(
         if (entry.relativePath === descriptorFileName) {
           descriptorText = Buffer.concat(descriptor).toString('utf8');
         }
+        if (collectContents) contents.set(entry.relativePath, Buffer.concat(captured));
         return { size, hash: hash.digest('hex') };
       },
       reviewed,
@@ -317,6 +339,8 @@ export async function checkPayload(
     bytes,
     descriptorText,
     paths: new Set(files.map((entry) => entry.relativePath)),
+    directories: directories.map((entry) => entry.relativePath),
+    ...(collectContents ? { contents } : {}),
   };
 }
 
