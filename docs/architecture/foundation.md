@@ -243,8 +243,18 @@ Studio replaces the exact live Turn by stable execution/Turn identity and return
 to Session history only after its durable terminal prefix is readable. The old
 POST SSE endpoint remains a compatibility path; production Studio uses separate
 acceptance, observation and cancellation. No direct execution or HTTP dependency
-is added to lower package layers. The next message queue feature builds on these
-accepted input facts without changing Tool Pipeline or Generation ownership.
+is added to lower package layers.
+
+The [message queue contract](../superpowers/specs/2026-11-23-message-queue-design.md)
+extends this service as the sole per-Session FIFO scheduler. Append-only accepted,
+claimed, finished and reordered facts preserve immutable logical inputs and frozen
+sampling defaults; queued work acquires its Generation only at actual start.
+Waiting capacity is bounded to 10 per Session and 100 globally. Separate metadata
+queue SSE and revision-checked controls keep browser observation independent from
+scheduling. Stop affects the exact current execution and preserves waiting work;
+server restart interrupts all unfinished entries without replaying tools. Studio
+separates admission from observation and reconciles exact Turns while the next
+execution is already live. Tool Pipeline and plugin authority remain unchanged.
 
 ## The Request Path
 

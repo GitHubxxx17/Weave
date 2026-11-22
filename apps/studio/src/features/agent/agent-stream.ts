@@ -1,5 +1,6 @@
 import type { AgentRunRequestInput, AgentStreamHandlers } from './agent-types.js';
-import { launchAndObserveAgentExecution } from './agent-execution-client.js';
+import { launchAgentExecution } from './agent-execution-client.js';
+export { launchAndObserveAgentExecution } from './agent-execution-client.js';
 export {
   AgentStreamError,
   parseAgentEvent,
@@ -13,5 +14,5 @@ export function streamAgentRun(
   handlers: AgentStreamHandlers,
   options?: { readonly signal?: AbortSignal; readonly requestId?: string | undefined },
 ): Promise<void> {
-  return launchAndObserveAgentExecution(request, handlers, options);
+  return launchAgentExecution(request, handlers, options).then(() => undefined);
 }

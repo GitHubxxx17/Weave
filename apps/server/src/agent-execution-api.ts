@@ -4,11 +4,14 @@ import {
   AgentExecutionError,
   agentExecutionCursorSchema,
   agentExecutionLaunchSchema,
+  agentExecutionQueueReorderSchema,
+  agentExecutionQueuedCancelSchema,
   type AgentExecutionFrame,
   type AgentExecutionService,
   type AgentExecutionSubscription,
 } from '@weave/runtime';
 import type { ProjectStore } from '@weave/workspace';
+import { detachedEventStream } from './detached-event-stream.js';
 import { ExecutionHttpError, readExecutionJson } from './agent-execution-guard.js';
 import { SessionServiceError, type SessionService } from './session-service.js';
 
@@ -27,7 +30,14 @@ function errorResponse(context: Context, error: unknown): Response {
         ? 404
         : error.code === 'execution-invalid-input'
           ? 400
-          : error.code === 'execution-busy' || error.code === 'execution-request-conflict'
+          : [
+                'execution-busy',
+                'execution-request-conflict',
+                'execution-queue-full',
+                'execution-queue-conflict',
+                'execution-not-queued',
+                'execution-not-active',
+              ].includes(error.code)
             ? 409
             : error.code === 'execution-output-limit'
               ? 413
@@ -62,78 +72,7 @@ export function executionEventStream(
   subscription: AgentExecutionSubscription,
   signal: AbortSignal,
 ): ReadableStream<Uint8Array> {
-  const initial = [...subscription.initial];
-  const iterator = subscription.events[Symbol.asyncIterator]();
-  let ended = false;
-  let pending: Promise<IteratorResult<AgentExecutionFrame>> | undefined;
-  let heartbeat: ReturnType<typeof setTimeout> | undefined;
-  let wake: (() => void) | undefined;
-  let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
-  const close = () => {
-    if (ended) return;
-    ended = true;
-    if (heartbeat !== undefined) clearTimeout(heartbeat);
-    wake?.();
-    signal.removeEventListener('abort', abort);
-    subscription.close();
-    void Promise.resolve(iterator.return?.()).catch(() => undefined);
-  };
-  const abort = () => {
-    close();
-    try {
-      streamController?.close();
-    } catch {
-      /* disconnected reader */
-    }
-  };
-  return new ReadableStream<Uint8Array>(
-    {
-      start(controller) {
-        streamController = controller;
-        signal.addEventListener('abort', abort, { once: true });
-        if (signal.aborted) abort();
-      },
-      async pull(controller) {
-        if (ended) return;
-        const first = initial.shift();
-        if (first !== undefined) {
-          controller.enqueue(encodeFrame(first));
-          return;
-        }
-        pending ??= iterator.next();
-        try {
-          const tick = new Promise<undefined>((resolve) => {
-            wake = () => resolve(undefined);
-            heartbeat = setTimeout(() => resolve(undefined), 15_000);
-            heartbeat.unref?.();
-          });
-          const next = await Promise.race([pending, tick]);
-          if (heartbeat !== undefined) clearTimeout(heartbeat);
-          heartbeat = undefined;
-          wake = undefined;
-          if (ended) return;
-          if (next === undefined) {
-            controller.enqueue(new TextEncoder().encode(': heartbeat\n\n'));
-            return;
-          }
-          pending = undefined;
-          if (next.done) {
-            close();
-            controller.close();
-            return;
-          }
-          controller.enqueue(encodeFrame(next.value));
-        } catch (error) {
-          close();
-          controller.error(error);
-        }
-      },
-      cancel() {
-        close();
-      },
-    },
-    { highWaterMark: 0 },
-  );
+  return detachedEventStream(subscription, signal, encodeFrame);
 }
 
 /** Validation and transport only; execution lifetime belongs to Runtime. */
@@ -201,6 +140,69 @@ export function registerAgentExecutionRoutes(app: Hono, options: AgentExecutionA
       noQuery(context);
       const { service, sessionId } = await serviceFor(context);
       return context.json(await service.list(sessionId));
+    } catch (error) {
+      return errorResponse(context, error);
+    }
+  });
+  app.get('/sessions/:sessionId/executions/queue', async (context) => {
+    try {
+      noQuery(context);
+      const { service, sessionId } = await serviceFor(context);
+      return context.json(await service.queue(sessionId));
+    } catch (error) {
+      return errorResponse(context, error);
+    }
+  });
+  app.get('/sessions/:sessionId/executions/queue/events', async (context) => {
+    try {
+      noQuery(context);
+      const { service, sessionId } = await serviceFor(context);
+      const subscription = await service.subscribeQueue(sessionId);
+      return new Response(
+        detachedEventStream(subscription, context.req.raw.signal, (snapshot) =>
+          new TextEncoder().encode(
+            `id: ${snapshot.cursor}\nevent: queue\ndata: ${JSON.stringify(snapshot)}\n\n`,
+          ),
+        ),
+        {
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-store',
+            Connection: 'keep-alive',
+            'X-Accel-Buffering': 'no',
+          },
+        },
+      );
+    } catch (error) {
+      return errorResponse(context, error);
+    }
+  });
+  app.post('/sessions/:sessionId/executions/queue/reorder', async (context) => {
+    try {
+      noQuery(context);
+      const parsed = agentExecutionQueueReorderSchema.safeParse(
+        await readExecutionJson(context.req.raw, 16 * 1024),
+      );
+      if (!parsed.success)
+        throw new AgentExecutionError('execution-invalid-input', 'Invalid queue reorder');
+      const { service, sessionId } = await serviceFor(context);
+      return context.json(await service.reorderQueue(sessionId, parsed.data));
+    } catch (error) {
+      return errorResponse(context, error);
+    }
+  });
+  app.post('/sessions/:sessionId/executions/:executionId/cancel-queued', async (context) => {
+    try {
+      noQuery(context);
+      const parsed = agentExecutionQueuedCancelSchema.safeParse(
+        await readExecutionJson(context.req.raw, 4096),
+      );
+      if (!parsed.success)
+        throw new AgentExecutionError('execution-invalid-input', 'Invalid queued cancellation');
+      const { service, sessionId } = await serviceFor(context);
+      return context.json(
+        await service.cancelQueued(sessionId, executionIdFor(context), parsed.data),
+      );
     } catch (error) {
       return errorResponse(context, error);
     }

@@ -5751,6 +5751,86 @@ body:has(.panel-resizer-active) {
   list-style: none;
 }
 
+.execution-queue {
+  display: grid;
+  gap: 7px;
+  max-height: 220px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  overflow-y: auto;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 0.71rem;
+}
+
+.execution-queue-heading {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+
+.execution-queue-heading span,
+.execution-queue-meta {
+  color: var(--muted);
+  font-size: 0.66rem;
+}
+
+.execution-queue ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.execution-queue li {
+  min-width: 0;
+  padding-top: 7px;
+  border-top: 1px solid var(--line);
+}
+
+.execution-queue-preview {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.execution-queue-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 5px;
+}
+
+.execution-queue-actions button {
+  padding: 3px 7px;
+  color: var(--ink-soft);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font-size: 0.65rem;
+}
+
+.queue-copy-dialog {
+  width: min(420px, calc(100vw - 32px));
+  padding: 22px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow-popover);
+}
+
+.queue-copy-dialog h2 {
+  margin-top: 0;
+  font-size: 1rem;
+}
+
+.queue-copy-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .command-option {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);

@@ -1,5 +1,7 @@
 import {
   executionAcceptedPayloadSchema,
+  executionClaimedPayloadSchema,
+  executionQueueReorderedPayloadSchema,
   executionFinishedPayloadSchema,
 } from './execution-events.js';
 import {
@@ -184,6 +186,11 @@ const promptSectionContentPayloadSchema = z
 export const sessionEventPayloadSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('execution.accepted'), payload: executionAcceptedPayloadSchema }),
   z.object({ type: z.literal('execution.finished'), payload: executionFinishedPayloadSchema }),
+  z.object({ type: z.literal('execution.claimed'), payload: executionClaimedPayloadSchema }),
+  z.object({
+    type: z.literal('execution.queue-reordered'),
+    payload: executionQueueReorderedPayloadSchema,
+  }),
   z.object({
     type: z.literal('workspace.file-write-intent'),
     payload: fileWriteIntentPayloadSchema,
@@ -312,6 +319,22 @@ export type SessionEventType = NewSessionEvent['type'];
 export const newSessionEventSchema = z.union([sessionEventPayloadSchema, pluginNewEventSchema]);
 
 const persistedEventSchemas = [
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('execution.claimed'),
+    payload: executionClaimedPayloadSchema,
+  }),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('execution.queue-reordered'),
+    payload: executionQueueReorderedPayloadSchema,
+  }),
   z.object({
     eventId: nonEmptyStringSchema,
     sessionId: nonEmptyStringSchema,

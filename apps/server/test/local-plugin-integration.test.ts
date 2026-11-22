@@ -1112,17 +1112,19 @@ describe('local plugin startup integration', () => {
     }
   });
 
-  it('rejects a second same-session execution and cancels the active Approval before durable stores close', async () => {
+  it('queues a second same-session execution and cancels queued input before durable stores close', async () => {
     const f = await fixture();
     const baseStore = createInMemorySessionEventStore();
     let closed = false;
     const terminalStatuses: string[] = [];
     let statusesAtClose: readonly string[] = [];
+    const executionTerminals: { executionId: string; status: string }[] = [];
     const sessionStore: SessionEventStore = {
       ...baseStore,
       async append(id, events) {
         if (closed) throw new Error('Session store closed before terminal persistence');
         for (const event of events) {
+          if (event.type === 'execution.finished') executionTerminals.push(event.payload);
           if (event.type === 'turn.completed') terminalStatuses.push(event.payload.status);
         }
         return baseStore.append(id, events);
@@ -1198,23 +1200,31 @@ describe('local plugin startup integration', () => {
               provider: 'mock',
               model: 'test',
               permissionMode: 'ask',
-              userMessage: { role: 'user', content: [{ type: 'text', text: 'Rejected request' }] },
+              userMessage: { role: 'user', content: [{ type: 'text', text: 'Queued request' }] },
             },
           }),
         },
       );
-      expect(second.status).toBe(409);
-      expect(await second.json()).toMatchObject({ error: { code: 'execution-busy' } });
+      expect(second.status).toBe(202);
+      const queued = (await second.json()) as { executionId: string };
+      expect(queued).toMatchObject({ status: 'queued' });
       expect(
         (await baseStore.read('local-session')).filter(
           (event) => event.type === 'execution.accepted',
         ),
+      ).toHaveLength(2);
+      expect(
+        (await baseStore.read('local-session')).filter((event) => event.type === 'turn.started'),
       ).toHaveLength(1);
       await Promise.all([server.stop(), server.stop()]);
       await body;
       expect(broker.list()[0]?.status).toBe('cancelled');
       expect(terminalStatuses).toEqual(['cancelled']);
       expect(statusesAtClose).toEqual(['cancelled']);
+      expect(executionTerminals).toContainEqual(
+        expect.objectContaining({ executionId: queued.executionId, status: 'cancelled' }),
+      );
+      expect(executionTerminals).toHaveLength(2);
       expect(closed).toBe(true);
     } finally {
       unsubscribe();

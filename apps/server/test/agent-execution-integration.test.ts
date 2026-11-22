@@ -124,3 +124,55 @@ describe('startup execution recovery', () => {
     }
   });
 });
+
+it('interrupts queued SQLite intents on restart without creating conversation Turns', async () => {
+  const database = createTemporaryDatabaseFile();
+  const store = createSqliteSessionEventStore({ filename: database.filename });
+  const projects = createInMemoryProjectStore();
+  const project = await projects.createProject({
+    name: 'Queued recovery',
+    folderName: 'queued-recovery',
+  });
+  await projects.attachSession(project.id, 'queued-session');
+  await store.append('queued-session', [
+    { type: 'session.created', payload: {} },
+    ...['first', 'second'].map((id) => ({
+      type: 'execution.accepted' as const,
+      payload: {
+        executionId: id,
+        requestId: `request-${id}`,
+        requestDigest: 'a'.repeat(64),
+        turnId: `turn-${id}`,
+        userMessageId: `user-${id}`,
+        input,
+        dispatch: 'queued' as const,
+        runInput: { ...input, useProviderDefaults: false },
+      },
+    })),
+  ]);
+  await store.close();
+  const server = await startServer(0, {
+    databaseFile: database.filename,
+    projectStore: projects,
+    environment: {},
+  });
+  try {
+    const base = `http://127.0.0.1:${server.port}/sessions/queued-session`;
+    const queue = await (await fetch(`${base}/executions/queue`)).json();
+    expect(queue).toMatchObject({ active: null, queued: [], scheduler: 'ready' });
+    const executions = (await (await fetch(`${base}/executions`)).json()) as { status: string }[];
+    expect(executions.map((item) => item.status)).toEqual(['interrupted', 'interrupted']);
+    const observer = createSqliteSessionEventStore({ filename: database.filename });
+    try {
+      const events = await observer.read('queued-session');
+      expect(projectSession(events).turns).toEqual([]);
+      expect(events.filter((event) => event.type === 'execution.claimed')).toEqual([]);
+      expect(events.filter((event) => event.type === 'execution.finished')).toHaveLength(2);
+    } finally {
+      await observer.close();
+    }
+  } finally {
+    await server.stop();
+    await database.cleanup();
+  }
+});

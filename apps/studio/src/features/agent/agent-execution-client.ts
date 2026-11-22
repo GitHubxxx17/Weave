@@ -49,7 +49,11 @@ export function waitForExecutionRetry(attempt: number, signal?: AbortSignal): Pr
     signal?.addEventListener('abort', abort, { once: true });
   });
 }
-async function requestJson<T>(path: string, schema: z.ZodType<T>, init?: RequestInit): Promise<T> {
+export async function requestExecutionJson<T>(
+  path: string,
+  schema: z.ZodType<T>,
+  init?: RequestInit,
+): Promise<T> {
   const response = await fetch(runtimeApiUrl(path), init);
   if (!response.ok) {
     const body: unknown = await response.json().catch(() => null);
@@ -76,6 +80,7 @@ async function requestJson<T>(path: string, schema: z.ZodType<T>, init?: Request
   if (!parsed.success) throw protocolError();
   return parsed.data;
 }
+const requestJson = requestExecutionJson;
 function validateIdentity(
   snapshot: AgentExecutionSnapshot,
   sessionId: string,
@@ -106,10 +111,12 @@ export async function listAgentExecutions(
 export async function getAgentExecution(
   sessionId: string,
   executionId: string,
+  signal?: AbortSignal,
 ): Promise<AgentExecutionSnapshot> {
   const snapshot = await requestJson(
     executionPath(sessionId, executionId),
     agentExecutionSnapshotSchema,
+    signal === undefined ? undefined : { signal },
   );
   validateIdentity(snapshot, sessionId, executionId);
   return snapshot;
@@ -131,11 +138,11 @@ export async function cancelAgentExecution(
   return snapshot;
 }
 
-export async function launchAndObserveAgentExecution(
+export async function launchAgentExecution(
   request: AgentRunRequestInput,
   handlers: AgentStreamHandlers,
   options?: ObserveOptions & { readonly requestId?: string | undefined },
-): Promise<void> {
+): Promise<AgentExecutionSnapshot> {
   const validated = agentRunRequestSchema.parse(request);
   const { sessionId, ...logicalInput } = validated;
   const input = agentExecutionInputSchema.parse({
@@ -173,6 +180,16 @@ export async function launchAndObserveAgentExecution(
   checkAbort(options?.signal);
   handlers.onReceipt?.(snapshot);
   handlers.onAccepted?.();
+  return snapshot;
+}
+
+/** Explicit compatibility helper for callers that own both admission and observation. */
+export async function launchAndObserveAgentExecution(
+  request: AgentRunRequestInput,
+  handlers: AgentStreamHandlers,
+  options?: ObserveOptions & { readonly requestId?: string | undefined },
+): Promise<void> {
+  const snapshot = await launchAgentExecution(request, handlers, options);
   await observeAgentExecution(snapshot, handlers, options);
 }
 
@@ -187,7 +204,7 @@ export async function observeAgentExecution(
   let cursor = snapshot.cursor;
   let terminal = isTerminalExecution(snapshot.status);
   handlers.onSnapshot?.(snapshot);
-  if (terminal) return;
+  if (terminal || snapshot.status === 'queued') return;
   let attempt = 0;
   const acceptCursor = (
     next: string,

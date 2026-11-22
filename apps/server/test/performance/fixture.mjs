@@ -139,6 +139,39 @@ export async function startPerformanceFixture(input) {
   async function handle(request, response) {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
     const path = url.pathname;
+    const queueRoute =
+      /^\/sessions\/(benchmark-(?:history|control))\/executions\/queue(?:\/(events))?$/.exec(path);
+    if (queueRoute && request.method === 'GET') {
+      const [, sessionId, action] = queueRoute;
+      if (action !== 'events') {
+        json(response, await executions.queue(sessionId));
+        return;
+      }
+      const subscription = await executions.subscribeQueue(sessionId);
+      response.once('close', subscription.close);
+      response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
+      response.flushHeaders();
+      const write = async (snapshot) => {
+        if (response.destroyed) return;
+        if (
+          !response.write(
+            `id: ${snapshot.cursor}\nevent: queue\ndata: ${JSON.stringify(snapshot)}\n\n`,
+          )
+        )
+          await Promise.race([once(response, 'drain'), once(response, 'close')]);
+      };
+      try {
+        for (const snapshot of subscription.initial) await write(snapshot);
+        for await (const snapshot of subscription.events) {
+          if (response.destroyed) break;
+          await write(snapshot);
+        }
+        response.end();
+      } finally {
+        subscription.close();
+      }
+      return;
+    }
     const executionRoute =
       /^\/sessions\/(benchmark-(?:history|control))\/executions(?:\/([^/]+)(?:\/(events|cancel))?)?$/.exec(
         path,

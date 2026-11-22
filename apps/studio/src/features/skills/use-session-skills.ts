@@ -94,6 +94,35 @@ export function useSessionSkills(sessionId: string, rootKey: string) {
       };
     });
   }
+  function restore(refs: readonly SkillRef[], append: boolean): void {
+    setDrafts((all) => {
+      const current = all[sessionId] ?? emptyDraft;
+      const available = [...current.selected, ...(catalogs[sessionId]?.catalog?.entries ?? [])];
+      const restored = refs.map((ref): SkillSummary => {
+        const known = available.find((skill) => sameSkill(skill, ref));
+        if (known !== undefined) return known;
+        const kind = ref.id.split(':')[0] as SkillSummary['source']['kind'];
+        return {
+          ...ref,
+          name: ref.id.split('/').at(-1)!.split(':').at(-1)!,
+          description: '从待执行消息复制的技能引用',
+          source: {
+            kind,
+            label: '已复制技能引用',
+            ...(kind === 'plugin' ? { pluginId: ref.id.slice(7).split('/')[0]! } : {}),
+          },
+          invocation: { user: true, model: false },
+        };
+      });
+      const selected = append
+        ? [
+            ...current.selected.filter((skill) => !refs.some((ref) => ref.id === skill.id)),
+            ...restored,
+          ].slice(0, 32)
+        : restored;
+      return { ...all, [sessionId]: { selected, revision: current.revision + 1 } };
+    });
+  }
   function clearSent(target: string, revision: number, sent: readonly SkillRef[]): void {
     setDrafts((all) => {
       const current = all[target];
@@ -126,6 +155,7 @@ export function useSessionSkills(sessionId: string, rootKey: string) {
     refresh,
     toggle,
     remove,
+    restore,
     clearSent,
     forget,
   };

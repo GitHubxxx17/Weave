@@ -484,7 +484,7 @@ describe('owned Agent executions', () => {
     expect((await service.get('session', receipt.executionId)).events).toEqual([]);
   });
 
-  it('replays the same accepted request after response loss and rejects conflicts or a second active execution', async () => {
+  it('replays accepted requests, rejects changed input and queues later admissions', async () => {
     const release = deferred<void>();
     const { service, store } = await setup({
       async *stream(): AsyncIterable<StreamEvent> {
@@ -498,17 +498,17 @@ describe('owned Agent executions', () => {
     await expect(
       service.launch('session', { requestId: 'request', input: { ...input, model: 'different' } }),
     ).rejects.toMatchObject({ code: 'execution-request-conflict' });
-    await expect(
-      service.launch('session', { ...launch, requestId: 'other' }),
-    ).rejects.toMatchObject({ code: 'execution-busy' });
+    const queued = await service.launch('session', { ...launch, requestId: 'other' });
+    expect(queued.status).toBe('queued');
     await expect(service.withSessionIdle('session', async () => 'archived')).rejects.toMatchObject({
       code: 'execution-busy',
     });
     expect(
       (await store.read('session')).filter((event) => event.type === 'execution.accepted'),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     release.resolve();
     await terminal(service, 'session', first.executionId);
+    await terminal(service, 'session', queued.executionId);
   });
 
   it('detaches subscriptions without cancelling and Stop durably retains partial output once', async () => {

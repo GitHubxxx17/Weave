@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { streamAgentRun } from '../src/features/agent/agent-stream.js';
+import { launchAndObserveAgentExecution as streamAgentRun } from '../src/features/agent/agent-stream.js';
 import {
   cancelAgentExecution,
   observeAgentExecution,
