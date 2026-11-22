@@ -11,6 +11,7 @@ import type { SessionEventStore } from '@weave/session';
 import {
   createApprovalBroker,
   createAgentRunner,
+  withWorkspaceMutation,
   createToolRegistry,
   createRuntime,
   createSessionEventStoreService,
@@ -246,6 +247,11 @@ export async function assembleServerGeneration(
     const runner = createAgentRunner({
       llmRegistry: providerRegistry,
       sessionStore: runnerStore,
+      turnAdmission: async (sessionId, start) => {
+        const root = await resolveWorkspaceRoot?.(sessionId);
+        if (root === undefined) await start();
+        else await withWorkspaceMutation(root, start);
+      },
       toolRegistry,
       toolPipeline: withSkillAuditPipeline(assembled.toolPipeline, skillController),
       // Plugins wrap the model stream only when one registered a handler.

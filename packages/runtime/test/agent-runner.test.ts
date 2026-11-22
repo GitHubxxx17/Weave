@@ -3335,3 +3335,46 @@ describe('Agent Runner LLM middleware', () => {
     expect(failure).toMatchObject({ message: 'middleware bug' });
   });
 });
+
+it('holds the durable turn start behind the host admission gate', async () => {
+  const store = createInMemorySessionEventStore();
+  let enter!: () => void;
+  let release!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    enter = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const runner = createAgentRunner({
+    sessionStore: store,
+    llm: recordingClient([{ type: 'finish', reason: 'stop' }], []),
+    turnAdmission: async (_sessionId, start) => {
+      enter();
+      await gate;
+      await start();
+    },
+  });
+  const running = collect(
+    runner.run({
+      sessionId: 'admission',
+      provider: 'mock',
+      model: 'mock',
+      userMessage: { role: 'user', content: [{ type: 'text', text: 'hello' }] },
+    }),
+  );
+  await Promise.race([
+    entered,
+    running.then(() => {
+      throw new Error('Turn bypassed admission');
+    }),
+  ]);
+  expect((await store.read('admission')).some((event) => event.type === 'turn.started')).toBe(
+    false,
+  );
+  release();
+  await running;
+  expect((await store.read('admission')).some((event) => event.type === 'turn.completed')).toBe(
+    true,
+  );
+});

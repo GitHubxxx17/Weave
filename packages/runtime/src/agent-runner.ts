@@ -542,65 +542,73 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
             validRequest.maxTokens ??
             (validRequest.useProviderDefaults === false ? undefined : descriptor?.maxTokens);
           sessionId = validRequest.sessionId;
-          let storedEvents = await options.sessionStore.read(validRequest.sessionId);
-          if (storedEvents.length === 0) {
-            await options.sessionStore.append(validRequest.sessionId, [
-              { type: 'session.created', payload: {} },
-            ]);
-            storedEvents = await options.sessionStore.read(validRequest.sessionId);
-          }
-          projectSession(storedEvents);
+          const startTurn = async (): Promise<void> => {
+            if (signal.aborted) throw createAbortError();
+            let storedEvents = await options.sessionStore.read(validRequest.sessionId);
+            if (storedEvents.length === 0) {
+              await options.sessionStore.append(validRequest.sessionId, [
+                { type: 'session.created', payload: {} },
+              ]);
+              storedEvents = await options.sessionStore.read(validRequest.sessionId);
+            }
+            projectSession(storedEvents);
 
-          const messageId = validRequest.executionIdentity?.userMessageId ?? crypto.randomUUID();
-          turnId = validRequest.executionIdentity?.turnId ?? crypto.randomUUID();
-          stepId = crypto.randomUUID();
-          await options.sessionStore.append(validRequest.sessionId, [
-            {
-              type: 'message.created',
-              payload: { messageId, message: validRequest.userMessage },
-            },
-            {
-              type: 'turn.started',
-              payload: {
-                turnId,
-                userMessageId: messageId,
-                ...(validRequest.executionIdentity === undefined
-                  ? {}
-                  : { executionId: validRequest.executionIdentity.executionId }),
-                request: {
-                  provider: validRequest.provider,
-                  model: validRequest.model,
-                  permissionMode: validRequest.permissionMode ?? 'ask',
-                  useProviderDefaults: false,
-                  ...(effectiveTemperature === undefined
-                    ? {}
-                    : { temperature: effectiveTemperature }),
-                  ...(effectiveMaxTokens === undefined ? {} : { maxTokens: effectiveMaxTokens }),
-                  ...(validRequest.reasoningEffort === undefined
-                    ? {}
-                    : { reasoningEffort: validRequest.reasoningEffort }),
+            const messageId = validRequest.executionIdentity?.userMessageId ?? crypto.randomUUID();
+            turnId = validRequest.executionIdentity?.turnId ?? crypto.randomUUID();
+            stepId = crypto.randomUUID();
+            await options.sessionStore.append(validRequest.sessionId, [
+              {
+                type: 'message.created',
+                payload: { messageId, message: validRequest.userMessage },
+              },
+              {
+                type: 'turn.started',
+                payload: {
+                  turnId,
+                  userMessageId: messageId,
+                  request: {
+                    provider: validRequest.provider,
+                    model: validRequest.model,
+                    permissionMode: validRequest.permissionMode ?? 'ask',
+                    useProviderDefaults: false,
+                    ...(effectiveTemperature === undefined
+                      ? {}
+                      : { temperature: effectiveTemperature }),
+                    ...(effectiveMaxTokens === undefined ? {} : { maxTokens: effectiveMaxTokens }),
+                    ...(validRequest.reasoningEffort === undefined
+                      ? {}
+                      : { reasoningEffort: validRequest.reasoningEffort }),
+                  },
                 },
               },
-            },
-            {
-              type: 'step.started',
-              payload: {
-                turnId,
-                stepId,
-                kind: 'model',
-                provider: validRequest.provider,
-                model: validRequest.model,
+              {
+                type: 'step.started',
+                payload: {
+                  turnId,
+                  stepId,
+                  kind: 'model',
+                  provider: validRequest.provider,
+                  model: validRequest.model,
+                },
               },
-            },
-            ...(validRequest.skills === undefined
-              ? []
-              : [
-                  {
-                    type: 'skill.requested' as const,
-                    payload: { turnId, userMessageId: messageId, skills: [...validRequest.skills] },
-                  },
-                ]),
-          ]);
+              ...(validRequest.skills === undefined
+                ? []
+                : [
+                    {
+                      type: 'skill.requested' as const,
+                      payload: {
+                        turnId,
+                        userMessageId: messageId,
+                        skills: [...validRequest.skills],
+                      },
+                    },
+                  ]),
+            ]);
+          };
+          if (options.turnAdmission === undefined) await startTurn();
+          else await options.turnAdmission(validRequest.sessionId, startTurn);
+          if (turnId === undefined || stepId === undefined)
+            throw new Error('Turn admission did not start the turn');
           lifecycleStarted = true;
 
           let projectedSession = projectSession(

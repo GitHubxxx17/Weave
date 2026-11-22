@@ -69,6 +69,7 @@ import { sameSkill, skillRef, type SkillSummary } from '../features/skills/skill
 import { useAutoScroll } from '../features/conversation/use-auto-scroll.js';
 import { MarkdownMessage } from '../features/conversation/markdown-message.js';
 import { ToolStep } from '../features/conversation/tool-step.js';
+import { TurnFileReview } from '../features/file-undo/turn-file-review.js';
 import { MessageFooter } from '../features/conversation/message-footer.js';
 import {
   useComposerDraft,
@@ -3483,20 +3484,31 @@ function StudioApp(): ReactElement {
                       message.turnId !== undefined &&
                       lastReplyIdByTurn.get(message.turnId) === message.id &&
                       !(isLatestAssistant && status === 'streaming') ? (
-                        <MessageFooter
-                          turn={turnById.get(message.turnId)}
-                          timeLabel={formatMessageTime(message.occurredAt)}
-                          text={message.text}
-                          canRetry={message.turnId === lastTurnId}
-                          disabled={status === 'streaming'}
-                          retryUnavailableReason={
-                            submissionForTurn(message.turnId) === undefined
-                              ? '旧会话未记录原始请求设置，无法精确重试'
-                              : undefined
-                          }
-                          onRetry={() => retryTurn(message.turnId as string)}
-                          onQuote={() => quoteReply(message.text)}
-                        />
+                        <>
+                          <MessageFooter
+                            turn={turnById.get(message.turnId)}
+                            timeLabel={formatMessageTime(message.occurredAt)}
+                            text={message.text}
+                            canRetry={message.turnId === lastTurnId}
+                            disabled={status === 'streaming'}
+                            retryUnavailableReason={
+                              submissionForTurn(message.turnId) === undefined
+                                ? '旧会话未记录原始请求设置，无法精确重试'
+                                : undefined
+                            }
+                            onRetry={() => retryTurn(message.turnId as string)}
+                            onQuote={() => quoteReply(message.text)}
+                          />
+                          {turnById.get(message.turnId)?.status !== 'running' ? (
+                            <TurnFileReview
+                              key={`${activeSessionId}:${message.turnId}`}
+                              projectId={activeProjectId}
+                              sessionId={activeSessionId}
+                              turnId={message.turnId}
+                              disabled={status === 'streaming'}
+                            />
+                          ) : null}
+                        </>
                       ) : null}
                     </div>
                   </article>

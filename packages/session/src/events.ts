@@ -1,4 +1,15 @@
 import {
+  executionAcceptedPayloadSchema,
+  executionFinishedPayloadSchema,
+} from './execution-events.js';
+import {
+  fileWriteIntentPayloadSchema,
+  fileWritePayloadSchema,
+  fileUndoStartedPayloadSchema,
+  fileUndoFilePayloadSchema,
+  fileUndoCompletedPayloadSchema,
+} from './file-undo-events.js';
+import {
   skillContentPayloadSchema,
   skillCatalogAppliedPayloadSchema,
   skillRequestedPayloadSchema,
@@ -13,10 +24,6 @@ import {
   turnRequestMetadataSchema,
 } from '@weave/protocol';
 import { z } from 'zod';
-import {
-  executionAcceptedPayloadSchema,
-  executionFinishedPayloadSchema,
-} from './execution-events.js';
 
 const nonEmptyStringSchema = z.string().min(1);
 const positiveSequenceSchema = z.number().int().positive().safe();
@@ -61,8 +68,8 @@ const messageCreatedPayloadSchema = z
 const turnStartedPayloadSchema = z
   .object({
     turnId: nonEmptyStringSchema,
-    userMessageId: nonEmptyStringSchema.optional(),
     executionId: nonEmptyStringSchema.optional(),
+    userMessageId: nonEmptyStringSchema.optional(),
     request: turnRequestMetadataSchema.optional(),
   })
   .passthrough();
@@ -127,6 +134,14 @@ const fileSnapshotPayloadSchema = z
     path: nonEmptyStringSchema,
     existedBefore: z.boolean(),
     previousContent: z.string(),
+    snapshotId: nonEmptyStringSchema.optional(),
+    turnId: nonEmptyStringSchema.optional(),
+    toolCallId: nonEmptyStringSchema.optional(),
+    rootIdentity: nonEmptyStringSchema.optional(),
+    beforeDigest: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
   })
   .passthrough();
 
@@ -169,6 +184,17 @@ const promptSectionContentPayloadSchema = z
 export const sessionEventPayloadSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('execution.accepted'), payload: executionAcceptedPayloadSchema }),
   z.object({ type: z.literal('execution.finished'), payload: executionFinishedPayloadSchema }),
+  z.object({
+    type: z.literal('workspace.file-write-intent'),
+    payload: fileWriteIntentPayloadSchema,
+  }),
+  z.object({ type: z.literal('workspace.file-write'), payload: fileWritePayloadSchema }),
+  z.object({ type: z.literal('workspace.undo-started'), payload: fileUndoStartedPayloadSchema }),
+  z.object({ type: z.literal('workspace.undo-file'), payload: fileUndoFilePayloadSchema }),
+  z.object({
+    type: z.literal('workspace.undo-completed'),
+    payload: fileUndoCompletedPayloadSchema,
+  }),
   z.object({ type: z.literal('skill.content'), payload: skillContentPayloadSchema }),
   z.object({ type: z.literal('skill.catalog-applied'), payload: skillCatalogAppliedPayloadSchema }),
   z.object({ type: z.literal('skill.requested'), payload: skillRequestedPayloadSchema }),
@@ -301,6 +327,46 @@ const persistedEventSchemas = [
     occurredAt: z.iso.datetime(),
     type: z.literal('execution.finished'),
     payload: executionFinishedPayloadSchema,
+  }),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('workspace.file-write-intent'),
+    payload: fileWriteIntentPayloadSchema,
+  }),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('workspace.file-write'),
+    payload: fileWritePayloadSchema,
+  }),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('workspace.undo-started'),
+    payload: fileUndoStartedPayloadSchema,
+  }),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('workspace.undo-file'),
+    payload: fileUndoFilePayloadSchema,
+  }),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('workspace.undo-completed'),
+    payload: fileUndoCompletedPayloadSchema,
   }),
   z.object({
     eventId: nonEmptyStringSchema,

@@ -18,6 +18,7 @@ import { registerAgentRoutes, type AgentAppOptions } from './agent-api.js';
 import { registerSessionRoutes, type SessionAppOptions } from './session-api.js';
 import { registerWorkspaceRoutes, type WorkspaceAppOptions } from './workspace-api.js';
 import { registerSkillRoutes, type SkillAppOptions } from './skill-api.js';
+import { registerFileUndoGuards } from './file-undo-guard.js';
 import { registerFileUndoRoutes } from './file-undo-api.js';
 import { registerFileRoutes, type FileAppOptions } from './file-api.js';
 import { registerPluginRoutes, type PluginAppOptions } from './plugin-api.js';
@@ -77,6 +78,7 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
 
   registerPanelGuards(app, options ?? {});
   registerAgentExecutionGuards(app, studioOrigin);
+  registerFileUndoGuards(app, options ?? {});
 
   if (studioOrigin !== undefined) {
     app.use(
