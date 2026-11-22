@@ -17,6 +17,7 @@ import {
   type ServerLocalPluginHost,
 } from './local-plugin-host.js';
 import type { ExtensionCoordinator } from './extension-coordinator.js';
+import type { ManagedPluginInstaller } from './managed-plugin-installer.js';
 import {
   acquireManagedPluginStartup,
   resolvePluginStartupOptions,
@@ -146,9 +147,10 @@ export async function startServer(
   let mcpManager: ServerMcpManager | undefined;
   let pluginHost: ServerLocalPluginHost | undefined;
   let coordinator: ExtensionCoordinator | undefined;
+  let installer: ManagedPluginInstaller | undefined;
   let server: ServerType | undefined;
   const shutdown = createServerShutdown({
-    resources: () => ({ server, coordinator, authority, owned }),
+    resources: () => ({ server, coordinator, authority, owned, installer }),
     disposeHost: () => disposeServerPlugins(runtime),
     stopRuntime: () => runtime.stop(),
     closeProjectStore: () => projectStore?.close(),
@@ -232,6 +234,7 @@ export async function startServer(
     const { localTrust } = startup;
     const extensions = createServerExtensionCoordinator(runtime, {
       runnerOptions,
+      ...(startup.owned === undefined ? {} : { installerStore: startup.owned }),
       managed: {
         initialAuthority: startup.snapshot,
         readAuthoritySync: startup.authority.snapshotSync,
@@ -258,6 +261,7 @@ export async function startServer(
           }),
     });
     coordinator = extensions.coordinator;
+    installer = extensions.installer;
     const managed = extensions.managed!;
     receiveOwnershipLoss = (error) => {
       managed.onOwnershipLostSync(error);

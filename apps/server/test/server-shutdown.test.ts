@@ -97,6 +97,42 @@ describe('Server shutdown', () => {
   });
 
   it.each(['stop', 'failStartup'] as const)(
+    'closes installer admission before draining owned work during %s',
+    async (method) => {
+      const calls: string[] = [];
+      const failure = new Error('boot failed');
+      const shutdown = createServerShutdown(
+        cleanupOptions(() => ({
+          installer: {
+            closeSync() {
+              calls.push('installer');
+            },
+          },
+          owned: {
+            async quiesce() {
+              calls.push('quiesce');
+            },
+            async close() {
+              calls.push('release');
+            },
+          },
+          authority: {
+            async close() {
+              calls.push('authority');
+            },
+          },
+        })),
+      );
+      if (method === 'failStartup') {
+        await expect(shutdown.failStartup(failure)).rejects.toBe(failure);
+      } else {
+        await shutdown.stop();
+      }
+      expect(calls).toEqual(['installer', 'quiesce', 'release', 'authority']);
+    },
+  );
+
+  it.each(['stop', 'failStartup'] as const)(
     'closes a separately owned trust override once alongside main authority during %s',
     async (method) => {
       const calls: string[] = [];

@@ -180,6 +180,7 @@ export async function createRealManagedCompositionFixture(
     directory: join(pluginsDirectory, '.weave-store'),
     initialBinding: 'allow-unbound',
     hostVersion: runnerOptions.hostVersion,
+    reservedIds: kernelPluginFactories.map((create) => create().manifest.id),
     onOwnershipLost: (error) => extensions?.managed?.onOwnershipLostSync?.(error),
   });
   const readOwned = vi.fn(owned.read);
@@ -192,6 +193,7 @@ export async function createRealManagedCompositionFixture(
   function closeResources() {
     closing ??= (async () => {
       try {
+        extensions?.installer?.closeSync();
         await extensions?.coordinator.dispose();
       } finally {
         await disposeServerPlugins(runtime);
@@ -311,6 +313,11 @@ export async function createRealManagedCompositionFixture(
         await authority.trust.append({ kind: 'trusted', pluginId: id, digest, manifest });
       return { directory, manifest, digest };
     },
+    async writeSource(id: string, text = 'source', marker?: string) {
+      const directory = join(root, `source-${++sequence}-private`);
+      const manifest = await writePlugin(directory, id, text, marker);
+      return { directory, manifest };
+    },
     async seedManaged(
       id: string,
       text: string,
@@ -350,6 +357,7 @@ export async function createRealManagedCompositionFixture(
     compose(
       options: {
         readonly execution?: boolean;
+        readonly installer?: boolean;
         readonly local?: boolean;
         readonly localTrustStore?: PluginTrustStore;
         readonly mcp?: boolean;
@@ -360,6 +368,9 @@ export async function createRealManagedCompositionFixture(
       extensions = createServerExtensionCoordinator(runtime, {
         runnerOptions,
         kernelPluginFactories,
+        ...(options.installer === true && options.execution !== false
+          ? { installerStore: owned }
+          : {}),
         ...(options.local === false
           ? {}
           : {
