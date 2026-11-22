@@ -61,6 +61,9 @@ import {
   isTerminalExecution,
   type AgentExecutionSnapshot,
 } from '../features/agent/agent-execution-types.js';
+import { ExecutionQueueList } from '../features/agent/execution-queue-list.js';
+import { mergeExecutionHistory } from '../features/agent/execution-history.js';
+import { useExecutionQueues } from '../features/agent/use-execution-queues.js';
 import { appendExecutionEvent, executionTurnView } from '../features/agent/agent-execution-view.js';
 import { useSessionSkills } from '../features/skills/use-session-skills.js';
 import { SkillPicker } from '../features/skills/skill-picker.js';
@@ -129,6 +132,10 @@ type SessionRunHandle = {
   controller: AbortController;
   assistantId: string;
   tools: readonly ToolActivity[];
+  projectId?: string;
+  sessionId?: string;
+  observing?: boolean;
+  reconciling?: boolean;
   execution?: AgentExecutionSnapshot;
   requestId?: string;
   pendingCancel?: boolean;
@@ -876,6 +883,22 @@ function StudioApp(): ReactElement {
   const [runStateBySession, setRunStateBySession] = useState<Record<string, SessionRunState>>({});
   const runHandles = useRef<Map<string, SessionRunHandle>>(new Map());
   const sessionActivityVersions = useRef(new Map<string, number>());
+  // Durable Session sequences survive navigation and Server epochs; late reads must not roll them back.
+  const appliedDurableSequences = useRef(new Map<string, number>());
+  const settledExecutionSequences = useRef(new Map<string, number>());
+  const [admitting, setAdmitting] = useState<Record<string, boolean>>({});
+  const [copyRequest, setCopyRequest] = useState<{
+    snapshot: AgentExecutionSnapshot;
+    owner: DraftCapture;
+  } | null>(null);
+  const queueController = useExecutionQueues({
+    activeSessionId,
+    activeProjectId,
+    onActive: (projectId, sessionId, summary) => {
+      void attachExecution(projectId, sessionId, summary.executionId);
+    },
+    onNotice: setNotice,
+  });
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -891,7 +914,11 @@ function StudioApp(): ReactElement {
     return runStateBySession[sessionId]?.status ?? 'idle';
   }
   function isSessionStreaming(sessionId: string): boolean {
-    return sessionRunStatus(sessionId) === 'streaming';
+    return (
+      sessionRunStatus(sessionId) === 'streaming' ||
+      (queueController.states[sessionId]?.queued.length ?? 0) > 0 ||
+      admitting[sessionId] === true
+    );
   }
   function setSessionRunState(sessionId: string, next: SessionRunState): void {
     setRunStateBySession((current) => ({ ...current, [sessionId]: next }));
@@ -901,7 +928,16 @@ function StudioApp(): ReactElement {
   const activeRunState = runStateBySession[activeSessionId] ?? idleRunState;
   const status = activeRunState.status;
   const errorMessage = activeRunState.errorMessage;
+  const activeQueue = queueController.states[activeSessionId];
+  const sessionHasWork = isSessionStreaming(activeSessionId);
   const activeSessionIdRef = useRef('');
+  useEffect(() => {
+    for (const [key, handle] of runHandles.current) {
+      if (!handle.observing || handle.sessionId === activeSessionId) continue;
+      handle.controller.abort();
+      runHandles.current.delete(key);
+    }
+  }, [activeSessionId]);
   const messageInputRef = useRef<HTMLTextAreaElement | null>(null);
   const directoryInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
@@ -1089,18 +1125,7 @@ function StudioApp(): ReactElement {
         if (disposed) {
           return;
         }
-        setProjects((current) =>
-          current.map((project) =>
-            project.id === firstProject.id
-              ? {
-                  ...project,
-                  sessions: project.sessions.map((session) =>
-                    session.id === firstSession.id ? toStudioSession(detail) : session,
-                  ),
-                }
-              : project,
-          ),
-        );
+        applySessionDetail(firstProject.id, detail);
         await recoverSessionExecution(
           firstProject.id,
           firstSession.id,
@@ -1264,7 +1289,9 @@ function StudioApp(): ReactElement {
     });
   }
 
-  function applySessionDetail(projectId: string, detail: SessionDetail): void {
+  function applySessionDetail(projectId: string, detail: SessionDetail): boolean {
+    if (detail.lastSequence < (appliedDurableSequences.current.get(detail.id) ?? 0)) return false;
+    appliedDurableSequences.current.set(detail.id, detail.lastSequence);
     setProjects((current) =>
       current.map((project) =>
         project.id !== projectId
@@ -1277,12 +1304,14 @@ function StudioApp(): ReactElement {
             },
       ),
     );
+    return true;
   }
 
   async function loadSessionDetail(projectId: string, sessionId: string): Promise<void> {
     // A streaming session's freshest messages live in memory; a server snapshot
     // would clobber its in-flight assistant message, so skip the reload while it runs.
-    if (runHandles.current.has(sessionId)) {
+    if (hasSessionHandles(sessionId)) {
+      void queueController.open(projectId, sessionId);
       return;
     }
     const activityVersion = sessionActivityVersions.current.get(sessionId) ?? 0;
@@ -1290,10 +1319,24 @@ function StudioApp(): ReactElement {
       const detail = await workspaceApi.getSession(sessionId);
       if ((sessionActivityVersions.current.get(sessionId) ?? 0) !== activityVersion) return;
       // A run may have started while the snapshot was in flight; don't clobber it.
-      if (runHandles.current.has(sessionId)) {
+      if (hasSessionHandles(sessionId)) {
+        void queueController.open(projectId, sessionId);
         return;
       }
-      applySessionDetail(projectId, detail);
+      if (!applySessionDetail(projectId, detail)) return;
+      if (sessionRunStatus(sessionId) === 'streaming') {
+        const latest = detail.turns.at(-1);
+        setSessionRunState(
+          sessionId,
+          latest?.status === 'completed'
+            ? { status: 'completed', errorMessage: null }
+            : latest?.status === 'cancelled'
+              ? { status: 'cancelled', errorMessage: null }
+              : latest?.status === 'failed'
+                ? { status: 'error', errorMessage: '本次运行失败，请查看运行错误' }
+                : idleRunState,
+        );
+      }
       await recoverSessionExecution(projectId, sessionId, detail.lastSequence);
     } catch (error: unknown) {
       if (activeSessionIdRef.current === sessionId) {
@@ -1302,8 +1345,100 @@ function StudioApp(): ReactElement {
     }
   }
 
+  function hasSessionHandles(sessionId: string): boolean {
+    return [...runHandles.current.values()].some(
+      (handle) => handle.sessionId === sessionId || handle.execution?.sessionId === sessionId,
+    );
+  }
+
+  function executionHandle(sessionId: string, runId: string): SessionRunHandle | undefined {
+    return [...runHandles.current.values()].find(
+      (handle) =>
+        handle.runId === runId &&
+        (handle.execution === undefined || handle.execution.sessionId === sessionId),
+    );
+  }
+
+  function executionOwnsStatus(sessionId: string, runId: string): boolean {
+    const active = queueController.getState(sessionId)?.active;
+    const handle = executionHandle(sessionId, runId);
+    return (
+      handle !== undefined &&
+      !(
+        handle.execution !== undefined &&
+        isTerminalExecution(handle.execution.status) &&
+        (handle.execution.durableThroughSequence ?? 0) <
+          (settledExecutionSequences.current.get(sessionId) ?? 0)
+      ) &&
+      (active === undefined ||
+        active === null ||
+        active.executionId === handle.execution?.executionId) &&
+      ![...runHandles.current.values()].some(
+        (candidate) =>
+          candidate !== handle &&
+          candidate.execution?.sessionId === sessionId &&
+          !isTerminalExecution(candidate.execution.status) &&
+          candidate.execution.status !== 'queued',
+      )
+    );
+  }
+
+  async function attachExecution(
+    projectId: string,
+    sessionId: string,
+    executionId: string,
+    supplied?: AgentExecutionSnapshot,
+  ): Promise<void> {
+    if (activeSessionIdRef.current !== sessionId) return;
+    if (!mounted.current || runHandles.current.has(executionId)) return;
+    const handle: SessionRunHandle = {
+      runId: createId('observation'),
+      projectId,
+      sessionId,
+      assistantId: supplied?.turnId ?? executionId,
+      controller: new AbortController(),
+      tools: [],
+      observing: true,
+    };
+    runHandles.current.set(executionId, handle);
+    if (queueController.getState(sessionId)?.active?.executionId === executionId)
+      setSessionRunState(sessionId, { status: 'streaming', errorMessage: null });
+    try {
+      let snapshot = supplied;
+      let attempt = 0;
+      while (snapshot === undefined) {
+        try {
+          snapshot = await getAgentExecution(sessionId, executionId, handle.controller.signal);
+        } catch (error: unknown) {
+          if (!(error instanceof TypeError)) throw error;
+          await waitForExecutionRetry(attempt++, handle.controller.signal);
+        }
+      }
+      if (!mounted.current || runHandles.current.get(executionId) !== handle) return;
+      handle.execution = snapshot;
+      handle.assistantId = snapshot.turnId;
+      renderExecution(projectId, snapshot, handle.runId);
+      if (snapshot.status === 'queued') {
+        runHandles.current.delete(executionId);
+        return;
+      }
+      if (executionOwnsStatus(sessionId, handle.runId))
+        setSessionRunState(sessionId, {
+          status: 'streaming',
+          stopping: snapshot.status === 'cancelling',
+          errorMessage: snapshot.error?.message ?? null,
+        });
+      if (handle.pendingCancel) void requestExecutionCancel(projectId, sessionId, handle.runId);
+      await resumeExecution(projectId, sessionId, handle.runId);
+    } catch (error: unknown) {
+      if (runHandles.current.get(executionId) === handle) runHandles.current.delete(executionId);
+      if (!handle.controller.signal.aborted && mounted.current)
+        setNotice(`无法恢复执行。${safeErrorMessage(error)}`);
+    }
+  }
+
   function executionIsCurrent(sessionId: string, runId: string): boolean {
-    return mounted.current && runHandles.current.get(sessionId)?.runId === runId;
+    return mounted.current && executionHandle(sessionId, runId) !== undefined;
   }
 
   function renderExecution(
@@ -1311,11 +1446,11 @@ function StudioApp(): ReactElement {
     snapshot: AgentExecutionSnapshot,
     runId: string,
   ): void {
-    const handle = runHandles.current.get(snapshot.sessionId);
+    const handle = executionHandle(snapshot.sessionId, runId);
     if (handle === undefined || !executionIsCurrent(snapshot.sessionId, runId)) return;
     const previous = handle.execution;
     handle.execution = snapshot;
-    if (isTerminalExecution(snapshot.status)) return;
+    if (isTerminalExecution(snapshot.status) || snapshot.status === 'queued') return;
     const view = executionTurnView(snapshot);
     const statuses = new Map(
       view.turn.toolResults.map((result) => [result.toolCallId, result.status]),
@@ -1387,6 +1522,9 @@ function StudioApp(): ReactElement {
       onSnapshot: (snapshot) => {
         if (!executionIsCurrent(sessionId, runId)) return;
         renderExecution(projectId, snapshot, runId);
+        if (isTerminalExecution(snapshot.status))
+          void reconcileExecution(projectId, sessionId, runId);
+        if (!executionOwnsStatus(sessionId, runId)) return;
         setRunStateBySession((current) => ({
           ...current,
           [sessionId]: {
@@ -1394,19 +1532,22 @@ function StudioApp(): ReactElement {
             status: 'streaming',
             errorMessage: snapshot.error?.message ?? null,
             stopping:
-              runHandles.current.get(sessionId)?.pendingCancel || snapshot.status === 'cancelling',
+              executionHandle(sessionId, runId)?.pendingCancel || snapshot.status === 'cancelling',
           },
         }));
       },
       onEvent: (event) => {
-        const handle = runHandles.current.get(sessionId);
+        const handle = executionHandle(sessionId, runId);
         if (handle?.execution === undefined || !executionIsCurrent(sessionId, runId)) return;
         renderExecution(projectId, appendExecutionEvent(handle.execution, event), runId);
       },
       onStatus: (status) => {
-        const handle = runHandles.current.get(sessionId);
+        const handle = executionHandle(sessionId, runId);
         if (handle?.execution === undefined || !executionIsCurrent(sessionId, runId)) return;
         handle.execution = { ...handle.execution, ...status };
+        if (isTerminalExecution(status.status))
+          void reconcileExecution(projectId, sessionId, runId);
+        if (!executionOwnsStatus(sessionId, runId)) return;
         setRunStateBySession((current) => ({
           ...current,
           [sessionId]: {
@@ -1419,6 +1560,7 @@ function StudioApp(): ReactElement {
       },
       onConnection: (connection) => {
         if (!executionIsCurrent(sessionId, runId)) return;
+        if (!executionOwnsStatus(sessionId, runId)) return;
         setRunStateBySession((current) => ({
           ...current,
           [sessionId]: {
@@ -1437,7 +1579,7 @@ function StudioApp(): ReactElement {
     sessionId: string,
     runId: string,
   ): Promise<void> {
-    const handle = runHandles.current.get(sessionId);
+    const handle = executionHandle(sessionId, runId);
     if (
       handle?.execution === undefined ||
       handle.cancelInFlight ||
@@ -1460,7 +1602,7 @@ function StudioApp(): ReactElement {
         };
       }
     } catch (error: unknown) {
-      if (executionIsCurrent(sessionId, runId))
+      if (executionIsCurrent(sessionId, runId) && executionOwnsStatus(sessionId, runId))
         setSessionRunState(sessionId, {
           status: 'streaming',
           stopping: true,
@@ -1476,54 +1618,113 @@ function StudioApp(): ReactElement {
     sessionId: string,
     runId: string,
   ): Promise<void> {
+    const reconciliationHandle = executionHandle(sessionId, runId);
+    if (reconciliationHandle === undefined || reconciliationHandle.reconciling) return;
+    reconciliationHandle.reconciling = true;
     let attempt = 0;
-    while (executionIsCurrent(sessionId, runId)) {
-      const handle = runHandles.current.get(sessionId);
-      const snapshot = handle?.execution;
-      if (handle === undefined || snapshot === undefined || !isTerminalExecution(snapshot.status))
-        return;
-      try {
-        const detail = await workspaceApi.getSession(sessionId);
-        if (!executionIsCurrent(sessionId, runId)) return;
-        const turn = detail.turns.find(
-          (candidate) =>
-            candidate.turnId === snapshot.turnId &&
-            candidate.userMessageId === snapshot.userMessageId,
-        );
-        if (
-          detail.id === sessionId &&
-          snapshot.durableThroughSequence !== undefined &&
-          detail.lastSequence >= snapshot.durableThroughSequence &&
-          ((turn !== undefined && turn.status !== 'running') ||
-            (turn === undefined && snapshot.status !== 'completed'))
-        ) {
-          applySessionDetail(projectId, detail);
-          runHandles.current.delete(sessionId);
-          setSessionRunState(sessionId, {
-            status:
-              snapshot.status === 'completed'
-                ? 'completed'
-                : snapshot.status === 'cancelled'
-                  ? 'cancelled'
-                  : 'error',
-            errorMessage:
-              snapshot.status === 'failed' || snapshot.status === 'interrupted'
-                ? (snapshot.error?.message ?? '本次运行已中断；会话记录已更新。')
-                : null,
-          });
+    try {
+      while (executionIsCurrent(sessionId, runId)) {
+        const handle = executionHandle(sessionId, runId);
+        const snapshot = handle?.execution;
+        if (handle === undefined || snapshot === undefined || !isTerminalExecution(snapshot.status))
           return;
+        try {
+          const detail = await workspaceApi.getSession(sessionId);
+          if (!executionIsCurrent(sessionId, runId)) return;
+          const turn = detail.turns.find(
+            (candidate) =>
+              candidate.turnId === snapshot.turnId &&
+              candidate.userMessageId === snapshot.userMessageId,
+          );
+          if (
+            detail.id === sessionId &&
+            snapshot.durableThroughSequence !== undefined &&
+            detail.lastSequence >= snapshot.durableThroughSequence &&
+            ((turn !== undefined && turn.status !== 'running') ||
+              (turn === undefined && snapshot.status !== 'completed'))
+          ) {
+            const durable = toStudioSession(detail);
+            const staleHistory =
+              detail.lastSequence < (appliedDurableSequences.current.get(sessionId) ?? 0);
+            if (!staleHistory) appliedDurableSequences.current.set(sessionId, detail.lastSequence);
+            const overlays = [...runHandles.current.values()].flatMap((candidate) =>
+              candidate !== handle &&
+              candidate.execution?.sessionId === sessionId &&
+              !confirmedExecutionTurn(detail, candidate.execution)
+                ? [candidate.execution]
+                : [],
+            );
+            if (!staleHistory) {
+              updateSessionMessages(projectId, sessionId, (current) =>
+                mergeExecutionHistory(durable.messages, current, overlays),
+              );
+              updateSessionTurns(projectId, sessionId, (current) =>
+                mergeExecutionHistory(durable.turns, current, overlays),
+              );
+            }
+            const ownsStatus =
+              executionOwnsStatus(sessionId, runId) &&
+              snapshot.durableThroughSequence >=
+                (settledExecutionSequences.current.get(sessionId) ?? 0);
+            settledExecutionSequences.current.set(
+              sessionId,
+              Math.max(
+                snapshot.durableThroughSequence,
+                settledExecutionSequences.current.get(sessionId) ?? 0,
+              ),
+            );
+            runHandles.current.delete(snapshot.executionId);
+            if (runHandles.current.get(sessionId) === handle) runHandles.current.delete(sessionId);
+            if (!ownsStatus) return;
+            setSessionRunState(sessionId, {
+              status:
+                snapshot.status === 'completed'
+                  ? 'completed'
+                  : snapshot.status === 'cancelled'
+                    ? 'cancelled'
+                    : 'error',
+              errorMessage:
+                snapshot.status === 'failed' || snapshot.status === 'interrupted'
+                  ? (snapshot.error?.message ?? '本次运行已中断；会话记录已更新。')
+                  : null,
+            });
+            return;
+          }
+        } catch (error: unknown) {
+          if (!executionIsCurrent(sessionId, runId)) return;
+          if (executionOwnsStatus(sessionId, runId))
+            setSessionRunState(sessionId, {
+              status: 'streaming',
+              stopping: handle.pendingCancel,
+              connection: 'reconnecting',
+              errorMessage: `正在确认持久化会话记录。${workspaceErrorMessage(error)}`,
+            });
         }
-      } catch (error: unknown) {
-        if (!executionIsCurrent(sessionId, runId)) return;
-        setSessionRunState(sessionId, {
-          status: 'streaming',
-          stopping: handle.pendingCancel,
-          connection: 'reconnecting',
-          errorMessage: `正在确认持久化会话记录。${workspaceErrorMessage(error)}`,
-        });
+        await waitForExecutionRetry(attempt++, handle.controller.signal);
       }
-      await waitForExecutionRetry(attempt++, handle.controller.signal);
+    } catch (error: unknown) {
+      if (!reconciliationHandle.controller.signal.aborted && mounted.current)
+        setNotice(`无法确认执行记录。${safeErrorMessage(error)}`);
+    } finally {
+      reconciliationHandle.reconciling = false;
     }
+  }
+
+  function confirmedExecutionTurn(
+    detail: SessionDetail,
+    execution: AgentExecutionSnapshot,
+  ): boolean {
+    return (
+      isTerminalExecution(execution.status) &&
+      execution.durableThroughSequence !== undefined &&
+      detail.lastSequence >= execution.durableThroughSequence &&
+      detail.turns.some(
+        (turn) =>
+          turn.turnId === execution.turnId &&
+          turn.userMessageId === execution.userMessageId &&
+          turn.status !== 'running',
+      )
+    );
   }
 
   async function resumeExecution(
@@ -1533,12 +1734,23 @@ function StudioApp(): ReactElement {
   ): Promise<void> {
     let attempt = 0;
     while (executionIsCurrent(sessionId, runId)) {
-      const handle = runHandles.current.get(sessionId);
+      const handle = executionHandle(sessionId, runId);
       if (handle?.execution === undefined) return;
       try {
         if (!isTerminalExecution(handle.execution.status)) {
-          const snapshot = await getAgentExecution(sessionId, handle.execution.executionId);
+          const snapshot =
+            attempt === 0
+              ? handle.execution
+              : await getAgentExecution(
+                  sessionId,
+                  handle.execution.executionId,
+                  handle.controller.signal,
+                );
           if (!executionIsCurrent(sessionId, runId)) return;
+          if (snapshot.status === 'queued') {
+            runHandles.current.delete(snapshot.executionId);
+            return;
+          }
           await observeAgentExecution(snapshot, executionHandlers(projectId, sessionId, runId), {
             signal: handle.controller.signal,
           });
@@ -1547,12 +1759,13 @@ function StudioApp(): ReactElement {
         return;
       } catch (error: unknown) {
         if (!executionIsCurrent(sessionId, runId)) return;
-        setSessionRunState(sessionId, {
-          status: 'streaming',
-          stopping: handle.pendingCancel,
-          connection: 'reconnecting',
-          errorMessage: `正在恢复运行连接。${safeErrorMessage(error)}`,
-        });
+        if (executionOwnsStatus(sessionId, runId))
+          setSessionRunState(sessionId, {
+            status: 'streaming',
+            stopping: handle.pendingCancel,
+            connection: 'reconnecting',
+            errorMessage: `正在恢复运行连接。${safeErrorMessage(error)}`,
+          });
         try {
           await waitForExecutionRetry(attempt++, handle.controller.signal);
         } catch {
@@ -1568,51 +1781,21 @@ function StudioApp(): ReactElement {
     lastSequence: number,
     disposed?: () => boolean,
   ): Promise<void> {
-    if (runHandles.current.has(sessionId)) return;
-    const activityVersion = sessionActivityVersions.current.get(sessionId) ?? 0;
+    await queueController.open(projectId, sessionId);
+    if (!mounted.current || disposed?.()) return;
     try {
       const summaries = await listAgentExecutions(sessionId);
-      if (
-        !mounted.current ||
-        disposed?.() ||
-        runHandles.current.has(sessionId) ||
-        (sessionActivityVersions.current.get(sessionId) ?? 0) !== activityVersion
-      )
-        return;
-      const active =
-        summaries.find((summary) => !isTerminalExecution(summary.status)) ??
-        summaries.find(
-          (summary) =>
-            summary.durableThroughSequence !== undefined &&
-            summary.durableThroughSequence > lastSequence,
-        );
-      if (active === undefined) return;
-      const snapshot = await getAgentExecution(sessionId, active.executionId);
-      if (
-        !mounted.current ||
-        disposed?.() ||
-        runHandles.current.has(sessionId) ||
-        (sessionActivityVersions.current.get(sessionId) ?? 0) !== activityVersion
-      )
-        return;
-      const runId = createId('observation');
-      runHandles.current.set(sessionId, {
-        runId,
-        assistantId: snapshot.turnId,
-        controller: new AbortController(),
-        execution: snapshot,
-        tools: [],
-      });
-      renderExecution(projectId, snapshot, runId);
-      setSessionRunState(sessionId, {
-        status: 'streaming',
-        stopping: snapshot.status === 'cancelling',
-        errorMessage: snapshot.error?.message ?? null,
-      });
-      void resumeExecution(projectId, sessionId, runId);
-    } catch (error: unknown) {
-      if (mounted.current && !disposed?.() && activeSessionIdRef.current === sessionId)
-        setNotice(`无法恢复运行状态。${safeErrorMessage(error)}`);
+      if (!mounted.current || disposed?.()) return;
+      for (const summary of summaries) {
+        if (
+          (summary.status !== 'queued' && !isTerminalExecution(summary.status)) ||
+          (summary.durableThroughSequence !== undefined &&
+            summary.durableThroughSequence > lastSequence)
+        )
+          void attachExecution(projectId, sessionId, summary.executionId);
+      }
+    } catch {
+      /* Queue observation remains authoritative if history metadata is unavailable. */
     }
   }
 
@@ -1799,6 +1982,7 @@ function StudioApp(): ReactElement {
   ): Promise<ActiveSessionContext | null> {
     try {
       const detail = await workspaceApi.createSession(projectId);
+      appliedDurableSequences.current.set(detail.id, detail.lastSequence);
       const newSession = toStudioSession(detail);
       setProjects((current) => {
         const project = current.find((candidate) => candidate.id === projectId);
@@ -1904,20 +2088,38 @@ function StudioApp(): ReactElement {
     const selectedSkills = retry === undefined ? [...sessionSkills.draft.selected] : [];
     const selectedRevision = sessionSkills.draft.revision;
     const selectedSessionId = activeSessionId;
-    const settings = {
-      provider: selectedProviderId,
-      model: selectedModel,
-      useProviderDefaults: false,
-      ...(selectedProvider?.temperature === undefined
-        ? {}
-        : { temperature: selectedProvider.temperature }),
-      ...(selectedProvider?.maxTokens === undefined
-        ? {}
-        : { maxTokens: selectedProvider.maxTokens }),
-      reasoningEffort,
-      permissionMode,
-    };
-    if ((text === '' && images.length === 0) || status === 'streaming') {
+    const copiedInput = composerDraft.draft.sampling;
+    const settings =
+      copiedInput !== undefined &&
+      copiedInput.provider === selectedProviderId &&
+      copiedInput.model === selectedModel
+        ? {
+            provider: selectedProviderId,
+            model: selectedModel,
+            ...(copiedInput.useProviderDefaults === undefined
+              ? {}
+              : { useProviderDefaults: copiedInput.useProviderDefaults }),
+            ...(copiedInput.temperature === undefined
+              ? {}
+              : { temperature: copiedInput.temperature }),
+            ...(copiedInput.maxTokens === undefined ? {} : { maxTokens: copiedInput.maxTokens }),
+            reasoningEffort,
+            permissionMode,
+          }
+        : {
+            provider: selectedProviderId,
+            model: selectedModel,
+            useProviderDefaults: false,
+            ...(selectedProvider?.temperature === undefined
+              ? {}
+              : { temperature: selectedProvider.temperature }),
+            ...(selectedProvider?.maxTokens === undefined
+              ? {}
+              : { maxTokens: selectedProvider.maxTokens }),
+            reasoningEffort,
+            permissionMode,
+          };
+    if ((text === '' && images.length === 0) || admitting[activeSessionId]) {
       return;
     }
 
@@ -1975,6 +2177,11 @@ function StudioApp(): ReactElement {
     const runId = createId('run');
     const requestController = new AbortController();
     const occurredAt = new Date().toISOString();
+    const queuedAdmission =
+      (queueController.getState(sessionId)?.active !== null &&
+        queueController.getState(sessionId)?.active !== undefined) ||
+      (queueController.getState(sessionId)?.queued.length ?? 0) > 0 ||
+      sessionRunStatus(sessionId) === 'streaming';
 
     sessionActivityVersions.current.set(
       sessionId,
@@ -1982,50 +2189,57 @@ function StudioApp(): ReactElement {
     );
     runHandles.current.set(sessionId, {
       runId,
+      sessionId,
       controller: requestController,
       assistantId,
       tools: [],
       requestId: crypto.randomUUID(),
     });
+    setAdmitting((current) => ({ ...current, [sessionId]: true }));
     conversationScroll.scrollToBottom('auto');
-    updateSessionMessages(projectId, sessionId, (current) => [
-      ...current,
-      {
-        id: userMessageId,
-        role: 'user',
-        text,
-        reasoning: '',
-        tools: [],
-        occurredAt,
-        images: images.map((image) => ({ mediaType: image.mediaType, data: image.data })),
-        turnId: liveTurnId,
-        submission,
-        selectedSkills: retry === undefined ? selectedSkills : [],
-      },
-      {
-        id: assistantId,
-        role: 'assistant',
-        text: '',
-        reasoning: '',
-        tools: [],
-        occurredAt,
-        turnId: liveTurnId,
-      },
-    ]);
-    updateSessionTurns(projectId, sessionId, (current) => [
-      ...current,
-      {
-        turnId: liveTurnId,
-        status: 'running',
-        startedAt: occurredAt,
-        provider: submission.provider,
-        model: submission.model,
-        modelSteps: [],
-        toolResults: [],
-        toolCalls: 0,
-        failedToolCalls: 0,
-      },
-    ]);
+    let optimisticInserted = false;
+    const ensureOptimistic = (): void => {
+      if (optimisticInserted || queuedAdmission) return;
+      optimisticInserted = true;
+      updateSessionMessages(projectId, sessionId, (current) => [
+        ...current,
+        {
+          id: userMessageId,
+          role: 'user',
+          text,
+          reasoning: '',
+          tools: [],
+          occurredAt,
+          images: images.map((image) => ({ mediaType: image.mediaType, data: image.data })),
+          turnId: liveTurnId,
+          submission,
+          selectedSkills: retry === undefined ? selectedSkills : [],
+        },
+        {
+          id: assistantId,
+          role: 'assistant',
+          text: '',
+          reasoning: '',
+          tools: [],
+          occurredAt,
+          turnId: liveTurnId,
+        },
+      ]);
+      updateSessionTurns(projectId, sessionId, (current) => [
+        ...current,
+        {
+          turnId: liveTurnId,
+          status: 'running',
+          startedAt: occurredAt,
+          provider: submission.provider,
+          model: submission.model,
+          modelSteps: [],
+          toolResults: [],
+          toolCalls: 0,
+          failedToolCalls: 0,
+        },
+      ]);
+    };
     setProjects((current) =>
       current.map((project) =>
         project.id === projectId
@@ -2050,14 +2264,18 @@ function StudioApp(): ReactElement {
       void workspaceApi.renameSession(sessionId, generatedTitle).catch(() => undefined);
     }
     setExpandedMessageIds([assistantId]);
-    setSessionRunState(sessionId, { status: 'streaming', errorMessage: null });
+    if (!queuedAdmission)
+      setSessionRunState(sessionId, { status: 'streaming', errorMessage: null });
 
+    let receiptObserved = false;
+    let productionRunId: string | undefined;
     let completedObserved = false;
     let completedTurnId: string | undefined;
     let accepted = false;
     const accept = (): void => {
-      if (accepted || !executionIsCurrent(sessionId, runId)) return;
+      if (accepted || !mounted.current) return;
       accepted = true;
+      if (!receiptObserved) ensureOptimistic();
       if (retry === undefined) {
         sessionSkills.clearSent(sessionId, selectedRevision, submission.skills);
         composerDraft.clearSubmittedDraftIfCurrent(
@@ -2072,15 +2290,46 @@ function StudioApp(): ReactElement {
         {
           ...executionHandlers(projectId, sessionId, runId),
           onReceipt: (snapshot) => {
-            if (!executionIsCurrent(sessionId, runId)) return;
+            if (!mounted.current) return;
+            receiptObserved = true;
             accept();
-            renderExecution(projectId, snapshot, runId);
-            if (runHandles.current.get(sessionId)?.pendingCancel)
-              void requestExecutionCancel(projectId, sessionId, runId);
+            const pending = runHandles.current.get(sessionId);
+            if (pending?.runId === runId) runHandles.current.delete(sessionId);
+            updateSessionMessages(projectId, sessionId, (current) =>
+              current.filter((message) => message.turnId !== liveTurnId),
+            );
+            updateSessionTurns(projectId, sessionId, (current) =>
+              current.filter((turn) => turn.turnId !== liveTurnId),
+            );
+            if (snapshot.status !== 'queued') {
+              void attachExecution(projectId, sessionId, snapshot.executionId, snapshot);
+              productionRunId = runHandles.current.get(snapshot.executionId)?.runId;
+              if (pending?.pendingCancel && productionRunId !== undefined)
+                void requestExecutionCancel(projectId, sessionId, productionRunId);
+            } else if (
+              !hasSessionHandles(sessionId) &&
+              queueController.getState(sessionId)?.active == null
+            ) {
+              setSessionRunState(sessionId, idleRunState);
+            }
+            void queueController.refresh(projectId, sessionId).catch(() => undefined);
           },
           onAccepted: accept,
+          onSnapshot: (snapshot) => {
+            if (productionRunId !== undefined)
+              executionHandlers(projectId, sessionId, productionRunId).onSnapshot?.(snapshot);
+          },
+          onStatus: (frame) => {
+            if (productionRunId !== undefined)
+              executionHandlers(projectId, sessionId, productionRunId).onStatus?.(frame);
+          },
           onEvent: (event) => {
             accept();
+            if (receiptObserved) {
+              if (productionRunId !== undefined)
+                executionHandlers(projectId, sessionId, productionRunId).onEvent(event);
+              return;
+            }
             if (runHandles.current.get(sessionId)?.execution !== undefined) {
               executionHandlers(projectId, sessionId, runId).onEvent(event);
               return;
@@ -2097,6 +2346,7 @@ function StudioApp(): ReactElement {
           requestId: runHandles.current.get(sessionId)?.requestId,
         },
       );
+      if (receiptObserved) return;
       if (runHandles.current.get(sessionId)?.execution !== undefined) {
         await reconcileExecution(projectId, sessionId, runId);
         return;
@@ -2118,6 +2368,27 @@ function StudioApp(): ReactElement {
         void resumeExecution(projectId, sessionId, runId);
         return;
       }
+      if (
+        error instanceof AgentStreamError &&
+        ['execution-queue-full', 'execution-queue-conflict', 'execution-request-conflict'].includes(
+          error.code,
+        )
+      ) {
+        updateSessionMessages(projectId, sessionId, (current) =>
+          current.filter((message) => message.turnId !== liveTurnId),
+        );
+        updateSessionTurns(projectId, sessionId, (current) =>
+          current.filter((turn) => turn.turnId !== liveTurnId),
+        );
+        if (!queuedAdmission) setSessionRunState(sessionId, idleRunState);
+        setNotice(
+          error.code === 'execution-queue-full'
+            ? '待执行队列已满，请稍后再试。草稿已保留。'
+            : '待执行队列已变化，请确认后重新发送。草稿已保留。',
+        );
+        void queueController.refresh(projectId, sessionId).catch(() => undefined);
+        return;
+      }
       if (error instanceof DOMException && error.name === 'AbortError') {
         setSessionRunState(sessionId, { status: 'cancelled', errorMessage: null });
         finishLiveTurn(projectId, sessionId, liveTurnId, 'cancelled');
@@ -2129,7 +2400,9 @@ function StudioApp(): ReactElement {
         finishLiveTurn(projectId, sessionId, liveTurnId, 'failed');
       }
     } finally {
+      setAdmitting((current) => ({ ...current, [sessionId]: false }));
       if (
+        !receiptObserved &&
         runHandles.current.get(sessionId)?.runId === runId &&
         runHandles.current.get(sessionId)?.execution === undefined
       ) {
@@ -2284,6 +2557,8 @@ function StudioApp(): ReactElement {
 
     try {
       await workspaceApi.deleteSession(session.sessionId);
+      appliedDurableSequences.current.delete(session.sessionId);
+      settledExecutionSequences.current.delete(session.sessionId);
       sessionSkills.forget(session.sessionId);
       setProjects((current) =>
         current.map((project) =>
@@ -2802,6 +3077,7 @@ function StudioApp(): ReactElement {
 
   /** Selects a public Provider and its configured default model for new runs. */
   function chooseProvider(provider: ProviderDescriptor): void {
+    composerDraft.setSampling(undefined);
     setSelectedProviderId(provider.id);
     setSelectedModel(provider.defaultModel ?? '');
     setOpenMenu(null);
@@ -2810,6 +3086,56 @@ function StudioApp(): ReactElement {
   function showNotice(message: string): void {
     setNotice(message);
     setOpenMenu(null);
+  }
+
+  async function copyQueuedMessage(executionId: string): Promise<void> {
+    const owner = composerDraft.capture();
+    try {
+      const snapshot = await getAgentExecution(owner.owner.sessionId, executionId);
+      if (!composerDraft.isOwnerCurrent(owner.owner)) return;
+      const current = composerDraft.read();
+      if (current.text !== '' || current.images.length > 0) setCopyRequest({ snapshot, owner });
+      else applyQueuedCopy(snapshot, owner, false);
+    } catch {
+      setNotice('无法复制该消息，请刷新队列后重试。');
+    }
+  }
+  function applyQueuedCopy(
+    snapshot: AgentExecutionSnapshot,
+    owner: DraftCapture,
+    append: boolean,
+  ): void {
+    if (!composerDraft.isOwnerCurrent(owner.owner)) {
+      setCopyRequest(null);
+      return;
+    }
+    const text = snapshot.input.userMessage.content
+      .filter((part) => part.type === 'text')
+      .map((part) => part.text)
+      .join('\n');
+    const images = snapshot.input.userMessage.content
+      .filter((part) => part.type === 'image')
+      .map((part) => ({
+        id: createId('img'),
+        name: '队列图片',
+        mediaType: part.mediaType,
+        data: part.data,
+      }));
+    setMessageInput((current) => (append && current !== '' ? `${current}\n\n${text}` : text));
+    setPendingImages((current) => (append ? [...current, ...images] : images));
+    setSelectedProviderId(snapshot.input.provider);
+    setSelectedModel(snapshot.input.model);
+    setPermissionMode(snapshot.input.permissionMode);
+    setReasoningEffort(snapshot.input.reasoningEffort ?? 'medium');
+    const { provider, model, useProviderDefaults, temperature, maxTokens } = {
+      ...snapshot.input,
+      ...snapshot.effectiveSettings,
+    };
+    composerDraft.setSampling({ provider, model, useProviderDefaults, temperature, maxTokens });
+    sessionSkills.restore(snapshot.input.skills ?? [], append);
+    composerDraft.markLiteral();
+    setCopyRequest(null);
+    setNotice('已复制到草稿，原消息仍在队列中。');
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>): void {
@@ -2868,11 +3194,19 @@ function StudioApp(): ReactElement {
 
   function cancelRun(): void {
     const sessionId = activeSessionId;
-    const handle = runHandles.current.get(sessionId);
-    if (handle === undefined) {
-      return;
-    }
-
+    const activeId = queueController.getState(sessionId)?.active?.executionId;
+    if (activeId !== undefined && !runHandles.current.has(activeId))
+      void attachExecution(activeProjectId, sessionId, activeId);
+    const handle =
+      activeId !== undefined
+        ? runHandles.current.get(activeId)
+        : ([...runHandles.current.values()].find(
+            (candidate) =>
+              candidate.execution?.sessionId === sessionId &&
+              !isTerminalExecution(candidate.execution.status) &&
+              candidate.execution.status !== 'queued',
+          ) ?? runHandles.current.get(sessionId));
+    if (handle === undefined) return;
     handle.pendingCancel = true;
     setSessionRunState(sessionId, { status: 'streaming', stopping: true, errorMessage: null });
     if (handle.execution !== undefined)
@@ -3490,7 +3824,7 @@ function StudioApp(): ReactElement {
                             timeLabel={formatMessageTime(message.occurredAt)}
                             text={message.text}
                             canRetry={message.turnId === lastTurnId}
-                            disabled={status === 'streaming'}
+                            disabled={sessionHasWork}
                             retryUnavailableReason={
                               submissionForTurn(message.turnId) === undefined
                                 ? '旧会话未记录原始请求设置，无法精确重试'
@@ -3505,7 +3839,7 @@ function StudioApp(): ReactElement {
                               projectId={activeProjectId}
                               sessionId={activeSessionId}
                               turnId={message.turnId}
-                              disabled={status === 'streaming'}
+                              disabled={sessionHasWork}
                             />
                           ) : null}
                         </>
@@ -3530,6 +3864,15 @@ function StudioApp(): ReactElement {
         </div>
 
         <form className="composer" onSubmit={handleSubmit}>
+          {activeQueue !== undefined ? (
+            <ExecutionQueueList
+              state={activeQueue}
+              pending={queueController.pending[activeSessionId] ?? false}
+              onCancel={(id) => void queueController.cancel(activeSessionId, id)}
+              onMove={(id) => void queueController.move(activeSessionId, id)}
+              onCopy={(id) => void copyQueuedMessage(id)}
+            />
+          ) : null}
           <ApprovalPanel
             pending={approvals.pending.filter(
               (approval) =>
@@ -3900,16 +4243,22 @@ function StudioApp(): ReactElement {
                   >
                     <Square aria-hidden="true" />
                   </button>
-                ) : (
-                  <button
-                    className="send-button"
-                    type="submit"
-                    disabled={messageInput.trim() === '' && pendingImages.length === 0}
-                    aria-label="发送"
-                  >
-                    <SendHorizontal aria-hidden="true" />
-                  </button>
-                )}
+                ) : null}
+                <button
+                  className="send-button"
+                  type="submit"
+                  disabled={
+                    admitting[activeSessionId] ||
+                    (messageInput.trim() === '' && pendingImages.length === 0)
+                  }
+                  aria-label={
+                    status === 'streaming' || (activeQueue?.queued.length ?? 0) > 0
+                      ? '加入队列'
+                      : '发送'
+                  }
+                >
+                  <SendHorizontal aria-hidden="true" />
+                </button>
               </div>
             </div>
           </div>
@@ -3961,7 +4310,7 @@ function StudioApp(): ReactElement {
                           type="button"
                           aria-label={`打开项目 ${project.name}`}
                           onClick={() => openProject(project.id)}
-                          disabled={status === 'streaming'}
+                          disabled={sessionHasWork}
                         >
                           <span className="project-overview-avatar" aria-hidden="true">
                             {project.name.slice(0, 1).toLocaleUpperCase()}
@@ -3995,7 +4344,7 @@ function StudioApp(): ReactElement {
                             aria-label={`在 ${project.name} 中新建会话`}
                             title="新建会话"
                             onClick={() => void createSessionForProject(project.id)}
-                            disabled={status === 'streaming'}
+                            disabled={sessionHasWork}
                           >
                             <MessageSquarePlus aria-hidden="true" />
                           </button>
@@ -4005,7 +4354,7 @@ function StudioApp(): ReactElement {
                             aria-label={`重命名项目 ${project.name}`}
                             title="重命名"
                             onClick={() => openProjectRename(project)}
-                            disabled={status === 'streaming'}
+                            disabled={sessionHasWork}
                           >
                             <Pencil aria-hidden="true" />
                           </button>
@@ -4015,7 +4364,7 @@ function StudioApp(): ReactElement {
                             aria-label={`设置项目 ${project.name} 的文件夹`}
                             title="设置文件夹"
                             onClick={() => openFolderDialog(project)}
-                            disabled={status === 'streaming'}
+                            disabled={sessionHasWork}
                           >
                             <FolderCog aria-hidden="true" />
                           </button>
@@ -4059,7 +4408,7 @@ function StudioApp(): ReactElement {
                                   type="button"
                                   aria-label={`恢复会话 ${session.title}`}
                                   onClick={() => void restoreSession(project.id, session.id)}
-                                  disabled={status === 'streaming'}
+                                  disabled={sessionHasWork}
                                 >
                                   <RotateCcw aria-hidden="true" />
                                   恢复
@@ -4075,7 +4424,7 @@ function StudioApp(): ReactElement {
                                       title: session.title,
                                     })
                                   }
-                                  disabled={status === 'streaming'}
+                                  disabled={sessionHasWork}
                                 >
                                   <Trash2 aria-hidden="true" />
                                   永久删除
@@ -4276,6 +4625,36 @@ function StudioApp(): ReactElement {
           onJumpToMessage: jumpToMessage,
         }}
       />
+      {copyRequest !== null ? (
+        <div className="modal-backdrop">
+          <section
+            className="queue-copy-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label="复制队列消息"
+          >
+            <h2>保留当前草稿</h2>
+            <p>请选择追加或替换；原消息仍在队列中。</p>
+            <div className="queue-copy-dialog-actions">
+              <button
+                type="button"
+                onClick={() => applyQueuedCopy(copyRequest.snapshot, copyRequest.owner, true)}
+              >
+                追加到草稿
+              </button>
+              <button
+                type="button"
+                onClick={() => applyQueuedCopy(copyRequest.snapshot, copyRequest.owner, false)}
+              >
+                替换草稿
+              </button>
+              <button type="button" onClick={() => setCopyRequest(null)}>
+                取消复制
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
       {notice !== null ? (
         <div className="studio-notice" role="status">
           {notice}

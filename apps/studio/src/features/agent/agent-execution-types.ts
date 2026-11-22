@@ -27,6 +27,7 @@ export const agentExecutionInputSchema = z.strictObject({
 });
 export type AgentExecutionInput = z.infer<typeof agentExecutionInputSchema>;
 export const agentExecutionStatusSchema = z.enum([
+  'queued',
   'accepted',
   'running',
   'cancelling',
@@ -58,10 +59,56 @@ export const agentExecutionSummarySchema = z.strictObject({
 export const agentExecutionSnapshotSchema = agentExecutionSummarySchema
   .extend({
     input: agentExecutionInputSchema,
+    effectiveSettings: z
+      .strictObject({
+        useProviderDefaults: z.literal(false),
+        temperature: z.number().finite().nonnegative().optional(),
+        maxTokens: z.number().finite().nonnegative().optional(),
+      })
+      .optional(),
     events: z.array(agentRuntimeEventSchema).max(4096).readonly(),
   })
   .strict();
 export type AgentExecutionSummary = z.infer<typeof agentExecutionSummarySchema>;
+export const agentExecutionQueueEntrySchema = agentExecutionSummarySchema
+  .extend({
+    preview: z.string().refine((value) => [...value].length <= 240),
+    provider: z.string().min(1),
+    model: z.string().min(1),
+    imageCount: z.number().int().nonnegative().safe(),
+    skillCount: z.number().int().nonnegative().max(32),
+  })
+  .strict();
+export const agentExecutionQueueSnapshotSchema = z.strictObject({
+  sessionId: id,
+  revision: z.number().int().nonnegative().safe(),
+  cursor: z
+    .string()
+    .max(2500)
+    .regex(/^[^:]+:[^:]+:(?:0|[1-9][0-9]*)$/)
+    .refine((cursor) => Number.isSafeInteger(Number(cursor.split(':')[2]))),
+  active: agentExecutionSummarySchema.nullable(),
+  queued: z.array(agentExecutionQueueEntrySchema).max(10).readonly(),
+  scheduler: z.enum(['ready', 'closing', 'blocked']),
+  limits: z.strictObject({ sessionQueued: z.literal(10), globalQueued: z.literal(100) }),
+  error: errorSchema.optional(),
+});
+export type AgentExecutionQueueSnapshot = z.infer<typeof agentExecutionQueueSnapshotSchema>;
+export const agentExecutionQueuedCancelSchema = z.strictObject({
+  requestId: id,
+  expectedRevision: z.number().int().nonnegative().safe(),
+});
+export const agentExecutionQueueReorderSchema = agentExecutionQueuedCancelSchema
+  .extend({
+    executionIds: z
+      .array(id)
+      .max(10)
+      .readonly()
+      .refine((ids) => new Set(ids).size === ids.length),
+  })
+  .strict();
+export type AgentExecutionQueuedCancel = z.infer<typeof agentExecutionQueuedCancelSchema>;
+export type AgentExecutionQueueReorder = z.infer<typeof agentExecutionQueueReorderSchema>;
 export type AgentExecutionSnapshot = z.infer<typeof agentExecutionSnapshotSchema>;
 export const agentExecutionStatusFrameSchema = z.strictObject({
   cursor: agentExecutionCursorSchema,

@@ -30,6 +30,15 @@ interface Draft {
   readonly images: readonly unknown[];
   readonly literalSend: boolean;
   readonly revision: number;
+  readonly owner?: ComposerOwner;
+  readonly sampling?: DraftSamplingSettings | undefined;
+}
+export interface DraftSamplingSettings {
+  readonly provider: string;
+  readonly model: string;
+  readonly useProviderDefaults?: boolean | undefined;
+  readonly temperature?: number | undefined;
+  readonly maxTokens?: number | undefined;
 }
 export interface DraftCapture {
   readonly owner: ComposerOwner;
@@ -136,7 +145,7 @@ export function useComposerDraft(options: {
   }
   if (!current.buckets.has(draftKey(current.owner)))
     current.buckets.set(draftKey(current.owner), emptyDraft());
-  const active = current.buckets.get(draftKey(current.owner))!;
+  const active = { ...current.buckets.get(draftKey(current.owner))!, owner: current.owner };
   current.buckets.delete(draftKey(current.owner));
   current.buckets.set(draftKey(current.owner), active);
   while (current.buckets.size > 129) {
@@ -165,6 +174,15 @@ export function useComposerDraft(options: {
     [update],
   );
   const resetLiteral = useCallback(() => update((d) => ({ ...d, literalSend: false })), [update]);
+  const markLiteral = useCallback(() => update((d) => ({ ...d, literalSend: true })), [update]);
+  const setSampling = useCallback(
+    (sampling: DraftSamplingSettings | undefined) => update((d) => ({ ...d, sampling })),
+    [update],
+  );
+  const read = useCallback((): Draft => {
+    const s = state.current;
+    return s.buckets.get(draftKey(s.owner)) ?? emptyDraft();
+  }, []);
   const isOwnerCurrent = useCallback(
     (owner: ComposerOwner) => sameComposerOwner(state.current.owner, owner),
     [],
@@ -261,7 +279,7 @@ export function useComposerDraft(options: {
       s.buckets.delete(draftKey(s.owner));
       s.key = ownerKey(sessionId, projectId, rootKey);
       s.owner = destination;
-      s.buckets.set(draftKey(s.owner), draft);
+      s.buckets.set(draftKey(s.owner), { ...draft, owner: destination });
       s.panel = null;
       s.token += 1;
       s.consumed = true;
@@ -279,10 +297,15 @@ export function useComposerDraft(options: {
         ticket !== null && s.ticket === ticket && ticket.source === source
           ? ticket.destination
           : source.owner;
-      const draft = s.buckets.get(draftKey(s.owner));
-      if (!sameComposerOwner(owner, s.owner) || draft?.revision !== source.revision) return false;
+      const draft = s.buckets.get(draftKey(owner));
+      if (
+        draft?.owner === undefined ||
+        !sameComposerOwner(owner, draft.owner) ||
+        draft.revision !== source.revision
+      )
+        return false;
       s.sequence += 1;
-      s.buckets.set(draftKey(s.owner), { ...emptyDraft(), revision: s.sequence });
+      s.buckets.set(draftKey(owner), { ...emptyDraft(), revision: s.sequence, owner });
       s.ticket = null;
       render((n) => n + 1);
       return true;
@@ -295,6 +318,9 @@ export function useComposerDraft(options: {
     setText,
     setImages,
     resetLiteral,
+    markLiteral,
+    setSampling,
+    read,
     isOwnerCurrent,
     setPanelContext,
     invalidatePanel,

@@ -1,3 +1,4 @@
+import { freezeExecutionInput } from './agent-execution-input.js';
 import { createAgentExecutionService, type AgentExecutionService } from '@weave/runtime';
 import { createPanelService } from './plugin-panel-service.js';
 import type { PanelService } from './plugin-panel-types.js';
@@ -331,6 +332,11 @@ export async function startServer(
     agentExecutionService = createAgentExecutionService({
       runner: coordinator.runner,
       sessionStore,
+      resolveInput: async (_sessionId, input) =>
+        freezeExecutionInput(
+          input,
+          runtime.serverHost.providerRegistry.getDescriptor(input.provider),
+        ),
       admit: async (sessionId) => {
         await sessionService.assertRunnable(sessionId);
         const allProjects = await projects.listProjects();

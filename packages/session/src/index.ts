@@ -44,8 +44,17 @@ export { collectFileUndo, fileUndoForTurn } from './file-undo.js';
 export type { FileSnapshot, TurnFileUndo } from './file-undo.js';
 
 export type { SkillApplication, SkillFailure } from './skill-events.js';
-export { agentExecutionInputSchema, projectAgentExecutions } from './execution-events.js';
-export type { AgentExecutionInput, SessionExecution } from './execution-events.js';
+export {
+  agentExecutionInputSchema,
+  projectAgentExecutions,
+  projectAgentExecutionQueue,
+} from './execution-events.js';
+export type {
+  AgentExecutionInput,
+  SessionExecution,
+  SessionExecutionMetadata,
+  SessionExecutionQueue,
+} from './execution-events.js';
 
 export type { FileUndoResult } from './file-undo-events.js';
 

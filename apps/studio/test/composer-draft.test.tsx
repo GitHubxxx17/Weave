@@ -9,6 +9,60 @@ const authority = {
   authorityEpoch: 1,
 };
 describe('owned composer drafts', () => {
+  it('clears an accepted background owner bucket while preserving the current Session and ABA edits', () => {
+    const { result, rerender } = renderHook(
+      ({ sessionId }) => useComposerDraft({ sessionId, projectId: 'p', rootKey: 'root' }),
+      { initialProps: { sessionId: 'a' } },
+    );
+    act(() => {
+      result.current.setText('accepted a');
+      result.current.setImages([{ id: 'a-image' }]);
+    });
+    const accepted = result.current.capture();
+    rerender({ sessionId: 'b' });
+    act(() => result.current.setText('keep b'));
+    act(() => expect(result.current.clearSubmittedDraftIfCurrent(accepted)).toBe(true));
+    expect(result.current.draft.text).toBe('keep b');
+    rerender({ sessionId: 'a' });
+    expect(result.current.draft.text).toBe('');
+    expect(result.current.draft.images).toEqual([]);
+    act(() => result.current.setText('another a'));
+    const old = result.current.capture();
+    rerender({ sessionId: 'b' });
+    rerender({ sessionId: 'a' });
+    act(() => result.current.setText('new a after ABA'));
+    act(() => expect(result.current.clearSubmittedDraftIfCurrent(old)).toBe(false));
+    expect(result.current.draft.text).toBe('new a after ABA');
+  });
+  it('keeps only copied sampling metadata with the owned draft and clears it on acceptance', () => {
+    const { result, rerender } = renderHook(
+      ({ sessionId }) => useComposerDraft({ sessionId, projectId: 'p', rootKey: 'root' }),
+      { initialProps: { sessionId: 'a' } },
+    );
+    act(() => {
+      result.current.setText('copied');
+      result.current.setSampling({
+        provider: 'p',
+        model: 'm',
+        useProviderDefaults: false,
+        temperature: 0.23,
+        maxTokens: 321,
+      });
+    });
+    const captured = result.current.capture();
+    expect(result.current.draft.sampling).toEqual({
+      provider: 'p',
+      model: 'm',
+      useProviderDefaults: false,
+      temperature: 0.23,
+      maxTokens: 321,
+    });
+    rerender({ sessionId: 'b' });
+    expect(result.current.draft.sampling).toBeUndefined();
+    act(() => result.current.clearSubmittedDraftIfCurrent(captured));
+    rerender({ sessionId: 'a' });
+    expect(result.current.draft.sampling).toBeUndefined();
+  });
   it('appends prepared text to latest edits once and preserves image identity', () => {
     const { result } = renderHook(() =>
       useComposerDraft({ sessionId: 'a', projectId: 'p', rootKey: 'root' }),

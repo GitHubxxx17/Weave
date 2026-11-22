@@ -3,6 +3,7 @@ import {
   agentExecutionFrameSchema,
   agentExecutionSnapshotSchema,
   agentExecutionSummarySchema,
+  agentExecutionQueueSnapshotSchema,
 } from '@weave/runtime';
 import { z } from 'zod';
 // @ts-expect-error Node-only acceptance tooling is JavaScript, outside production TS contracts.
@@ -151,6 +152,35 @@ describe('Studio performance fixture', () => {
       await fixture.close();
     }
   });
+  it('exposes queue replacement state used by production Studio without changing benchmark work', async () => {
+    const fixture = await startPerformanceFixture({ count: 100, variant: 'markdown' });
+    try {
+      const response = await fetch(
+        `${fixture.url}/sessions/benchmark-history/executions/queue/events`,
+      );
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toContain('text/event-stream');
+      const reader = response.body!.getReader();
+      try {
+        const frame = new TextDecoder().decode((await reader.read()).value);
+        expect(frame).toContain('event: queue');
+        const snapshot = agentExecutionQueueSnapshotSchema.parse(
+          JSON.parse(frame.split('data: ')[1]!.trim()),
+        );
+        expect(snapshot).toMatchObject({
+          sessionId: 'benchmark-history',
+          active: null,
+          queued: [],
+        });
+      } finally {
+        await reader.cancel();
+        reader.releaseLock();
+      }
+    } finally {
+      await fixture.close();
+    }
+  });
+
   it('holds approval snapshot subscription open and closes active streams', async () => {
     const fixture = await startPerformanceFixture({ count: 100, variant: 'markdown' });
     const response = await fetch(`${fixture.url}/approvals/stream`);

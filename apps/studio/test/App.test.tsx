@@ -229,6 +229,22 @@ function createWorkspaceFetchMock(
     const url = String(input);
     const method = init?.method ?? 'GET';
     const requestPath = new URL(url, 'http://weave.local').pathname;
+    const queueMatch = /^\/sessions\/([^/]+)\/executions\/queue(?:\/(events))?$/.exec(requestPath);
+    if (queueMatch !== null && method === 'GET') {
+      if (queueMatch[2] === 'events')
+        return new Response(new ReadableStream(), {
+          headers: { 'Content-Type': 'text/event-stream' },
+        });
+      return Response.json({
+        sessionId: queueMatch[1],
+        revision: 0,
+        cursor: `epoch:${queueMatch[1]}:0`,
+        active: null,
+        queued: [],
+        scheduler: 'ready',
+        limits: { sessionQueued: 10, globalQueued: 100 },
+      });
+    }
     if (/^\/sessions\/[^/]+\/executions$/.test(requestPath) && method === 'GET')
       return Response.json([]);
     const managed = disabledManagedCatalog(requestPath, init);
@@ -2192,13 +2208,808 @@ describe('Studio Agent Chat', () => {
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
 
     expect(await screen.findByText('Agent run failed')).toBeTruthy();
-    expect(screen.getByText('本次运行失败，请查看运行错误')).toBeTruthy();
+    expect(screen.queryByText('本次运行失败，请查看运行错误')).toBeNull();
     expect(screen.queryByText(/secret\.ts|\/Users\/mi\/private/)).toBeNull();
     expect(
       within(screen.getByRole('region', { name: '运行错误' })).getByText('错误', {
         selector: '.status-badge',
       }),
     ).toBeTruthy();
+  });
+
+  it('accepts repeated queued messages while running without adding premature conversation rows or clearing newer edits', async () => {
+    const baseFetch = fetchMock;
+    let publish: (state: unknown) => void = () => undefined;
+    const active = {
+      executionId: 'active-q',
+      requestId: 'active-r',
+      sessionId: sessionIds.local,
+      turnId: 'active-t',
+      userMessageId: 'active-u',
+      createdAt: '2026-11-23T00:00:00.000Z',
+      status: 'running',
+      cursor: 'epoch:active-q:1',
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith(`/executions/queue/events`) && url.includes(sessionIds.local))
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                publish = (state) =>
+                  controller.enqueue(
+                    new TextEncoder().encode(`event: queue\ndata: ${JSON.stringify(state)}\n\n`),
+                  );
+              },
+            }),
+            { headers: { 'Content-Type': 'text/event-stream' } },
+          );
+        if (url.endsWith('/executions/active-q'))
+          return Response.json({
+            ...active,
+            events: [{ type: 'text-delta', text: 'current answer' }],
+            input: {
+              provider: 'mock',
+              model: 'demo',
+              permissionMode: 'ask',
+              userMessage: { role: 'user', content: [{ type: 'text', text: 'active question' }] },
+            },
+          });
+        if (url.includes('/active-q/events'))
+          return new Response(new ReadableStream(), {
+            headers: { 'Content-Type': 'text/event-stream' },
+          });
+        return baseFetch(input, init);
+      }),
+    );
+    await renderApp();
+    const state = {
+      sessionId: sessionIds.local,
+      revision: 2,
+      cursor: `epoch:${sessionIds.local}:2`,
+      active,
+      queued: [],
+      scheduler: 'ready',
+      limits: { sessionQueued: 10, globalQueued: 100 },
+    };
+    act(() => publish(state));
+    await screen.findByText('current answer');
+    let receipt: AgentStreamHandlers | undefined;
+    let release: () => void = () => undefined;
+    streamAgentRunMock.mockImplementation((request, handlers) => {
+      receipt = handlers;
+      return new Promise<void>((resolve) => {
+        release = () => {
+          const { sessionId, ...input } = request;
+          handlers.onReceipt?.({
+            ...active,
+            executionId: 'queued-1',
+            requestId: 'r1',
+            turnId: 't1',
+            userMessageId: 'u1',
+            sessionId,
+            status: 'queued',
+            cursor: 'epoch:queued-1:0',
+            input: { ...input, permissionMode: 'ask' },
+            events: [],
+          });
+          resolve();
+        };
+      });
+    });
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: 'queued first' } });
+    fireEvent.click(screen.getByRole('button', { name: '加入队列' }));
+    expect((screen.getByRole('button', { name: '加入队列' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect(document.querySelector('.message-list')?.textContent).not.toContain('queued first');
+    act(() =>
+      publish({
+        ...state,
+        revision: 3,
+        cursor: `epoch:${sessionIds.local}:3`,
+        queued: [
+          {
+            ...active,
+            executionId: 'queued-1',
+            requestId: 'r1',
+            turnId: 't1',
+            userMessageId: 'u1',
+            status: 'queued',
+            cursor: 'epoch:queued-1:0',
+            preview: 'queued first',
+            provider: 'mock',
+            model: 'demo',
+            imageCount: 0,
+            skillCount: 0,
+          },
+        ],
+      }),
+    );
+    await screen.findByText('待执行 1/10');
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: 'newer draft' } });
+    await act(async () => release());
+    expect(receipt).toBeDefined();
+    expect((screen.getByLabelText('发送消息') as HTMLTextAreaElement).value).toBe('newer draft');
+    expect(document.querySelector('.message-list')?.textContent).not.toContain('queued first');
+    expect(screen.getByText('current answer')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '加入队列' }));
+    expect(streamAgentRunMock).toHaveBeenCalledTimes(2);
+    await act(async () => release());
+  });
+
+  it('preserves the next execution overlay and exact Stop target while the previous terminal history read is pending', async () => {
+    const baseFetch = fetchMock;
+    let publishQueue: (state: unknown) => void = () => undefined;
+    let publishOld: (value: string) => void = () => undefined;
+    let releaseHistory: () => void = () => undefined;
+    let terminal = false;
+    let historyWaiting = false;
+    let nextReads = 0;
+    const execution = (id: string, text: string): AgentExecutionSnapshot => ({
+      executionId: id,
+      requestId: `${id}-r`,
+      sessionId: sessionIds.local,
+      turnId: `${id}-t`,
+      userMessageId: `${id}-u`,
+      createdAt: '2026-11-23T00:00:00.000Z',
+      status: 'running',
+      cursor: `epoch:${id}:1`,
+      input: {
+        provider: 'mock',
+        model: 'demo',
+        permissionMode: 'ask',
+        userMessage: { role: 'user', content: [{ type: 'text', text: `${id} question` }] },
+      },
+      events: [{ type: 'text-delta', text }],
+    });
+    const old = execution('handoff-old', 'old live answer');
+    const next = execution('handoff-next', 'next live answer');
+    const queue = (snapshot: AgentExecutionSnapshot, sequence: number) => {
+      const { input: _input, events: _events, ...active } = snapshot;
+      void _input;
+      void _events;
+      return {
+        sessionId: sessionIds.local,
+        revision: sequence,
+        cursor: `epoch:${sessionIds.local}:${sequence}`,
+        active,
+        queued: [],
+        scheduler: 'ready',
+        limits: { sessionQueued: 10, globalQueued: 100 },
+      };
+    };
+    const api = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === `/sessions/${sessionIds.local}/executions/queue/events`)
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              publishQueue = (state) =>
+                controller.enqueue(
+                  new TextEncoder().encode(`event: queue\ndata: ${JSON.stringify(state)}\n\n`),
+                );
+            },
+          }),
+          { headers: { 'Content-Type': 'text/event-stream' } },
+        );
+      if (url.endsWith('/executions/handoff-old')) return Response.json(old);
+      if (url.includes('/handoff-old/events'))
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              publishOld = (value) => controller.enqueue(new TextEncoder().encode(value));
+            },
+          }),
+          { headers: { 'Content-Type': 'text/event-stream' } },
+        );
+      if (url.endsWith('/executions/handoff-next')) {
+        if (++nextReads === 1) throw new TypeError('temporarily offline');
+        return Response.json(next);
+      }
+      if (url.includes('/handoff-next/events'))
+        return new Response(new ReadableStream(), {
+          headers: { 'Content-Type': 'text/event-stream' },
+        });
+      if (url.endsWith('/handoff-next/cancel'))
+        return Response.json({ ...next, status: 'cancelling' });
+      if (terminal && url === `/sessions/${sessionIds.local}`)
+        return new Promise<Response>((resolve) => {
+          historyWaiting = true;
+          releaseHistory = () =>
+            resolve(
+              Response.json({
+                ...sessionDetail(sessionIds.local, '本地 Agent 演示', [
+                  {
+                    role: 'user',
+                    turnId: old.turnId,
+                    content: [{ type: 'text', text: 'handoff-old question' }],
+                  },
+                  {
+                    role: 'assistant',
+                    turnId: old.turnId,
+                    content: [{ type: 'text', text: 'old durable answer' }],
+                  },
+                  {
+                    role: 'assistant',
+                    turnId: 'missed-t',
+                    content: [{ type: 'text', text: 'unseen durable middle' }],
+                  },
+                  {
+                    role: 'user',
+                    turnId: next.turnId,
+                    content: [{ type: 'text', text: 'handoff-next question' }],
+                  },
+                  {
+                    role: 'assistant',
+                    turnId: next.turnId,
+                    content: [{ type: 'text', text: 'stale durable next' }],
+                  },
+                ]),
+                lastSequence: 30,
+                turns: [
+                  {
+                    turnId: old.turnId,
+                    userMessageId: old.userMessageId,
+                    status: 'completed',
+                    startedAt: old.createdAt,
+                  },
+                  { turnId: 'missed-t', status: 'completed', startedAt: old.createdAt },
+                  {
+                    turnId: next.turnId,
+                    userMessageId: next.userMessageId,
+                    status: 'running',
+                    startedAt: next.createdAt,
+                  },
+                ],
+              }),
+            );
+        });
+      return baseFetch(input, init);
+    });
+    vi.stubGlobal('fetch', api);
+    await renderApp();
+    act(() => publishQueue(queue(old, 2)));
+    await screen.findByText('old live answer');
+    act(() => {
+      terminal = true;
+      publishOld(
+        'event: status\ndata: {"cursor":"epoch:handoff-old:2","status":"completed","durableThroughSequence":30}\n\n',
+      );
+    });
+    await waitFor(() => expect(historyWaiting).toBe(true));
+    act(() => publishQueue(queue(next, 3)));
+    await screen.findByText('next live answer');
+    await act(async () => releaseHistory());
+    await screen.findByText('old durable answer');
+    expect(screen.getByText('unseen durable middle')).toBeTruthy();
+    expect(screen.queryByText('stale durable next')).toBeNull();
+    expect(screen.getAllByText('next live answer')).toHaveLength(1);
+    expect(screen.getAllByText('handoff-next question')).toHaveLength(1);
+    const renderedAnswers = [...document.querySelectorAll('.timeline-item-assistant')].map(
+      (element) => element.textContent,
+    );
+    expect(renderedAnswers.findIndex((text) => text?.includes('old durable answer'))).toBeLessThan(
+      renderedAnswers.findIndex((text) => text?.includes('next live answer')),
+    );
+    expect(
+      screen
+        .getAllByRole<HTMLButtonElement>('button', { name: '审阅本轮文件' })
+        .every((button) => button.disabled),
+    ).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: '停止运行' }));
+    await waitFor(() =>
+      expect(api.mock.calls.some(([url]) => String(url).endsWith('/handoff-next/cancel'))).toBe(
+        true,
+      ),
+    );
+    expect(api.mock.calls.some(([url]) => String(url).endsWith('/handoff-old/cancel'))).toBe(false);
+    expect(
+      api.mock.calls.filter(([url]) => String(url).includes('/handoff-next/events')),
+    ).toHaveLength(1);
+  });
+
+  it.each(['failed', 'cancelled'] as const)(
+    'keeps newer reconciled %s history and status when an earlier terminal read returns late',
+    async (nextStatus) => {
+      const baseFetch = fetchMock;
+      let publishQueue: (state: unknown) => void = () => undefined;
+      const publishExecution = new Map<string, (value: string) => void>();
+      let releaseOld: () => void = () => undefined;
+      let historyReads = 0;
+      const execution = (id: string): AgentExecutionSnapshot => ({
+        executionId: id,
+        requestId: `${id}-r`,
+        sessionId: sessionIds.local,
+        turnId: `${id}-t`,
+        userMessageId: `${id}-u`,
+        createdAt: '2026-11-23T00:00:00.000Z',
+        status: 'running',
+        cursor: `epoch:${id}:1`,
+        input: {
+          provider: 'mock',
+          model: 'demo',
+          permissionMode: 'ask',
+          userMessage: { role: 'user', content: [{ type: 'text', text: `${id} question` }] },
+        },
+        events: [{ type: 'text-delta', text: `${id} live answer` }],
+      });
+      const old = execution('late-old');
+      const next = execution('late-next');
+      const queue = (snapshot: AgentExecutionSnapshot | null, sequence: number) => {
+        const active =
+          snapshot === null
+            ? null
+            : {
+                executionId: snapshot.executionId,
+                requestId: snapshot.requestId,
+                sessionId: snapshot.sessionId,
+                turnId: snapshot.turnId,
+                userMessageId: snapshot.userMessageId,
+                createdAt: snapshot.createdAt,
+                status: snapshot.status,
+                cursor: snapshot.cursor,
+              };
+        return {
+          sessionId: sessionIds.local,
+          revision: sequence,
+          cursor: `epoch:${sessionIds.local}:${sequence}`,
+          active,
+          queued: [],
+          scheduler: 'ready',
+          limits: { sessionQueued: 10, globalQueued: 100 },
+        };
+      };
+      const detail = (newer: boolean) => ({
+        ...sessionDetail(sessionIds.local, '本地 Agent 演示', [
+          {
+            role: 'user',
+            turnId: old.turnId,
+            content: [{ type: 'text', text: 'late-old question' }],
+          },
+          {
+            role: 'assistant',
+            turnId: old.turnId,
+            content: [{ type: 'text', text: 'old canonical answer' }],
+          },
+          ...(newer
+            ? [
+                {
+                  role: 'assistant',
+                  turnId: 'middle-t',
+                  content: [{ type: 'text', text: 'canonical middle answer' }],
+                },
+                {
+                  role: 'user',
+                  turnId: next.turnId,
+                  content: [{ type: 'text', text: 'late-next question' }],
+                },
+                {
+                  role: 'assistant',
+                  turnId: next.turnId,
+                  content: [{ type: 'text', text: 'new canonical answer' }],
+                },
+              ]
+            : []),
+        ]),
+        lastSequence: newer ? 60 : 30,
+        turns: [
+          {
+            turnId: old.turnId,
+            userMessageId: old.userMessageId,
+            status: 'completed',
+            startedAt: old.createdAt,
+          },
+          ...(newer
+            ? [
+                { turnId: 'middle-t', status: 'completed', startedAt: old.createdAt },
+                {
+                  turnId: next.turnId,
+                  userMessageId: next.userMessageId,
+                  status: nextStatus,
+                  startedAt: next.createdAt,
+                },
+              ]
+            : []),
+        ],
+      });
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          if (url === `/sessions/${sessionIds.local}/executions/queue/events`)
+            return new Response(
+              new ReadableStream({
+                start(controller) {
+                  publishQueue = (state) =>
+                    controller.enqueue(
+                      new TextEncoder().encode(`event: queue\ndata: ${JSON.stringify(state)}\n\n`),
+                    );
+                },
+              }),
+              { headers: { 'Content-Type': 'text/event-stream' } },
+            );
+          if (url.endsWith('/executions/late-old')) return Response.json(old);
+          if (url.endsWith('/executions/late-next')) return Response.json(next);
+          const id = url.includes('/late-old/events')
+            ? old.executionId
+            : url.includes('/late-next/events')
+              ? next.executionId
+              : undefined;
+          if (id !== undefined)
+            return new Response(
+              new ReadableStream({
+                start(controller) {
+                  publishExecution.set(id, (value) =>
+                    controller.enqueue(new TextEncoder().encode(value)),
+                  );
+                },
+              }),
+              { headers: { 'Content-Type': 'text/event-stream' } },
+            );
+          if (url === `/sessions/${sessionIds.local}` && publishExecution.has(old.executionId)) {
+            if (++historyReads === 1)
+              return new Promise<Response>((resolve) => {
+                releaseOld = () => resolve(Response.json(detail(false)));
+              });
+            return Response.json(detail(true));
+          }
+          return baseFetch(input, init);
+        }),
+      );
+      await renderApp();
+      act(() => publishQueue(queue(old, 2)));
+      await screen.findByText('late-old live answer');
+      act(() =>
+        publishExecution.get(old.executionId)?.(
+          'event: status\ndata: {"cursor":"epoch:late-old:2","status":"completed","durableThroughSequence":30}\n\n',
+        ),
+      );
+      await waitFor(() => expect(historyReads).toBe(1));
+      act(() => publishQueue(queue(next, 3)));
+      await screen.findByText('late-next live answer');
+      act(() => {
+        publishQueue(queue(null, 4));
+        publishExecution.get(next.executionId)?.(
+          `event: status\ndata: ${JSON.stringify({ cursor: 'epoch:late-next:2', status: nextStatus, durableThroughSequence: 60 })}\n\n`,
+        );
+      });
+      await screen.findByText('new canonical answer');
+      const label = nextStatus === 'failed' ? '出错' : '已取消';
+      await waitFor(() =>
+        expect(screen.getByText(label, { selector: '.run-status' })).toBeTruthy(),
+      );
+      expect(screen.getByText('canonical middle answer')).toBeTruthy();
+      await act(async () => releaseOld());
+      expect(screen.getAllByText('new canonical answer')).toHaveLength(1);
+      expect(screen.getAllByText('canonical middle answer')).toHaveLength(1);
+      expect(screen.getAllByText('old canonical answer')).toHaveLength(1);
+      expect(screen.queryByText('late-old live answer')).toBeNull();
+      expect(screen.getByText(label, { selector: '.run-status' })).toBeTruthy();
+      const answers = [...document.querySelectorAll('.timeline-item-assistant')].map(
+        (entry) => entry.textContent,
+      );
+      expect(answers.findIndex((text) => text?.includes('old canonical answer'))).toBeLessThan(
+        answers.findIndex((text) => text?.includes('new canonical answer')),
+      );
+      expect(
+        screen
+          .getAllByRole<HTMLButtonElement>('button', { name: '审阅本轮文件' })
+          .some((button) => button.disabled),
+      ).toBe(false);
+      expect(historyReads).toBe(2);
+    },
+  );
+
+  it('accepts an inactive Session receipt without observing it and recovers only after returning', async () => {
+    const baseFetch = fetchMock;
+    let callbacks: AgentStreamHandlers | undefined;
+    let resolveAdmission: () => void = () => undefined;
+    const execution: AgentExecutionSnapshot = {
+      executionId: 'inactive-receipt',
+      requestId: 'inactive-r',
+      sessionId: sessionIds.local,
+      turnId: 'inactive-t',
+      userMessageId: 'inactive-u',
+      createdAt: '2026-11-23T00:00:00.000Z',
+      status: 'running',
+      cursor: 'epoch:inactive-receipt:1',
+      events: [{ type: 'text-delta', text: 'recovered inactive answer' }],
+      input: {
+        provider: 'mock',
+        model: 'demo',
+        permissionMode: 'ask',
+        userMessage: { role: 'user', content: [{ type: 'text', text: 'accepted original draft' }] },
+      },
+    };
+    let accepted = false;
+    const api = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (accepted && url === `/sessions/${sessionIds.local}/executions/queue`) {
+        const { input: _input, events: _events, ...active } = execution;
+        void _input;
+        void _events;
+        return Response.json({
+          sessionId: sessionIds.local,
+          revision: 3,
+          cursor: `epoch:${sessionIds.local}:3`,
+          active,
+          queued: [],
+          scheduler: 'ready',
+          limits: { sessionQueued: 10, globalQueued: 100 },
+        });
+      }
+      if (url.endsWith('/executions/inactive-receipt')) return Response.json(execution);
+      if (url.includes('/inactive-receipt/events'))
+        return new Response(new ReadableStream(), {
+          headers: { 'Content-Type': 'text/event-stream' },
+        });
+      return baseFetch(input, init);
+    });
+    vi.stubGlobal('fetch', api);
+    streamAgentRunMock.mockImplementationOnce((_request, handlers) => {
+      callbacks = handlers;
+      return new Promise<void>((resolve) => {
+        resolveAdmission = resolve;
+      });
+    });
+    await renderApp();
+    fireEvent.change(screen.getByLabelText('发送消息'), {
+      target: { value: 'accepted original draft' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(callbacks).toBeDefined());
+    fireEvent.click(screen.getByRole('button', { name: /Session event store/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('发送消息'), {
+      target: { value: 'keep active Session draft' },
+    });
+    await act(async () => {
+      accepted = true;
+      callbacks?.onReceipt?.(execution);
+      resolveAdmission();
+    });
+    expect((screen.getByLabelText('发送消息') as HTMLTextAreaElement).value).toBe(
+      'keep active Session draft',
+    );
+    expect(api.mock.calls.some(([url]) => String(url).includes('/inactive-receipt'))).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: /本地 Agent 演示/ }));
+    await screen.findByText('recovered inactive answer');
+    expect((screen.getByLabelText('发送消息') as HTMLTextAreaElement).value).toBe('');
+    expect(
+      api.mock.calls.filter(([url]) => String(url).includes('/inactive-receipt/events')),
+    ).toHaveLength(1);
+    expect(api.mock.calls.some(([url]) => String(url).endsWith('/inactive-receipt/cancel'))).toBe(
+      false,
+    );
+  });
+
+  it('keeps the highest applied Session history when a previous navigation read returns late', async () => {
+    const baseFetch = fetchMock;
+    let reads = 0;
+    let releaseOld: () => void = () => undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (
+          String(input) === `/sessions/${sessionIds.local}` &&
+          (init?.method ?? 'GET') === 'GET'
+        ) {
+          reads += 1;
+          if (reads === 2)
+            return new Promise<Response>((resolve) => {
+              releaseOld = () =>
+                resolve(
+                  Response.json({
+                    ...sessionDetail(sessionIds.local, '本地 Agent 演示', [
+                      {
+                        role: 'assistant',
+                        turnId: 'navigation-old',
+                        content: [{ type: 'text', text: 'stale navigation answer' }],
+                      },
+                    ]),
+                    lastSequence: 30,
+                  }),
+                );
+            });
+          if (reads === 3)
+            return Response.json({
+              ...sessionDetail(sessionIds.local, '本地 Agent 演示', [
+                {
+                  role: 'assistant',
+                  turnId: 'navigation-new',
+                  content: [{ type: 'text', text: 'newest navigation answer' }],
+                },
+              ]),
+              lastSequence: 60,
+            });
+        }
+        return baseFetch(input, init);
+      }),
+    );
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: /Session event store/ }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: /Session event store/ }).closest('.session-tree-item')
+          ?.className,
+      ).toContain('active'),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /本地 Agent 演示/ }));
+    await waitFor(() => expect(reads).toBe(2));
+    fireEvent.click(screen.getByRole('button', { name: /Session event store/ }));
+    fireEvent.click(screen.getByRole('button', { name: /本地 Agent 演示/ }));
+    await screen.findByText('newest navigation answer');
+    await act(async () => releaseOld());
+    expect(screen.getByText('newest navigation answer')).toBeTruthy();
+    expect(screen.queryByText('stale navigation answer')).toBeNull();
+  });
+
+  it('preserves the draft and current answer when queue admission is rejected at capacity', async () => {
+    const baseFetch = fetchMock;
+    const execution: AgentExecutionSnapshot = {
+      executionId: 'capacity-active',
+      requestId: 'capacity-r',
+      sessionId: sessionIds.local,
+      turnId: 'capacity-t',
+      userMessageId: 'capacity-u',
+      createdAt: '2026-11-23T00:00:00.000Z',
+      status: 'running',
+      cursor: 'epoch:capacity-active:1',
+      events: [{ type: 'text-delta', text: 'keep current answer' }],
+      input: {
+        provider: 'mock',
+        model: 'demo',
+        permissionMode: 'ask',
+        userMessage: { role: 'user', content: [{ type: 'text', text: 'current question' }] },
+      },
+    };
+    const { input: _input, events: _events, ...active } = execution;
+    void _input;
+    void _events;
+    const state = {
+      sessionId: sessionIds.local,
+      revision: 2,
+      cursor: `epoch:${sessionIds.local}:2`,
+      active,
+      queued: [],
+      scheduler: 'ready',
+      limits: { sessionQueued: 10, globalQueued: 100 },
+    };
+    const api = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === `/sessions/${sessionIds.local}/executions/queue`) return Response.json(state);
+      if (url.endsWith('/executions/capacity-active')) return Response.json(execution);
+      if (url.includes('/capacity-active/events'))
+        return new Response(new ReadableStream(), {
+          headers: { 'Content-Type': 'text/event-stream' },
+        });
+      return baseFetch(input, init);
+    });
+    vi.stubGlobal('fetch', api);
+    streamAgentRunMock.mockRejectedValueOnce(new AgentStreamError('execution-queue-full', 'full'));
+    await renderApp();
+    await screen.findByText('keep current answer');
+    const reads = api.mock.calls.filter(([url]) =>
+      String(url).endsWith('/executions/queue'),
+    ).length;
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: 'keep queued draft' } });
+    fireEvent.click(screen.getByRole('button', { name: '加入队列' }));
+    await screen.findByText('待执行队列已满，请稍后再试。草稿已保留。');
+    expect((screen.getByLabelText('发送消息') as HTMLTextAreaElement).value).toBe(
+      'keep queued draft',
+    );
+    expect(screen.getByText('keep current answer')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '停止运行' })).toBeTruthy();
+    expect(document.querySelector('.message-list')?.textContent).not.toContain('keep queued draft');
+    await waitFor(() =>
+      expect(
+        api.mock.calls.filter(([url]) => String(url).endsWith('/executions/queue')).length,
+      ).toBeGreaterThan(reads),
+    );
+  });
+
+  it('copies queued input after an explicit choice without overwriting late draft edits or cancelling the original', async () => {
+    const baseFetch = fetchMock;
+    let release: () => void = () => undefined;
+    const queued: AgentExecutionSnapshot = {
+      executionId: 'copy-q',
+      requestId: 'copy-r',
+      sessionId: sessionIds.local,
+      turnId: 'copy-t',
+      userMessageId: 'copy-u',
+      createdAt: '2026-11-23T00:00:00.000Z',
+      status: 'queued',
+      cursor: 'epoch:copy-q:0',
+      events: [],
+      effectiveSettings: { useProviderDefaults: false, temperature: 0.23, maxTokens: 321 },
+      input: {
+        provider: 'mock',
+        model: 'weave-local-demo',
+        permissionMode: 'trust',
+        reasoningEffort: 'high',
+        skills: [planningRef],
+        userMessage: {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'copied queue text' },
+            { type: 'image', mediaType: 'image/png', data: 'aGVsbG8=' },
+          ],
+        },
+      },
+    };
+    const { input: _input, events: _events, effectiveSettings: _settings, ...summary } = queued;
+    void _settings;
+    void _input;
+    void _events;
+    const api = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === `/sessions/${sessionIds.local}/executions/queue`)
+        return Response.json({
+          sessionId: sessionIds.local,
+          revision: 2,
+          cursor: `epoch:${sessionIds.local}:2`,
+          active: null,
+          queued: [
+            {
+              ...summary,
+              preview: 'copied queue text',
+              provider: 'mock',
+              model: 'weave-local-demo',
+              imageCount: 1,
+              skillCount: 1,
+            },
+          ],
+          scheduler: 'ready',
+          limits: { sessionQueued: 10, globalQueued: 100 },
+        });
+      if (url.endsWith('/executions/copy-q'))
+        return new Promise<Response>((resolve) => {
+          release = () => resolve(Response.json(queued));
+        });
+      return baseFetch(input, init);
+    });
+    vi.stubGlobal('fetch', api);
+    await renderApp();
+    await screen.findByRole('button', { name: '复制第 1 条消息到草稿' });
+    fireEvent.click(screen.getByRole('button', { name: '复制第 1 条消息到草稿' }));
+    fireEvent.change(screen.getByLabelText('发送消息'), {
+      target: { value: 'typed while fetching' },
+    });
+    await act(async () => release());
+    const dialog = await screen.findByRole('dialog', { name: '复制队列消息' });
+    expect((screen.getByLabelText('发送消息') as HTMLTextAreaElement).value).toBe(
+      'typed while fetching',
+    );
+    fireEvent.click(within(dialog).getByRole('button', { name: '追加到草稿' }));
+    expect((screen.getByLabelText('发送消息') as HTMLTextAreaElement).value).toBe(
+      'typed while fetching\n\ncopied queue text',
+    );
+    expect(screen.getByText('已复制到草稿，原消息仍在队列中。')).toBeTruthy();
+    streamAgentRunMock.mockImplementationOnce(async (request, handlers) => {
+      const { sessionId, ...input } = request;
+      handlers.onReceipt?.({
+        ...queued,
+        executionId: 'copy-new',
+        requestId: 'copy-new-r',
+        sessionId,
+        input: { ...input, permissionMode: input.permissionMode ?? 'ask' },
+        cursor: 'epoch:copy-new:0',
+      });
+    });
+    fireEvent.click(screen.getByRole('button', { name: '加入队列' }));
+    await waitFor(() => expect(streamAgentRunMock).toHaveBeenCalledOnce());
+    expect(streamAgentRunMock.mock.calls[0]?.[0]).toMatchObject({
+      temperature: 0.23,
+      maxTokens: 321,
+      useProviderDefaults: false,
+      permissionMode: 'trust',
+      reasoningEffort: 'high',
+      skills: [planningRef],
+    });
+    expect(api.mock.calls.some(([url]) => String(url).includes('/cancel'))).toBe(false);
   });
 
   it('keeps Stop pending before receipt and confirms cancellation only after the durable waterline', async () => {
@@ -2270,6 +3081,7 @@ describe('Studio Agent Chat', () => {
     fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '取消这次运行' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     fireEvent.click(screen.getByRole('button', { name: '停止运行' }));
+    expect(document.querySelector('.message-list')?.textContent).not.toContain('取消这次运行');
     expect(signal?.aborted).toBe(false);
     expect(screen.getByRole('button', { name: '停止运行' })).toBeTruthy();
     act(() => {
@@ -2359,13 +3171,14 @@ describe('Studio Agent Chat', () => {
     expect(streamAgentRunMock).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /Session event store/ }));
     await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeTruthy());
+    await waitFor(() => expect(cancelReader).toHaveBeenCalledOnce());
     fireEvent.click(screen.getByRole('button', { name: /本地 Agent 演示/ }));
     await screen.findByText('whole recovered answer');
     expect(
       api.mock.calls.filter(([url]) => String(url).includes('/execution-refresh/events')),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     cleanup();
-    await waitFor(() => expect(cancelReader).toHaveBeenCalledOnce());
+    await waitFor(() => expect(cancelReader).toHaveBeenCalledTimes(2));
     expect(api.mock.calls.some(([url]) => String(url).endsWith('/cancel'))).toBe(false);
   });
 
@@ -2496,14 +3309,18 @@ describe('Studio Agent Chat', () => {
       expect(screen.getByText('live exact text')).toBeTruthy();
       expect(screen.getByRole('button', { name: '停止运行' })).toBeTruthy();
       expect(
-        (screen.getByRole('button', { name: '审阅本轮文件' }) as HTMLButtonElement).disabled,
+        screen
+          .getAllByRole<HTMLButtonElement>('button', { name: '审阅本轮文件' })
+          .every((button) => button.disabled),
       ).toBe(true);
       durable = true;
       await screen.findByText('durable exact text');
       expect(screen.queryByText('live exact text')).toBeNull();
       expect(screen.getAllByText('real question')).toHaveLength(1);
       expect(
-        (screen.getByRole('button', { name: '审阅本轮文件' }) as HTMLButtonElement).disabled,
+        screen
+          .getAllByRole<HTMLButtonElement>('button', { name: '审阅本轮文件' })
+          .some((button) => button.disabled),
       ).toBe(false);
       expect(api.mock.calls.some(([url]) => String(url).includes('/agent/runs/stream'))).toBe(
         false,
@@ -2561,7 +3378,7 @@ describe('Studio Agent Chat', () => {
   });
 
   it.each(['completed', 'failed', 'cancelled'] as const)(
-    'reconciles a normal EOF with the new durable %s turn after switching sessions',
+    'detaches the old observer and recovers its durable %s turn when returning to the Session',
     async (terminalStatus) => {
       let resolveStream: () => void = () => undefined;
       let callbacks: AgentStreamHandlers | undefined;
@@ -2644,10 +3461,11 @@ describe('Studio Agent Chat', () => {
         });
         resolveStream();
       });
-      expect(reads).toEqual([`/sessions/${sessionIds.local}`]);
-      expect(screen.queryByTitle('运行中')).toBeNull();
+      expect(reads).toEqual([]);
+      expect(screen.queryByTitle('运行中')).toBeTruthy();
       fireEvent.click(screen.getByRole('button', { name: /本地 Agent 演示/ }));
       await screen.findByText('durable question');
+      expect(reads).toEqual([`/sessions/${sessionIds.local}`]);
       const expectedLabel =
         terminalStatus === 'completed'
           ? '已完成'

@@ -1,6 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
   projectAgentExecutions,
+  projectAgentExecutionQueue,
+  type SessionExecutionMetadata,
+  type SessionExecutionQueue,
+  type SessionEvent,
   projectSession,
   type NewSessionEvent,
   type SessionExecution,
@@ -10,6 +14,11 @@ import {
   AgentExecutionError,
   agentExecutionCursorSchema,
   agentExecutionLaunchSchema,
+  agentExecutionInputSchema,
+  agentExecutionQueueReorderSchema,
+  agentExecutionQueuedCancelSchema,
+  type AgentExecutionQueueSnapshot,
+  type AgentExecutionSummary,
   type AgentExecutionFrame,
   type AgentExecutionService,
   type AgentExecutionServiceOptions,
@@ -68,30 +77,53 @@ interface LiveExecution {
   promise: Promise<void>;
 }
 
+interface QueueSubscriber {
+  push(snapshot: AgentExecutionQueueSnapshot): void;
+  close(): void;
+}
+interface QueueState {
+  revision: number;
+  active: SessionExecutionMetadata | null;
+  queued: readonly SessionExecutionMetadata[];
+  readonly subscribers: Set<QueueSubscriber>;
+  error?: { code: string; message: string };
+  unresolvedAdmission?: { requestId: string; requestDigest: string; executionId: string };
+}
+class AppendFailure extends Error {
+  constructor(
+    readonly uncertain: boolean,
+    cause: unknown,
+  ) {
+    super('Execution persistence failed', { cause });
+  }
+}
+
 /** Owns execution production independently from every detachable observer. */
 export function createAgentExecutionService(
   options: AgentExecutionServiceOptions,
 ): AgentExecutionService {
   const epoch = randomUUID();
   const live = new Map<string, LiveExecution>();
-  const gates = new Map<string, Promise<void>>();
+  const queues = new Map<string, QueueState>();
+  const pendingCounts = new Map<string, number>();
+  let tail = Promise.resolve();
+  let queueSequence = 0;
   let closed = false;
-
   const cursor = (executionId: string, sequence: number): string =>
     `${epoch}:${executionId}:${sequence}`;
-  const gate = async <T>(sessionId: string, operation: () => Promise<T>): Promise<T> => {
-    const previous = gates.get(sessionId) ?? Promise.resolve();
+  // One short mutation gate also makes global pending reservations atomic.
+  const gate = async <T>(_sessionId: string, operation: () => Promise<T>): Promise<T> => {
+    const previous = tail;
     let release!: () => void;
-    const current = new Promise<void>((resolve) => {
+    tail = new Promise<void>((resolve) => {
       release = resolve;
     });
-    gates.set(sessionId, current);
     await previous;
     try {
       return await operation();
     } finally {
+      cleanup(_sessionId);
       release();
-      if (gates.get(sessionId) === current) gates.delete(sessionId);
     }
   };
   const requireId = (value: string): void => {
@@ -100,6 +132,140 @@ export function createAgentExecutionService(
   };
   const records = async (sessionId: string) =>
     projectAgentExecutions(await options.sessionStore.read(sessionId));
+  const digest = (value: unknown): string =>
+    createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex');
+  const summary = (
+    accepted: SessionExecutionMetadata | SessionExecution,
+    state = live.get(accepted.executionId),
+  ): AgentExecutionSummary => ({
+    executionId: accepted.executionId,
+    requestId: accepted.requestId,
+    sessionId: accepted.sessionId,
+    turnId: accepted.turnId,
+    userMessageId: accepted.userMessageId,
+    createdAt: accepted.createdAt,
+    status: state?.status ?? accepted.status,
+    cursor: cursor(accepted.executionId, state?.sequence ?? 0),
+    ...((state?.durableThroughSequence ?? accepted.durableThroughSequence) === undefined
+      ? {}
+      : {
+          durableThroughSequence: state?.durableThroughSequence ?? accepted.durableThroughSequence,
+        }),
+    ...(state?.error === undefined
+      ? accepted.reason === undefined
+        ? {}
+        : { error: { code: accepted.reason, message: accepted.reason } }
+      : { error: state.error }),
+  });
+  const view = (sessionId: string, state: QueueState): AgentExecutionQueueSnapshot =>
+    structuredClone({
+      sessionId,
+      revision: state.revision,
+      cursor: cursor(encodeURIComponent(sessionId), queueSequence),
+      active: state.active === null ? null : summary(state.active),
+      queued: state.queued.map((item) => ({
+        ...summary(item),
+        preview: item.preview,
+        provider: item.provider,
+        model: item.model,
+        imageCount: item.imageCount,
+        skillCount: item.skillCount,
+      })),
+      scheduler: state.error !== undefined ? 'blocked' : closed ? 'closing' : 'ready',
+      limits: { sessionQueued: 10, globalQueued: 100 },
+      ...(state.error === undefined ? {} : { error: state.error }),
+    });
+  const cleanup = (sessionId: string): void => {
+    const state = queues.get(sessionId);
+    if (
+      state !== undefined &&
+      state.active === null &&
+      state.queued.length === 0 &&
+      state.subscribers.size === 0 &&
+      state.error === undefined
+    ) {
+      queues.delete(sessionId);
+      pendingCounts.delete(sessionId);
+    }
+  };
+  const notifyQueue = (sessionId: string): void => {
+    queueSequence++;
+    const state = queues.get(sessionId);
+    if (state === undefined) return;
+    const current = view(sessionId, state);
+    for (const subscriber of state.subscribers) subscriber.push(structuredClone(current));
+  };
+  const sync = (sessionId: string, events: readonly SessionEvent[]): SessionExecutionQueue => {
+    const projection = projectAgentExecutionQueue(events);
+    const previous = queues.get(sessionId);
+    queues.set(sessionId, {
+      revision: projection.revision,
+      active: projection.active,
+      queued: projection.queued,
+      subscribers: previous?.subscribers ?? new Set(),
+      ...(previous?.error === undefined ? {} : { error: previous.error }),
+      ...(previous?.unresolvedAdmission === undefined
+        ? {}
+        : { unresolvedAdmission: previous.unresolvedAdmission }),
+    });
+    // An uncertain append keeps its conservative reservation until restart.
+    if (previous?.error === undefined) {
+      if (projection.queued.length === 0) pendingCounts.delete(sessionId);
+      else pendingCounts.set(sessionId, projection.queued.length);
+    }
+    return projection;
+  };
+  const load = async (sessionId: string) => {
+    const events = await options.sessionStore.read(sessionId);
+    return { events, projection: sync(sessionId, events) };
+  };
+  const block = (sessionId: string): void => {
+    const current = queues.get(sessionId) ?? {
+      revision: 0,
+      active: null,
+      queued: [],
+      subscribers: new Set<QueueSubscriber>(),
+    };
+    current.error = {
+      code: 'execution-persistence-error',
+      message: 'Execution persistence is uncertain; restart is required',
+    };
+    queues.set(sessionId, current);
+    notifyQueue(sessionId);
+  };
+  const requireMutable = (sessionId: string): void => {
+    if (closed) throw new AgentExecutionError('execution-closed', 'Execution admission is closed');
+    if (queues.get(sessionId)?.error !== undefined)
+      throw new AgentExecutionError(
+        'execution-persistence-error',
+        'Session queue is blocked by uncertain persistence',
+      );
+  };
+  const append = async (
+    sessionId: string,
+    batch: readonly NewSessionEvent[],
+  ): Promise<readonly SessionEvent[]> => {
+    try {
+      return await options.sessionStore.append(sessionId, batch);
+    } catch (cause: unknown) {
+      let events: readonly SessionEvent[];
+      try {
+        events = await options.sessionStore.read(sessionId);
+      } catch {
+        block(sessionId);
+        throw new AppendFailure(true, cause);
+      }
+      const confirmed = batch.map((item) =>
+        events.find(
+          (event) =>
+            event.type === item.type &&
+            canonicalJson(event.payload) === canonicalJson(item.payload),
+        ),
+      );
+      if (confirmed.every((event): event is SessionEvent => event !== undefined)) return confirmed;
+      throw new AppendFailure(false, cause);
+    }
+  };
   const snapshot = (accepted: SessionExecution, state?: LiveExecution): AgentExecutionSnapshot =>
     structuredClone({
       executionId: accepted.executionId,
@@ -108,6 +274,19 @@ export function createAgentExecutionService(
       turnId: accepted.turnId,
       userMessageId: accepted.userMessageId,
       input: accepted.input,
+      ...(accepted.runInput === undefined
+        ? {}
+        : {
+            effectiveSettings: {
+              useProviderDefaults: false,
+              ...(accepted.runInput.temperature === undefined
+                ? {}
+                : { temperature: accepted.runInput.temperature }),
+              ...(accepted.runInput.maxTokens === undefined
+                ? {}
+                : { maxTokens: accepted.runInput.maxTokens }),
+            },
+          }),
       createdAt: accepted.createdAt,
       status: state?.status ?? accepted.status,
       cursor: cursor(accepted.executionId, state?.sequence ?? 0),
@@ -157,6 +336,7 @@ export function createAgentExecutionService(
         : { durableThroughSequence: state.durableThroughSequence }),
       ...(state.error === undefined ? {} : { error: state.error }),
     });
+    notifyQueue(state.accepted.sessionId);
   };
   const event = (state: LiveExecution, incoming: AgentRuntimeEvent): void => {
     if (state.outputLimited) return;
@@ -201,6 +381,7 @@ export function createAgentExecutionService(
       message: 'Execution terminal state could not be persisted',
     };
     status(state, 'persistence-error');
+    block(state.accepted.sessionId);
     void cause;
   };
 
@@ -211,10 +392,11 @@ export function createAgentExecutionService(
     try {
       if (!state.controller.signal.aborted) {
         await options.admit(state.accepted.sessionId);
+        if (closed) state.controller.abort();
         state.controller.signal.throwIfAborted();
         status(state, 'running');
         const stream = options.runner.run({
-          ...structuredClone(state.accepted.input),
+          ...structuredClone(state.accepted.runInput ?? state.accepted.input),
           sessionId: state.accepted.sessionId,
           executionIdentity: {
             executionId: state.accepted.executionId,
@@ -233,74 +415,133 @@ export function createAgentExecutionService(
       hasFailure = true;
     }
     try {
-      const persisted = await options.sessionStore.read(state.accepted.sessionId);
-      const started = persisted.some(
-        (item) =>
-          item.type === 'turn.started' &&
-          item.payload.turnId === state.accepted.turnId &&
-          item.payload.executionId === state.accepted.executionId,
-      );
-      const turnTerminal = persisted.find(
-        (item) => item.type === 'turn.completed' && item.payload.turnId === state.accepted.turnId,
-      );
-      if (started && turnTerminal?.type !== 'turn.completed') {
-        markPersistenceError(state, failure);
-        return;
-      }
-      if (!started && !hasFailure && !state.controller.signal.aborted)
-        throw new Error('Runner ended without a durable Turn');
-      const outcome =
-        turnTerminal?.type === 'turn.completed'
-          ? turnTerminal.payload.status
-          : state.controller.signal.aborted
-            ? 'cancelled'
-            : 'failed';
-      const reason =
-        state.error?.code ??
-        (turnTerminal?.type === 'turn.completed' ? turnTerminal.payload.reason : undefined) ??
-        (hasFailure &&
-        typeof failure === 'object' &&
-        failure !== null &&
-        'code' in failure &&
-        typeof failure.code === 'string'
-          ? failure.code
-          : undefined);
-      const appended = await options.sessionStore.append(state.accepted.sessionId, [
-        {
-          type: 'execution.finished',
-          payload: {
-            executionId: state.accepted.executionId,
-            status: outcome,
-            ...(reason === undefined ? {} : { reason }),
+      await gate(state.accepted.sessionId, async () => {
+        const persisted = await options.sessionStore.read(state.accepted.sessionId);
+        const started = persisted.some(
+          (item) =>
+            item.type === 'turn.started' &&
+            item.payload.turnId === state.accepted.turnId &&
+            item.payload.executionId === state.accepted.executionId,
+        );
+        const turnTerminal = persisted.find(
+          (item) => item.type === 'turn.completed' && item.payload.turnId === state.accepted.turnId,
+        );
+        if (started && turnTerminal?.type !== 'turn.completed') {
+          markPersistenceError(state, failure);
+          return;
+        }
+        if (!started && !hasFailure && !state.controller.signal.aborted)
+          throw new Error('Runner ended without a durable Turn');
+        const outcome =
+          turnTerminal?.type === 'turn.completed'
+            ? turnTerminal.payload.status
+            : state.controller.signal.aborted
+              ? 'cancelled'
+              : 'failed';
+        const reason =
+          state.error?.code ??
+          (turnTerminal?.type === 'turn.completed' ? turnTerminal.payload.reason : undefined) ??
+          (hasFailure &&
+          typeof failure === 'object' &&
+          failure !== null &&
+          'code' in failure &&
+          typeof failure.code === 'string'
+            ? failure.code
+            : undefined);
+        const appended = await append(state.accepted.sessionId, [
+          {
+            type: 'execution.finished',
+            payload: {
+              executionId: state.accepted.executionId,
+              status: outcome,
+              ...(reason === undefined ? {} : { reason }),
+            },
           },
-        },
-      ]);
-      const terminalSequence = appended.at(-1)?.sequence;
-      if (terminalSequence === undefined)
-        throw new Error('Execution terminal append returned no event');
-      state.durableThroughSequence = terminalSequence;
-      // Legacy completion is forwarded only after durability; it is terminal
-      // bookkeeping rather than part of the bounded, reconstructable live view.
-      if (completion !== undefined && !state.outputLimited) {
-        state.sequence += 1;
-        publish(state, {
-          type: 'event',
-          cursor: cursor(state.accepted.executionId, state.sequence),
-          event: completion,
-        });
-      }
-      status(state, outcome);
-      for (const subscriber of state.subscribers) subscriber.finish();
-      state.subscribers.clear();
-      // Detached initial snapshots and subscriber queues own their copies.
-      // Retained subscription handles must not keep the complete live view.
-      state.events.length = 0;
-      state.ring.length = 0;
-      state.ringBytes = 0;
-      state.outputBytes = 0;
-      live.delete(state.accepted.executionId);
+        ]);
+        const terminalSequence = appended.at(-1)?.sequence;
+        if (terminalSequence === undefined)
+          throw new Error('Execution terminal append returned no event');
+        state.durableThroughSequence = terminalSequence;
+        // Queue observers can already be waiting for the first terminal status
+        // notification. Project its confirmed removal before publishing any view.
+        sync(state.accepted.sessionId, [...persisted, ...appended]);
+        // Legacy completion is forwarded only after durability; it is terminal
+        // bookkeeping rather than part of the bounded, reconstructable live view.
+        if (completion !== undefined && !state.outputLimited) {
+          state.sequence += 1;
+          publish(state, {
+            type: 'event',
+            cursor: cursor(state.accepted.executionId, state.sequence),
+            event: completion,
+          });
+        }
+        status(state, outcome);
+        for (const subscriber of state.subscribers) subscriber.finish();
+        state.subscribers.clear();
+        // Detached initial snapshots and subscriber queues own their copies.
+        // Retained subscription handles must not keep the complete live view.
+        state.events.length = 0;
+        state.ring.length = 0;
+        state.ringBytes = 0;
+        state.outputBytes = 0;
+        live.delete(state.accepted.executionId);
+        await claimNext(state.accepted.sessionId);
+      });
     } catch (error: unknown) {
       markPersistenceError(state, error);
+    }
+  };
+
+  const install = (accepted: SessionExecution): LiveExecution => {
+    const state: LiveExecution = {
+      accepted,
+      controller: new AbortController(),
+      subscribers: new Set(),
+      ring: [],
+      events: [],
+      status: 'accepted',
+      sequence: 0,
+      ringBytes: 0,
+      outputBytes: bytes(snapshot(accepted)),
+      outputLimited: false,
+      promise: Promise.resolve(),
+    };
+    live.set(accepted.executionId, state);
+    // The barrier releases the mutation gate before entering Runner or plugin code.
+    state.promise = (async () => {
+      await gate(accepted.sessionId, async () => {
+        if (closed) state.controller.abort();
+      });
+      await pump(state);
+    })();
+    return state;
+  };
+  const claimNext = async (sessionId: string): Promise<void> => {
+    const current = queues.get(sessionId);
+    if (
+      closed ||
+      current?.error !== undefined ||
+      (current?.active !== null && current?.active !== undefined) ||
+      current?.queued.length === 0 ||
+      current === undefined
+    )
+      return;
+    const head = current.queued[0];
+    if (head === undefined) return;
+    try {
+      const { events } = await load(sessionId);
+      const accepted = projectAgentExecutions(events).find(
+        (item) => item.executionId === head.executionId,
+      );
+      if (accepted === undefined) throw new Error('Missing accepted queue head');
+      const appended = await append(sessionId, [
+        { type: 'execution.claimed', payload: { executionId: head.executionId } },
+      ]);
+      sync(sessionId, [...events, ...appended]);
+      install({ ...accepted, status: 'accepted' });
+      notifyQueue(sessionId);
+    } catch {
+      block(sessionId);
     }
   };
 
@@ -311,106 +552,216 @@ export function createAgentExecutionService(
       if (!parsed.success)
         throw new AgentExecutionError('execution-invalid-input', 'Execution input is invalid');
       const frozen = structuredClone(parsed.data);
-      const digest = createHash('sha256').update(canonicalJson(frozen.input), 'utf8').digest('hex');
+      const requestDigest = digest(frozen.input);
+      const replay = (
+        existing: readonly SessionExecution[],
+        observedLive = new Map(live),
+      ): AgentExecutionSnapshot | undefined => {
+        const item = existing.find((item) => item.requestId === frozen.requestId);
+        if (item === undefined) return undefined;
+        if (item.requestDigest !== requestDigest)
+          throw new AgentExecutionError(
+            'execution-request-conflict',
+            'Request identifier already belongs to different input',
+          );
+        return snapshot(item, live.get(item.executionId) ?? observedLive.get(item.executionId));
+      };
+      // Exact durable replay precedes all lifecycle/default/capacity checks.
+      const observedLive = new Map(live);
+      const previous = replay(await records(sessionId), observedLive);
+      const unresolved = queues.get(sessionId)?.unresolvedAdmission;
+      const reconciliation = unresolved?.requestId === frozen.requestId;
+      if (previous !== undefined && !reconciliation) return previous;
       return gate(sessionId, async () => {
-        // Retain a settled state while its older durable prefix is being read.
-        const observedLive = new Map(live);
-        const existing = await records(sessionId);
-        const replay = existing.find((item) => item.requestId === frozen.requestId);
-        if (replay !== undefined) {
-          if (replay.requestDigest !== digest)
+        const { events, projection } = await load(sessionId);
+        const unresolved = queues.get(sessionId)?.unresolvedAdmission;
+        if (unresolved?.requestId === frozen.requestId) {
+          if (unresolved.requestDigest !== requestDigest)
             throw new AgentExecutionError(
               'execution-request-conflict',
-              'Request identifier already belongs to different input',
+              'Ambiguous request identifier belongs to different input',
             );
-          return snapshot(
-            replay,
-            live.get(replay.executionId) ?? observedLive.get(replay.executionId),
+          const candidate = projectAgentExecutions(events).find(
+            (item) => item.executionId === unresolved.executionId,
           );
+          const state = queues.get(sessionId)!;
+          const hasOtherBlock = [...live.values()].some(
+            (item) => item.accepted.sessionId === sessionId && item.status === 'persistence-error',
+          );
+          if (!hasOtherBlock) {
+            if (
+              closed &&
+              candidate !== undefined &&
+              (candidate.status === 'queued' || candidate.status === 'accepted')
+            ) {
+              const appended = await append(sessionId, [
+                {
+                  type: 'execution.finished',
+                  payload: {
+                    executionId: candidate.executionId,
+                    status: 'cancelled',
+                    reason: 'service-closed',
+                  },
+                },
+              ]);
+              delete state.unresolvedAdmission;
+              delete state.error;
+              sync(sessionId, [...events, ...appended]);
+              notifyQueue(sessionId);
+              return snapshot({
+                ...candidate,
+                status: 'cancelled',
+                reason: 'service-closed',
+                durableThroughSequence: appended.at(-1)!.sequence,
+              });
+            }
+            delete state.unresolvedAdmission;
+            delete state.error;
+            // Recompute pending reservations only after this exact ambiguity is resolved.
+            sync(sessionId, events);
+            if (candidate?.status === 'accepted' && !live.has(candidate.executionId))
+              install(candidate);
+            if (candidate?.status === 'queued') await claimNext(sessionId);
+            notifyQueue(sessionId);
+          }
         }
-        if (closed)
-          throw new AgentExecutionError('execution-closed', 'Execution admission is closed');
-        if (existing.some((item) => item.status === 'accepted'))
-          throw new AgentExecutionError(
-            'execution-busy',
-            'Session already has an active execution',
-          );
+        const previous = replay(projectAgentExecutions(events));
+        if (previous !== undefined) return previous;
+        requireMutable(sessionId);
         await options.admit(sessionId);
-        if (closed)
-          throw new AgentExecutionError('execution-closed', 'Execution admission is closed');
+        requireMutable(sessionId);
+        const immediate = projection.active === null && projection.queued.length === 0;
+        const globalPending = [...pendingCounts.values()].reduce(
+          (total, count) => total + count,
+          0,
+        );
+        if (!immediate && (projection.queued.length >= 10 || globalPending >= 100))
+          throw new AgentExecutionError('execution-queue-full', 'Execution waiting queue is full');
+        const resolved =
+          options.resolveInput === undefined
+            ? { ...structuredClone(frozen.input), useProviderDefaults: false }
+            : await options.resolveInput(sessionId, structuredClone(frozen.input));
+        const effective = agentExecutionInputSchema.safeParse(resolved);
+        if (!effective.success || effective.data.useProviderDefaults !== false)
+          throw new AgentExecutionError(
+            'execution-invalid-input',
+            'Effective execution input is invalid',
+          );
+        const immutable = (value: typeof frozen.input): unknown => {
+          const {
+            temperature: _temperature,
+            maxTokens: _maxTokens,
+            useProviderDefaults: _defaults,
+            ...rest
+          } = value;
+          void _temperature;
+          void _maxTokens;
+          void _defaults;
+          return rest;
+        };
+        if (
+          canonicalJson(immutable(effective.data)) !== canonicalJson(immutable(frozen.input)) ||
+          (frozen.input.temperature !== undefined &&
+            effective.data.temperature !== frozen.input.temperature) ||
+          (frozen.input.maxTokens !== undefined &&
+            effective.data.maxTokens !== frozen.input.maxTokens) ||
+          (frozen.input.useProviderDefaults === false &&
+            (effective.data.temperature !== frozen.input.temperature ||
+              effective.data.maxTokens !== frozen.input.maxTokens))
+        )
+          throw new AgentExecutionError(
+            'execution-invalid-input',
+            'Effective execution input changed immutable request fields',
+          );
+        requireMutable(sessionId);
         const accepted: SessionExecution = {
           executionId: randomUUID(),
           requestId: frozen.requestId,
-          requestDigest: digest,
+          requestDigest,
           turnId: randomUUID(),
           userMessageId: randomUUID(),
           input: frozen.input,
+          dispatch: 'queued',
+          runInput: structuredClone(effective.data),
           sessionId,
           createdAt: new Date().toISOString(),
-          status: 'accepted',
+          status: immediate ? 'accepted' : 'queued',
         };
-        if (bytes(snapshot(accepted)) + 1024 > snapshotMaxBytes)
+        if (
+          bytes(snapshot(accepted)) + 1024 > snapshotMaxBytes ||
+          bytes(effective.data) + 1024 > snapshotMaxBytes
+        )
           throw new AgentExecutionError(
             'execution-output-limit',
             'Execution input exceeds the live snapshot limit',
           );
-        const appended = await options.sessionStore.append(sessionId, [
-          {
-            type: 'execution.accepted',
-            payload: {
+        const {
+          sessionId: _sessionId,
+          createdAt: _createdAt,
+          status: _status,
+          ...payload
+        } = accepted;
+        void _sessionId;
+        void _createdAt;
+        void _status;
+        const batch: NewSessionEvent[] = [
+          { type: 'execution.accepted', payload },
+          ...(immediate
+            ? [
+                {
+                  type: 'execution.claimed' as const,
+                  payload: { executionId: accepted.executionId },
+                },
+              ]
+            : []),
+        ];
+        // Reservation remains conservative if both append and reconciliation read fail.
+        if (!immediate) pendingCounts.set(sessionId, (pendingCounts.get(sessionId) ?? 0) + 1);
+        let appended: readonly SessionEvent[];
+        try {
+          appended = await append(sessionId, batch);
+        } catch (error: unknown) {
+          if (error instanceof AppendFailure && !error.uncertain) {
+            sync(sessionId, events);
+            cleanup(sessionId);
+          } else if (error instanceof AppendFailure && error.uncertain) {
+            queues.get(sessionId)!.unresolvedAdmission = {
+              requestId: frozen.requestId,
+              requestDigest,
               executionId: accepted.executionId,
-              requestId: accepted.requestId,
-              requestDigest: digest,
-              turnId: accepted.turnId,
-              userMessageId: accepted.userMessageId,
-              input: structuredClone(accepted.input),
-            },
-          },
-        ]);
+            };
+          }
+          throw new AgentExecutionError(
+            error instanceof AppendFailure && error.uncertain
+              ? 'execution-admission-uncertain'
+              : 'execution-persistence-error',
+            'Execution acceptance could not be confirmed',
+            { cause: error },
+          );
+        }
         const durableAccepted = {
           ...accepted,
           createdAt: appended[0]?.occurredAt ?? accepted.createdAt,
         };
-        const state: LiveExecution = {
-          accepted: durableAccepted,
-          controller: new AbortController(),
-          subscribers: new Set(),
-          ring: [],
-          events: [],
-          status: 'accepted',
-          sequence: 0,
-          ringBytes: 0,
-          outputBytes: bytes(snapshot(durableAccepted)),
-          outputLimited: false,
-          promise: Promise.resolve(),
-        };
-        live.set(accepted.executionId, state);
-        const receipt = snapshot(durableAccepted, state);
-        state.promise = Promise.resolve().then(() => pump(state));
-        return receipt;
+        // Reuse the confirmed durable prefix; avoid a second read after acceptance.
+        sync(sessionId, [...events, ...appended]);
+        const state = immediate ? install(durableAccepted) : undefined;
+        notifyQueue(sessionId);
+        return snapshot(durableAccepted, state);
       });
     },
     async list(sessionId) {
       requireId(sessionId);
-      // Keep any state that settles while durable history is being read, so
-      // its stale accepted record cannot briefly appear active without output.
       const observedLive = new Map(live);
-      return (await records(sessionId))
-        .slice(-100)
+      return projectAgentExecutionQueue(await options.sessionStore.read(sessionId))
+        .executions.slice(-100)
         .reverse()
-        .map((accepted) => {
-          const {
-            input: _input,
-            events: _events,
-            ...summary
-          } = snapshot(
+        .map((accepted) =>
+          summary(
             accepted,
             live.get(accepted.executionId) ?? observedLive.get(accepted.executionId),
-          );
-          void _input;
-          void _events;
-          return summary;
-        });
+          ),
+        );
     },
     async get(sessionId, executionId) {
       const { accepted, state } = await lookup(sessionId, executionId);
@@ -504,16 +855,184 @@ export function createAgentExecutionService(
       };
     },
     async cancel(sessionId, executionId) {
-      const { accepted, state } = await lookup(sessionId, executionId);
-      if (
-        state !== undefined &&
-        !terminalStatuses.has(state.status) &&
-        state.status !== 'persistence-error'
-      ) {
-        if (state.status !== 'cancelling') status(state, 'cancelling');
-        state.controller.abort();
-      }
-      return snapshot(accepted, state);
+      return gate(sessionId, async () => {
+        const { accepted, state } = await lookup(sessionId, executionId);
+        if (accepted.status === 'queued')
+          throw new AgentExecutionError(
+            'execution-not-active',
+            'Queued execution requires explicit queue cancellation',
+          );
+        if (
+          state !== undefined &&
+          !terminalStatuses.has(state.status) &&
+          state.status !== 'persistence-error'
+        ) {
+          if (state.status !== 'cancelling') status(state, 'cancelling');
+          state.controller.abort();
+        }
+        return snapshot(accepted, state);
+      });
+    },
+    async queue(sessionId) {
+      requireId(sessionId);
+      return gate(sessionId, async () => {
+        await load(sessionId);
+        const current = view(sessionId, queues.get(sessionId)!);
+        cleanup(sessionId);
+        return current;
+      });
+    },
+    async subscribeQueue(sessionId) {
+      requireId(sessionId);
+      return gate(sessionId, async () => {
+        await load(sessionId);
+        const subscribers = queues.get(sessionId)!.subscribers;
+        let latest: AgentExecutionQueueSnapshot | undefined;
+        let pending: ((value: IteratorResult<AgentExecutionQueueSnapshot>) => void) | undefined;
+        let ended = false;
+        const close = (): void => {
+          ended = true;
+          latest = undefined;
+          subscribers.delete(subscriber);
+          pending?.({ done: true, value: undefined });
+          pending = undefined;
+          cleanup(sessionId);
+        };
+        const subscriber: QueueSubscriber = {
+          push(value) {
+            if (ended) return;
+            if (pending !== undefined) {
+              const resolve = pending;
+              pending = undefined;
+              resolve({ done: false, value });
+            } else latest = value;
+          },
+          close,
+        };
+        subscribers.add(subscriber);
+        const iterator: AsyncIterator<AgentExecutionQueueSnapshot> = {
+          next() {
+            if (latest !== undefined) {
+              const value = latest;
+              latest = undefined;
+              return Promise.resolve({ done: false, value });
+            }
+            if (ended) return Promise.resolve({ done: true, value: undefined });
+            return new Promise((resolve) => {
+              pending = resolve;
+            });
+          },
+          return() {
+            close();
+            return Promise.resolve({ done: true, value: undefined });
+          },
+        };
+        queueSequence++;
+        return {
+          initial: [view(sessionId, queues.get(sessionId)!)],
+          events: { [Symbol.asyncIterator]: () => iterator },
+          close,
+        };
+      });
+    },
+    async reorderQueue(sessionId, request) {
+      requireId(sessionId);
+      const parsed = agentExecutionQueueReorderSchema.safeParse(request);
+      if (!parsed.success)
+        throw new AgentExecutionError('execution-invalid-input', 'Invalid execution queue reorder');
+      const frozen = structuredClone(parsed.data);
+      const requestDigest = digest({ kind: 'reorder', ...frozen });
+      return gate(sessionId, async () => {
+        const { events, projection } = await load(sessionId);
+        const previous = projection.controls.find((item) => item.requestId === frozen.requestId);
+        if (previous !== undefined) {
+          if (previous.requestDigest !== requestDigest)
+            throw new AgentExecutionError(
+              'execution-request-conflict',
+              'Queue control identifier conflicts',
+            );
+          const current = view(sessionId, queues.get(sessionId)!);
+          cleanup(sessionId);
+          return current;
+        }
+        requireMutable(sessionId);
+        if (frozen.expectedRevision !== projection.revision)
+          throw new AgentExecutionError('execution-queue-conflict', 'Queue revision changed');
+        if (
+          frozen.executionIds.length !== projection.queued.length ||
+          frozen.executionIds.some(
+            (id) => !projection.queued.some((item) => item.executionId === id),
+          )
+        )
+          throw new AgentExecutionError('execution-queue-conflict', 'Queue membership changed');
+        try {
+          const appended = await append(sessionId, [
+            { type: 'execution.queue-reordered', payload: { ...frozen, requestDigest } },
+          ]);
+          sync(sessionId, [...events, ...appended]);
+        } catch (error: unknown) {
+          throw new AgentExecutionError(
+            'execution-persistence-error',
+            'Queue reorder could not be confirmed',
+            { cause: error },
+          );
+        }
+        notifyQueue(sessionId);
+        return view(sessionId, queues.get(sessionId)!);
+      });
+    },
+    async cancelQueued(sessionId, executionId, request) {
+      requireId(sessionId);
+      requireId(executionId);
+      const parsed = agentExecutionQueuedCancelSchema.safeParse(request);
+      if (!parsed.success)
+        throw new AgentExecutionError(
+          'execution-invalid-input',
+          'Invalid queued execution cancellation',
+        );
+      const frozen = structuredClone(parsed.data);
+      const requestDigest = digest({ kind: 'cancel', executionId, ...frozen });
+      return gate(sessionId, async () => {
+        const { events, projection } = await load(sessionId);
+        const previous = projection.controls.find((item) => item.requestId === frozen.requestId);
+        if (previous !== undefined) {
+          if (previous.requestDigest !== requestDigest)
+            throw new AgentExecutionError(
+              'execution-request-conflict',
+              'Queue control identifier conflicts',
+            );
+          const current = view(sessionId, queues.get(sessionId)!);
+          cleanup(sessionId);
+          return current;
+        }
+        requireMutable(sessionId);
+        if (frozen.expectedRevision !== projection.revision)
+          throw new AgentExecutionError('execution-queue-conflict', 'Queue revision changed');
+        if (!projection.queued.some((item) => item.executionId === executionId))
+          throw new AgentExecutionError('execution-not-queued', 'Execution is no longer queued');
+        try {
+          const appended = await append(sessionId, [
+            {
+              type: 'execution.finished',
+              payload: {
+                executionId,
+                status: 'cancelled',
+                reason: 'queue-cancelled',
+                queueRequest: { ...frozen, requestDigest },
+              },
+            },
+          ]);
+          sync(sessionId, [...events, ...appended]);
+        } catch (error: unknown) {
+          throw new AgentExecutionError(
+            'execution-persistence-error',
+            'Queued cancellation could not be confirmed',
+            { cause: error },
+          );
+        }
+        notifyQueue(sessionId);
+        return view(sessionId, queues.get(sessionId)!);
+      });
     },
     async recover(sessionIds) {
       for (const sessionId of sessionIds)
@@ -521,7 +1040,11 @@ export function createAgentExecutionService(
           const events = await options.sessionStore.read(sessionId);
           const projection = events.length === 0 ? undefined : projectSession(events);
           for (const accepted of projectAgentExecutions(events)) {
-            if (accepted.status !== 'accepted' || live.has(accepted.executionId)) continue;
+            if (
+              (accepted.status !== 'accepted' && accepted.status !== 'queued') ||
+              live.has(accepted.executionId)
+            )
+              continue;
             const turn = projection?.turns.find((item) => item.turnId === accepted.turnId);
             const batch: NewSessionEvent[] = [];
             if (turn?.status === 'running') {
@@ -542,15 +1065,17 @@ export function createAgentExecutionService(
                 executionId: accepted.executionId,
                 status:
                   turn !== undefined && turn.status !== 'running' ? turn.status : 'interrupted',
-                ...(turn?.status !== 'running' && turn?.reason !== undefined
-                  ? { reason: turn.reason }
-                  : turn === undefined || turn.status === 'running'
-                    ? { reason: 'server-restarted' }
-                    : {}),
+                ...(turn !== undefined && turn.status !== 'running'
+                  ? turn.reason === undefined
+                    ? {}
+                    : { reason: turn.reason }
+                  : { reason: 'server-restarted' }),
               },
             });
-            await options.sessionStore.append(sessionId, batch);
+            await append(sessionId, batch);
           }
+          await load(sessionId);
+          notifyQueue(sessionId);
         });
     },
     async withSessionIdle(sessionId, operation) {
@@ -558,7 +1083,12 @@ export function createAgentExecutionService(
       return gate(sessionId, async () => {
         if (closed)
           throw new AgentExecutionError('execution-closed', 'Execution admission is closed');
-        if ((await records(sessionId)).some((item) => item.status === 'accepted'))
+        if (
+          (await records(sessionId)).some(
+            (item) => item.status === 'accepted' || item.status === 'queued',
+          ) ||
+          queues.get(sessionId)?.error !== undefined
+        )
           throw new AgentExecutionError(
             'execution-busy',
             'Session already has an active execution',
@@ -568,18 +1098,51 @@ export function createAgentExecutionService(
     },
     closeSync() {
       closed = true;
+      for (const sessionId of queues.keys()) notifyQueue(sessionId);
     },
     async drain() {
-      closed = true;
-      await Promise.all([...gates.values()]);
-      const states = [...live.values()];
-      for (const state of states)
-        if (state.status !== 'persistence-error') {
-          if (state.status !== 'cancelling') status(state, 'cancelling');
-          state.controller.abort();
+      service.closeSync();
+      let failed = false;
+      const states = await gate('', async () => {
+        const states = [...live.values()];
+        for (const state of states)
+          if (state.status !== 'persistence-error') {
+            if (state.status !== 'cancelling') status(state, 'cancelling');
+            state.controller.abort();
+          }
+        for (const [sessionId, state] of queues) {
+          if (state.error !== undefined) {
+            failed = true;
+            continue;
+          }
+          try {
+            const { events, projection } = await load(sessionId);
+            const batch: NewSessionEvent[] = projection.queued.map((item) => ({
+              type: 'execution.finished',
+              payload: {
+                executionId: item.executionId,
+                status: 'cancelled',
+                reason: 'service-closed',
+              },
+            }));
+            if (batch.length !== 0) {
+              const appended = await append(sessionId, batch);
+              sync(sessionId, [...events, ...appended]);
+              notifyQueue(sessionId);
+            }
+          } catch {
+            failed = true;
+            block(sessionId);
+          }
         }
+        return states;
+      });
       await Promise.all(states.map((state) => state.promise));
-      if (states.some((state) => state.status === 'persistence-error'))
+      for (const state of queues.values()) {
+        if (state.error !== undefined) failed = true;
+        for (const subscriber of [...state.subscribers]) subscriber.close();
+      }
+      if (failed || states.some((state) => state.status === 'persistence-error'))
         throw new AgentExecutionError(
           'execution-persistence-error',
           'One or more execution terminal states could not be persisted',
