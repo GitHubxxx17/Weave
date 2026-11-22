@@ -61,6 +61,7 @@ class FixtureSource {
   ready = true;
   includeInstanceId = false;
   origin: ExtensionIdentity['origin'];
+  managedIdentity: { readonly digest: string; readonly activationSequence: number } | undefined;
 
   constructor(readonly id: string) {}
 
@@ -155,6 +156,9 @@ class FixtureSource {
           items: [
             {
               ...this.itemIdentity(identity),
+              ...(this.managedIdentity === undefined
+                ? {}
+                : { managedIdentity: this.managedIdentity }),
               plugin,
               dispose,
               ...(this.normalizeError === undefined ? {} : { normalizeError: this.normalizeError }),
@@ -218,15 +222,16 @@ async function fixtureWithAuthorityOrder(
     ]);
   }
   let failAssembly = false;
+  const assemble = vi.fn(async (kernelPlugins: readonly KernelPlugin[]) => {
+    if (failAssembly) throw new Error('Shared assembly failed');
+    return assembleServerGeneration(runtime, { kernelPlugins });
+  });
   const coordinator = createExtensionCoordinator({
     host: runtime.serverHost,
     sources: sources.map((source) => source.register),
     mcpFirstAuthority: mode === true,
     ...(typeof mode === 'boolean' ? {} : { managedAuthority: mode }),
-    assemble: async (kernelPlugins) => {
-      if (failAssembly) throw new Error('Shared assembly failed');
-      return assembleServerGeneration(runtime, { kernelPlugins });
-    },
+    assemble,
   });
   const app = createApp(runtime, {
     pluginCatalog: () => listServerPlugins(runtime),
@@ -236,6 +241,7 @@ async function fixtureWithAuthorityOrder(
     coordinator,
     runtime,
     runner,
+    assemble,
     failAssembly(value: boolean) {
       failAssembly = value;
     },
@@ -288,6 +294,55 @@ function toolContent(content: string) {
 }
 
 describe('Server extension coordination', () => {
+  it.each(['skip-rebuild', 'committed-no-rebuild'] as const)(
+    'captures the %s ticket without refresh or assembly before a competing replacement',
+    async (disposition) => {
+      const local = new FixtureSource('local-esm');
+      local.origin = 'managed';
+      const f = await fixture(local);
+      const release = deferred();
+      try {
+        await f.coordinator.reload();
+        const { generation, members } = f.coordinator.snapshot();
+        const refresh = vi.fn();
+        local.onRefresh = refresh;
+        f.assemble.mockClear();
+        const first = f.coordinator.mutateManaged(local.id, async () => {
+          await release.promise;
+          return disposition === 'skip-rebuild'
+            ? { disposition, replay: 'recorded' }
+            : { disposition, saved: 'durable' };
+        });
+        const second = f.coordinator.mutateManaged(local.id, async () => {
+          expect(refresh).not.toHaveBeenCalled();
+          expect(f.assemble).not.toHaveBeenCalled();
+          expect(f.coordinator.generationSnapshot()).toEqual(generation);
+          await local.decide('replacement');
+          return { disposition: 'rebuild', saved: 'replacement' };
+        });
+        release.resolve();
+        const [recorded, replacement] = await Promise.all([first, second]);
+        expect(recorded).toEqual(
+          disposition === 'skip-rebuild'
+            ? { kind: 'replayed', replay: 'recorded', observed: { generation, members } }
+            : {
+                kind: 'committed',
+                saved: 'durable',
+                outcome: { kind: 'not-required' },
+                observed: { generation, members },
+              },
+        );
+        expect(replacement.observed.members).toMatchObject([{ identity: 'replacement' }]);
+        expect(replacement.observed.generation.id).toBeGreaterThan(generation.id);
+        expect(refresh).toHaveBeenCalledOnce();
+        expect(f.assemble).toHaveBeenCalledOnce();
+      } finally {
+        release.resolve();
+        await f.close();
+      }
+    },
+  );
+
   it('captures managed completions in each ticket before the next mutation changes admission', async () => {
     const local = new FixtureSource('local-esm');
     local.origin = 'managed';
@@ -307,16 +362,20 @@ describe('Server extension coordination', () => {
       expect(firstResult).toMatchObject({
         kind: 'committed',
         saved: 'first-saved',
-        generation: { acceptingRuns: true },
-        members: [{ identity: 'first', origin: 'managed' }],
+        observed: {
+          generation: { acceptingRuns: true },
+          members: [{ identity: 'first', origin: 'managed' }],
+        },
         outcome: { kind: 'completed' },
       });
       expect(secondResult).toMatchObject({
         kind: 'committed',
         saved: 'second-saved',
-        generation: { acceptingRuns: false },
-        members: [{ identity: 'first', origin: 'managed' }],
-        outcome: { kind: 'failed', cause: undefined },
+        observed: {
+          generation: { acceptingRuns: false },
+          members: [{ identity: 'first', origin: 'managed' }],
+        },
+        outcome: { kind: 'failed', failureKind: 'adoption', cause: undefined },
       });
       if (secondResult.kind !== 'committed') throw new Error('Expected a committed result');
       expect(Object.hasOwn(secondResult.outcome, 'cause')).toBe(true);
@@ -345,7 +404,7 @@ describe('Server extension coordination', () => {
       }));
       expect(result).toMatchObject({
         kind: 'committed',
-        members: [],
+        observed: { members: [] },
         outcome: { kind: 'completed' },
       });
       if (result.kind !== 'committed' || result.outcome.kind !== 'completed')
@@ -379,7 +438,11 @@ describe('Server extension coordination', () => {
         saved: 'saved',
       }));
       if (result.kind !== 'committed') throw new Error('Expected a committed decision');
-      expect(result.outcome).toStrictEqual({ kind: 'failed', cause: undefined });
+      expect(result.outcome).toStrictEqual({
+        kind: 'failed',
+        failureKind: 'publication',
+        cause: undefined,
+      });
       await expect(f.coordinator.reload()).rejects.toBeUndefined();
     } finally {
       await f.close();
@@ -967,6 +1030,8 @@ describe('Server extension coordination', () => {
 
   it('retains exact current and pinned generation instances until preparation cleanup settles', async () => {
     const a = new FixtureSource('source-a');
+    a.origin = 'managed';
+    a.managedIdentity = { digest: '1'.repeat(64), activationSequence: 1 };
     a.includeInstanceId = true;
     const turnEntered = deferred();
     const turnRelease = deferred();
@@ -980,17 +1045,28 @@ describe('Server extension coordination', () => {
       const oldTurn = f.turn(a.id, 'old-turn');
       await turnEntered.promise;
       a.onTool = undefined;
+      a.managedIdentity = { digest: '2'.repeat(64), activationSequence: 2 };
       const second = await f.coordinator.reload({ force: true });
       expect(f.coordinator.retainedGenerations()).toEqual([
         {
           generationId: first.generation.id,
           current: false,
-          members: [expect.objectContaining({ instanceId: 'source-a:attempt-1' })],
+          members: [
+            expect.objectContaining({
+              instanceId: 'source-a:attempt-1',
+              managedIdentity: { digest: '1'.repeat(64), activationSequence: 1 },
+            }),
+          ],
         },
         {
           generationId: second.generation.id,
           current: true,
-          members: [expect.objectContaining({ instanceId: 'source-a:attempt-2' })],
+          members: [
+            expect.objectContaining({
+              instanceId: 'source-a:attempt-2',
+              managedIdentity: { digest: '2'.repeat(64), activationSequence: 2 },
+            }),
+          ],
         },
       ]);
       const external = f.coordinator.retainedGenerations();

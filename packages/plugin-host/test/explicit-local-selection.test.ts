@@ -52,9 +52,9 @@ it('exposes combined eligibility and keeps the legacy manual identity', async ()
     expect(candidates.map(localSourceCandidateIdentity)).toEqual([
       JSON.stringify(['a', manual.ready[0]!.digest]),
     ]);
-    expect((await source.prepare(snapshot.stamp, prepareOptions())).items[0]?.origin).toBe(
-      'manual',
-    );
+    const prepared = (await source.prepare(snapshot.stamp, prepareOptions())).items[0];
+    expect(prepared?.origin).toBe('manual');
+    expect(prepared).not.toHaveProperty('managedIdentity');
   } finally {
     await source.close();
   }
@@ -455,7 +455,12 @@ it('detaches input, preserves equivalent stamps, and rechecks activation identit
   const prepared = await source.prepare(current.stamp, prepareOptions());
   expect(prepared.items).toMatchObject([
     { id: 'a', origin: 'manual', identity: manualIdentity },
-    { id, origin: 'managed', identity: managedIdentity },
+    {
+      id,
+      origin: 'managed',
+      identity: managedIdentity,
+      managedIdentity: { digest: ready.digest, activationSequence: selection.activationSequence },
+    },
   ]);
   const kernel = createPluginKernel();
   try {

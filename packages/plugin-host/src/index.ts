@@ -90,6 +90,7 @@ export type {
   LocalSourceStamp,
   ManagedLocalCandidate,
   PreparedLocalPlugin,
+  ManagedPreparedIdentity,
   PreparedLocalPluginFailure,
   PreparedLocalPlugins,
 } from './local-source-types.js';

@@ -339,6 +339,7 @@ export function createManagedPluginComposition(
     snapshot: PluginAuthoritySnapshot,
     blockSync: () => void,
   ): void {
+    authority = snapshot;
     let blocked = false;
     const committed: CommittedAdoption = {
       causes: [],
@@ -397,9 +398,50 @@ export function createManagedPluginComposition(
     reconcileSync(options.readAuthoritySync);
   }
 
-  function invalidateAuthoritySync(cause: unknown): never {
+  function withdrawUncertainAuthoritySync(
+    failure: ExplicitLocalAuthorityError,
+    onSecondary: (secondary: unknown) => void,
+  ): void {
+    targets.clear();
+    const sticky = new Set(authority.installations.map(({ pluginId }) => pluginId));
+    let cancelPreparation: (() => void) | undefined;
+    try {
+      buffer.runSync(() => {
+        const { local, mcp } = getSources();
+        try {
+          cancelPreparation = local?.withdrawExplicitSelectionSync(sticky, undefined, failure);
+        } catch (withdrawal: unknown) {
+          onSecondary(withdrawal);
+        }
+        try {
+          mcp?.setDeniedPluginIdsSync(
+            new Set(mcp.declaredPluginIds().filter((id) => sticky.has(id))),
+          );
+        } catch (denial: unknown) {
+          onSecondary(denial);
+        }
+      });
+    } catch (publication: unknown) {
+      onSecondary(publication);
+    } finally {
+      try {
+        cancelPreparation?.();
+      } catch (cancellation: unknown) {
+        onSecondary(cancellation);
+      }
+    }
+  }
+
+  function invalidateAuthoritySync(
+    cause: unknown,
+    onSecondary?: (secondary: unknown) => void,
+  ): never {
     const failure =
       cause instanceof ExplicitLocalAuthorityError ? cause : new ExplicitLocalAuthorityError(cause);
+    if (onSecondary !== undefined) {
+      withdrawUncertainAuthoritySync(failure, onSecondary);
+      throw failure;
+    }
     // An install hook can already have withdrawn both sources before rejecting.
     if (targets.size > 0 || !(cause instanceof ExplicitLocalAuthorityError)) {
       reconcileSync(() => authority, undefined, failure);
@@ -618,6 +660,7 @@ export function createManagedPluginComposition(
     adoptAuthoritySync,
     adoptCommittedAuthoritySync,
     adoptLatestAuthoritySync,
+    cachedAuthoritySync: () => authority,
     adoptInitialAuthoritySync: () => adoptAuthoritySync(options.initialAuthority),
     invalidateAuthoritySync,
     managedAuthority,

@@ -273,6 +273,9 @@ export function createLocalExtensionSource(
             pluginId: item.id,
             identity: item.identity,
             origin: item.origin,
+            ...(item.managedIdentity === undefined
+              ? {}
+              : { managedIdentity: item.managedIdentity }),
             plugin: item.plugin,
             normalizeError: item.normalize,
             dispose: item.dispose,

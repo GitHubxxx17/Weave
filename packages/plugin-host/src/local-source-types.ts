@@ -83,11 +83,17 @@ export interface LocalSourceAuthorityChange {
   readonly immediate: boolean;
 }
 
+export interface ManagedPreparedIdentity {
+  readonly digest: string;
+  readonly activationSequence: number;
+}
+
 export interface PreparedLocalPlugin {
   readonly id: string;
   readonly identity: string;
   readonly digest: string;
   readonly origin: LocalSourceCandidate['origin'];
+  readonly managedIdentity?: ManagedPreparedIdentity;
   readonly plugin: KernelPlugin;
   readonly normalize: (error: unknown) => unknown;
   readonly cleanupErrors: readonly unknown[];

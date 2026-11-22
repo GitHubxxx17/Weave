@@ -524,6 +524,14 @@ export function createLocalPluginSource(
               digest: candidate.digest,
               identity: key,
               origin: candidate.origin,
+              ...(managed
+                ? {
+                    managedIdentity: Object.freeze({
+                      digest: candidate.digest,
+                      activationSequence: candidate.activationSequence,
+                    }),
+                  }
+                : {}),
               plugin: lifecycle.plugin,
               normalize: lifecycle.normalize,
               dispose: lifecycle.dispose,

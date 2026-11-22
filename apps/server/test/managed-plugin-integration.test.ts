@@ -447,7 +447,7 @@ describe('joint managed, manual and MCP Generation', () => {
           command: input.request.command,
         });
         if (application.kind !== 'committed') throw new Error('Expected committed activation');
-        expect(application.application.status).toBe('failed');
+        if (application.application.status !== 'failed') throw new Error('Expected failure');
         expect(
           phase === 'import'
             ? (application.application.cause as Error).cause
@@ -1037,7 +1037,9 @@ describe('joint managed, manual and MCP Generation', () => {
     const release = Promise.withResolvers<void>();
     let oldTurn: Promise<unknown> | undefined;
     try {
-      await f.seedManaged('notes', 'retained');
+      const artifact = await f.seedManaged('notes', 'retained');
+      const activationSequence =
+        f.authority.snapshotSync().installations[0]!.selection!.activationSequence;
       await f.seedMcp('remote');
       const first = echoConnection(async (_name, _args, options) => {
         entered.resolve(options!.signal!);
@@ -1050,6 +1052,9 @@ describe('joint managed, manual and MCP Generation', () => {
         .mockImplementation(async () => echoConnection());
       const host = f.compose({ mcpConnect: connect });
       const original = await host.coordinator.reload();
+      expect(original.members.find(({ sourceId }) => sourceId === 'mcp')).not.toHaveProperty(
+        'managedIdentity',
+      );
       const tool = original.members.find(({ sourceId }) => sourceId === 'mcp')!.manifest
         .contributes!.tools![0]!;
       oldTurn = f.runTool([tool, 'notes'], 'retired-managed');
@@ -1070,7 +1075,14 @@ describe('joint managed, manual and MCP Generation', () => {
           generationId: original.generation.id,
           current: false,
           members: expect.arrayContaining([
-            expect.objectContaining({ pluginId: 'notes', origin: 'managed' }),
+            expect.objectContaining({
+              pluginId: 'notes',
+              origin: 'managed',
+              managedIdentity: {
+                digest: artifact.digest,
+                activationSequence,
+              },
+            }),
           ]),
         }),
       );
@@ -1099,6 +1111,7 @@ describe('joint managed, manual and MCP Generation', () => {
         kind: 'replayed',
         operation: repeated.operation,
         currentAuthority: repeated.savedAuthority,
+        observed: repeated.observed,
       });
       expect(retry).toHaveBeenCalledOnce();
       expect(abort).toHaveBeenCalledOnce();

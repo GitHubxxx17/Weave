@@ -1,5 +1,9 @@
 import type { KernelPlugin, PluginManifest } from '@weave/plugin';
-import type { LocalPluginIssue, LocalSourceCandidate } from '@weave/plugin-host';
+import type {
+  LocalPluginIssue,
+  LocalSourceCandidate,
+  ManagedPreparedIdentity,
+} from '@weave/plugin-host';
 
 /** Candidate-wide resource failure; authority read errors must remain distinct. */
 export class ExtensionPreparationError extends Error {
@@ -51,6 +55,7 @@ export type ExtensionAuthorityObserver = (
 ) => void;
 
 export interface PreparedExtensionItem extends ExtensionIdentity {
+  readonly managedIdentity?: ManagedPreparedIdentity;
   /** Server-private identity of these exact preparation resources. */
   readonly instanceId?: string;
   readonly plugin: KernelPlugin;
@@ -90,6 +95,7 @@ export type ExtensionSourceFactory = (observe: ExtensionAuthorityObserver) => Ex
 
 export interface ExtensionMember extends ExtensionIdentity {
   readonly sourceId: string;
+  readonly managedIdentity?: ManagedPreparedIdentity;
   readonly instanceId?: string;
   readonly manifest: PluginManifest;
 }
