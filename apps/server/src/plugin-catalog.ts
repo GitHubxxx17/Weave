@@ -37,7 +37,7 @@ export const pluginListItemSchema = z.object({
   error: pluginIssueSchema.optional(),
   local: localPluginMetadataSchema.optional(),
   host: z.enum(['in-process', 'mcp', 'subprocess']),
-  capabilities: z.array(z.enum(['tool', 'llm-provider', 'prompt', 'event', 'command'])),
+  capabilities: z.array(z.enum(['tool', 'llm-provider', 'prompt', 'event', 'command', 'skill'])),
   engines: z.object({ weave: z.string() }).optional(),
   contributes: z
     .object({
@@ -46,6 +46,7 @@ export const pluginListItemSchema = z.object({
       promptSections: nameListSchema.optional(),
       events: nameListSchema.optional(),
       commands: nameListSchema.optional(),
+      skills: nameListSchema.optional(),
       hooks: nameListSchema.optional(),
       services: nameListSchema.optional(),
     })
@@ -57,6 +58,7 @@ export const pluginListItemSchema = z.object({
     promptSections: nameListSchema,
     events: nameListSchema,
     commands: nameListSchema,
+    skills: nameListSchema.default([]),
     hooks: nameListSchema,
     services: nameListSchema,
   }),
@@ -100,6 +102,7 @@ function declared(contributes: PluginContributes): NonNullable<PluginListItem['c
       : { promptSections: [...contributes.promptSections] }),
     ...(contributes.events === undefined ? {} : { events: [...contributes.events] }),
     ...(contributes.commands === undefined ? {} : { commands: [...contributes.commands] }),
+    ...(contributes.skills === undefined ? {} : { skills: [...contributes.skills] }),
     ...(contributes.hooks === undefined ? {} : { hooks: [...contributes.hooks] }),
     ...(contributes.services === undefined ? {} : { services: [...contributes.services] }),
   };
@@ -126,6 +129,7 @@ export function describePlugin(info: PluginInfo, origin: PluginOrigin): PluginLi
       promptSections: [...contributed.promptSections],
       events: [...contributed.events],
       commands: [...contributed.commands],
+      skills: [...contributed.skills],
       hooks: [...contributed.hooks],
       services: [...contributed.services],
     },
@@ -183,6 +187,7 @@ export function projectPluginCatalog(
         promptSections: [],
         events: [],
         commands: [],
+        skills: [],
         hooks: [],
         services: [],
       },

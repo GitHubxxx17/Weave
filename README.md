@@ -17,14 +17,15 @@ The Foundation vertical slice, Session persistence, the headless Agent Tool
 Loop, the shared Tool Pipeline, the Approval HTTP control plane, the Agent
 HTTP/SSE adapter, the first Studio Agent Chat workspace, multi-Provider
 routing, the typed Plugin Kernel, local ESM plugin trust/management, and local
-stdio MCP tools are implemented. Studio manages local launch configurations,
+stdio MCP tools, immutable GitHub plugin acquisition, multiple marketplace
+indexes, and the Skills selection/resource/history flow are implemented. Studio manages local launch configurations,
 canonical trust reviews, enable/disable/revoke/remove decisions, and explicit
 extension reloads through the Server control plane.
 `@weave/protocol`, `@weave/llm`, `@weave/session`, `@weave/runtime`,
 `@weave/plugin`, `@weave/server`, and `@weave/studio` form the current
 architecture, alongside `@weave/plugin-builtins`, `@weave/plugin-host`,
-`@weave/mcp-client`, and `@weave/desktop`. OS Sandbox hardening, GitHub Plugin
-installation, remote MCP transports, and the broader Studio product remain later phases. The first
+`@weave/mcp-client`, and `@weave/desktop`. OS Sandbox hardening,
+remote MCP transports, and the broader Studio product remain later phases. The first
 protected Workspace file tools are now available in `@weave/runtime`.
 
 Start with the [Foundation architecture guide](docs/architecture/foundation.md)
@@ -34,7 +35,10 @@ the repository begins with these four units.
 
 See [local MCP setup and lifecycle](docs/learning/2026-11-21-local-mcp.md)
 for the Studio workflow, launch configuration format, trust boundaries, and
-troubleshooting.
+troubleshooting. See [Skills usage and authoring](docs/learning/2026-11-22-skills.md)
+for per-session selection, exact retry, progressive resource reads and supported
+`SKILL.md` metadata. Skill-only installable packages and custom panel SDK remain
+the next independent distribution and extension topics.
 
 The Stage 6.1 [local plugin artifact store](docs/learning/2026-11-21-plugin-artifact-store.md)
 provides bounded, non-executing directory copies at fixed content-addressed paths.
@@ -115,10 +119,11 @@ pnpm --filter @weave/plugin typecheck
 The Server composition root can register a `WeavePlugin` before creating the
 Agent Runner. A plugin can register a Tool or Provider through `PluginContext`,
 but Tool execution still goes through the shared Tool Pipeline and Provider
-selection still goes through `LlmProviderRegistry`. The current phase does not
-download arbitrary GitHub code. GitHub Catalog and Installer support will be
-added as a separate phase with repository, exact Commit, and Monorepo path
-locking.
+selection still goes through `LlmProviderRegistry`. GitHub installation accepts
+an exact full Commit and optional Monorepo path through an inert preview/import;
+reviewed trust and activation remain separate decisions. Marketplace discovery
+does not execute a plugin. See [GitHub acquisition](docs/learning/2026-11-22-github-plugin-acquisition.md)
+and [marketplace publishing](docs/learning/plugin-marketplace-publishing.md).
 
 Server does not contain the Agent Loop because HTTP should remain a thin
 control-plane boundary while agent behavior belongs in the runtime. Server

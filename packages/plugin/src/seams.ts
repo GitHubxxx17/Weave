@@ -17,6 +17,7 @@ import { defineHook, type Hook, type PolicyVote } from './hook.js';
 import { PluginError } from './plugin-errors.js';
 import type { PluginEventDefinition, PluginEventRegistry } from './plugin-events.js';
 import { defineServiceRef, type ServiceRef } from './service.js';
+import { skillContributionSchema, type SkillsExtensionApi } from './skills.js';
 
 /**
  * The concrete seams that Weave's own subsystems are exposed through, typed
@@ -220,6 +221,40 @@ export const commandsExtensionPoint: ExtensionPoint<CommandsExtensionApi> = defi
 });
 
 // --- Hooks ---
+
+/** Declarative per-turn instructions, with host-assigned contributor identity. */
+export const skillsExtensionPoint: ExtensionPoint<SkillsExtensionApi> = defineExtensionPoint({
+  id: 'weave.skills',
+  governed: {
+    capability: 'skill',
+    key: 'skills',
+    guard: (api, check, pluginId) => ({
+      addSkill(skill) {
+        const parsed = skillContributionSchema.safeParse(skill);
+        if (!parsed.success) {
+          throw new PluginError(
+            'plugin-invalid-definition',
+            `Plugin "${pluginId}" contributed an invalid Skill`,
+            { cause: parsed.error, pluginId },
+          );
+        }
+        check(parsed.data.name);
+        api.addSkill(
+          Object.freeze({
+            ...parsed.data,
+            pluginId,
+            ...(parsed.data.invocation === undefined
+              ? {}
+              : { invocation: Object.freeze(parsed.data.invocation) }),
+            ...(parsed.data.resources === undefined
+              ? {}
+              : { resources: Object.freeze(parsed.data.resources) }),
+          }),
+        );
+      },
+    }),
+  },
+});
 
 /** Security vote before a tool runs; votes merge strictly tighter. */
 export const toolPolicyHook: Hook<ToolExecutionRequest, PolicyVote> = defineHook({

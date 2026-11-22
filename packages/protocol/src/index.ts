@@ -30,3 +30,24 @@ export type { ContextBreakdown, ContextCategoryBreakdown } from './context.js';
 
 export { planItemSchema, planItemStatusSchema, planSchema } from './plan.js';
 export type { AgentPlan, PlanItem, PlanItemStatus } from './plan.js';
+
+export {
+  skillRefSchema,
+  skillRefsSchema,
+  skillSourceSchema,
+  skillSummarySchema,
+  skillIssueSchema,
+  skillCatalogSchema,
+  skillPageSchema,
+  skillResourcePathSchema,
+  turnRequestMetadataSchema,
+} from './skills.js';
+export type {
+  SkillRef,
+  SkillSource,
+  SkillSummary,
+  SkillIssue,
+  SkillCatalog,
+  SkillPage,
+  TurnRequestMetadata,
+} from './skills.js';

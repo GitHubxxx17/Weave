@@ -1,4 +1,13 @@
-import type { AgentPlan, ContextBreakdown, Message, TokenUsage } from '@weave/protocol';
+import type { SkillApplication, SkillFailure } from './skill-events.js';
+import {
+  skillPageSchema,
+  type SkillRef,
+  type TurnRequestMetadata,
+  type AgentPlan,
+  type ContextBreakdown,
+  type Message,
+  type TokenUsage,
+} from '@weave/protocol';
 import type { ToolCall } from '@weave/protocol';
 import { sessionEventSchema, type SessionEvent } from './events.js';
 
@@ -29,7 +38,7 @@ export interface SessionMessage {
   readonly message: Message;
   readonly sequence: number;
   readonly occurredAt: string;
-  /** Turn that was running when the message was created, if any. */
+  /** Explicit user Turn, or legacy Turn inferred when the message was created. */
   readonly turnId?: string | undefined;
 }
 
@@ -75,7 +84,16 @@ export interface SessionToolResult {
 /**
  * A Turn and its projected Step states.
  */
+export interface SessionTurnSkills {
+  readonly requested: SkillRef[];
+  readonly applications: readonly SkillApplication[];
+  readonly failures: readonly SkillFailure[];
+}
+
 export interface SessionTurn {
+  readonly userMessageId?: string | undefined;
+  readonly request?: TurnRequestMetadata | undefined;
+  readonly skills?: SessionTurnSkills | undefined;
   readonly turnId: string;
   readonly status: 'running' | 'completed' | 'failed' | 'cancelled';
   /** Why the Turn ended, when its `turn.completed` event recorded one. */
@@ -114,6 +132,12 @@ interface MutableStep {
 }
 
 interface MutableTurn {
+  skillRequestRecorded?: boolean;
+  userMessageId?: string | undefined;
+  request?: TurnRequestMetadata | undefined;
+  skills?:
+    | { requested: SkillRef[]; applications: SkillApplication[]; failures: SkillFailure[] }
+    | undefined;
   turnId: string;
   status: SessionTurn['status'];
   reason?: string | undefined;
@@ -139,6 +163,7 @@ export interface ProjectionState {
   deletedAt: string | undefined;
   messages: SessionMessage[];
   messageIds: Set<string>;
+  boundUserMessageIds: Set<string>;
   turns: MutableTurn[];
   turnById: Map<string, MutableTurn>;
   activeTurnId: string | undefined;
@@ -165,6 +190,7 @@ export function createProjectionState(): ProjectionState {
     deletedAt: undefined,
     messages: [],
     messageIds: new Set<string>(),
+    boundUserMessageIds: new Set<string>(),
     turns: [],
     turnById: new Map<string, MutableTurn>(),
     activeTurnId: undefined,
@@ -251,9 +277,62 @@ export function applyEvent(state: ProjectionState, event: SessionEvent): void {
       toolCalls: [],
       toolResults: [],
     };
+    if (event.payload.userMessageId !== undefined) {
+      const index = state.messages.findIndex(
+        (message) => message.messageId === event.payload.userMessageId,
+      );
+      const message = state.messages[index];
+      if (
+        message === undefined ||
+        message.message.role !== 'user' ||
+        state.boundUserMessageIds.has(message.messageId)
+      ) {
+        throw missingReference('Turn user message must reference an unassigned user message');
+      }
+      state.messages[index] = { ...message, turnId: turn.turnId };
+      state.boundUserMessageIds.add(message.messageId);
+      turn.userMessageId = message.messageId;
+    }
+    if (event.payload.request !== undefined) turn.request = structuredClone(event.payload.request);
     state.turns.push(turn);
     state.turnById.set(turn.turnId, turn);
     state.activeTurnId = turn.turnId;
+  } else if (
+    event.type === 'skill.requested' ||
+    event.type === 'skill.applied' ||
+    event.type === 'skill.failed' ||
+    event.type === 'skill.catalog-applied'
+  ) {
+    const turn = state.turnById.get(event.payload.turnId);
+    if (turn === undefined) throw missingReference(`Turn ${event.payload.turnId} does not exist`);
+    if (turn.status !== 'running') throw invalidOrder('Skill facts require a running Turn');
+    if (event.type === 'skill.requested') {
+      if (turn.skillRequestRecorded === true) throw invalidOrder('Skill request already recorded');
+      if (turn.userMessageId !== undefined && turn.userMessageId !== event.payload.userMessageId) {
+        throw invalidOrder('Skill request user message differs from Turn');
+      }
+      const message = state.messages.find((item) => item.messageId === event.payload.userMessageId);
+      if (
+        message === undefined ||
+        message.message.role !== 'user' ||
+        message.turnId !== turn.turnId
+      ) {
+        throw missingReference('Skill request requires this Turn user message');
+      }
+      turn.skills ??= { requested: [], applications: [], failures: [] };
+      turn.skillRequestRecorded = true;
+      turn.skills.requested = structuredClone(event.payload.skills);
+    } else if (event.type === 'skill.applied') {
+      turn.skills ??= { requested: [], applications: [], failures: [] };
+      const { turnId: _turnId, ...application } = event.payload;
+      void _turnId;
+      turn.skills.applications.push({ ...structuredClone(application), delivery: 'prepared' });
+    } else if (event.type === 'skill.failed') {
+      turn.skills ??= { requested: [], applications: [], failures: [] };
+      const { turnId: _turnId, ...failure } = event.payload;
+      void _turnId;
+      turn.skills.failures.push(structuredClone(failure));
+    }
   } else if (event.type === 'turn.completed') {
     const turn = state.turnById.get(event.payload.turnId);
     if (turn === undefined) {
@@ -395,6 +474,22 @@ export function snapshotProjection(state: ProjectionState): SessionProjection {
     messages: state.messages.map((message) => ({ ...message })),
     turns: state.turns.map((turn) => ({
       turnId: turn.turnId,
+      ...(turn.userMessageId === undefined ? {} : { userMessageId: turn.userMessageId }),
+      ...(turn.request === undefined ? {} : { request: structuredClone(turn.request) }),
+      ...(turn.skills === undefined
+        ? {}
+        : {
+            skills: {
+              requested: structuredClone(turn.skills.requested),
+              failures: structuredClone(turn.skills.failures),
+              applications: turn.skills.applications.map((application) => ({
+                ...structuredClone(application),
+                delivery: skillDelivered(application, turn)
+                  ? ('delivered' as const)
+                  : ('prepared' as const),
+              })),
+            },
+          }),
       status: turn.status,
       ...(turn.reason === undefined ? {} : { reason: turn.reason }),
       startedAt: turn.startedAt,
@@ -461,4 +556,32 @@ export function sumTokenUsage(
     }
   }
   return total as TokenUsage;
+}
+
+function skillDelivered(application: SkillApplication, turn: MutableTurn): boolean {
+  if (application.invocation !== 'model') return false;
+  const result = turn.toolResults.find(
+    (candidate) => candidate.toolCallId === application.toolCallId,
+  );
+  if (
+    result === undefined ||
+    result.status !== 'completed' ||
+    result.truncated ||
+    result.name !== 'read_skill'
+  )
+    return false;
+  try {
+    const page = skillPageSchema.safeParse(JSON.parse(result.content) as unknown);
+    return (
+      page.success &&
+      page.data.kind === 'instructions' &&
+      page.data.eof &&
+      page.data.skill.id === application.skill.id &&
+      page.data.skill.instructionSha256 === application.skill.instructionSha256 &&
+      page.data.skill.bundleSha256 === application.skill.bundleSha256 &&
+      page.data.contentSha256 === application.skill.instructionSha256
+    );
+  } catch {
+    return false;
+  }
 }

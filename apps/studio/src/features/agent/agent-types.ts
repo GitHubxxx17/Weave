@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { skillRefsSchema, type SkillRef } from '../skills/skill-types.js';
 import {
   contextBreakdownSchema,
   planSchema,
@@ -38,6 +39,10 @@ export interface AgentRunRequestInput {
   };
   readonly provider: string;
   readonly model: string;
+  readonly temperature?: number | undefined;
+  readonly maxTokens?: number | undefined;
+  readonly useProviderDefaults?: boolean | undefined;
+  readonly skills?: readonly SkillRef[] | undefined;
   /** Provider-specific reasoning effort hint; omit for the provider default. */
   readonly reasoningEffort?: string | undefined;
   /** Approval mode for this run. */
@@ -96,6 +101,10 @@ export const agentRunRequestSchema: z.ZodType<AgentRunRequestInput> = z
     userMessage: userMessageSchema,
     provider: nonEmptyStringSchema,
     model: nonEmptyStringSchema,
+    temperature: z.number().finite().nonnegative().optional(),
+    maxTokens: z.number().finite().nonnegative().optional(),
+    useProviderDefaults: z.boolean().optional(),
+    skills: skillRefsSchema.optional(),
     reasoningEffort: nonEmptyStringSchema.optional(),
     permissionMode: z.enum(['ask', 'trust', 'yolo']).optional(),
   })
@@ -150,5 +159,7 @@ export const agentStreamErrorPayloadSchema = z.object({
 });
 
 export interface AgentStreamHandlers {
+  /** HTTP transport accepted this run; this is not a model application receipt. */
+  readonly onAccepted?: (() => void) | undefined;
   readonly onEvent: (event: AgentRuntimeEvent) => void;
 }

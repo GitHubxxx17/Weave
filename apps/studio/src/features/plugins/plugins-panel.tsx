@@ -41,6 +41,7 @@ const capabilityLabels: Readonly<Record<string, string>> = {
   prompt: '提示词',
   event: '会话事件',
   command: '命令',
+  skill: '技能',
 };
 const hostLabels: Readonly<Record<string, string>> = { mcp: 'MCP', subprocess: '子进程' };
 const permissionLabels: Readonly<Record<string, string>> = {
@@ -55,6 +56,7 @@ const contributionLabels: readonly (readonly [keyof PluginDeclarations, string])
   ['promptSections', '提示词片段'],
   ['events', '会话事件'],
   ['commands', '命令'],
+  ['skills', '技能'],
   ['hooks', '钩子'],
   ['services', '服务'],
 ];
@@ -178,7 +180,7 @@ function PluginItem({
   const disable = trusted && ['loaded', 'failed'].includes(plugin.state);
   const revoke = trusted && ['changed', 'loaded', 'disabled', 'failed'].includes(plugin.state);
   const enable = trusted && plugin.state === 'disabled' && local?.digest === local.trusted?.digest;
-  const hasActual = Object.values(plugin.provides).some((names) => names.length > 0);
+  const hasActual = Object.values(plugin.provides).some((names) => (names?.length ?? 0) > 0);
   return (
     <li>
       <details className="plugin-item">

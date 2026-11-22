@@ -1,4 +1,17 @@
-import { contextBreakdownSchema, messageSchema, planSchema, toolCallSchema } from '@weave/protocol';
+import {
+  skillContentPayloadSchema,
+  skillCatalogAppliedPayloadSchema,
+  skillRequestedPayloadSchema,
+  skillFailedPayloadSchema,
+  skillAppliedPayloadSchema,
+} from './skill-events.js';
+import {
+  contextBreakdownSchema,
+  messageSchema,
+  planSchema,
+  toolCallSchema,
+  turnRequestMetadataSchema,
+} from '@weave/protocol';
 import { z } from 'zod';
 
 const nonEmptyStringSchema = z.string().min(1);
@@ -44,6 +57,8 @@ const messageCreatedPayloadSchema = z
 const turnStartedPayloadSchema = z
   .object({
     turnId: nonEmptyStringSchema,
+    userMessageId: nonEmptyStringSchema.optional(),
+    request: turnRequestMetadataSchema.optional(),
   })
   .passthrough();
 
@@ -147,6 +162,11 @@ const promptSectionContentPayloadSchema = z
  * The durable facts supported by the first Session Event Store slice.
  */
 export const sessionEventPayloadSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('skill.content'), payload: skillContentPayloadSchema }),
+  z.object({ type: z.literal('skill.catalog-applied'), payload: skillCatalogAppliedPayloadSchema }),
+  z.object({ type: z.literal('skill.requested'), payload: skillRequestedPayloadSchema }),
+  z.object({ type: z.literal('skill.failed'), payload: skillFailedPayloadSchema }),
+  z.object({ type: z.literal('skill.applied'), payload: skillAppliedPayloadSchema }),
   z.object({
     type: z.literal('session.created'),
     payload: sessionCreatedPayloadSchema,
@@ -259,6 +279,46 @@ export type SessionEventType = NewSessionEvent['type'];
 export const newSessionEventSchema = z.union([sessionEventPayloadSchema, pluginNewEventSchema]);
 
 const persistedEventSchemas = [
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('skill.content'),
+    payload: skillContentPayloadSchema,
+  }),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('skill.catalog-applied'),
+    payload: skillCatalogAppliedPayloadSchema,
+  }),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('skill.requested'),
+    payload: skillRequestedPayloadSchema,
+  }),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('skill.failed'),
+    payload: skillFailedPayloadSchema,
+  }),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('skill.applied'),
+    payload: skillAppliedPayloadSchema,
+  }),
   z.object({
     eventId: nonEmptyStringSchema,
     sessionId: nonEmptyStringSchema,

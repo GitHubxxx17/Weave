@@ -380,3 +380,37 @@ describe('streamAgentRun', () => {
     expect(error.name).toBe('AgentStreamError');
   });
 });
+
+it('reports transport acceptance before streaming and preserves exact Skill and sampling fields', async () => {
+  const accepted = vi.fn();
+  const fetcher = vi
+    .spyOn(globalThis, 'fetch')
+    .mockResolvedValue(
+      responseFromChunks([utf8(eventFrame('completed', { type: 'completed', turnId: 'one' }))]),
+    );
+  await streamAgentRun(
+    {
+      ...request,
+      temperature: 0.2,
+      maxTokens: 777,
+      skills: [
+        {
+          id: 'builtin:weave-planning',
+          instructionSha256: 'a'.repeat(64),
+          bundleSha256: 'b'.repeat(64),
+        },
+      ],
+    },
+    { onEvent: () => expect(accepted).toHaveBeenCalledTimes(1), onAccepted: accepted },
+  );
+  const body = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body));
+  expect(body.skills).toEqual([
+    {
+      id: 'builtin:weave-planning',
+      instructionSha256: 'a'.repeat(64),
+      bundleSha256: 'b'.repeat(64),
+    },
+  ]);
+  expect(body.temperature).toBe(0.2);
+  expect(body.maxTokens).toBe(777);
+});

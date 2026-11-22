@@ -1,0 +1,110 @@
+.skill-picker {
+  position: absolute;
+  z-index: 30;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: min(560px, 100%);
+  max-height: min(620px, 70dvh);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--ink);
+  padding: 14px;
+  box-shadow: var(--shadow-popover);
+}
+.skill-picker header,
+.skill-picker label,
+.skill-chips {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.skill-picker header {
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.skill-picker button {
+  cursor: pointer;
+  border: 1px solid #8885;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  padding: 4px 8px;
+}
+.skill-picker > input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  border: 1px solid #8885;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+}
+.skill-picker-list article {
+  border-bottom: 1px solid #8883;
+  padding: 12px 0;
+}
+.skill-picker-list p {
+  margin: 6px 0;
+  font-size: 13px;
+}
+.skill-picker-list small {
+  display: block;
+  overflow-wrap: anywhere;
+  margin-bottom: 8px;
+  opacity: 0.65;
+}
+.skill-source {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #8882;
+  font-size: 11px;
+}
+.skill-preview {
+  border-top: 1px solid #8884;
+  margin-top: 12px;
+  padding-top: 12px;
+}
+.skill-preview pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 220px;
+  overflow: auto;
+  font-size: 12px;
+}
+.skill-chips {
+  padding: 6px 12px;
+}
+.skill-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #8884;
+  border-radius: 8px;
+  padding: 3px 7px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.skill-chip button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.skill-warning {
+  color: var(--warning);
+}
+.message-skills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+@media (max-width: 700px) {
+  .skill-picker {
+    max-height: 55dvh;
+  }
+}

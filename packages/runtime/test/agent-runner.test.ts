@@ -1242,6 +1242,13 @@ describe('Agent Runner contracts', () => {
         type: 'turn.started',
         payload: {
           turnId: initializationBatch[1].payload.turnId,
+          userMessageId: expect.any(String),
+          request: {
+            provider: 'mock',
+            model: 'test-model',
+            permissionMode: 'ask',
+            useProviderDefaults: false,
+          },
         },
       },
       {

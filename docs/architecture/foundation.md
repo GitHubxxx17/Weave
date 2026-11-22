@@ -1,5 +1,16 @@
 # Weave Foundation Architecture
 
+Skills provides protocol references, core Session facts, Runtime turn context and
+governed plugin contributions in an end-to-end Server/Studio vertical slice.
+The [Skills contract](../superpowers/specs/2026-11-22-skills-design.md) defines exact
+source and bundle identity, lazy resources through the shared Tool Pipeline,
+per-generation/per-turn pins and required audit. This is instruction data;
+execution and approval stay under existing Runtime policy. The [usage guide](../learning/2026-11-22-skills.md) covers authoring, selection,
+progressive resources, durable provenance and exact retries. Skill-only artifact
+distribution and custom panels remain separate following topics. Current verified Codex, Harness and Kimi
+references and official-content choices are recorded in the
+[reference audit](../learning/2026-11-22-official-plugin-references.md).
+
 Stage 6.5 index extension adopts multiple cached marketplace sources and a
 repository-maintained directory with deterministic submission tooling. Server
 owns HTTPS discovery and append-only source settings; Studio uses guarded HTTP.

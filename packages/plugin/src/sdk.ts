@@ -11,6 +11,7 @@ import {
   pluginEventsRef,
   promptSectionsExtensionPoint,
   sessionStoreRef,
+  skillsExtensionPoint,
   toolAroundHook,
   toolPolicyHook,
   toolResultHook,
@@ -65,6 +66,7 @@ export interface PluginSdk {
 
   // Extension points.
   readonly commandsExtensionPoint: typeof commandsExtensionPoint;
+  readonly skillsExtensionPoint: typeof skillsExtensionPoint;
   readonly llmProvidersExtensionPoint: typeof llmProvidersExtensionPoint;
   readonly promptSectionsExtensionPoint: typeof promptSectionsExtensionPoint;
   readonly toolsExtensionPoint: typeof toolsExtensionPoint;
@@ -90,6 +92,7 @@ export function createPluginSdk(): PluginSdk {
     pluginEventsRef,
     sessionStoreRef,
     commandsExtensionPoint,
+    skillsExtensionPoint,
     llmProvidersExtensionPoint,
     promptSectionsExtensionPoint,
     toolsExtensionPoint,

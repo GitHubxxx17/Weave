@@ -7,6 +7,7 @@ import { registerApprovalRoutes, type ApprovalAppOptions } from './approval-api.
 import { registerAgentRoutes, type AgentAppOptions } from './agent-api.js';
 import { registerSessionRoutes, type SessionAppOptions } from './session-api.js';
 import { registerWorkspaceRoutes, type WorkspaceAppOptions } from './workspace-api.js';
+import { registerSkillRoutes, type SkillAppOptions } from './skill-api.js';
 import { registerFileUndoRoutes } from './file-undo-api.js';
 import { registerFileRoutes, type FileAppOptions } from './file-api.js';
 import { registerPluginRoutes, type PluginAppOptions } from './plugin-api.js';
@@ -41,7 +42,8 @@ export interface AppOptions
     PluginAppOptions,
     McpAppOptions,
     PluginMarketplaceAppOptions,
-    ProviderAppOptions {
+    ProviderAppOptions,
+    SkillAppOptions {
   /**
    * Exact browser origin allowed to call the local control plane.
    *
@@ -88,6 +90,7 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
   registerFileRoutes(app, options ?? {});
   registerSessionRoutes(app, options ?? {});
   registerAgentRoutes(app, runtime, options ?? {});
+  registerSkillRoutes(app, options ?? {});
   registerProviderRoutes(app, options ?? {});
   registerPluginRoutes(app, options ?? {});
   registerPluginMarketplaceRoutes(app, options ?? {});

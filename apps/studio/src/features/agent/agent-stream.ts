@@ -120,6 +120,7 @@ export async function streamAgentRun(
     throw new AgentStreamError('agent-stream-protocol', 'Agent stream has no response body');
   }
 
+  handlers.onAccepted?.();
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';

@@ -24,6 +24,7 @@ const sdkNames = [
   'pluginEventsRef',
   'promptSectionsExtensionPoint',
   'sessionStoreRef',
+  'skillsExtensionPoint',
   'toolAroundHook',
   'toolPolicyHook',
   'toolResultHook',
@@ -53,6 +54,7 @@ describe('createPluginSdk', () => {
 
     expect(sdk.toolsExtensionPoint).toBe(seams.toolsExtensionPoint);
     expect(sdk.commandsExtensionPoint).toBe(seams.commandsExtensionPoint);
+    expect(sdk.skillsExtensionPoint).toBe(seams.skillsExtensionPoint);
     expect(sdk.llmProvidersExtensionPoint).toBe(seams.llmProvidersExtensionPoint);
     expect(sdk.promptSectionsExtensionPoint).toBe(seams.promptSectionsExtensionPoint);
     expect(sdk.toolPolicyHook).toBe(seams.toolPolicyHook);

@@ -232,6 +232,7 @@ export interface ListDiff {
 
 /** The `contributes` keys a diff reports. */
 export const contributesKeys = [
+  'skills',
   'tools',
   'providers',
   'promptSections',

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { turnSkillsSchema } from '../skills/skill-types.js';
 
 const nonEmptyStringSchema = z.string().min(1);
 const messageMetadataSchema = z.object({
@@ -125,9 +126,21 @@ export const planSchema = z.object({
   items: z.array(planItemSchema),
 });
 
+export const turnRequestMetadataSchema = z.strictObject({
+  provider: nonEmptyStringSchema,
+  model: nonEmptyStringSchema,
+  temperature: z.number().finite().nonnegative().optional(),
+  maxTokens: z.number().finite().nonnegative().optional(),
+  useProviderDefaults: z.boolean().optional(),
+  reasoningEffort: nonEmptyStringSchema.optional(),
+  permissionMode: z.enum(['ask', 'trust', 'yolo']),
+});
 /** Per-Turn timing, attribution, and token usage summed over its model steps. */
 export const turnSummarySchema = z.object({
   turnId: nonEmptyStringSchema,
+  userMessageId: nonEmptyStringSchema.optional(),
+  request: turnRequestMetadataSchema.optional(),
+  skills: turnSkillsSchema.optional(),
   status: z.enum(['running', 'completed', 'failed', 'cancelled']),
   startedAt: z.string().datetime(),
   completedAt: z.string().datetime().optional(),
