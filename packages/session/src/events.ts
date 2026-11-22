@@ -1,4 +1,11 @@
 import {
+  fileWriteIntentPayloadSchema,
+  fileWritePayloadSchema,
+  fileUndoStartedPayloadSchema,
+  fileUndoFilePayloadSchema,
+  fileUndoCompletedPayloadSchema,
+} from './file-undo-events.js';
+import {
   skillContentPayloadSchema,
   skillCatalogAppliedPayloadSchema,
   skillRequestedPayloadSchema,
@@ -122,6 +129,14 @@ const fileSnapshotPayloadSchema = z
     path: nonEmptyStringSchema,
     existedBefore: z.boolean(),
     previousContent: z.string(),
+    snapshotId: nonEmptyStringSchema.optional(),
+    turnId: nonEmptyStringSchema.optional(),
+    toolCallId: nonEmptyStringSchema.optional(),
+    rootIdentity: nonEmptyStringSchema.optional(),
+    beforeDigest: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
   })
   .passthrough();
 
@@ -162,6 +177,17 @@ const promptSectionContentPayloadSchema = z
  * The durable facts supported by the first Session Event Store slice.
  */
 export const sessionEventPayloadSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('workspace.file-write-intent'),
+    payload: fileWriteIntentPayloadSchema,
+  }),
+  z.object({ type: z.literal('workspace.file-write'), payload: fileWritePayloadSchema }),
+  z.object({ type: z.literal('workspace.undo-started'), payload: fileUndoStartedPayloadSchema }),
+  z.object({ type: z.literal('workspace.undo-file'), payload: fileUndoFilePayloadSchema }),
+  z.object({
+    type: z.literal('workspace.undo-completed'),
+    payload: fileUndoCompletedPayloadSchema,
+  }),
   z.object({ type: z.literal('skill.content'), payload: skillContentPayloadSchema }),
   z.object({ type: z.literal('skill.catalog-applied'), payload: skillCatalogAppliedPayloadSchema }),
   z.object({ type: z.literal('skill.requested'), payload: skillRequestedPayloadSchema }),
@@ -279,6 +305,46 @@ export type SessionEventType = NewSessionEvent['type'];
 export const newSessionEventSchema = z.union([sessionEventPayloadSchema, pluginNewEventSchema]);
 
 const persistedEventSchemas = [
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('workspace.file-write-intent'),
+    payload: fileWriteIntentPayloadSchema,
+  }),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('workspace.file-write'),
+    payload: fileWritePayloadSchema,
+  }),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('workspace.undo-started'),
+    payload: fileUndoStartedPayloadSchema,
+  }),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('workspace.undo-file'),
+    payload: fileUndoFilePayloadSchema,
+  }),
+  z.object({
+    eventId: nonEmptyStringSchema,
+    sessionId: nonEmptyStringSchema,
+    sequence: positiveSequenceSchema,
+    occurredAt: z.iso.datetime(),
+    type: z.literal('workspace.undo-completed'),
+    payload: fileUndoCompletedPayloadSchema,
+  }),
   z.object({
     eventId: nonEmptyStringSchema,
     sessionId: nonEmptyStringSchema,

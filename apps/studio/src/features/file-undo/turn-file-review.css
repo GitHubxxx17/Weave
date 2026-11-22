@@ -1,0 +1,67 @@
+.turn-file-undo {
+  margin-block: 6px;
+}
+.turn-file-review-toggle,
+.turn-file-review button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 1px solid var(--line, #e5e7f2);
+  border-radius: 6px;
+  color: var(--muted, #778095);
+  background: var(--surface, #fff);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.turn-file-review-toggle {
+  width: auto;
+  white-space: nowrap;
+  border-color: transparent;
+}
+.turn-file-review-toggle:hover:not(:disabled),
+.turn-file-review button:hover:not(:disabled) {
+  color: var(--ink, #20263b);
+  background: var(--surface-muted, #f5f5fb);
+}
+.turn-file-undo button:focus-visible {
+  outline: 2px solid var(--accent, #6c5cff);
+  outline-offset: 2px;
+}
+.turn-file-undo button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.turn-file-review {
+  margin-block: 8px;
+  padding: 14px;
+  border: 1px solid var(--line-strong, #d8dce8);
+  border-radius: 8px;
+  max-width: 100%;
+  overflow: auto;
+}
+.turn-file-review h4 {
+  margin: 0 0 8px;
+}
+.turn-file-review p {
+  font-size: 12px;
+  line-height: 1.6;
+}
+.turn-file-review ul {
+  padding-inline-start: 20px;
+}
+.turn-file-review li {
+  margin-block: 10px;
+  overflow-wrap: anywhere;
+}
+.turn-file-review button {
+  margin: 4px 8px 4px 0;
+}
+.turn-file-confirm {
+  padding: 10px;
+  border: 1px solid var(--line-strong, #d8dce8);
+  border-radius: 6px;
+}

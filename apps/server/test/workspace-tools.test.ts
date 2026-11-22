@@ -96,6 +96,7 @@ async function createAgentApp(
       ...runnerOptions,
     }),
     sessionService,
+    projectStore,
   });
   const broker = runtime.get(approvalBrokerService);
 
@@ -114,7 +115,7 @@ async function createAgentApp(
     return response.text();
   }
 
-  return { run, broker };
+  return { run, broker, app, project, session, sessionStore };
 }
 
 describe('Workspace root resolver', () => {
@@ -786,7 +787,54 @@ describe('Project folder update API', () => {
 });
 
 describe('File undo API', () => {
-  it('restores the file changes of a turn to the captured original', async () => {
+  it('reviews and safely restores captured writes produced by the real Tool Pipeline', async () => {
+    const folder = await createTemporaryFolder();
+    await writeFile(join(folder, 'notes.md'), 'before');
+    const fixture = await createAgentApp(
+      [
+        toolCallScript('call-edit', 'edit_file', {
+          path: 'notes.md',
+          oldText: 'before',
+          newText: 'after',
+        }),
+        finalText,
+      ],
+      folder,
+    );
+    const unsubscribe = fixture.broker.subscribe((event) => {
+      if (event.type === 'approval.created') fixture.broker.approve(event.request.approvalId);
+    });
+    cleanups.push(async () => unsubscribe());
+    await fixture.run('edit notes');
+    const events = await fixture.sessionStore.read(fixture.session.id);
+    const started = events.find((event) => event.type === 'turn.started');
+    if (started?.type !== 'turn.started') throw Error('Missing turn');
+    expect(events.map((event) => event.type)).toContain('workspace.file-write-intent');
+    expect(events.map((event) => event.type)).toContain('workspace.file-write');
+    const base = `/projects/${fixture.project.id}/sessions/${fixture.session.id}`;
+    const review = await fixture.app.request(`${base}/file-undo?turnId=${started.payload.turnId}`, {
+      headers: { Host: 'localhost' },
+    });
+    expect(review.status).toBe(200);
+    expect(await review.json()).toMatchObject({
+      files: [{ path: 'notes.md', previousContent: 'before', afterContent: 'after' }],
+    });
+    const undo = await fixture.app.request(`${base}/undo`, {
+      method: 'POST',
+      headers: { Host: 'localhost', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        turnId: started.payload.turnId,
+        operationId: 'actual-pipeline',
+        requestId: 'restore',
+      }),
+    });
+    expect(undo.status).toBe(200);
+    expect(await undo.json()).toMatchObject({
+      results: [{ path: 'notes.md', status: 'restored' }],
+    });
+    expect(await readFile(join(folder, 'notes.md'), 'utf8')).toBe('before');
+  });
+  it('keeps legacy snapshots unavailable for safe undo', async () => {
     const folder = await createTemporaryFolder();
     await writeFile(join(folder, 'notes.md'), 'edited by agent', 'utf8');
 
@@ -818,12 +866,14 @@ describe('File undo API', () => {
     const app = createApp(runtime, { projectStore, sessionService });
     const response = await app.request(`/projects/${project.id}/sessions/${session.id}/undo`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ turnId: 'turn-1' }),
+      headers: { 'content-type': 'application/json', Host: 'localhost' },
+      body: JSON.stringify({ turnId: 'turn-1', operationId: 'legacy-op', requestId: 'legacy-req' }),
     });
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ restored: ['notes.md'], failed: [] });
-    expect(await readFile(join(folder, 'notes.md'), 'utf8')).toBe('original');
+    expect(await response.json()).toMatchObject({
+      results: [{ path: 'notes.md', status: 'unavailable', reason: 'legacy-snapshot' }],
+    });
+    expect(await readFile(join(folder, 'notes.md'), 'utf8')).toBe('edited by agent');
   });
 });

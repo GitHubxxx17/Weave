@@ -117,6 +117,8 @@ export type {
   WorkspaceResolver,
   WorkspaceSource,
   WorkspaceFileSnapshot,
+  WorkspaceFileWriteIntent,
+  WorkspaceFileWriteOutcome,
   WorkspaceFileSnapshotHook,
 } from './workspace-file-types.js';
 export { createWorkspaceFileTools } from './workspace-file-tools.js';
@@ -184,3 +186,12 @@ export type {
   SkillToolPorts,
   SkillTools,
 } from './skill-tools.js';
+
+export {
+  workspaceRootIdentity,
+  workspaceFileIdentity,
+  fileContentDigest,
+  withWorkspaceMutation,
+} from './workspace-mutation.js';
+export { createFileUndoService, FileUndoError } from './file-undo-service.js';
+export type { FileUndoInput, FileUndoReviewInput, FileUndoResponse } from './file-undo-service.js';

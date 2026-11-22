@@ -186,16 +186,19 @@ export async function assembleAgentKernel(
           };
           const fileTools = createWorkspaceFileTools({
             resolveWorkspace,
-            onFileSnapshot: async ({ sessionId, path, existedBefore, previousContent }) => {
-              if (sessionId === undefined) {
-                return;
-              }
+            onFileWriteIntent: async ({ sessionId, ...payload }) => {
+              if (sessionId === undefined) throw new Error('File capture requires a Session');
               await sessionStore.append(sessionId, [
-                {
-                  type: 'workspace.file-snapshot',
-                  payload: { path, existedBefore, previousContent },
-                },
+                { type: 'workspace.file-write-intent', payload },
               ]);
+            },
+            onFileSnapshot: async ({ sessionId, ...payload }) => {
+              if (sessionId === undefined) return;
+              await sessionStore.append(sessionId, [{ type: 'workspace.file-snapshot', payload }]);
+            },
+            onFileWriteOutcome: async ({ sessionId, ...payload }) => {
+              if (sessionId === undefined) return;
+              await sessionStore.append(sessionId, [{ type: 'workspace.file-write', payload }]);
             },
           });
           const searchTools = createWorkspaceSearchTools({ resolveWorkspace });

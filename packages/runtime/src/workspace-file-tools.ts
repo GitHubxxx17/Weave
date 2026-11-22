@@ -1,3 +1,4 @@
+import { withWorkspaceMutation } from './workspace-mutation.js';
 import { lstat, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
@@ -35,6 +36,7 @@ import {
   planTextEdit,
   type TextEditPlan,
 } from './workspace-text.js';
+import { runCapturedWrite } from './workspace-write-capture.js';
 import type { ToolDefinition, ToolExecutionContext } from './tool-types.js';
 
 const defaultMaxReadBytes = 1_000_000;
@@ -299,29 +301,6 @@ async function planWrite(
   return { ...created, relativePath, bytes, existed: false };
 }
 
-/** Best-effort pre-write snapshot; a hook failure must not block the write. */
-async function recordFileSnapshot(
-  options: WorkspaceFileToolOptions,
-  context: ToolExecutionContext,
-  relativePath: string,
-  existedBefore: boolean,
-  previousContent: string,
-): Promise<void> {
-  if (options.onFileSnapshot === undefined) {
-    return;
-  }
-  try {
-    await options.onFileSnapshot({
-      ...(context.sessionId === undefined ? {} : { sessionId: context.sessionId }),
-      path: relativePath,
-      existedBefore,
-      previousContent,
-    });
-  } catch {
-    // A snapshot failure is non-fatal; the write proceeds.
-  }
-}
-
 async function writeWorkspaceFile(
   input: WriteFileInput,
   context: ToolExecutionContext,
@@ -330,52 +309,48 @@ async function writeWorkspaceFile(
   const plan = await planWrite(input, context, options);
 
   checkSignal(context);
-  if (options.onFileSnapshot !== undefined) {
-    if (plan.existed) {
-      let original: string | undefined;
+  const undoUnavailableReason = await runCapturedWrite(
+    options,
+    context,
+    plan.target,
+    plan.relativePath,
+    plan.existed,
+    input.content,
+    async () => {
+      for (const directory of plan.missingDirectories) {
+        try {
+          await mkdir(directory);
+        } catch (error: unknown) {
+          const code = isNodeFileError(error) ? error.code : undefined;
+          if (code !== 'EEXIST') {
+            throw mapFilesystemError(error, 'write');
+          }
+          const metadata = await lstat(directory).catch(() => undefined);
+          if (metadata === undefined || !metadata.isDirectory()) {
+            throw createMappedError(
+              'workspace-file-not-directory',
+              'A parent of the Workspace path is not a directory',
+              error,
+            );
+          }
+        }
+      }
       try {
-        original = await readFile(plan.target, 'utf8');
-      } catch {
-        original = undefined;
-      }
-      if (original !== undefined) {
-        await recordFileSnapshot(options, context, plan.relativePath, true, original);
-      }
-    } else {
-      await recordFileSnapshot(options, context, plan.relativePath, false, '');
-    }
-  }
-  for (const directory of plan.missingDirectories) {
-    try {
-      await mkdir(directory);
-    } catch (error: unknown) {
-      const code = isNodeFileError(error) ? error.code : undefined;
-      if (code !== 'EEXIST') {
+        await writeFile(plan.target, input.content, {
+          encoding: 'utf8',
+          flag: plan.existed ? 'w' : 'wx',
+          signal: context.signal,
+        });
+      } catch (error: unknown) {
         throw mapFilesystemError(error, 'write');
       }
-      const metadata = await lstat(directory).catch(() => undefined);
-      if (metadata === undefined || !metadata.isDirectory()) {
-        throw createMappedError(
-          'workspace-file-not-directory',
-          'A parent of the Workspace path is not a directory',
-          error,
-        );
-      }
-    }
-  }
-  try {
-    await writeFile(plan.target, input.content, {
-      encoding: 'utf8',
-      flag: plan.existed ? 'w' : 'wx',
-      signal: context.signal,
-    });
-  } catch (error: unknown) {
-    throw mapFilesystemError(error, 'write');
-  }
+    },
+  );
 
   return {
     path: plan.relativePath,
     bytesWritten: plan.bytes,
+    ...(undoUnavailableReason === undefined ? {} : { undoUnavailableReason }),
     overwritten: plan.existed,
     ...(plan.createdDirectories.length === 0
       ? {}
@@ -411,23 +386,32 @@ async function editWorkspaceFile(
 ): Promise<EditFileResult> {
   // Re-read and re-match: a file changed while the Approval was pending must
   // still contain the exact text, otherwise the edit fails instead of guessing.
-  const { target, relativePath, plan, content } = await planEdit(input, context, options);
+  const { target, relativePath, plan } = await planEdit(input, context, options);
   checkSignal(context);
-  if (options.onFileSnapshot !== undefined) {
-    await recordFileSnapshot(options, context, relativePath, true, content);
-  }
-  try {
-    await writeFile(target, plan.updated, {
-      encoding: 'utf8',
-      flag: 'w',
-      signal: context.signal,
-    });
-  } catch (error: unknown) {
-    throw mapFilesystemError(error, 'write');
-  }
+  const undoUnavailableReason = await runCapturedWrite(
+    options,
+    context,
+    target,
+    relativePath,
+    true,
+    plan.updated,
+    async () => {
+      try {
+        await writeFile(target, plan.updated, {
+          encoding: 'utf8',
+          flag: 'w',
+          signal: context.signal,
+        });
+      } catch (error: unknown) {
+        throw mapFilesystemError(error, 'write');
+      }
+    },
+  );
+
   return {
     path: relativePath,
     replacements: plan.replacements,
+    ...(undoUnavailableReason === undefined ? {} : { undoUnavailableReason }),
     linesAdded: plan.linesAdded,
     linesRemoved: plan.linesRemoved,
     snippet: plan.snippet,
@@ -503,7 +487,16 @@ export function createWorkspaceFileTools(options: WorkspaceFileToolOptions): Wor
         };
       },
     },
-    execute: (input, context) => writeWorkspaceFile(input, context, normalizedOptions),
+    execute: async (input, context) => {
+      const workspace = await resolvePolicy(normalizedOptions, context);
+      return withWorkspaceMutation(workspace.root, () =>
+        writeWorkspaceFile(input, context, {
+          ...normalizedOptions,
+          resolveWorkspace: undefined,
+          workspace,
+        }),
+      );
+    },
   };
 
   const editFileTool: ToolDefinition<EditFileInput, EditFileResult> = {
@@ -543,7 +536,16 @@ export function createWorkspaceFileTools(options: WorkspaceFileToolOptions): Wor
         };
       },
     },
-    execute: (input, context) => editWorkspaceFile(input, context, normalizedOptions),
+    execute: async (input, context) => {
+      const workspace = await resolvePolicy(normalizedOptions, context);
+      return withWorkspaceMutation(workspace.root, () =>
+        editWorkspaceFile(input, context, {
+          ...normalizedOptions,
+          resolveWorkspace: undefined,
+          workspace,
+        }),
+      );
+    },
   };
 
   return Object.freeze({

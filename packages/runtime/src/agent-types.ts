@@ -225,6 +225,9 @@ export interface AgentRunnerOptions {
   readonly llmMiddleware?: LlmMiddleware | undefined;
   /** Append-only Session Event Store used for durable turn facts. */
   readonly sessionStore: SessionEventStore;
+  /** Host serialization around Session read and the durable turn-start batch only. */
+  readonly turnAdmission?:
+    ((sessionId: string, start: () => Promise<void>) => Promise<void>) | undefined;
   /** Model-visible and executable tool registry; must pair with `toolPipeline`. */
   readonly toolRegistry?: ToolRegistry | undefined;
   /** Shared validation, approval, timeout, cancellation, and execution boundary. */

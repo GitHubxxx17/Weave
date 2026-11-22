@@ -1,5 +1,19 @@
 # Weave Foundation Architecture
 
+Safe turn file undo replaces direct snapshot overwrite with complete before/write
+evidence, root identity and current-content checks. Session owns append-only
+capture, write-outcome and per-file undo-operation facts; Runtime owns shared-root
+serialization and resumable guarded restore; Server checks Project/Session
+membership and terminal turns before invoking it; Studio reviews captured diffs
+and explicitly confirms through HTTP. A durable write-intent barrier prevents lost
+captures from hiding earlier changes. AgentRunner’s optional turnAdmission port
+serializes only Session read and durable turn start with the same root queue,
+closing the terminal-check/new-turn race without holding a lock through tools.
+Legacy before-only snapshots remain readable
+but unavailable for restoration. This is cooperative process serialization, not OS
+CAS or a multi-file transaction, and excludes shell/MCP effects. Contracts are
+recorded before implementation in the [safe undo design](../superpowers/specs/2026-11-23-safe-turn-undo-design.md).
+
 Runtime context assembly enforces an estimated request budget over the final
 system, tools and message content, including images, skeletons and truncation
 markers. It preserves complete user content and failure text; if its faithful
