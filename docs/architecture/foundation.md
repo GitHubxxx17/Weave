@@ -1,5 +1,15 @@
 # Weave Foundation Architecture
 
+Stage 6.4 adds public GitHub acquisition at a complete commit and optional
+subdirectory. `plugin-host` validates bounded Git commit/tree metadata and raw
+blob content inside a callback-scoped private scratch directory. Server preserves
+remote provenance and imports only bytes matching the preview; saved request
+replay remains offline. Studio adds a GitHub source form and source-aware review
+and history. Installation still creates an inert candidate and activation remains
+a separate human decision. Acquisition cleanup drains before store ownership is
+released. See the [GitHub design](../superpowers/specs/2026-11-22-github-plugin-acquisition-design.md)
+and [usage and validation](../learning/2026-11-22-github-plugin-acquisition.md).
+
 Stage 6.3 extends Studio's App-owned plugin catalog and management
 gate with the existing managed installer API. It pairs the manual, MCP and
 managed catalog observations, preserves confirmed authority heads, and keeps
@@ -64,8 +74,8 @@ restart with binding options omitted. The existing `/plugins` and `/commands`
 GETs project cached state. Published managed members appear as path-free
 `kernel` entries, manual rows keep their discovery paths, and public failures
 use safe messages while retaining raw causes privately. Managed desired and
-retired state stay private in those existing endpoints. GitHub acquisition
-and the discovery catalog belong to later stages. See the
+retired state stay private in those existing endpoints. The discovery catalog
+belongs to Stage 6.5. See the
 [managed source design](../superpowers/specs/2026-11-21-managed-plugin-source-design.md)
 and [Server plan](../superpowers/plans/2026-11-21-managed-plugin-source-server.md).
 
@@ -646,6 +656,15 @@ revisions where available. Harness here means `deepseek-ai/deepseek-harness`
 (`@deepseek-ai/dsh`, based on Cordis). Its HMR documents describe different
 recovery guarantees for different failure paths; the earlier third-party audit
 mentioned in ADR 0003 is not a fresh audit of the current implementation.
+
+On 2026-11-22, Stage 6.4 additionally inspected Harness's `plugin-market`,
+`plugin-market-index` and `plugin-manager` at the same pinned revision. Weave adopts
+discovery/installation separation and repository/full-commit/subdirectory identity,
+while retaining prebundled immutable artifacts and independent human activation.
+The [GitHub acquisition design](../superpowers/specs/2026-11-22-github-plugin-acquisition-design.md)
+defines the plugin-host acquisition callback, Server provenance/API extension and
+Studio review contract before their implementation. No Runtime contract changes
+or additional package dependencies are required.
 
 ### Stage 5 contracts
 

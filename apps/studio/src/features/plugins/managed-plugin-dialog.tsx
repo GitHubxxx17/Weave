@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactElement 
 
 import type {
   ManagedManifest,
+  GithubPluginSource,
   ManagedMutationResponse,
   ManagedPlugin,
   ManagedReview,
@@ -33,9 +34,9 @@ export function managedAction(action: ManagedTarget | ManagedReview): string {
 export function managedRecoveryText(recovery: ManagedRejection['recovery']): string | undefined {
   switch (recovery) {
     case 'preview':
-      return '请重新预览来源目录。';
+      return '请重新预览插件来源。';
     case 'retry-review':
-      return '条件恢复后可重新确认，或重新预览来源目录。';
+      return '条件恢复后可重新确认，或重新预览插件来源。';
     case 'review':
       return '请读取目录后重新审查。';
     case 'activate':
@@ -113,14 +114,46 @@ export function ManagedIdentity({
   );
 }
 
+export function ManagedGithubSource({
+  source,
+}: {
+  readonly source: GithubPluginSource;
+}): ReactElement {
+  return (
+    <dl className="managed-github-source managed-identity">
+      <div>
+        <dt>GitHub 仓库</dt>
+        <dd>
+          <code>{source.repository}</code>
+        </dd>
+      </div>
+      <div>
+        <dt>完整提交</dt>
+        <dd>
+          <code>{source.commit}</code>
+        </dd>
+      </div>
+      <div>
+        <dt>插件子目录</dt>
+        <dd>{source.subdirectory === '' ? '仓库根目录' : <code>{source.subdirectory}</code>}</dd>
+      </div>
+    </dl>
+  );
+}
+
 export type ManagedDraft =
   | {
       readonly review: Extract<ManagedReview, { kind: 'import' }>;
       readonly sourceDirectory: string;
     }
   | {
+      readonly review: Extract<ManagedReview, { kind: 'import' }>;
+      readonly github: GithubPluginSource;
+    }
+  | {
       readonly review: Exclude<ManagedReview, { kind: 'import' }>;
       readonly selectedManifest?: ManagedManifest;
+      readonly github?: GithubPluginSource;
     };
 
 function usePreviewExpired(expiresAt: string | undefined): boolean {
@@ -268,32 +301,32 @@ export function ManagedPluginDialog({
               <dd>v{manifest.version}</dd>
             </div>
           )}
-          {kind === 'activate' ? (
+          {manifest !== undefined && (kind === 'activate' || kind === 'import') ? (
             <>
               <div>
                 <dt>名称</dt>
-                <dd>{review.manifest.name}</dd>
+                <dd>{manifest.name}</dd>
               </div>
               <div>
                 <dt>API 版本</dt>
-                <dd>{review.manifest.apiVersion}</dd>
+                <dd>{manifest.apiVersion}</dd>
               </div>
-              {review.manifest.description === undefined ? null : (
+              {manifest.description === undefined ? null : (
                 <div>
                   <dt>说明</dt>
-                  <dd>{review.manifest.description}</dd>
+                  <dd>{manifest.description}</dd>
                 </div>
               )}
-              {review.manifest.host === undefined ? null : (
+              {manifest.host === undefined ? null : (
                 <div>
                   <dt>宿主</dt>
-                  <dd>{review.manifest.host}</dd>
+                  <dd>{manifest.host}</dd>
                 </div>
               )}
-              {review.manifest.engines === undefined ? null : (
+              {manifest.engines === undefined ? null : (
                 <div>
                   <dt>Weave 兼容</dt>
-                  <dd>{review.manifest.engines.weave}</dd>
+                  <dd>{manifest.engines.weave}</dd>
                 </div>
               )}
             </>
@@ -326,6 +359,9 @@ export function ManagedPluginDialog({
           )}
         </dl>
       </div>
+      {'github' in draft && draft.github !== undefined ? (
+        <ManagedGithubSource source={draft.github} />
+      ) : null}
       {expiresAt === undefined ? null : (
         <p className="plugin-dialog-note">
           预览有效至 <time dateTime={expiresAt}>{new Date(expiresAt).toLocaleString()}</time>

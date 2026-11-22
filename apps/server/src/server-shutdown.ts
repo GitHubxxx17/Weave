@@ -7,7 +7,9 @@ import type { PluginAuthorityDatabase } from './plugin-authority-types.js';
 export interface ServerShutdownResources {
   readonly server?: ServerType | undefined;
   readonly coordinator?: ExtensionCoordinator | undefined;
-  readonly installer?: Pick<ManagedPluginInstaller, 'closeSync'> | undefined;
+  readonly installer?:
+    | (Pick<ManagedPluginInstaller, 'closeSync'> & Partial<Pick<ManagedPluginInstaller, 'drain'>>)
+    | undefined;
   readonly owned?: Pick<OwnedPluginArtifactStore, 'quiesce' | 'close'> | undefined;
   readonly authority?: Pick<PluginAuthorityDatabase, 'close'> | undefined;
 }
@@ -108,7 +110,8 @@ export function createServerShutdown(options: ServerShutdownOptions): ServerShut
     if (owned !== undefined && !consumersDrained) {
       const quiesce = async () => {
         if (quiesced) return;
-        await owned.quiesce();
+        // Remote sources outlive individual store calls through callback cleanup.
+        await Promise.all([owned.quiesce(), installer?.drain?.()]);
         quiesced = true;
       };
       if (coordinator === undefined) {
@@ -125,7 +128,12 @@ export function createServerShutdown(options: ServerShutdownOptions): ServerShut
 
     if (!settledCleanup) {
       if (owned === undefined && coordinator !== undefined) {
-        await record(() => coordinator.dispose());
+        await record(async () => {
+          const disposal = coordinator.dispose();
+          await Promise.all([disposal, installer?.drain?.()]);
+        });
+      } else if (owned === undefined && installer?.drain !== undefined) {
+        await record(() => installer.drain!());
       }
       await record(options.disposeHost);
       // Idle SSE sockets can close once Agent terminal writes have settled.

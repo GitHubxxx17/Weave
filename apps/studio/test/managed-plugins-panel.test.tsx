@@ -853,3 +853,187 @@ describe('Studio managed plugins', () => {
     expect(network.writes().map(([path]) => path)).toEqual([`/plugins/${managedPluginId}/trust`]);
   });
 });
+
+const githubSource = {
+  repository: 'https://github.com/weave/plugins',
+  commit: 'a'.repeat(40),
+  subdirectory: 'packages/notes',
+};
+const githubPreview = {
+  ...validPreview,
+  candidate: { ...validPreview.candidate, manifest: firstCandidate.manifest },
+  github: githubSource,
+};
+function writeGithubSource(commit = githubSource.commit) {
+  fireEvent.click(screen.getByRole('radio', { name: 'GitHub 仓库' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'GitHub 仓库地址' }), {
+    target: { value: 'https://github.com/Weave/Plugins' },
+  });
+  fireEvent.change(screen.getByRole('textbox', { name: '完整提交 SHA' }), {
+    target: { value: commit },
+  });
+  fireEvent.change(screen.getByRole('textbox', { name: '插件子目录（可选）' }), {
+    target: { value: githubSource.subdirectory },
+  });
+}
+
+describe('GitHub managed plugin source', () => {
+  it('validates before requesting and reviews canonical source, actual manifest and declarations before import', async () => {
+    const network = installFetch({
+      managed: () => emptyHistory,
+      handle: (path) =>
+        path === '/plugins/managed/github/preview' ? Response.json(githubPreview) : undefined,
+    });
+    renderPanel();
+    await screen.findByText('尚无受管插件');
+    writeGithubSource('main');
+    previewPath();
+    expect(screen.getByRole('alert')).toBeTruthy();
+    expect(network.writes()).toHaveLength(0);
+    fireEvent.change(screen.getByRole('textbox', { name: '完整提交 SHA' }), {
+      target: { value: githubSource.commit },
+    });
+    previewPath();
+    const dialog = within(await screen.findByRole('dialog'));
+    expect(network.writes().map(([path, init]) => [path, JSON.parse(String(init.body))])).toEqual([
+      ['/plugins/managed/github/preview', githubSource],
+    ]);
+    expect(dialog.getByText(githubSource.repository)).toBeTruthy();
+    expect(dialog.getByText(githubSource.commit)).toBeTruthy();
+    expect(dialog.getByText(githubSource.subdirectory)).toBeTruthy();
+    expect(dialog.getByText(firstCandidate.manifest.name)).toBeTruthy();
+    expect(dialog.getByText(firstCandidate.manifest.description)).toBeTruthy();
+    expect(dialog.getByText('workspace:write')).toBeTruthy();
+    expect(dialog.getByText(secondDigest)).toBeTruthy();
+    expect(dialog.getByText(/激活与授信需要单独确认/)).toBeTruthy();
+    const sourceInput = screen.getByRole('textbox', { name: 'GitHub 仓库地址' });
+    fireEvent.keyDown(dialog.getByRole('button', { name: '取消' }), { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(sourceInput);
+  });
+
+  it('cancels pending previews and discards responses after cancellation, edits or source changes', async () => {
+    const pending = [pendingResponse(), pendingResponse(), pendingResponse()];
+    const responses = pending.map(({ response }) => response);
+    const network = installFetch({
+      managed: () => emptyHistory,
+      handle: (path) =>
+        path === '/plugins/managed/github/preview' ? responses.shift() : undefined,
+    });
+    renderPanel();
+    await screen.findByText('尚无受管插件');
+    writeGithubSource();
+    previewPath();
+    expect(screen.getByText('正在预览插件…')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '取消预览' }));
+    expect(network.writes()[0]?.[1].signal?.aborted).toBe(true);
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'GitHub 仓库地址' }));
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '预览插件' }).disabled).toBe(
+      false,
+    );
+    await act(async () => pending[0]!.finish(Response.json(githubPreview)));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    previewPath();
+    fireEvent.change(screen.getByRole('textbox', { name: '插件子目录（可选）' }), {
+      target: { value: 'next' },
+    });
+    expect(network.writes()[1]?.[1].signal?.aborted).toBe(true);
+    await act(async () => pending[1]!.finish(Response.json(githubPreview)));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    previewPath();
+    fireEvent.click(screen.getByRole('radio', { name: '本地目录' }));
+    expect(network.writes()[2]?.[1].signal?.aborted).toBe(true);
+    await act(async () => pending[2]!.finish(Response.json(githubPreview)));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('textbox', { name: '插件来源目录' })).toBeTruthy();
+  });
+
+  it('aborts and discards a preview when the App management gate invalidates it', async () => {
+    const pending = pendingResponse();
+    const read = pendingResponse();
+    let holdRead = false;
+    const network = installFetch({
+      managed: () => emptyHistory,
+      handle: (path) => {
+        if (path === '/plugins/managed/github/preview') return pending.response;
+        if (holdRead && path === '/plugins/managed') return read.response;
+      },
+    });
+    const store = createPluginCatalogStore();
+    renderPanel(store);
+    await screen.findByText('尚无受管插件');
+    writeGithubSource();
+    previewPath();
+    let refresh: Promise<void>;
+    act(() => {
+      holdRead = true;
+      refresh = store.refresh();
+    });
+    expect(network.writes()[0]?.[1].signal?.aborted).toBe(true);
+    expect(
+      screen.getByRole<HTMLInputElement>('textbox', { name: 'GitHub 仓库地址' }).disabled,
+    ).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '预览插件' }).disabled).toBe(true);
+    await act(async () => {
+      read.finish(Response.json(emptyHistory));
+      await refresh!;
+    });
+    await act(async () => pending.finish(Response.json(githubPreview)));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(network.writes()).toHaveLength(1);
+  });
+
+  it('ignores a GitHub preview completing after the panel closes', async () => {
+    const pending = pendingResponse();
+    const network = installFetch({
+      managed: () => emptyHistory,
+      handle: (path) => (path === '/plugins/managed/github/preview' ? pending.response : undefined),
+    });
+    const store = createPluginCatalogStore();
+    const panel = renderPanel(store);
+    await screen.findByText('尚无受管插件');
+    writeGithubSource();
+    previewPath();
+    panel.unmount();
+    expect(network.writes()[0]?.[1].signal?.aborted).toBe(true);
+    await act(async () => pending.finish(Response.json(githubPreview)));
+    renderPanel(store);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('shows the first GitHub source in candidate history after refresh and remount', async () => {
+    const catalog = {
+      ...managedCatalog,
+      plugins: [
+        {
+          ...managedPlugin,
+          candidates: [
+            { ...firstCandidate, provenance: 'github' as const, github: githubSource },
+            secondCandidate,
+          ],
+        },
+      ],
+    };
+    installFetch({ managed: () => catalog });
+    const store = createPluginCatalogStore();
+    const panel = renderPanel(store);
+    let row = await managedRow();
+    expect(row.getByText(githubSource.repository)).toBeTruthy();
+    expect(row.getByText(githubSource.commit)).toBeTruthy();
+    expect(row.getByText(githubSource.subdirectory)).toBeTruthy();
+    fireEvent.click(row.getAllByRole('button', { name: '激活' })[0]!);
+    const activation = within(screen.getByRole('dialog'));
+    expect(activation.getByText(githubSource.repository)).toBeTruthy();
+    expect(activation.getByText(githubSource.commit)).toBeTruthy();
+    fireEvent.keyDown(activation.getByRole('button', { name: '取消' }), { key: 'Escape' });
+    await act(async () => {
+      await store.refresh();
+    });
+    panel.unmount();
+    renderPanel(createPluginCatalogStore());
+    row = await managedRow();
+    expect(row.getByText(githubSource.repository)).toBeTruthy();
+    expect(row.getByText(githubSource.commit)).toBeTruthy();
+    expect(row.getByText(/本地目录/)).toBeTruthy();
+  });
+});

@@ -2,6 +2,7 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   ExplicitLocalAuthorityError,
+  GithubAcquisitionError,
   PluginArtifactError,
   PluginHostError,
 } from '@weave/plugin-host';
@@ -81,12 +82,24 @@ function fixture() {
       expectedInstallSequence: 0,
       candidate,
     }),
+    previewGithub: vi.fn<ManagedPluginInstaller['previewGithub']>().mockResolvedValue({
+      previewId: 'preview',
+      expiresAt: stamp,
+      expectedInstallSequence: 0,
+      candidate,
+      github: {
+        repository: 'https://github.com/weave/notes',
+        commit: 'a'.repeat(40),
+        subdirectory: '',
+      },
+    }),
     import: vi.fn<ManagedPluginInstaller['import']>(),
     applySelection: vi.fn<ManagedPluginInstaller['applySelection']>(),
     snapshot: vi
       .fn<ManagedPluginInstaller['snapshot']>()
       .mockReturnValue({ authority: emptyAuthority, observed }),
     closeSync: () => {},
+    drain: async () => {},
   } satisfies ManagedPluginInstaller;
   return {
     installer,
@@ -108,12 +121,74 @@ async function expectError(response: Response, status: number, code: string, mes
 
 function expectNoDispatch(installer: ReturnType<typeof fixture>['installer']) {
   expect(installer.preview).not.toHaveBeenCalled();
+  expect(installer.previewGithub).not.toHaveBeenCalled();
   expect(installer.import).not.toHaveBeenCalled();
   expect(installer.applySelection).not.toHaveBeenCalled();
   expect(installer.snapshot).not.toHaveBeenCalled();
 }
 
 describe('managed plugin request validation', () => {
+  it('returns canonical GitHub review data without paths and passes the raw signal', async () => {
+    const { app, installer } = fixture();
+    const source = { repository: 'https://github.com/WEAVE/Notes', commit: 'a'.repeat(40) };
+    const request = new Request('http://localhost' + managed + '/github/preview', post(source));
+    const response = await app.request(request);
+    expect(response.status).toBe(200);
+    expect(installer.previewGithub).toHaveBeenCalledExactlyOnceWith(
+      { ...source, repository: 'https://github.com/weave/notes', subdirectory: '' },
+      request.signal,
+    );
+    const body = await response.json();
+    expect(body).toEqual({
+      previewId: 'preview',
+      expiresAt: stamp,
+      expectedInstallSequence: 0,
+      candidate: {
+        digest: digestA,
+        manifest: { ...identity.manifest, description: 'Preserve this author text.' },
+        files: 2,
+        bytes: 128,
+      },
+      github: {
+        repository: 'https://github.com/weave/notes',
+        commit: 'a'.repeat(40),
+        subdirectory: '',
+      },
+    });
+    expect(JSON.stringify(body)).not.toContain(privatePath);
+  });
+
+  it.each([
+    { repository: 'https://github.com/weave/notes', commit: 'main' },
+    { repository: 'https://github.com/weave/notes.git', commit: 'a'.repeat(40) },
+    {
+      repository: 'https://github.com/weave/notes',
+      commit: 'a'.repeat(40),
+      subdirectory: '../notes',
+    },
+    { repository: 'https://github.com/weave/notes', commit: 'a'.repeat(40), token: 'secret' },
+  ])('rejects invalid GitHub sources before dispatch', async (source) => {
+    const { app, installer } = fixture();
+    await expectError(
+      await app.request(managed + '/github/preview', post(source)),
+      400,
+      'plugin-invalid-request',
+    );
+    expectNoDispatch(installer);
+  });
+
+  it('guards GitHub preview before acquisition', async () => {
+    const { app, installer } = fixture();
+    await expectError(
+      await app.request(
+        managed + '/github/preview',
+        post({}, { ...jsonHeaders, Origin: 'https://attacker.example' }),
+      ),
+      403,
+      'forbidden-origin',
+    );
+    expectNoDispatch(installer);
+  });
   it.each([
     ['preview', { sourceDirectory: 'relative' }],
     ['preview', { sourceDirectory: '/source\0' }],
@@ -324,6 +399,28 @@ describe('managed plugin byte limit', () => {
 });
 
 describe('managed plugin public errors', () => {
+  it.each([
+    ['plugin-github-invalid', 400],
+    ['plugin-github-too-large', 400],
+    ['plugin-github-unavailable', 502],
+    ['plugin-github-rate-limited', 429],
+    ['plugin-github-timeout', 504],
+  ] as const)('redacts remote acquisition error %s', async (code, status) => {
+    const { app, installer } = fixture();
+    installer.previewGithub.mockRejectedValueOnce(
+      new GithubAcquisitionError(code, privatePath, { cause: new Error('private response body') }),
+    );
+    const response = await app.request(
+      managed + '/github/preview',
+      post({ repository: 'https://github.com/weave/notes', commit: 'a'.repeat(40) }),
+    );
+    expect(response.status).toBe(status);
+    const body = await response.text();
+    expect(JSON.parse(body)).toEqual({ error: { code, message: expect.any(String) } });
+    expect(body).not.toContain(privatePath);
+    expect(body).not.toContain('private response body');
+  });
+
   it.each([
     [
       new ManagedInstallerError('plugin-preview-stale', { cause: privatePath }),

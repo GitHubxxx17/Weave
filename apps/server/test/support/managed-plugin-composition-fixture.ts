@@ -6,6 +6,7 @@ import type { connectMcp } from '@weave/mcp-client';
 import type { KernelPlugin, PluginManifest } from '@weave/plugin';
 import {
   computeDirectoryDigest,
+  type GithubPluginAcquirer,
   type PluginTrustStore,
   type RecordedPluginTrustEvent,
 } from '@weave/plugin-host';
@@ -364,6 +365,7 @@ export async function createRealManagedCompositionFixture(
       options: {
         readonly execution?: boolean;
         readonly installer?: boolean;
+        readonly githubAcquirer?: GithubPluginAcquirer;
         readonly local?: boolean;
         readonly localTrustStore?: PluginTrustStore;
         readonly mcp?: boolean;
@@ -374,6 +376,7 @@ export async function createRealManagedCompositionFixture(
       extensions = createServerExtensionCoordinator(runtime, {
         runnerOptions,
         kernelPluginFactories,
+        ...(options.githubAcquirer === undefined ? {} : { githubAcquirer: options.githubAcquirer }),
         ...(options.installer === true && options.execution !== false
           ? { installerStore: owned }
           : {}),

@@ -106,3 +106,12 @@ export type {
   PluginReloadFailure,
   ReloadResult,
 } from './host-types.js';
+
+export { createGithubPluginAcquirer } from './github-acquirer.js';
+export { GithubAcquisitionError, githubPluginSourceSchema } from './github-source.js';
+export type {
+  GithubAcquisitionErrorCode,
+  GithubPluginAcquirer,
+  GithubPluginAcquirerOptions,
+  GithubPluginSource,
+} from './github-source.js';

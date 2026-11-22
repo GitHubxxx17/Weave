@@ -68,6 +68,12 @@ dependency is required for local-directory acquisition.
    or implicit trust. Its network and archive contract precedes implementation.
 5. **6.5 Catalog:** a static discovery index that uses the same installer.
 
+Stage 6.4's [GitHub acquisition contract](../superpowers/specs/2026-11-22-github-plugin-acquisition-design.md)
+uses bounded Git tree metadata and verified raw blobs, rather than archives or Git
+processes. It records fixed-commit provenance and reacquires reviewed content before
+fresh import; saved request replay never requires the network. Harness market,
+index and manager references and Weave's installation differences are recorded there.
+
 Each topic uses a fresh branch and reviewed PR from current `origin/main`.
 Artifact garbage collection requires explicit current/candidate/retired leases and
 rollback retention; it is a separate design and is not required for 6.1 correctness.

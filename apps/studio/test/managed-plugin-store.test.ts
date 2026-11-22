@@ -747,3 +747,95 @@ describe('managed authority lag recovery', () => {
     },
   );
 });
+
+describe('GitHub previews use the shared management gate', () => {
+  const source = {
+    repository: 'https://github.com/weave/plugins',
+    commit: 'a'.repeat(40),
+    subdirectory: '',
+  };
+  it('rejects preview admission while a shared write is pending', async () => {
+    let finish: ((response: Response) => void) | undefined;
+    const { writes } = installFetch((path) => {
+      if (path === '/mcp/servers')
+        return new Promise<Response>((resolve) => {
+          finish = resolve;
+        });
+      return undefined;
+    });
+    const store = createPluginCatalogStore();
+    await store.ensureLoaded();
+    const writing = store.configureMcp(5, config).catch(() => undefined);
+    await vi.waitFor(() => expect(finish).toBeDefined());
+    await expect(store.previewGithubManaged(source)).rejects.toMatchObject({
+      code: 'plugin-operation-pending',
+    });
+    expect(writes()).toHaveLength(1);
+    finish?.(error(409, 'mcp-authority-conflict'));
+    await writing;
+  });
+
+  it('forwards a caller-owned signal to GitHub preview without changing import replay', async () => {
+    const { writes } = installFetch((path) =>
+      path === '/plugins/managed/github/preview'
+        ? json({ ...managedPreview, github: source })
+        : undefined,
+    );
+    const store = createPluginCatalogStore();
+    await store.ensureLoaded();
+    const signal = new AbortController().signal;
+    await expect(store.previewGithubManaged(source, signal)).resolves.toEqual({
+      ...managedPreview,
+      github: source,
+    });
+    expect(
+      writes().map(([path, init]) => [path, init.signal, JSON.parse(String(init.body))]),
+    ).toEqual([['/plugins/managed/github/preview', signal, source]]);
+    expect(store.getSnapshot().sharedManagementBlocked).toBe(false);
+  });
+});
+
+describe('GitHub import keeps the durable retry independent of acquisition', () => {
+  it('retries the exact frozen import body without fetching a source again', async () => {
+    const github = {
+      repository: 'https://github.com/weave/plugins',
+      commit: 'a'.repeat(40),
+      subdirectory: '',
+    };
+    let imports = 0;
+    let acquisitions = 0;
+    const network = installFetch((path, init) => {
+      if (path === '/plugins/managed/github/preview') {
+        acquisitions++;
+        return json({ ...importedReview.preview, github });
+      }
+      if (path === '/plugins/managed/import') {
+        if (++imports === 1) throw new TypeError('lost after decision');
+        return importReceipt(init);
+      }
+      return undefined;
+    });
+    const store = createPluginCatalogStore();
+    await store.ensureLoaded();
+    const preview = await store.previewGithubManaged(github);
+    expect(await store.submitManaged({ kind: 'import', preview })).toMatchObject({
+      kind: 'unresolved',
+    });
+    const original = network.writes()[1]!;
+    github.repository = 'https://github.com/changed/source';
+    await expect(store.previewGithubManaged(github)).rejects.toMatchObject({
+      code: 'plugin-managed-unresolved',
+    });
+    expect(await store.retryManaged()).toMatchObject({
+      kind: 'saved',
+      response: { kind: 'replayed' },
+    });
+    expect(acquisitions).toBe(1);
+    expect(network.writes()[2]).toEqual(original);
+    expect(JSON.parse(String(original[1].body))).toEqual({
+      requestId: expect.any(String),
+      previewId: 'preview-1',
+      expectedInstallSequence: 2,
+    });
+  });
+});

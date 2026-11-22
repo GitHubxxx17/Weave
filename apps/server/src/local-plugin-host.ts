@@ -1,4 +1,4 @@
-import type { PluginHost, PluginTrustStore } from '@weave/plugin-host';
+import type { GithubPluginAcquirer, PluginHost, PluginTrustStore } from '@weave/plugin-host';
 import type { KernelPlugin } from '@weave/plugin';
 import type { AgentRunRequest, AgentRuntimeEvent } from '@weave/runtime';
 import {
@@ -45,7 +45,9 @@ interface ServerExtensionOptions {
     readonly connect?: typeof connectMcp;
   };
   readonly managed?: ManagedPluginCompositionOptions;
-  readonly installerStore?: Pick<OwnedPluginArtifactStore, 'preview' | 'stage'>;
+  readonly installerStore?: Pick<OwnedPluginArtifactStore, 'preview' | 'stage'> &
+    Partial<Pick<OwnedPluginArtifactStore, 'binding'>>;
+  readonly githubAcquirer?: GithubPluginAcquirer;
   readonly runnerOptions: Omit<ServerAgentRunnerOptions, 'kernelPlugins'> & {
     readonly hostVersion: string;
   };
@@ -215,6 +217,9 @@ export function createServerExtensionCoordinator(
           coordinator,
           authority: options.managed.selectionAuthority,
           store: options.installerStore,
+          ...(options.githubAcquirer === undefined
+            ? {}
+            : { githubAcquirer: options.githubAcquirer }),
           composition: managed,
           inspectLocalClaims: local.inspectDeclarationClaims,
           ...(mcp === undefined ? {} : { inspectMcpIds: mcp.inspectDeclaredPluginIds }),
@@ -222,6 +227,23 @@ export function createServerExtensionCoordinator(
           applySelection: applyManagedSelection,
         })
       : undefined;
+  if (installer !== undefined) {
+    const dispose = coordinator.dispose;
+    let disposal: Promise<void> | undefined;
+    coordinator.dispose = () => {
+      if (disposal !== undefined) return disposal;
+      installer.closeSync();
+      // Dispose can be called directly by embedded hosts without Server shutdown.
+      disposal = Promise.allSettled([dispose(), installer.drain()]).then((outcomes) => {
+        const failures = outcomes.flatMap((outcome) =>
+          outcome.status === 'rejected' ? [outcome.reason] : [],
+        );
+        if (failures.length > 0)
+          throw new AggregateError(failures, 'Extension resources could not close');
+      });
+      return disposal;
+    };
+  }
   coordinatedHosts.add(runtime.serverHost);
   return {
     coordinator,
@@ -235,7 +257,11 @@ export function createServerExtensionCoordinator(
     async closeUnpublished() {
       installer?.closeSync();
       try {
-        const outcomes = await Promise.allSettled([local?.close(), mcp?.close()]);
+        const outcomes = await Promise.allSettled([
+          installer?.drain(),
+          local?.close(),
+          mcp?.close(),
+        ]);
         const failures = outcomes.flatMap((outcome) =>
           outcome.status === 'rejected' ? [outcome.reason] : [],
         );

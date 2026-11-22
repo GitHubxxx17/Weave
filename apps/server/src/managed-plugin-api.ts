@@ -1,5 +1,7 @@
 import {
   ExplicitLocalAuthorityError,
+  GithubAcquisitionError,
+  githubPluginSourceSchema,
   PluginArtifactError,
   PluginHostError,
 } from '@weave/plugin-host';
@@ -8,6 +10,7 @@ import { z } from 'zod';
 import { ManagedCommitFailure } from './managed-command-commit.js';
 import {
   importPreviewResponseSchema,
+  githubImportPreviewResponseSchema,
   projectManagedCatalog,
   projectManagedMutation,
 } from './managed-plugin-catalog.js';
@@ -55,6 +58,11 @@ const destructiveBody = z.strictObject({
 });
 
 const issues = {
+  'plugin-github-invalid': [400, 'The GitHub source could not be verified.'],
+  'plugin-github-too-large': [400, 'The GitHub source exceeds the acquisition limits.'],
+  'plugin-github-unavailable': [502, 'The GitHub source is unavailable.'],
+  'plugin-github-rate-limited': [429, 'GitHub rate limits prevented acquisition. Retry later.'],
+  'plugin-github-timeout': [504, 'GitHub acquisition timed out.'],
   'plugin-invalid-request': [400, 'Invalid managed plugin request.'],
   'plugin-artifact-invalid': [
     400,
@@ -100,6 +108,7 @@ function ownershipUnavailable(error: unknown): boolean {
 
 function publicCode(failure: unknown): keyof typeof issues {
   const error = failure instanceof ManagedCommitFailure ? failure.cause : failure;
+  if (error instanceof GithubAcquisitionError) return error.code;
   if (error instanceof ManagedInstallerError && Object.hasOwn(issues, error.code)) {
     return error.code;
   }
@@ -252,6 +261,20 @@ export function registerManagedPluginRoutes(
       signal,
     );
     return projectManagedMutation(result);
+  });
+
+  write('/github/preview', async (_context, body, signal) => {
+    const source = readStatic(githubPluginSourceSchema, body);
+    const { previewId, expiresAt, expectedInstallSequence, candidate, github } =
+      await installed().previewGithub(source, signal);
+    const { digest, manifest, files, bytes } = candidate;
+    return githubImportPreviewResponseSchema.parse({
+      previewId,
+      expiresAt,
+      expectedInstallSequence,
+      candidate: { digest, manifest, files, bytes },
+      github,
+    });
   });
 
   for (const kind of ['activate', 'enable', 'disable', 'revoke', 'uninstall'] as const) {

@@ -9,6 +9,57 @@ export const managedHeadSchema = z.int().nonnegative();
 const intentSchema = z.enum(['activate', 'rollback']);
 const declarationNames = z.array(z.string().min(1)).readonly().optional();
 
+const githubRepositorySchema = z
+  .string()
+  .regex(/^https:\/\/github\.com\/[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\/[a-zA-Z0-9._-]+$/)
+  .refine((repository) => {
+    const name = repository.split('/').at(-1)!;
+    return name !== '.' && name !== '..' && !name.toLowerCase().endsWith('.git');
+  });
+const githubSubdirectorySchema = z.string().refine((path) => {
+  if (path === '') return true;
+  const segments = path.split('/');
+  if (segments.length > 8) return false;
+  return segments.every((segment) => {
+    if (
+      segment === '' ||
+      segment === '.' ||
+      segment === '..' ||
+      /[<>:"\\|?*\p{Cc}]/u.test(segment) ||
+      /[. ]$/.test(segment) ||
+      /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(segment)
+    )
+      return false;
+    try {
+      encodeURIComponent(segment);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+});
+const githubSourceFields = {
+  repository: githubRepositorySchema,
+  commit: z.string().regex(/^[0-9a-f]{40}$/),
+  subdirectory: githubSubdirectorySchema,
+};
+export const githubPluginSourceInputSchema = z
+  .strictObject({
+    ...githubSourceFields,
+    repository: githubRepositorySchema.transform((repository) => repository.toLowerCase()),
+    subdirectory: githubSubdirectorySchema.default(''),
+  })
+  .readonly();
+export const githubPluginSourceSchema = z
+  .strictObject({
+    ...githubSourceFields,
+    repository: githubRepositorySchema.refine(
+      (repository) => repository === repository.toLowerCase(),
+    ),
+  })
+  .readonly();
+export type GithubPluginSource = z.infer<typeof githubPluginSourceSchema>;
+
 // Preserve the reviewed manifest in full for the activation command.
 const manifestSchema = z
   .strictObject({
@@ -58,25 +109,35 @@ const candidateFields = {
   files: positiveSequenceSchema,
   bytes: managedHeadSchema,
 };
+const importedCandidateFields = {
+  ...candidateFields,
+  importSequence: positiveSequenceSchema,
+  importedAt: z.iso.datetime(),
+};
 const candidateSchema = z
-  .strictObject({
-    ...candidateFields,
-    importSequence: positiveSequenceSchema,
-    importedAt: z.iso.datetime(),
-    provenance: z.literal('local-directory'),
-  })
+  .discriminatedUnion('provenance', [
+    z.strictObject({ ...importedCandidateFields, provenance: z.literal('local-directory') }),
+    z.strictObject({
+      ...importedCandidateFields,
+      provenance: z.literal('github'),
+      github: githubPluginSourceSchema,
+    }),
+  ])
   .readonly();
 export type ManagedCandidate = z.infer<typeof candidateSchema>;
 
-export const managedPreviewSchema = z
-  .strictObject({
-    previewId: tokenSchema,
-    expiresAt: z.iso.datetime(),
-    expectedInstallSequence: managedHeadSchema,
-    candidate: z.strictObject(candidateFields).readonly(),
-  })
+const previewFields = {
+  previewId: tokenSchema,
+  expiresAt: z.iso.datetime(),
+  expectedInstallSequence: managedHeadSchema,
+  candidate: z.strictObject(candidateFields).readonly(),
+};
+export const managedPreviewSchema = z.strictObject(previewFields).readonly();
+export const githubManagedPreviewSchema = z
+  .strictObject({ ...previewFields, github: githubPluginSourceSchema })
   .readonly();
-export type ManagedPreview = z.infer<typeof managedPreviewSchema>;
+export type GithubManagedPreview = z.infer<typeof githubManagedPreviewSchema>;
+export type ManagedPreview = z.infer<typeof managedPreviewSchema> | GithubManagedPreview;
 
 const selectionSchema = z
   .strictObject({

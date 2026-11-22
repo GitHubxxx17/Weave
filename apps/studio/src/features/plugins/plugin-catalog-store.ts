@@ -10,11 +10,14 @@ import type { PluginCatalog, PluginMutationResponse, PluginReloadResult } from '
 import {
   fetchManagedCatalog,
   prepareManagedRequest,
+  previewGithubManagedPlugin,
   previewManagedPlugin,
   sendManagedRequest,
 } from './managed-plugin-api.js';
 import type {
   ManagedCatalog,
+  GithubManagedPreview,
+  GithubPluginSource,
   ManagedCatalogObservation,
   ManagedHeads,
   ManagedMutationResponse,
@@ -111,6 +114,10 @@ export interface PluginCatalogStore {
   refresh(): Promise<void>;
   reload(): Promise<void>;
   previewManaged(sourceDirectory: string, signal?: AbortSignal): Promise<ManagedPreview>;
+  previewGithubManaged(
+    source: GithubPluginSource,
+    signal?: AbortSignal,
+  ): Promise<GithubManagedPreview>;
   submitManaged(review: ManagedReview): Promise<ManagedAttemptOutcome>;
   retryManaged(): Promise<ManagedAttemptOutcome>;
   stopTrackingManaged(): Promise<void>;
@@ -558,6 +565,17 @@ export function createPluginCatalogStore(): PluginCatalogStore {
     requireManaged();
     return previewManagedPlugin(sourceDirectory, signal);
   }
+  async function previewGithubManaged(
+    source: GithubPluginSource,
+    signal?: AbortSignal,
+  ): Promise<GithubManagedPreview> {
+    const blocked = writeBlock();
+    if (blocked !== undefined) throw blocked;
+    if (snapshot.sharedManagementBlocked)
+      throw new PluginApiError('catalog-unavailable', '请先重新读取一致的目录', 0);
+    requireManaged();
+    return previewGithubManagedPlugin(source, signal);
+  }
   async function sendManaged(
     prepared: PreparedManagedRequest,
     retry: boolean,
@@ -652,6 +670,7 @@ export function createPluginCatalogStore(): PluginCatalogStore {
     refresh,
     reload,
     previewManaged,
+    previewGithubManaged,
     submitManaged,
     retryManaged,
     stopTrackingManaged,

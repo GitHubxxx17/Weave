@@ -19,6 +19,40 @@ function cleanupOptions(resources: () => ServerShutdownResources) {
 }
 
 describe('Server shutdown', () => {
+  it.each(['stop', 'failStartup'] as const)(
+    'awaits external acquisition cleanup before lease release during %s',
+    async (method) => {
+      const release = Promise.withResolvers<void>();
+      const entered = Promise.withResolvers<void>();
+      const close = vi.fn(async () => {});
+      const shutdown = createServerShutdown(
+        cleanupOptions(() => ({
+          installer: {
+            closeSync() {},
+            async drain() {
+              entered.resolve();
+              await release.promise;
+            },
+          },
+          owned: { quiesce: async () => {}, close },
+        })),
+      );
+      const startup = new Error('startup');
+      const stopped = (method === 'stop' ? shutdown.stop() : shutdown.failStartup(startup)).catch(
+        (cause: unknown) => cause,
+      );
+      try {
+        await entered.promise;
+        await Promise.resolve();
+        expect(close).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+      }
+      expect(await stopped).toBe(method === 'stop' ? undefined : startup);
+      expect(close).toHaveBeenCalledOnce();
+    },
+  );
+
   it('shares synchronous reentry and retries release and authority independently', async () => {
     const calls: string[] = [];
     const releaseFailure = new Error('lease still held');
