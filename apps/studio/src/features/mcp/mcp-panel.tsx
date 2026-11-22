@@ -387,13 +387,14 @@ export function McpPanel({
     reviewEpoch,
     initialLoading,
     pendingOperation,
+    sharedManagementBlocked,
     mcpLastResult,
     mcpLastGeneration,
   } = usePluginCatalogState();
   const [dialog, setDialog] = useState<PanelDialog | null>(null);
   const rows = selectMcpRows(catalog, mcp);
   const busy = initialLoading || pendingOperation !== undefined;
-  const blocked = busy || consistency.kind !== 'ready' || mcpAvailable !== true;
+  const blocked = sharedManagementBlocked || mcpAvailable !== true;
   const liveCount = mcp?.servers.filter((server) => server.state !== 'removed').length ?? 0;
   const expectedSequence = mcp?.authoritySequence ?? 0;
   const capture = { expectedSequence, reviewEpoch };
@@ -492,7 +493,7 @@ export function McpPanel({
         <McpConfigDialog
           {...(dialog.kind === 'edit' ? { initial: dialog.initial } : {})}
           expectedSequence={dialog.expectedSequence}
-          busy={busy}
+          busy={blocked}
           stale={stale}
           onCancel={() => setDialog(null)}
           onSave={(config, sequence) =>
@@ -506,7 +507,7 @@ export function McpPanel({
       {dialog?.kind === 'trust' ? (
         <McpTrustDialog
           review={dialog.review}
-          busy={busy}
+          busy={blocked}
           stale={stale}
           onCancel={() => setDialog(null)}
           onTrust={(review) => store.trustMcp(review)}
@@ -518,7 +519,7 @@ export function McpPanel({
           server={dialog.server}
           action={dialog.kind}
           expectedSequence={dialog.expectedSequence}
-          busy={busy}
+          busy={blocked}
           stale={stale}
           hasRunningSessions={hasRunningSessions}
           onCancel={() => setDialog(null)}

@@ -38,8 +38,8 @@ troubleshooting.
 
 The Stage 6.1 [local plugin artifact store](docs/learning/2026-11-21-plugin-artifact-store.md)
 provides bounded, non-executing directory copies at fixed content-addressed paths.
-Server installation records, reviewed version activation and Studio installation
-controls remain subsequent slices; publishing files alone does not load a plugin.
+Studio can import these directories as candidates and activate a selected version
+after a separate trust review. See [Local plugin installation](#local-plugin-installation).
 
 ## Planned stack
 
@@ -167,7 +167,7 @@ When a Project is created with a folder (the system dialog on Desktop, or a
 typed absolute path in browser mode), the default Agent can call `read_file`
 and `write_file` inside that folder; every write waits for an approval card in
 Studio. Studio still does not include a file editor, Diff view, Shell tools,
-Plugin loading, Crew orchestration, a Run Registry, reconnection or
+Crew orchestration, a Run Registry, reconnection or
 `Last-Event-ID`, or login. An existing Project can be given a folder from the
 project menu ("设置文件夹"). In
 browser mode Provider configuration is local Server configuration read from
@@ -282,6 +282,51 @@ Provider metadata, Session events, SSE payloads, logs, and error messages.
 
 The detailed learning guide is
 [LLM Provider 路由：从配置到 Studio 选择](docs/learning/2026-11-16-llm-provider-routing.md).
+
+### Local plugin installation
+
+The Studio Plugins panel can import an already bundled local ESM plugin
+directory into a bound managed store. Import prepares a candidate. Activation
+requires a separate review before Server loads that version.
+
+On Desktop, use the native folder picker to select the bundled directory.
+With `WEAVE_PLUGINS_DIR` unset, Desktop uses `<userData>/plugins` and permits
+first binding. Set `WEAVE_PLUGINS_DIR` to use a custom directory. Server
+resolves a relative value from its working directory and rejects an empty
+value at startup. To bind a custom directory for the first time, use the
+explicit Server launcher below with `pluginsDirectory` set to that directory's
+absolute path and `dataDirectory` set to the Desktop profile. An existing
+registration must match the configured root.
+
+In a browser, enter the absolute path to the bundled directory on the machine
+running Server. `pnpm dev` can resume a store whose registered root matches the
+profile. The installer is disabled for an unbound profile unless its launcher
+authorizes first binding.
+
+To test first binding in a browser, run `pnpm --filter @weave/server... build`
+from the repository root. Replace `/absolute/isolated/profile` with the
+absolute path to a separate test profile and start Server from the same root.
+
+```bash
+WEAVE_TEST_PROFILE=/absolute/isolated/profile node --input-type=module -e '
+  import { join } from "node:path";
+  import { startServer } from "./apps/server/dist/main.js";
+  const dataDirectory = process.env.WEAVE_TEST_PROFILE;
+  const server = await startServer(4317, {
+    dataDirectory,
+    databaseFile: join(dataDirectory, "weave.sqlite"),
+    pluginsDirectory: join(dataDirectory, "plugins"),
+    studioOrigin: "http://127.0.0.1:5173",
+    managedPluginStore: { initialBinding: "allow-unbound" },
+  });
+  for (const name of ["SIGINT", "SIGTERM"]) process.once(name, async () => {
+    try { await server.stop(); } catch (error) { console.error(error); process.exitCode = 1; }
+  });
+'
+```
+
+Run `pnpm --filter @weave/studio dev` in another terminal and open
+`http://127.0.0.1:5173`.
 
 ## Agent Runner
 

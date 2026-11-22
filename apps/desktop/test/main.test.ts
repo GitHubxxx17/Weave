@@ -1,4 +1,9 @@
+import { readFileSync } from 'node:fs';
+import { parse } from 'node:path';
+import { runInNewContext } from 'node:vm';
+import ts from 'typescript';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDesktopConfig } from '../src/desktop-config.js';
 
 const mocks = vi.hoisted(() => {
   class FakeBrowserWindow {
@@ -64,12 +69,10 @@ const {
   startDesktopServer,
 } = await import('../src/main.js');
 
-const config = {
+const config = createDesktopConfig({
   userDataDirectory: '/tmp/weave-user-data',
-  databaseFile: '/tmp/weave-user-data/weave.sqlite',
-  studioUrl: 'http://127.0.0.1:5173',
-  studioOrigin: 'http://127.0.0.1:5173',
-} as const;
+  environment: {},
+});
 
 const providerSecretCodec = {
   isAvailable: vi.fn(() => true),
@@ -83,7 +86,7 @@ describe('desktop main process', () => {
     mocks.FakeBrowserWindow.instances.length = 0;
   });
 
-  it('starts the Server with the desktop data directory, database and Studio origin', async () => {
+  it('starts the Server with the default desktop plugin directory and first binding enabled', async () => {
     const stop = vi.fn(async () => undefined);
     mocks.startServer.mockResolvedValueOnce({ port: 46321, stop });
 
@@ -92,6 +95,8 @@ describe('desktop main process', () => {
     expect(mocks.startServer).toHaveBeenCalledWith(0, {
       databaseFile: config.databaseFile,
       dataDirectory: config.userDataDirectory,
+      pluginsDirectory: '/tmp/weave-user-data/plugins',
+      managedPluginStore: { initialBinding: 'allow-unbound' },
       studioOrigin: config.studioOrigin,
       providerSecretCodec,
       fetch: expect.any(Function),
@@ -99,6 +104,29 @@ describe('desktop main process', () => {
     expect(result.port).toBe(46321);
     expect(result.stop).toBe(stop);
   });
+
+  it.each(['/tmp/custom-plugins', './custom/../plugins', ''])(
+    'passes the plugin directory override %j verbatim without enabling first binding',
+    async (override) => {
+      const configWithOverride = createDesktopConfig({
+        userDataDirectory: config.userDataDirectory,
+        environment: { WEAVE_PLUGINS_DIR: override },
+      });
+      mocks.startServer.mockResolvedValueOnce({ port: 46321, stop: vi.fn() });
+
+      await startDesktopServer(configWithOverride, providerSecretCodec);
+
+      expect(mocks.startServer).toHaveBeenCalledWith(0, {
+        databaseFile: config.databaseFile,
+        dataDirectory: config.userDataDirectory,
+        pluginsDirectory: override,
+        studioOrigin: config.studioOrigin,
+        providerSecretCodec,
+        fetch: expect.any(Function),
+      });
+      expect(mocks.startServer.mock.lastCall?.[1]).not.toHaveProperty('managedPluginStore');
+    },
+  );
 
   it('uses the standard Node Fetch contract for provider requests', async () => {
     const response = new Response('ok');
@@ -178,46 +206,166 @@ describe('desktop main process', () => {
     );
     expect(mocks.app.exit).toHaveBeenCalledWith(1);
   });
+
+  it('shows the Server error for an empty plugin directory override before opening a window', async () => {
+    const serverError = 'pluginsDirectory must not be empty';
+    vi.stubEnv('WEAVE_PLUGINS_DIR', '');
+    vi.stubEnv('WEAVE_STUDIO_URL', undefined);
+    mocks.startServer.mockRejectedValueOnce(new Error(serverError));
+
+    try {
+      await startDesktopApplication();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    expect(mocks.startServer).toHaveBeenCalledWith(0, {
+      databaseFile: config.databaseFile,
+      dataDirectory: config.userDataDirectory,
+      pluginsDirectory: '',
+      studioOrigin: config.studioOrigin,
+      providerSecretCodec: expect.any(Object),
+      fetch: expect.any(Function),
+    });
+    expect(mocks.dialog.showErrorBox).toHaveBeenCalledWith('Weave Desktop 启动失败', serverError);
+    expect(mocks.app.exit).toHaveBeenCalledWith(1);
+    expect(mocks.FakeBrowserWindow.instances).toHaveLength(0);
+  });
 });
 
 describe('desktop folder picker IPC', () => {
+  const trustedFrame = { url: 'http://127.0.0.1:5173/', origin: 'http://127.0.0.1:5173' };
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  function invokeEvent(url: string) {
-    return { senderFrame: { url }, sender: {} } as never;
+  function invokeEvent(senderFrame: { url: string; origin?: string } | null) {
+    return { senderFrame, sender: {} } as never;
   }
 
-  it('returns the folder chosen in the system dialog', async () => {
-    mocks.dialog.showOpenDialog.mockResolvedValue({
-      canceled: false,
-      filePaths: ['/Users/mi/projects/demo'],
-    });
+  it.each([{ args: [] }, { args: ['project'] }])(
+    'opens the existing project dialog for $args',
+    async ({ args }) => {
+      mocks.dialog.showOpenDialog.mockResolvedValue({
+        canceled: false,
+        filePaths: ['/Users/mi/projects/demo'],
+      });
+
+      await expect(
+        handlePickDirectory(invokeEvent(trustedFrame), config.studioOrigin, ...args),
+      ).resolves.toEqual({ path: '/Users/mi/projects/demo', name: 'demo' });
+      expect(mocks.dialog.showOpenDialog).toHaveBeenCalledWith({
+        title: '选择项目文件夹',
+        properties: ['openDirectory', 'createDirectory'],
+      });
+    },
+  );
+
+  it('opens an existing-directory dialog for plugins and returns a name for a filesystem root', async () => {
+    const root = parse(process.cwd()).root;
+    mocks.dialog.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [root] });
 
     await expect(
-      handlePickDirectory(invokeEvent('http://127.0.0.1:5173/'), config.studioOrigin),
-    ).resolves.toEqual({ path: '/Users/mi/projects/demo', name: 'demo' });
-    expect(mocks.dialog.showOpenDialog).toHaveBeenCalledWith(
-      expect.objectContaining({ properties: ['openDirectory', 'createDirectory'] }),
-    );
+      handlePickDirectory(invokeEvent(trustedFrame), config.studioOrigin, 'plugin-import'),
+    ).resolves.toEqual({ path: root, name: root });
+    expect(mocks.dialog.showOpenDialog).toHaveBeenCalledWith({
+      title: '选择已打包的插件文件夹',
+      properties: ['openDirectory'],
+    });
   });
 
   it('returns null when the user cancels', async () => {
     mocks.dialog.showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
 
     await expect(
-      handlePickDirectory(invokeEvent('http://127.0.0.1:5173/'), config.studioOrigin),
+      handlePickDirectory(invokeEvent(trustedFrame), config.studioOrigin, 'plugin-import'),
     ).resolves.toBeNull();
   });
 
-  it('ignores requests from an untrusted origin without opening a dialog', async () => {
+  it('ignores requests with an untrusted or invalid frame URL without opening a dialog', async () => {
     await expect(
-      handlePickDirectory(invokeEvent('https://evil.example/'), config.studioOrigin),
+      handlePickDirectory(
+        invokeEvent({ ...trustedFrame, url: 'https://evil.example/' }),
+        config.studioOrigin,
+        'plugin-import',
+      ),
     ).resolves.toBeNull();
-    await expect(handlePickDirectory(invokeEvent('not a url'), config.studioOrigin)).resolves.toBe(
-      null,
-    );
+    await expect(
+      handlePickDirectory(invokeEvent({ ...trustedFrame, url: 'not a url' }), config.studioOrigin),
+    ).resolves.toBeNull();
     expect(mocks.dialog.showOpenDialog).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { frame: { ...trustedFrame, origin: 'null' }, reason: 'an opaque origin' },
+    { frame: { ...trustedFrame, origin: 'http://127.0.0.1:5174' }, reason: 'a different origin' },
+    { frame: { url: trustedFrame.url }, reason: 'a missing origin' },
+    { frame: null, reason: 'a missing frame' },
+  ])('rejects $reason without opening a dialog', async ({ frame }) => {
+    mocks.dialog.showOpenDialog.mockResolvedValue({
+      canceled: false,
+      filePaths: ['/Users/mi/projects/demo'],
+    });
+
+    await expect(
+      handlePickDirectory(invokeEvent(frame), config.studioOrigin, 'plugin-import'),
+    ).resolves.toBeNull();
+    expect(mocks.dialog.showOpenDialog).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { args: ['other'] },
+    { args: [undefined] },
+    { args: [{}] },
+    { args: ['plugin-import', {}] },
+  ])('rejects invalid picker arguments $args without opening a dialog', async ({ args }) => {
+    mocks.dialog.showOpenDialog.mockResolvedValue({
+      canceled: false,
+      filePaths: ['/Users/mi/projects/demo'],
+    });
+
+    await expect(
+      handlePickDirectory(invokeEvent(trustedFrame), config.studioOrigin, ...args),
+    ).resolves.toBeNull();
+    expect(mocks.dialog.showOpenDialog).not.toHaveBeenCalled();
+  });
+});
+
+describe('desktop folder picker preload', () => {
+  it('advertises plugin picker support and preserves zero IPC arguments for existing project callers', async () => {
+    const contextBridge = { exposeInMainWorld: vi.fn<(name: string, bridge: unknown) => void>() };
+    const ipcRenderer = {
+      invoke: vi.fn<(...args: string[]) => Promise<null>>().mockResolvedValue(null),
+    };
+    const source = readFileSync(new URL('../src/preload.cts', import.meta.url), 'utf8');
+    const { outputText } = ts.transpileModule(source, {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+      fileName: 'preload.cts',
+    });
+    runInNewContext(outputText, {
+      exports: {},
+      require: (specifier: string) => {
+        if (specifier !== 'electron') throw new Error(`Unexpected preload import ${specifier}`);
+        return { contextBridge, ipcRenderer };
+      },
+      process: { argv: ['--weave-server-url=http%3A%2F%2F127.0.0.1%3A46321'] },
+    });
+
+    expect(contextBridge.exposeInMainWorld).toHaveBeenCalledWith(
+      'weaveDesktop',
+      expect.objectContaining({ pluginDirectoryPicker: true }),
+    );
+    const bridge = contextBridge.exposeInMainWorld.mock.calls[0]?.[1] as {
+      pickDirectory: (purpose?: 'project' | 'plugin-import') => Promise<unknown>;
+    };
+    await bridge.pickDirectory();
+    await bridge.pickDirectory('project');
+    await bridge.pickDirectory('plugin-import');
+    expect(ipcRenderer.invoke.mock.calls).toEqual([
+      ['weave:pick-directory'],
+      ['weave:pick-directory', 'project'],
+      ['weave:pick-directory', 'plugin-import'],
+    ]);
   });
 });

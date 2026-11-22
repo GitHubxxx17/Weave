@@ -8,6 +8,26 @@ import {
 } from './plugin-api.js';
 import type { PluginCatalog, PluginMutationResponse, PluginReloadResult } from './plugin-types.js';
 import {
+  fetchManagedCatalog,
+  prepareManagedRequest,
+  previewManagedPlugin,
+  sendManagedRequest,
+} from './managed-plugin-api.js';
+import type {
+  ManagedCatalog,
+  ManagedCatalogObservation,
+  ManagedHeads,
+  ManagedMutationResponse,
+  ManagedPreview,
+  ManagedReview,
+  PreparedManagedRequest,
+} from './managed-plugin-types.js';
+import {
+  managedHeadsAtLeast,
+  sameLegacyGeneration,
+  sameManagedGeneration,
+} from './plugin-catalog-observation.js';
+import {
   McpApiError,
   configureMcpServer,
   disableMcpServer,
@@ -28,9 +48,19 @@ import type {
 import type { McpReview } from '../mcp/mcp-review.js';
 
 export type PluginPendingOperation = {
-  readonly source?: 'esm' | 'mcp';
+  readonly source?: 'esm' | 'mcp' | 'managed';
   readonly kind:
-    'reload' | 'trust' | 'enable' | 'disable' | 'revoke' | 'configure' | 'update' | 'remove';
+    | 'reload'
+    | 'trust'
+    | 'enable'
+    | 'disable'
+    | 'revoke'
+    | 'configure'
+    | 'update'
+    | 'remove'
+    | 'import'
+    | 'activate'
+    | 'uninstall';
   readonly id?: string;
   readonly digest?: string;
 };
@@ -38,13 +68,33 @@ export type CatalogConsistency =
   | { readonly kind: 'uninitialized' | 'refreshing' | 'ready' }
   | {
       readonly kind: 'unavailable';
-      readonly reason: 'generation-mismatch' | 'protocol' | 'network';
+      readonly reason: 'generation-mismatch' | 'managed-authority-lag' | 'protocol' | 'network';
     };
 export type CatalogApiError = PluginApiError | McpApiError;
+export type ManagedAttemptContext = Readonly<{
+  pluginId: string;
+  target: ManagedMutationResponse['decision']['target'];
+  error: PluginApiError;
+}>;
+export type ManagedRejection = ManagedAttemptContext &
+  Readonly<{ recovery: 'none' | 'review' | 'preview' | 'retry-review' | 'activate' }>;
+export type ManagedAttemptOutcome =
+  | { readonly kind: 'saved'; readonly response: ManagedMutationResponse }
+  | ({ readonly kind: 'unresolved' } & ManagedAttemptContext)
+  | ({ readonly kind: 'rejected' } & ManagedRejection)
+  | { readonly kind: 'not-sent'; readonly error: PluginApiError };
+
 export interface PluginCatalogState {
   readonly catalog: PluginCatalog | undefined;
   readonly mcp: McpManagementSnapshot | undefined;
   readonly mcpAvailable: boolean | undefined;
+  readonly managed: ManagedCatalogObservation | undefined;
+  readonly managedUnresolved: ManagedAttemptContext | undefined;
+  readonly managedLastResult: ManagedMutationResponse | undefined;
+  readonly managedLastRejection: ManagedRejection | undefined;
+  readonly managedReviewRequiredId: string | undefined;
+  readonly sharedManagementBlocked: boolean;
+  readonly canRecoverManagedLag: boolean;
   readonly consistency: CatalogConsistency;
   readonly reviewEpoch: number;
   readonly mcpLastResult: McpMutationResult['result'] | undefined;
@@ -60,6 +110,10 @@ export interface PluginCatalogStore {
   ensureLoaded(): Promise<void>;
   refresh(): Promise<void>;
   reload(): Promise<void>;
+  previewManaged(sourceDirectory: string, signal?: AbortSignal): Promise<ManagedPreview>;
+  submitManaged(review: ManagedReview): Promise<ManagedAttemptOutcome>;
+  retryManaged(): Promise<ManagedAttemptOutcome>;
+  stopTrackingManaged(): Promise<void>;
   trust(id: string, digest: string): Promise<void>;
   setEnabled(id: string, enabled: boolean, immediate?: boolean): Promise<void>;
   revoke(id: string, immediate?: boolean): Promise<void>;
@@ -71,35 +125,101 @@ export interface PluginCatalogStore {
   revokeMcp(id: string, expectedSequence: number, immediate?: boolean): Promise<void>;
   removeMcp(id: string, expectedSequence: number, immediate?: boolean): Promise<void>;
 }
-interface Pair {
+type McpObservation =
+  | { readonly kind: 'enabled'; readonly snapshot: McpManagementSnapshot }
+  | { readonly kind: 'disabled' };
+interface CatalogGroup {
   readonly catalog: PluginCatalog;
-  readonly mcp?: McpManagementSnapshot;
-  readonly mcpAvailable: boolean;
+  readonly mcp: McpObservation;
+  readonly managed: ManagedCatalogObservation;
 }
+type CatalogRead = { readonly kind: 'ready' | 'lag'; readonly group: CatalogGroup };
 interface Seed {
   readonly catalog?: PluginCatalog;
   readonly mcp?: McpManagementSnapshot;
+  readonly managed?: ManagedCatalog;
+}
+interface ReadOptions {
+  readonly seed?: Seed;
+  readonly alreadyInvalidated?: boolean;
+  readonly rememberInitial?: boolean;
 }
 const toApiError = (error: unknown): CatalogApiError =>
   error instanceof PluginApiError || error instanceof McpApiError
     ? error
     : new PluginApiError('plugin-network', '无法连接到本地服务', 0);
-const sameGeneration = (a: ExtensionGeneration | undefined, b: ExtensionGeneration): boolean =>
-  a !== undefined &&
-  a.id === b.id &&
-  a.acceptingRuns === b.acceptingRuns &&
-  a.blocked?.code === b.blocked?.code &&
-  a.blocked?.message === b.blocked?.message;
+function toManagedError(reason: unknown): PluginApiError {
+  const error = toApiError(reason);
+  return error instanceof PluginApiError
+    ? error
+    : new PluginApiError(error.code, error.message, error.status);
+}
+class ManagedAuthorityLagError extends PluginApiError {
+  constructor() {
+    super('catalog-managed-authority-lag', '受管插件目录正在等待同步', 0);
+  }
+}
 function unavailable(error: CatalogApiError): CatalogConsistency {
-  return {
-    kind: 'unavailable',
-    reason:
-      error.code === 'catalog-generation-mismatch'
-        ? 'generation-mismatch'
-        : error.status === 0
-          ? 'network'
-          : 'protocol',
-  };
+  if (error.code === 'catalog-generation-mismatch')
+    return { kind: 'unavailable', reason: 'generation-mismatch' };
+  if (error instanceof ManagedAuthorityLagError)
+    return { kind: 'unavailable', reason: 'managed-authority-lag' };
+  return { kind: 'unavailable', reason: error.status === 0 ? 'network' : 'protocol' };
+}
+
+async function observeMcp(): Promise<McpObservation> {
+  try {
+    return { kind: 'enabled', snapshot: await fetchMcpCatalog() };
+  } catch (error) {
+    if (
+      error instanceof McpApiError &&
+      error.status === 404 &&
+      error.code === 'mcp-management-disabled'
+    )
+      return { kind: 'disabled' };
+    throw error;
+  }
+}
+
+function hasReloadManager({ catalog, mcp }: CatalogGroup): boolean {
+  return mcp.kind === 'enabled' || catalog.local !== undefined;
+}
+
+function rejectionRecovery(
+  { code, status }: PluginApiError,
+  command: PreparedManagedRequest['target']['kind'],
+  retry: boolean,
+): ManagedRejection['recovery'] | undefined {
+  if (
+    (status === 400 && code === 'plugin-invalid-request') ||
+    (status === 403 && code === 'forbidden-origin') ||
+    (status === 404 && code === 'plugin-installer-disabled') ||
+    (status === 413 && code === 'plugin-request-too-large') ||
+    (status === 415 && code === 'unsupported-media-type')
+  )
+    return retry ? undefined : 'none';
+  if (status === 404 && code === 'plugin-authority-not-found' && command !== 'import')
+    return 'review';
+  if (status !== 409) return undefined;
+  switch (code) {
+    case 'plugin-authority-request-conflict':
+      return 'none';
+    case 'plugin-preview-stale':
+    case 'plugin-managed-id-conflict':
+      return command === 'import' ? 'preview' : undefined;
+    case 'plugin-managed-namespace-unavailable':
+    case 'plugin-artifact-capacity':
+      return command === 'import' ? 'retry-review' : undefined;
+    case 'plugin-authority-conflict':
+      return command === 'import' ? undefined : 'review';
+    case 'plugin-authority-activation-required':
+      return command === 'enable' ? 'activate' : undefined;
+    case 'plugin-artifact-unavailable':
+      if (command === 'import') return 'preview';
+      return command === 'activate' || command === 'enable' ? 'review' : undefined;
+    default:
+      return undefined;
+  }
 }
 
 /** One app-owned cache and write gate for the complete extension catalog. */
@@ -108,6 +228,13 @@ export function createPluginCatalogStore(): PluginCatalogStore {
     catalog: undefined,
     mcp: undefined,
     mcpAvailable: undefined,
+    managed: undefined,
+    managedUnresolved: undefined,
+    managedLastResult: undefined,
+    managedLastRejection: undefined,
+    managedReviewRequiredId: undefined,
+    sharedManagementBlocked: true,
+    canRecoverManagedLag: false,
     consistency: { kind: 'uninitialized' as const },
     reviewEpoch: 0,
     mcpLastResult: undefined,
@@ -120,98 +247,141 @@ export function createPluginCatalogStore(): PluginCatalogStore {
   const listeners = new Set<() => void>();
   let initialPromise: Promise<void> | undefined;
   let readPromise: Promise<void> | undefined;
-  let operationPromise: Promise<void> | undefined;
+  let operationPromise: Promise<unknown> | undefined;
+  let reloadPromise: Promise<void> | undefined;
+  let confirmedHeads: ManagedHeads | undefined;
+  let lastLag: CatalogGroup | undefined;
+  let unresolvedRequest: PreparedManagedRequest | undefined;
   const publish = (next: PluginCatalogState): void => {
-    snapshot = Object.freeze(next);
+    const writeBlocked = operationPromise !== undefined || unresolvedRequest !== undefined;
+    snapshot = Object.freeze({
+      ...next,
+      sharedManagementBlocked: next.consistency.kind !== 'ready' || writeBlocked,
+      canRecoverManagedLag:
+        !writeBlocked &&
+        next.consistency.kind === 'unavailable' &&
+        next.consistency.reason === 'managed-authority-lag' &&
+        lastLag !== undefined &&
+        hasReloadManager(lastLag),
+    });
     for (const listener of listeners) listener();
   };
 
-  async function readPair(seed: Seed = {}): Promise<Pair> {
+  function meetsConfirmedHeads(heads: ManagedHeads): boolean {
+    return confirmedHeads === undefined || managedHeadsAtLeast(heads, confirmedHeads);
+  }
+
+  async function readGroup(seed: Seed = {}): Promise<CatalogRead> {
     for (let round = 0; round < 3; round++) {
-      const [plugins, mcp] = await Promise.allSettled([
-        round === 0 && seed.catalog !== undefined
-          ? Promise.resolve(seed.catalog)
+      const initialSeed = round === 0 ? seed : {};
+      const [plugins, mcp, managed] = await Promise.allSettled([
+        initialSeed.catalog !== undefined
+          ? Promise.resolve(initialSeed.catalog)
           : fetchPluginCatalog(),
-        snapshot.mcpAvailable === false
-          ? Promise.resolve(undefined)
-          : round === 0 && seed.mcp !== undefined
-            ? Promise.resolve(seed.mcp)
-            : fetchMcpCatalog(),
+        initialSeed.mcp !== undefined
+          ? Promise.resolve({ kind: 'enabled' as const, snapshot: initialSeed.mcp })
+          : observeMcp(),
+        initialSeed.managed !== undefined
+          ? Promise.resolve({ kind: 'enabled' as const, catalog: initialSeed.managed })
+          : fetchManagedCatalog(),
       ]);
       if (plugins.status === 'rejected') throw plugins.reason;
-      if (mcp.status === 'rejected') {
-        if (
-          mcp.reason instanceof McpApiError &&
-          mcp.reason.status === 404 &&
-          mcp.reason.code === 'mcp-management-disabled'
-        )
-          return { catalog: plugins.value, mcpAvailable: false };
-        throw mcp.reason;
+      if (mcp.status === 'rejected') throw mcp.reason;
+      if (managed.status === 'rejected') throw managed.reason;
+      const group = { catalog: plugins.value, mcp: mcp.value, managed: managed.value };
+      const { generation } = group.catalog;
+      if (confirmedHeads !== undefined && group.managed.kind !== 'enabled') {
+        throw new PluginApiError(
+          'catalog-managed-authority-unavailable',
+          '受管插件目录不可用，请重新连接或重新打开 Studio',
+          404,
+        );
       }
-      if (mcp.value === undefined) return { catalog: plugins.value, mcpAvailable: false };
-      if (plugins.value.generation === undefined) {
-        throw new McpApiError(
+      if (group.mcp.kind === 'disabled' && group.managed.kind !== 'enabled')
+        return { kind: 'ready', group };
+      if (generation === undefined) {
+        if (initialSeed.catalog !== undefined) continue;
+        throw new PluginApiError(
           'catalog-invalid-generation',
           '插件目录缺少版本信息，请重新读取目录',
           200,
         );
       }
-      if (sameGeneration(plugins.value.generation, mcp.value.generation))
-        return { catalog: plugins.value, mcp: mcp.value, mcpAvailable: true };
+      if (
+        group.mcp.kind === 'enabled' &&
+        !sameLegacyGeneration(generation, group.mcp.snapshot.generation)
+      )
+        continue;
+      if (group.managed.kind === 'enabled') {
+        if (!sameManagedGeneration(generation, group.managed.catalog.generation)) continue;
+        if (!meetsConfirmedHeads(group.managed.catalog.heads)) {
+          if (round === 2) return { kind: 'lag', group };
+          continue;
+        }
+      }
+      return { kind: 'ready', group };
     }
     throw new McpApiError('catalog-generation-mismatch', '目录版本尚未同步，请重新读取目录', 0);
   }
-  function install(pair: Pair, alreadyInvalidated = false): void {
+  function install(group: CatalogGroup, alreadyInvalidated: boolean): void {
+    if (group.managed.kind === 'enabled') confirmedHeads = group.managed.catalog.heads;
+    const mcp = group.mcp.kind === 'enabled' ? group.mcp.snapshot : undefined;
     const authorityChanged =
       snapshot.mcp !== undefined &&
-      pair.mcp !== undefined &&
-      snapshot.mcp.authoritySequence !== pair.mcp.authoritySequence;
+      mcp !== undefined &&
+      snapshot.mcp.authoritySequence !== mcp.authoritySequence;
     publish({
       ...snapshot,
-      catalog: pair.catalog,
-      mcp: pair.mcp,
-      mcpAvailable: pair.mcpAvailable,
+      catalog: group.catalog,
+      mcp,
+      mcpAvailable: group.mcp.kind === 'enabled',
+      managed: Object.freeze(group.managed),
       consistency: Object.freeze({ kind: 'ready' }),
       error: undefined,
       reviewEpoch: snapshot.reviewEpoch + Number(authorityChanged && !alreadyInvalidated),
     });
   }
-  function read(seed: Seed = {}, alreadyInvalidated = false): Promise<void> {
+  function beginRead({
+    seed,
+    alreadyInvalidated = false,
+    rememberInitial = false,
+  }: ReadOptions = {}): Promise<void> {
+    if (readPromise !== undefined) return readPromise;
     const promise = Promise.resolve()
-      .then(() => readPair(seed))
-      .then((pair) => install(pair, alreadyInvalidated))
+      .then(async () => {
+        lastLag = undefined;
+        const { kind, group } = await readGroup(seed);
+        if (kind === 'lag') {
+          lastLag = group;
+          throw new ManagedAuthorityLagError();
+        }
+        install(group, alreadyInvalidated);
+      })
       .catch((reason: unknown) => {
         const error = toApiError(reason);
         publish({ ...snapshot, error, consistency: Object.freeze(unavailable(error)) });
         throw error;
+      })
+      .finally(() => {
+        readPromise = undefined;
+        if (snapshot.initialLoading) publish({ ...snapshot, initialLoading: false });
       });
-    return promise;
-  }
-  function beginRead(initial: boolean): Promise<void> {
-    if (readPromise !== undefined) return readPromise;
-    readPromise = read().finally(() => {
-      readPromise = undefined;
-      publish({ ...snapshot, initialLoading: false });
-    });
+    readPromise = promise;
+    if (rememberInitial) initialPromise = promise;
     publish({
       ...snapshot,
-      initialLoading: initial,
+      initialLoading: snapshot.catalog === undefined,
       consistency: Object.freeze({ kind: 'refreshing' }),
     });
-    return readPromise;
+    return promise;
   }
   function ensureLoaded(): Promise<void> {
-    if (initialPromise !== undefined) return initialPromise;
-    initialPromise = beginRead(snapshot.catalog === undefined);
-    return initialPromise;
+    if (operationPromise !== undefined) return operationPromise.then(ensureLoaded, ensureLoaded);
+    return readPromise ?? initialPromise ?? beginRead({ rememberInitial: true });
   }
   function refresh(): Promise<void> {
-    if (operationPromise !== undefined)
-      return operationPromise.catch(() => undefined).then(() => refresh());
-    initialPromise = undefined;
-    const promise = beginRead(snapshot.catalog === undefined);
-    initialPromise = promise;
-    return promise;
+    if (operationPromise !== undefined) return operationPromise.then(refresh, refresh);
+    return beginRead({ rememberInitial: true });
   }
   const requireReady = (): void => {
     if (snapshot.consistency.kind !== 'ready')
@@ -219,51 +389,68 @@ export function createPluginCatalogStore(): PluginCatalogStore {
   };
   async function reconcile(seed: Seed, alreadyInvalidated = false): Promise<void> {
     try {
-      await read(seed, alreadyInvalidated);
+      await beginRead({ seed, alreadyInvalidated });
     } catch {
       /* Durable outcomes and original write failures remain visible. */
     }
   }
-  function start(
-    pending: PluginPendingOperation,
-    operation: () => Promise<void>,
-    recover = false,
-  ): Promise<void> {
-    if (snapshot.pendingOperation !== undefined)
-      return Promise.reject(
-        new PluginApiError('plugin-operation-pending', '已有插件操作正在进行', 0),
-      );
+  function writeBlock(allowUnresolved = false): PluginApiError | undefined {
+    if (operationPromise !== undefined)
+      return new PluginApiError('plugin-operation-pending', '已有插件操作正在进行', 0);
+    if (!allowUnresolved && unresolvedRequest !== undefined)
+      return new PluginApiError('plugin-managed-unresolved', '请先核对受管插件操作的结果', 0);
+    return undefined;
+  }
+  function reserve<T>(
+    pending: PluginPendingOperation | undefined,
+    operation: (olderRead: Promise<void> | undefined) => Promise<T>,
+    remember?: (promise: Promise<T>) => void,
+  ): Promise<T> {
     // Reserve before notifying reentrant subscribers. A write waits for every older read.
-    operationPromise = Promise.resolve()
-      .then(async () => {
-        if (readPromise !== undefined) {
-          try {
-            await readPromise;
-          } catch (error) {
-            if (!recover) throw error;
-          }
-        }
-        if (snapshot.catalog === undefined) {
-          initialPromise = undefined;
-          await ensureLoaded();
-        } else if (recover && snapshot.consistency.kind !== 'ready') await beginRead(false);
-        requireReady();
-        await operation();
-      })
-      .catch((reason: unknown) => {
-        const error = toApiError(reason);
-        publish({ ...snapshot, error });
-        throw error;
-      })
+    const olderRead = readPromise;
+    const promise = Promise.resolve()
+      .then(() => operation(olderRead))
       .finally(() => {
         operationPromise = undefined;
+        reloadPromise = undefined;
         publish({ ...snapshot, pendingOperation: undefined });
       });
-    const promise = operationPromise;
-    publish({ ...snapshot, pendingOperation: Object.freeze(pending) });
+    operationPromise = promise;
+    remember?.(promise);
+    publish({
+      ...snapshot,
+      pendingOperation: pending === undefined ? undefined : Object.freeze(pending),
+    });
     return promise;
   }
-  async function esmWrite(request: () => Promise<PluginMutationResponse>): Promise<void> {
+  async function prepareOrdinaryWrite(olderRead: Promise<void> | undefined): Promise<void> {
+    await olderRead;
+    if (snapshot.catalog === undefined) await beginRead({ rememberInitial: true });
+    requireReady();
+  }
+  function reportWriteError(reason: unknown): never {
+    const error = toApiError(reason);
+    publish({ ...snapshot, error });
+    throw error;
+  }
+  function start(pending: PluginPendingOperation, operation: () => Promise<void>): Promise<void> {
+    const blocked = writeBlock();
+    if (blocked !== undefined) return Promise.reject(blocked);
+    return reserve(pending, async (olderRead) => {
+      try {
+        await prepareOrdinaryWrite(olderRead);
+        await operation();
+      } catch (reason) {
+        reportWriteError(reason);
+      }
+    });
+  }
+  async function esmWrite(
+    request: () => Promise<PluginMutationResponse>,
+    id?: string,
+  ): Promise<void> {
+    if (id !== undefined && snapshot.managedReviewRequiredId !== undefined)
+      publish({ ...snapshot, managedReviewRequiredId: undefined });
     try {
       const response = await request();
       publish({
@@ -279,6 +466,12 @@ export function createPluginCatalogStore(): PluginCatalogStore {
         }),
       });
     } catch (reason) {
+      if (
+        id !== undefined &&
+        reason instanceof PluginApiError &&
+        reason.code === 'plugin-managed-review-required'
+      )
+        publish({ ...snapshot, managedReviewRequiredId: id });
       await reconcile({});
       throw reason;
     }
@@ -311,19 +504,143 @@ export function createPluginCatalogStore(): PluginCatalogStore {
     });
   }
   function reload(): Promise<void> {
-    if (snapshot.pendingOperation?.kind === 'reload' && operationPromise !== undefined)
-      return operationPromise;
+    if (reloadPromise !== undefined) return reloadPromise;
+    const blocked = writeBlock();
+    if (blocked !== undefined) return Promise.reject(blocked);
     const hadCatalog = snapshot.catalog !== undefined;
-    return start(
+    const requestedLagRecovery = lastLag !== undefined;
+    return reserve(
       { kind: 'reload' },
-      async () => {
-        if (snapshot.mcpAvailable === true && snapshot.mcp !== undefined)
-          await mcpWrite(() => reloadMcpServers(snapshot.mcp!.authoritySequence));
-        else if (snapshot.catalog?.local !== undefined) await esmWrite(reloadPlugins);
-        else if (hadCatalog) await read({});
+      async (olderRead) => {
+        try {
+          await olderRead?.catch(() => undefined);
+          const recoverLag = requestedLagRecovery || lastLag !== undefined;
+          const probe = recoverLag || snapshot.consistency.kind !== 'ready';
+          if (probe) {
+            try {
+              await beginRead({ rememberInitial: true });
+            } catch (error) {
+              if (!recoverLag || lastLag === undefined || !hasReloadManager(lastLag)) throw error;
+            }
+          }
+          const mcp =
+            lastLag === undefined
+              ? snapshot.mcp
+              : lastLag.mcp.kind === 'enabled'
+                ? lastLag.mcp.snapshot
+                : undefined;
+          const catalog = lastLag?.catalog ?? snapshot.catalog;
+          if (mcp !== undefined) await mcpWrite(() => reloadMcpServers(mcp.authoritySequence));
+          else if (catalog?.local !== undefined) await esmWrite(reloadPlugins);
+          else if (!probe && hadCatalog) await beginRead();
+        } catch (reason) {
+          reportWriteError(reason);
+        }
       },
-      true,
+      (promise) => {
+        reloadPromise = promise;
+      },
     );
+  }
+  function requireManaged(): ManagedCatalog {
+    if (snapshot.managed?.kind !== 'enabled')
+      throw new PluginApiError('plugin-installer-disabled', '受管插件安装不可用', 404);
+    return snapshot.managed.catalog;
+  }
+  async function previewManaged(
+    sourceDirectory: string,
+    signal?: AbortSignal,
+  ): Promise<ManagedPreview> {
+    const blocked = writeBlock();
+    if (blocked !== undefined) throw blocked;
+    if (snapshot.sharedManagementBlocked)
+      throw new PluginApiError('catalog-unavailable', '请先重新读取一致的目录', 0);
+    requireManaged();
+    return previewManagedPlugin(sourceDirectory, signal);
+  }
+  async function sendManaged(
+    prepared: PreparedManagedRequest,
+    retry: boolean,
+  ): Promise<ManagedAttemptOutcome> {
+    if (snapshot.managedLastRejection !== undefined)
+      publish({ ...snapshot, managedLastRejection: undefined });
+    let response: ManagedMutationResponse;
+    try {
+      response = await sendManagedRequest(prepared);
+    } catch (reason) {
+      const error = toManagedError(reason);
+      const context = { pluginId: prepared.pluginId, target: prepared.target, error };
+      const recovery = rejectionRecovery(error, prepared.target.kind, retry);
+      if (recovery === undefined) {
+        unresolvedRequest = prepared;
+        publish({ ...snapshot, managedUnresolved: Object.freeze(context) });
+        await reconcile({});
+        return { kind: 'unresolved', ...context };
+      }
+      const rejection = Object.freeze({ ...context, recovery });
+      unresolvedRequest = undefined;
+      publish({ ...snapshot, managedUnresolved: undefined, managedLastRejection: rejection });
+      await reconcile({});
+      return { kind: 'rejected', ...rejection };
+    }
+    unresolvedRequest = undefined;
+    if (meetsConfirmedHeads(response.current.heads)) confirmedHeads = response.current.heads;
+    publish({ ...snapshot, managedUnresolved: undefined, managedLastResult: response });
+    await reconcile({ managed: response.current });
+    return { kind: 'saved', response };
+  }
+  function submitManaged(review: ManagedReview): Promise<ManagedAttemptOutcome> {
+    const blocked = writeBlock();
+    if (blocked !== undefined) return Promise.resolve({ kind: 'not-sent', error: blocked });
+    const id = review.kind === 'import' ? review.preview.candidate.manifest.id : review.pluginId;
+    return reserve({ source: 'managed', kind: review.kind, id }, async (olderRead) => {
+      let prepared: PreparedManagedRequest;
+      try {
+        await prepareOrdinaryWrite(olderRead);
+        const { heads } = requireManaged();
+        const install =
+          review.kind === 'import'
+            ? review.preview.expectedInstallSequence
+            : review.expectedInstallSequence;
+        if (
+          install !== heads.installSequence ||
+          (review.kind !== 'import' && review.expectedTrustSequence !== heads.trustSequence)
+        )
+          throw new PluginApiError('plugin-managed-review-stale', '本次审查已失效，请重新审查', 0);
+        prepared = prepareManagedRequest(review, crypto.randomUUID());
+      } catch (reason) {
+        return { kind: 'not-sent', error: toManagedError(reason) };
+      }
+      return sendManaged(prepared, false);
+    });
+  }
+  function retryManaged(): Promise<ManagedAttemptOutcome> {
+    const blocked = writeBlock(true);
+    if (blocked !== undefined) return Promise.resolve({ kind: 'not-sent', error: blocked });
+    const prepared = unresolvedRequest;
+    if (prepared === undefined)
+      return Promise.resolve({
+        kind: 'not-sent',
+        error: new PluginApiError('plugin-managed-no-unresolved', '没有需要核对的受管插件操作', 0),
+      });
+    return reserve(
+      { source: 'managed', id: prepared.pluginId, kind: prepared.target.kind },
+      async (olderRead) => {
+        await olderRead?.catch(() => undefined);
+        return sendManaged(prepared, true);
+      },
+    );
+  }
+  function stopTrackingManaged(): Promise<void> {
+    const blocked = writeBlock(true);
+    if (blocked !== undefined) return Promise.reject(blocked);
+    if (unresolvedRequest === undefined) return Promise.resolve();
+    return reserve(undefined, async (olderRead) => {
+      await olderRead?.catch(() => undefined);
+      unresolvedRequest = undefined;
+      publish({ ...snapshot, managedUnresolved: undefined });
+      await beginRead({ rememberInitial: true });
+    });
   }
   return {
     getSnapshot: () => snapshot,
@@ -334,14 +651,18 @@ export function createPluginCatalogStore(): PluginCatalogStore {
     ensureLoaded,
     refresh,
     reload,
+    previewManaged,
+    submitManaged,
+    retryManaged,
+    stopTrackingManaged,
     trust: (id, digest) =>
-      start({ kind: 'trust', id, digest }, () => esmWrite(() => trustPlugin(id, digest))),
+      start({ kind: 'trust', id, digest }, () => esmWrite(() => trustPlugin(id, digest), id)),
     setEnabled: (id, enabled, immediate = false) =>
       start({ kind: enabled ? 'enable' : 'disable', id }, () =>
-        esmWrite(() => setPluginEnabled(id, enabled, { immediate })),
+        esmWrite(() => setPluginEnabled(id, enabled, { immediate }), id),
       ),
     revoke: (id, immediate = false) =>
-      start({ kind: 'revoke', id }, () => esmWrite(() => revokePluginTrust(id, { immediate }))),
+      start({ kind: 'revoke', id }, () => esmWrite(() => revokePluginTrust(id, { immediate }), id)),
     configureMcp: (seq, config) =>
       mcpOperation({ kind: 'configure', id: config.id }, () => configureMcpServer(seq, config)),
     updateMcp: (id, seq, config) =>

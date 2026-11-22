@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentStreamError, streamAgentRun } from '../src/features/agent/agent-stream.js';
 import { App } from '../src/app/App.js';
 import type { AgentStreamHandlers } from '../src/features/agent/agent-types.js';
+import { disabledManagedCatalog } from './support/disabled-managed-catalog.js';
+import { managedCatalog, managedPluginId } from './support/managed-plugin-fixtures.js';
 
 vi.mock('../src/features/agent/agent-stream.js', async () => {
   const actual = await vi.importActual<typeof import('../src/features/agent/agent-stream.js')>(
@@ -192,6 +194,8 @@ function createWorkspaceFetchMock(
     const url = String(input);
     const method = init?.method ?? 'GET';
     const requestPath = new URL(url, 'http://weave.local').pathname;
+    const managed = disabledManagedCatalog(requestPath, init);
+    if (managed !== undefined) return managed;
     if (requestPath === '/mcp' && method === 'GET') {
       return new Response(
         JSON.stringify({ error: { code: 'mcp-management-disabled', message: 'MCP disabled' } }),
@@ -496,7 +500,10 @@ describe('Studio Agent Chat', () => {
       const pluginCalls = fetchMock.mock.calls.filter(([input]) =>
         String(input).includes('/plugins'),
       );
-      expect(pluginCalls.map(([, init]) => init?.method ?? 'GET')).toEqual(['GET']);
+      expect(pluginCalls.map(([input, init]) => [String(input), init?.method])).toEqual([
+        ['/plugins', 'GET'],
+        ['/plugins/managed', 'GET'],
+      ]);
       expect(screen.queryByRole('dialog')).toBeNull();
     },
   );
@@ -522,6 +529,60 @@ describe('Studio Agent Chat', () => {
       fetchMock.mock.calls.filter(([input]) => String(input).includes('/plugins')),
     ).toHaveLength(before);
   });
+
+  it.each([false, true])(
+    'reopens a managed plugin panel with reads only (restored=%s)',
+    async (restored) => {
+      if (restored) {
+        localStorage.setItem(
+          'weave.studio.panelTabs.v2',
+          JSON.stringify({
+            tabs: [{ id: 'plugins', kind: 'plugins' }],
+            active: 'plugins',
+            pinned: [],
+          }),
+        );
+      }
+      const routes = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === 'GET') {
+          if (String(input) === '/plugins/managed')
+            return Promise.resolve(Response.json(managedCatalog));
+          if (String(input) === '/plugins')
+            return Promise.resolve(
+              Response.json({ plugins: [], generation: managedCatalog.generation }),
+            );
+        }
+        return fetchMock(input, init);
+      });
+      vi.stubGlobal('fetch', routes);
+      const open = (): void => {
+        fireEvent.click(screen.getByRole('button', { name: '添加面板' }));
+        fireEvent.click(screen.getByRole('menuitem', { name: '插件' }));
+      };
+      await renderApp();
+      if (!restored) open();
+      await screen.findByText(managedPluginId, { selector: '.plugin-name' });
+      const input = screen.getByRole<HTMLInputElement>('textbox', { name: '插件来源目录' });
+      fireEvent.change(input, { target: { value: '/local/source' } });
+      fireEvent.click(screen.getByRole('button', { name: '关闭插件' }));
+      expect(screen.queryByRole('region', { name: '受管插件' })).toBeNull();
+      open();
+      await screen.findByText(managedPluginId, { selector: '.plugin-name' });
+      expect(screen.getByRole<HTMLInputElement>('textbox', { name: '插件来源目录' }).value).toBe(
+        '',
+      );
+      expect(
+        routes.mock.calls
+          .filter(([input]) => String(input).startsWith('/plugins'))
+          .map(([input, init]) => [String(input), init?.method]),
+      ).toEqual(
+        Array.from({ length: restored ? 2 : 3 }, () => [
+          ['/plugins', 'GET'],
+          ['/plugins/managed', 'GET'],
+        ]).flat(),
+      );
+    },
+  );
 
   it('renders the workspace with Chinese interface labels by default', async () => {
     await renderApp();
@@ -1426,7 +1487,7 @@ describe('Studio Agent Chat', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        if (String(input).includes('/plugins')) {
+        if (String(input) === '/plugins' || String(input) === '/plugins/reload') {
           return new Response(
             JSON.stringify(
               init?.method === 'POST'

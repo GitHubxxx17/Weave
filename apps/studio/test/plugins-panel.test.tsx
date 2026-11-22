@@ -10,6 +10,7 @@ import {
   type PluginCatalogStore,
 } from '../src/features/plugins/plugin-catalog-store.js';
 import type { PluginCatalog, PluginListItem } from '../src/features/plugins/plugin-types.js';
+import { disabledManagedCatalog } from './support/disabled-managed-catalog.js';
 import {
   PluginsPanel,
   groupByOrigin,
@@ -46,8 +47,7 @@ function plugin(over: Partial<PluginListItem> = {}): PluginListItem {
 /** Answers each request with the next response; the last one repeats. */
 function stubPlugins(...responses: Array<readonly PluginListItem[] | number>) {
   const queue = [...responses];
-  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-    if (String(input) === '/mcp') return disabledMcp();
+  const fetchMock = vi.fn<typeof fetch>(async () => {
     const next = queue.length > 1 ? queue.shift() : queue[0];
     if (typeof next === 'number') {
       return new Response('{}', { status: next });
@@ -57,7 +57,7 @@ function stubPlugins(...responses: Array<readonly PluginListItem[] | number>) {
       headers: { 'content-type': 'application/json' },
     });
   });
-  vi.stubGlobal('fetch', fetchMock);
+  installLegacyPluginFetch(fetchMock);
   return fetchMock;
 }
 
@@ -131,17 +131,25 @@ function disabledMcp(): Response {
   );
 }
 
+function installLegacyPluginFetch(fetchMock: typeof fetch): void {
+  vi.stubGlobal(
+    'fetch',
+    (input: RequestInfo | URL, init?: RequestInit) =>
+      disabledManagedCatalog(input, init) ??
+      (String(input) === '/mcp' && init?.method === 'GET' ? disabledMcp() : fetchMock(input, init)),
+  );
+}
+
 function stubCatalog(...responses: unknown[]) {
   const queue = [...responses];
-  const fetchMock = vi.fn(async (input: RequestInfo | URL) =>
-    String(input) === '/mcp'
-      ? disabledMcp()
-      : new Response(JSON.stringify(queue.length > 1 ? queue.shift() : queue[0]), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        }),
+  const fetchMock = vi.fn<typeof fetch>(
+    async () =>
+      new Response(JSON.stringify(queue.length > 1 ? queue.shift() : queue[0]), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
   );
-  vi.stubGlobal('fetch', fetchMock);
+  installLegacyPluginFetch(fetchMock);
   return fetchMock;
 }
 
@@ -294,13 +302,12 @@ describe('PluginsPanel', () => {
 
     expect(await screen.findByText('Server Echo')).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
-    expect(fetchMock.mock.calls.filter(([path]) => String(path) !== '/mcp')).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('does not update after it is unmounted mid-request', async () => {
     let resolve: (response: Response) => void = () => undefined;
-    vi.stubGlobal(
-      'fetch',
+    installLegacyPluginFetch(
       vi.fn(
         () =>
           new Promise<Response>((done) => {
@@ -375,10 +382,8 @@ describe('local plugin management panel', () => {
     await store.reload();
     fireEvent.click(screen.getByRole('button', { name: '信任并启用' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    const [, request] = fetchMock.mock.calls.filter(
-      ([path]) => String(path) !== '/mcp',
-    )[2]! as unknown as [string, RequestInit];
-    expect(JSON.parse(String(request.body))).toEqual({ digest });
+    const [, request] = fetchMock.mock.calls[2]!;
+    expect(JSON.parse(String(request?.body))).toEqual({ digest });
   });
 
   it('keeps cached rows visible and blocks all writes during a shared reload', async () => {
@@ -516,10 +521,7 @@ describe('local plugin management panel', () => {
     fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.click(screen.getByRole('button', { name: '确认撤销信任' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    const requests = fetchMock.mock.calls.filter(
-      ([path]) => String(path) !== '/mcp',
-    ) as unknown as [string, RequestInit][];
-    expect(requests.map(([url, init]) => [url, init.method])).toEqual([
+    expect(fetchMock.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
       ['/plugins', 'GET'],
       ['/plugins/local-echo/enable', 'POST'],
       ['/plugins/local-echo/disable', 'POST'],
@@ -530,10 +532,8 @@ describe('local plugin management panel', () => {
   it('retains cached rows and shows the write failure after server reconciliation', async () => {
     const original = catalog([localPlugin('loaded')]);
     let writes = 0;
-    vi.stubGlobal(
-      'fetch',
+    installLegacyPluginFetch(
       vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-        if (String(_input) === '/mcp') return disabledMcp();
         if (init?.method === 'POST') {
           writes += 1;
           return new Response(
@@ -619,7 +619,7 @@ describe('local plugin management panel', () => {
     first.unmount();
     renderPluginPanel(false, store);
     await screen.findByText('local-echo', { selector: '.plugin-name' });
-    expect(fetchMock.mock.calls.filter(([path]) => String(path) !== '/mcp')).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 });

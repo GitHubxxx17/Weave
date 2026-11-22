@@ -179,6 +179,8 @@ describe('McpConfigDialog', () => {
     fireEvent.keyDown(window, { key: 'Tab' });
     expect(document.activeElement).toBe(screen.getByRole('button', { name: '保存配置' }));
     fireEvent.keyDown(window, { key: 'Tab' });
+    expect(document.activeElement).toBe(screen.getByRole('region', { name: '审查内容' }));
+    fireEvent.keyDown(window, { key: 'Tab' });
     expect(document.activeElement).toBe(screen.getByLabelText('服务 ID'));
     fireEvent.click(screen.getByRole('button', { name: '添加环境引用' }));
     expect(document.activeElement).toBe(screen.getByLabelText('目标变量 2'));

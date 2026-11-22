@@ -8,6 +8,15 @@ import { PanelContainer } from '../src/features/panel/panel-container.js';
 import { PluginCatalogProvider } from '../src/features/plugins/plugin-catalog-context.js';
 import { createPluginCatalogStore } from '../src/features/plugins/plugin-catalog-store.js';
 import type { PanelContext } from '../src/features/panel/panel-data.js';
+import { disabledManagedCatalog } from './support/disabled-managed-catalog.js';
+
+function installFetchWithDisabledManaged(fetchMock: typeof fetch): void {
+  vi.stubGlobal(
+    'fetch',
+    (input: RequestInfo | URL, init?: RequestInit) =>
+      disabledManagedCatalog(input, init) ?? fetchMock(input, init),
+  );
+}
 
 afterEach(() => {
   cleanup();
@@ -15,8 +24,7 @@ afterEach(() => {
 });
 beforeEach(() => {
   localStorage.clear();
-  vi.stubGlobal(
-    'fetch',
+  installFetchWithDisabledManaged(
     vi.fn(async (input: RequestInfo | URL) =>
       String(input) === '/mcp'
         ? disabledMcp()
@@ -184,8 +192,7 @@ describe('plugin activation boundary', () => {
       JSON.stringify({ tabs: [{ id: 'plugins', kind: 'plugins' }], active: 'plugins', pinned: [] }),
     );
     const methods: string[] = [];
-    vi.stubGlobal(
-      'fetch',
+    installFetchWithDisabledManaged(
       vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
         if (String(_input) === '/mcp') return disabledMcp();
         const method = init?.method ?? 'GET';
@@ -256,8 +263,7 @@ describe('plugin activation boundary', () => {
         },
       },
     ];
-    vi.stubGlobal(
-      'fetch',
+    installFetchWithDisabledManaged(
       vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
         String(_input) === '/mcp'
           ? disabledMcp()
@@ -281,8 +287,7 @@ describe('plugin activation boundary', () => {
 
   it('keeps old-server explicit activation and refresh on GET', async () => {
     const methods: string[] = [];
-    vi.stubGlobal(
-      'fetch',
+    installFetchWithDisabledManaged(
       vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
         if (String(_input) === '/mcp') return disabledMcp();
         methods.push(init?.method ?? 'GET');

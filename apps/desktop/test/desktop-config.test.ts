@@ -28,6 +28,29 @@ describe('createDesktopConfig', () => {
     expect(config.studioOrigin).toBe('http://127.0.0.1:5173');
   });
 
+  it('allows first binding under the Electron user data directory by default', () => {
+    const config = createDesktopConfig({
+      userDataDirectory: '/tmp/weave-user-data',
+      environment: {},
+    });
+
+    expect(config.pluginsDirectory).toBe('/tmp/weave-user-data/plugins');
+    expect(config.allowInitialManagedPluginBinding).toBe(true);
+  });
+
+  it.each(['/tmp/custom-plugins', './custom/../plugins', ''])(
+    'preserves the directory override %j and disables first binding',
+    (override) => {
+      const config = createDesktopConfig({
+        userDataDirectory: '/tmp/weave-user-data',
+        environment: { WEAVE_PLUGINS_DIR: override },
+      });
+
+      expect(config.pluginsDirectory).toBe(override);
+      expect(config.allowInitialManagedPluginBinding).toBe(false);
+    },
+  );
+
   it('keeps the database file inside the resolved user data directory', () => {
     const config = createDesktopConfig({
       userDataDirectory: 'relative/weave-user-data',

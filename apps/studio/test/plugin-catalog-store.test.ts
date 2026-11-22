@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { PluginApiError } from '../src/features/plugins/plugin-api.js';
 import { createPluginCatalogStore } from '../src/features/plugins/plugin-catalog-store.js';
+import { disabledManagedCatalog } from './support/disabled-managed-catalog.js';
 
 const digest = 'a'.repeat(64);
 const row = {
@@ -49,20 +50,23 @@ function response(payload: unknown, status = 200): Response {
 function installFetch(responses: Array<Response | Promise<Response>>) {
   const fetchMock = vi.fn();
   for (const item of responses) fetchMock.mockImplementationOnce(() => item);
-  vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) =>
-    String(input).endsWith('/mcp')
-      ? Promise.resolve(
-          response(
-            {
-              error: {
-                code: 'mcp-management-disabled',
-                message: 'MCP not enabled in legacy fixture',
+  vi.stubGlobal(
+    'fetch',
+    (input: RequestInfo | URL, init?: RequestInit) =>
+      disabledManagedCatalog(input, init) ??
+      (String(input) === '/mcp'
+        ? Promise.resolve(
+            response(
+              {
+                error: {
+                  code: 'mcp-management-disabled',
+                  message: 'MCP not enabled in legacy fixture',
+                },
               },
-            },
-            404,
-          ),
-        )
-      : fetchMock(input, init),
+              404,
+            ),
+          )
+        : fetchMock(input, init)),
   );
   return fetchMock;
 }
