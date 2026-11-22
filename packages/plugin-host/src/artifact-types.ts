@@ -1,3 +1,8 @@
+import path from 'node:path';
+
+import { pluginManifestSchema, type PluginManifest } from '@weave/plugin';
+import { z } from 'zod';
+
 import type { PluginDescriptor } from './descriptor.js';
 
 export interface PluginArtifact {
@@ -18,9 +23,38 @@ export interface PluginArtifactStoreOptions {
   readonly reservedIds?: readonly string[] | undefined;
 }
 
-export interface StagePluginArtifactOptions {
+export interface PluginArtifactSourceIdentity {
+  /** The normalized directory inspected for this review. */
+  readonly sourceDirectory: string;
+  readonly digest: string;
+  readonly manifest: PluginManifest;
+  readonly files: number;
+  readonly bytes: number;
+}
+
+export const artifactDirectorySchema = z
+  .string()
+  .refine((directory) => path.isAbsolute(directory) && !directory.includes('\0'));
+export const artifactDigestSchema = z.string().regex(/^[0-9a-f]{64}$/);
+export const pluginArtifactSourceIdentitySchema: z.ZodType<PluginArtifactSourceIdentity> =
+  z.strictObject({
+    sourceDirectory: artifactDirectorySchema,
+    digest: artifactDigestSchema,
+    manifest: pluginManifestSchema.refine(
+      (manifest) => manifest.contributes !== undefined && manifest.permissions !== undefined,
+      { message: 'Plugin artifacts require contributes and permissions declarations' },
+    ),
+    files: z.number().int().positive(),
+    bytes: z.number().int().nonnegative(),
+  });
+
+export interface PreviewPluginArtifactOptions {
   readonly sourceDirectory: string;
   readonly signal?: AbortSignal | undefined;
+}
+
+export interface StagePluginArtifactOptions extends PreviewPluginArtifactOptions {
+  readonly expectedSource?: PluginArtifactSourceIdentity | undefined;
 }
 
 export interface ReadPluginArtifactOptions {
@@ -29,6 +63,7 @@ export interface ReadPluginArtifactOptions {
 
 /** One instance serializes operations. The caller owns exclusive use of the directory. */
 export interface PluginArtifactStore {
+  preview(options: PreviewPluginArtifactOptions): Promise<PluginArtifactSourceIdentity>;
   stage(options: StagePluginArtifactOptions): Promise<PluginArtifact>;
   read(digest: string, options?: ReadPluginArtifactOptions): Promise<PluginArtifact>;
 }

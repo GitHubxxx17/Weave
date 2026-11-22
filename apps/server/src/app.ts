@@ -50,6 +50,12 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
   const app = new Hono();
   const studioOrigin = options?.studioOrigin;
 
+  // Hono's trailing wildcard matches the collection as well as descendants.
+  app.use('/plugins/managed/*', async (context, next) => {
+    context.header('Cache-Control', 'no-store');
+    await next();
+  });
+
   if (studioOrigin !== undefined) {
     app.use(
       '*',

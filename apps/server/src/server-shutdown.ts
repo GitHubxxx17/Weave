@@ -1,11 +1,13 @@
 import type { ServerType } from '@hono/node-server';
 import type { ExtensionCoordinator } from './extension-coordinator.js';
+import type { ManagedPluginInstaller } from './managed-plugin-installer.js';
 import type { OwnedPluginArtifactStore } from './owned-plugin-artifact-store.js';
 import type { PluginAuthorityDatabase } from './plugin-authority-types.js';
 
 export interface ServerShutdownResources {
   readonly server?: ServerType | undefined;
   readonly coordinator?: ExtensionCoordinator | undefined;
+  readonly installer?: Pick<ManagedPluginInstaller, 'closeSync'> | undefined;
   readonly owned?: Pick<OwnedPluginArtifactStore, 'quiesce' | 'close'> | undefined;
   readonly authority?: Pick<PluginAuthorityDatabase, 'close'> | undefined;
 }
@@ -99,7 +101,8 @@ export function createServerShutdown(options: ServerShutdownOptions): ServerShut
 
   async function run(retryRelease: boolean): Promise<readonly unknown[]> {
     resources ??= options.resources();
-    const { server, coordinator, owned, authority } = resources;
+    const { server, coordinator, installer, owned, authority } = resources;
+    installer?.closeSync();
     // Start HTTP close before cancellation. Its completion can depend on Agent SSE.
     if (server !== undefined) httpClose ??= settle(() => closeServer(server));
     if (owned !== undefined && !consumersDrained) {

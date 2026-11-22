@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { constants, type BigIntStats } from 'node:fs';
+import { constants, type BigIntStats, type Dirent } from 'node:fs';
 import fs, { type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -28,6 +28,11 @@ interface PayloadEntry {
 export interface CheckedPayload extends DirectoryDigest {
   readonly descriptorText: string | undefined;
   readonly paths: ReadonlySet<string>;
+}
+
+interface CheckPayloadOptions {
+  readonly destination?: string;
+  readonly reviewed?: boolean;
 }
 
 function tooLarge(bound: string): PluginArtifactError {
@@ -70,6 +75,7 @@ async function assertUnchanged(file: PayloadEntry): Promise<void> {
 async function listPayload(
   directory: string,
   signal: AbortSignal | undefined,
+  reviewed: boolean,
 ): Promise<{
   readonly files: PayloadEntry[];
   readonly directories: PayloadEntry[];
@@ -82,9 +88,9 @@ async function listPayload(
   const walk = async (parent: PayloadEntry, depth: number): Promise<void> => {
     signal?.throwIfAborted();
     await assertUnchanged(parent);
-    for await (const entry of await fs.opendir(parent.absolutePath)) {
+    const visit = async (entry: Dirent): Promise<void> => {
       signal?.throwIfAborted();
-      if (ignoredNames.has(entry.name)) continue;
+      if (ignoredNames.has(entry.name)) return;
       entries += 1;
       if (entries > maxEntries) throw tooLarge(`${maxEntries} filesystem entries`);
       const relativePath = parent.relativePath
@@ -118,6 +124,22 @@ async function listPayload(
           'Plugin payloads may contain only regular files and real directories',
         );
       }
+    };
+    const handle = await fs.opendir(parent.absolutePath);
+    if (reviewed) {
+      // The native iterator closes implicitly, hiding which operation failed.
+      await usingPayloadHandle(
+        handle,
+        async (dir) => {
+          for (let entry = await dir.read(); entry !== null; entry = await dir.read()) {
+            await visit(entry);
+          }
+        },
+        reviewed,
+        'directory',
+      );
+    } else {
+      for await (const entry of handle) await visit(entry);
     }
     await assertUnchanged(parent);
   };
@@ -135,9 +157,11 @@ async function listPayload(
   return { files, directories: [root, ...directories] };
 }
 
-async function usingFile<T>(
-  handle: FileHandle,
-  use: (handle: FileHandle) => Promise<T>,
+async function usingPayloadHandle<H extends { close(): Promise<void> }, T>(
+  handle: H,
+  use: (handle: H) => Promise<T>,
+  reviewed: boolean,
+  kind: 'file' | 'directory' = 'file',
 ): Promise<T> {
   let result: T;
   try {
@@ -146,21 +170,36 @@ async function usingFile<T>(
     try {
       await handle.close();
     } catch (cleanup: unknown) {
-      throw new PluginArtifactError('plugin-artifact-io', 'Closing a plugin payload file failed', {
-        cause: new AggregateError([error, cleanup]),
-      });
+      throw new PluginArtifactError(
+        'plugin-artifact-io',
+        `Closing a plugin payload ${kind} failed`,
+        {
+          cause: new AggregateError([error, cleanup]),
+        },
+      );
     }
     throw error;
   }
-  await handle.close();
+  try {
+    await handle.close();
+  } catch (error: unknown) {
+    if (!reviewed) throw error;
+    throw new PluginArtifactError('plugin-artifact-io', `Closing a plugin payload ${kind} failed`, {
+      cause: error,
+    });
+  }
   return result;
 }
 
-async function openSource(entry: PayloadEntry): Promise<FileHandle> {
+async function openSource(
+  entry: PayloadEntry,
+  signal: AbortSignal | undefined,
+): Promise<FileHandle> {
   await assertUnchanged(entry);
   try {
     return await fs.open(entry.absolutePath, readFlags);
   } catch (error: unknown) {
+    if (signal?.aborted && Object.is(error, signal.reason)) throw error;
     if (hasCode(error, 'ELOOP', 'ENOENT', 'ENOTDIR')) throw sourceChanged(error);
     throw error;
   }
@@ -184,10 +223,29 @@ async function writeChunk(output: FileHandle, buffer: Buffer, size: number): Pro
 export async function checkPayload(
   directory: string,
   signal: AbortSignal | undefined,
-  destination?: string,
+  { destination, reviewed = false }: CheckPayloadOptions = {},
 ): Promise<CheckedPayload> {
+  // A failed destination operation can have the same errno as source disappearance.
+  async function observeSource<T>(observe: () => Promise<T>): Promise<T> {
+    try {
+      return await observe();
+    } catch (error: unknown) {
+      if (
+        reviewed &&
+        destination !== undefined &&
+        !(signal?.aborted && Object.is(error, signal.reason)) &&
+        hasCode(error, 'ENOENT', 'ENOTDIR', 'ELOOP')
+      ) {
+        throw sourceChanged(error);
+      }
+      throw error;
+    }
+  }
+
   signal?.throwIfAborted();
-  const { files, directories } = await listPayload(directory, signal);
+  const { files, directories } = await observeSource(() =>
+    listPayload(directory, signal, reviewed),
+  );
   if (destination !== undefined) {
     for (const entry of directories.slice(1)) {
       signal?.throwIfAborted();
@@ -201,50 +259,57 @@ export async function checkPayload(
   let descriptorText: string | undefined;
   for (const entry of files) {
     signal?.throwIfAborted();
-    const measured = await usingFile(await openSource(entry), async (input) => {
-      if (!sameFile(entry.stat, await input.stat({ bigint: true }))) throw sourceChanged();
-      const hash = createHash('sha256');
-      const descriptor: Buffer[] = [];
-      const stream = async (output?: FileHandle): Promise<number> => {
-        let size = 0;
-        const expectedSize = Number(entry.stat.size);
-        while (true) {
-          signal?.throwIfAborted();
-          // Read at most one extra byte to detect growth without copying beyond the bound.
-          const length = Math.min(buffer.length, expectedSize - size + 1);
-          const { bytesRead } = await input.read(buffer, 0, length, null);
-          if (bytesRead === 0) break;
-          size += bytesRead;
-          if (size > expectedSize) throw sourceChanged();
-          const chunk = buffer.subarray(0, bytesRead);
-          hash.update(chunk);
-          if (entry.relativePath === descriptorFileName) descriptor.push(Buffer.from(chunk));
-          if (output !== undefined) await writeChunk(output, buffer, bytesRead);
+    const handle = await observeSource(() => openSource(entry, signal));
+    const measured = await usingPayloadHandle(
+      handle,
+      async (input) => {
+        const stat = () => observeSource(() => input.stat({ bigint: true }));
+        if (!sameFile(entry.stat, await stat())) throw sourceChanged();
+        const hash = createHash('sha256');
+        const descriptor: Buffer[] = [];
+        const stream = async (output?: FileHandle): Promise<number> => {
+          let size = 0;
+          const expectedSize = Number(entry.stat.size);
+          while (true) {
+            signal?.throwIfAborted();
+            // Read at most one extra byte to detect growth without copying beyond the bound.
+            const length = Math.min(buffer.length, expectedSize - size + 1);
+            const { bytesRead } = await observeSource(() => input.read(buffer, 0, length, null));
+            if (bytesRead === 0) break;
+            size += bytesRead;
+            if (size > expectedSize) throw sourceChanged();
+            const chunk = buffer.subarray(0, bytesRead);
+            hash.update(chunk);
+            if (entry.relativePath === descriptorFileName) descriptor.push(Buffer.from(chunk));
+            if (output !== undefined) await writeChunk(output, buffer, bytesRead);
+          }
+          if (size !== expectedSize || !sameFile(entry.stat, await stat())) {
+            throw sourceChanged();
+          }
+          await observeSource(() => assertUnchanged(entry));
+          return size;
+        };
+        const size =
+          destination === undefined
+            ? await stream()
+            : await usingPayloadHandle(
+                await fs.open(path.join(destination, entry.relativePath), 'wx', 0o600),
+                stream,
+                reviewed,
+              );
+        if (entry.relativePath === descriptorFileName) {
+          descriptorText = Buffer.concat(descriptor).toString('utf8');
         }
-        if (size !== expectedSize || !sameFile(entry.stat, await input.stat({ bigint: true }))) {
-          throw sourceChanged();
-        }
-        await assertUnchanged(entry);
-        return size;
-      };
-      const size =
-        destination === undefined
-          ? await stream()
-          : await usingFile(
-              await fs.open(path.join(destination, entry.relativePath), 'wx', 0o600),
-              stream,
-            );
-      if (entry.relativePath === descriptorFileName) {
-        descriptorText = Buffer.concat(descriptor).toString('utf8');
-      }
-      return { size, hash: hash.digest('hex') };
-    });
+        return { size, hash: hash.digest('hex') };
+      },
+      reviewed,
+    );
     bytes += measured.size;
     appendDigestFile(outer, entry.relativePath, measured.size, measured.hash);
   }
   for (const entry of directories) {
     signal?.throwIfAborted();
-    await assertUnchanged(entry);
+    await observeSource(() => assertUnchanged(entry));
   }
   return {
     digest: outer.digest('hex'),

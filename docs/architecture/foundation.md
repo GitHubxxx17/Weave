@@ -1,5 +1,24 @@
 # Weave Foundation Architecture
 
+Stage 6.2d adds a loopback HTTP installer for already bundled local ESM
+directories when Server startup owns the registered store. The installer
+uses bounded, transient previews and publishes reviewed bytes before
+recording a candidate. Import grants no trust or selection and preserves a
+healthy Generation. Reviewed activation and rollback bind exact persisted
+candidate identities. Managed JSON projects durable decisions, actual
+members captured in the same ticket, and a cached catalog.
+
+Real loopback tests with SQLite and filesystem readback verify namespace
+ordering, pinned payloads, isolated setup and terminal publication failures,
+and owned shutdown and release retry. A request disconnected before commit
+can leave a reusable artifact without a durable decision. Application
+continues after a postcommit disconnect, and replay after restart returns
+the saved decision with application status unknown. The cached catalog
+remains available after observed store ownership loss while Server is
+reachable. Studio and Desktop verification belongs to Stage 6.3. See
+the [installer design](../superpowers/specs/2026-11-22-managed-plugin-installer-api-design.md)
+and [implementation plan](../superpowers/plans/2026-11-22-managed-plugin-installer-api.md).
+
 Stage 6.2c.2 integrates managed plugin authority and artifact ownership into
 Server startup. With local ESM enabled, a registered store automatically resumes
 at its bound root before source preparation or HTTP listen. An unregistered
@@ -32,9 +51,8 @@ restart with binding options omitted. The existing `/plugins` and `/commands`
 GETs project cached state. Published managed members appear as path-free
 `kernel` entries, manual rows keep their discovery paths, and public failures
 use safe messages while retaining raw causes privately. Managed desired and
-retired state stay private. Installer HTTP and managed catalog DTOs, Studio
-installation, GitHub acquisition and the discovery catalog belong to later
-stages. See the
+retired state stay private in those existing endpoints. GitHub acquisition
+and the discovery catalog belong to later stages. See the
 [managed source design](../superpowers/specs/2026-11-21-managed-plugin-source-design.md)
 and [Server plan](../superpowers/plans/2026-11-21-managed-plugin-source-server.md).
 

@@ -104,6 +104,15 @@ One instance serializes stage/read operations. Callers must use one instance per
 store and one live owning process. The API makes no cross-process locking claim.
 The Stage 6.2 Server ownership guard must be implemented before any HTTP exposure.
 
+Stage 6.2d extends this fixture-independent filesystem contract with read-only
+`preview(options)` and the optional `expectedSource` on `stage(options)`.
+They share the existing queue and artifact validation. The detached preview
+identity binds the normalized source directory, digest, normalized manifest,
+file count and byte count. A reviewed stage rechecks that identity before
+accepting exact reuse or renaming a staged object. The
+[installer design](2026-11-22-managed-plugin-installer-api-design.md#read-only-review-and-exact-staging)
+specifies both contracts and error boundaries.
+
 ### 4.1 Limits
 
 - 1,000 regular payload files and 20 MiB of actual file bytes per artifact.
@@ -208,11 +217,11 @@ ID validation. A manual and managed plugin with the same ID conflict; neither is
 silently adopted. Missing or corrupt selected content fails closed, without
 searching disk for a replacement. No automatic migration of manual directories.
 
-Selection mutation runs in the sole coordinator queue and updates the local source
-snapshot before assembly: `coordinator.mutate` intentionally skips refreshing its
-mutated source. It must not call the queued public facade recursively. Authority
-notification occurs after durable commit before another await. Publication uses
-the existing complete ESM/MCP candidate recheck and synchronous commit.
+Selection mutation runs in the sole coordinator queue through `mutateManaged`.
+Authority adoption occurs synchronously after durable commit. The ordered
+rebuild includes the mutated local source and uses the complete ESM/MCP
+candidate recheck and synchronous publication. Import uses the committed
+no-rebuild disposition.
 
 Installing a candidate leaves healthy selection and admission unchanged. Activation
 changes desired authority. A plugin load/setup failure stays isolated: a complete
@@ -224,13 +233,12 @@ accept new turns. Do not silently re-trust or select the prior version. Old pinn
 turns continue by default; explicit immediate removal cancels all current and
 retired turns using existing semantics.
 
-Guarded JSON POSTs for preview/import, activation and uninstall carry immutable
-review identities and expected sequences. Reads do not copy, discover or launch.
-The management response separately preserves durable installation outcome and
-actual Generation outcome. Request IDs are durably deduplicated before retry
-validation; a conflict invalidates review and never substitutes a new token.
-The exact route DTOs and store-ownership/recovery protocol are refined in the 6.2
-implementation design before code, rather than invented inside thin HTTP handlers.
+The [Stage 6.2d installer design](2026-11-22-managed-plugin-installer-api-design.md)
+defines guarded JSON preview, import and reviewed selection routes and the
+path-free cached catalog. Responses preserve each durable decision and its
+captured Generation outcome. Durable replay precedes token and artifact work.
+Legacy ID-targeted writes to sticky IDs use the fixed managed-review-required
+409, including after uninstall or when local ESM is disabled.
 
 ## 6. Stage 6.3 Studio
 
@@ -239,8 +247,8 @@ directory import, installed candidate/history rows, source/version/digest displa
 independent reviewed activation, rollback and uninstall. Installing an update must
 not imply activation. The interface displays durable decisions and actual loaded
 versions separately. Panel activation remains GET-only; closing a panel does not
-cancel a durable request. Every 409 invalidates the captured review and requires
-explicit review again. The detailed HTTP DTOs travel with the 6.2/6.3 plans.
+cancel a durable request. Each 409 follows the review and token lifecycle in
+the [installer API contract](2026-11-22-managed-plugin-installer-api-design.md#preview-tokens).
 
 ## 7. Later acquisition and limits
 

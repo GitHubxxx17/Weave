@@ -39,6 +39,13 @@ export class PluginTrustStoreError extends Error {
   }
 }
 
+export class ManagedReviewRequiredError extends PluginTrustStoreError {
+  constructor() {
+    super('plugin-trust-invalid', 'Managed plugin trust requires the combined managed API');
+    this.name = 'ManagedReviewRequiredError';
+  }
+}
+
 function matchesManifestIdentity(event: PluginTrustEvent): boolean {
   return event.kind !== 'trusted' || event.pluginId === event.manifest.id;
 }

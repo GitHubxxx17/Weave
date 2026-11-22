@@ -7,6 +7,7 @@ import {
   finalizeLocalPluginDiscovery,
   scanLocalPluginDeclarations,
   type DiscoveryResult,
+  type LocalPluginDeclarationScan,
   type ReadyLocalPlugin,
 } from './discovery.js';
 import { ExplicitLocalAuthorityError, PluginHostError } from './errors.js';
@@ -17,6 +18,7 @@ import {
   localPluginDigestSchema,
   localPluginIdSchema,
   localSourceCandidateIdentity,
+  manualNamespaceAllowsManaged,
 } from './explicit-local-selection.js';
 import { immutable } from './host-state.js';
 import { loadLocalPlugin, type LoadLocalPluginOptions } from './loader.js';
@@ -165,7 +167,7 @@ export function createLocalPluginSource(
     trust: [],
     stamp: { revision: 0, trustSequence: 0 },
   });
-  let declarations: DiscoveryResult | undefined;
+  let declarations: LocalPluginDeclarationScan | undefined;
   let explicit: Omit<ExplicitLocalSelectionInput, 'trustEvents'> = {
     stickyIds: [],
     selections: [],
@@ -312,7 +314,20 @@ export function createLocalPluginSource(
 
   async function scan(): Promise<LocalPluginSourceSnapshot> {
     ensureOpen();
-    const found = await scanLocalPluginDeclarations(discoveryOptions);
+    let found: LocalPluginDeclarationScan;
+    try {
+      found = await scanLocalPluginDeclarations(discoveryOptions);
+    } catch (error: unknown) {
+      if (declarations?.complete && !stopping.signal.aborted) {
+        declarations = { ...declarations, complete: false };
+        try {
+          update('discovery');
+        } catch {
+          // Preserve the scan error if authority notification also fails.
+        }
+      }
+      throw error;
+    }
     ensureOpen();
     declarations = found;
     update('discovery');
@@ -509,6 +524,14 @@ export function createLocalPluginSource(
               digest: candidate.digest,
               identity: key,
               origin: candidate.origin,
+              ...(managed
+                ? {
+                    managedIdentity: Object.freeze({
+                      digest: candidate.digest,
+                      activationSequence: candidate.activationSequence,
+                    }),
+                  }
+                : {}),
               plugin: lifecycle.plugin,
               normalize: lifecycle.normalize,
               dispose: lifecycle.dispose,
@@ -551,6 +574,7 @@ export function createLocalPluginSource(
 
   return {
     snapshot: () => snapshot,
+    mayReadManagedSync: (id) => manualNamespaceAllowsManaged(id, declarations, reservedIds),
     adoptExplicitSelectionSync,
     refresh,
     mutate,

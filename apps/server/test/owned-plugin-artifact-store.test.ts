@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { setImmediate } from 'node:timers/promises';
-import { createPluginArtifactStore, type PluginArtifact } from '@weave/plugin-host';
+import { createPluginArtifactStore, type StagePluginArtifactOptions } from '@weave/plugin-host';
 import { afterEach, expect, it, vi } from 'vitest';
 import {
   openOwnedPluginArtifactStore,
@@ -173,12 +173,17 @@ async function queueFixture(onOwnershipLost?: StoreOptions['onOwnershipLost']) {
   const fx = fixture();
   const host = await vi.importActual<typeof import('@weave/plugin-host')>('@weave/plugin-host');
   const signals = {
+    preview: [] as (AbortSignal | undefined)[],
     stage: [] as (AbortSignal | undefined)[],
     read: [] as (AbortSignal | undefined)[],
   };
   storeFactory.mockImplementation((options) => {
     const store = host.createPluginArtifactStore(options);
     return {
+      preview(input) {
+        signals.preview.push(input.signal);
+        return store.preview(input);
+      },
       stage(input) {
         signals.stage.push(input.signal);
         return store.stage(input);
@@ -199,14 +204,11 @@ async function queueFixture(onOwnershipLost?: StoreOptions['onOwnershipLost']) {
     void operation.catch(() => undefined);
     return operation;
   }
-  async function waitForGate(
-    gate: ReturnType<typeof filesystemGate>,
-    operation: Promise<PluginArtifact>,
-  ) {
+  async function waitForGate(gate: ReturnType<typeof filesystemGate>, operation: Promise<unknown>) {
     await Promise.race([
       gate.entered.promise,
       operation.then(() => {
-        throw new Error('Artifact read finished before its filesystem gate');
+        throw new Error('Artifact operation finished before its filesystem gate');
       }),
     ]);
   }
@@ -258,6 +260,7 @@ it('commits the root binding before taking the lifetime lock and registers main 
     'assertHeldSync',
     'binding',
     'close',
+    'preview',
     'quiesce',
     'read',
     'stage',
@@ -494,6 +497,109 @@ it('preserves caller abort and artifact errors while ownership stays healthy', a
   await expect(fx.store.read(fx.b.digest)).resolves.toEqual(fx.b);
   fx.store.assertHeldSync();
   expect(fx.observer).not.toHaveBeenCalled();
+});
+
+it('detects lost ownership before dispatching a preview', async () => {
+  const fx = await queueFixture();
+  const sourceDirectory = await pluginSource(fx.parent, 'draft');
+  await fx.authority.close();
+
+  const error = await fx.store.preview({ sourceDirectory }).catch((cause: unknown) => cause);
+  expect(error).toMatchObject(lost);
+  expect(errorTree(error)).toContainEqual(
+    expect.objectContaining({ code: 'plugin-authority-closed' }),
+  );
+  expect(fx.observer).toHaveBeenCalledExactlyOnceWith(error);
+  expect(fx.signals.preview).toEqual([]);
+});
+
+it('checks ownership after preview and preserves an independent failure from dispatched work', async () => {
+  const fx = await queueFixture();
+  const sourceDirectory = await pluginSource(fx.parent, 'draft');
+  const previewGate = filesystemGate(sourceDirectory);
+  const cause = Object.assign(new Error('preview read failed'), { code: 'EIO' });
+  const lstat = fs.lstat;
+  await fx.runWithGates([previewGate], async () => {
+    vi.spyOn(fs, 'lstat').mockImplementation((file, options) => {
+      if (file === join(sourceDirectory, 'index.mjs')) throw cause;
+      return lstat(file, options);
+    });
+    const preview = fx.track(fx.store.preview({ sourceDirectory }));
+    await fx.waitForGate(previewGate, preview);
+    await fx.authority.close();
+    expect(fx.signals.preview[0]?.aborted).toBe(false);
+    previewGate.release.resolve();
+
+    const error = await preview.catch((operation: unknown) => operation);
+    expect(error).toMatchObject(lost);
+    expect(errorTree(error)).toContain(cause);
+    expect(errorTree(error)).toContain(fx.observer.mock.calls[0]?.[0]);
+    expect(fx.observer).toHaveBeenCalledTimes(1);
+    await expect(fx.store.preview({ sourceDirectory })).rejects.toBe(
+      fx.observer.mock.calls[0]?.[0],
+    );
+  });
+});
+
+it('tracks an in-flight preview through quiescence and propagates caller cancellation', async () => {
+  const fx = await queueFixture();
+  const sourceDirectory = await pluginSource(fx.parent, 'draft');
+  const previewGate = filesystemGate(sourceDirectory);
+  const contender = fx.contender();
+  const caller = new AbortController();
+  const reason = new Error('preview cancelled');
+
+  await fx.runWithGates([previewGate], async () => {
+    const preview = fx.track(fx.store.preview({ sourceDirectory, signal: caller.signal }));
+    await fx.waitForGate(previewGate, preview);
+    let drained = false;
+    const drain = fx.track(
+      fx.store.quiesce().then(() => {
+        drained = true;
+      }),
+    );
+    const close = fx.track(fx.store.close());
+    await expect(fx.store.preview({ sourceDirectory })).rejects.toMatchObject(closed);
+    await expect(fx.open({ authority: contender })).rejects.toMatchObject(busy);
+    caller.abort(reason);
+    expect(fx.signals.preview).toHaveLength(1);
+    expect(fx.signals.preview[0]?.reason).toBe(reason);
+    expect(drained).toBe(false);
+    previewGate.release.resolve();
+
+    await expect(preview).rejects.toBe(reason);
+    await drain;
+    await close;
+    expect(fx.observer).not.toHaveBeenCalled();
+  });
+  expect(
+    (await fx.open({ authority: contender, initialBinding: 'require-bound' })).binding,
+  ).toEqual(fx.store.binding);
+});
+
+it('forwards reviewed evidence through the same owned artifact store', async () => {
+  const fx = await queueFixture();
+  const sourceDirectory = await pluginSource(fx.parent, 'draft');
+  const expectedSource = await fx.store.preview({ sourceDirectory });
+  const invalidEvidence: StagePluginArtifactOptions = {
+    sourceDirectory,
+    expectedSource: { ...expectedSource, files: 0 },
+  };
+  await expect(fx.store.stage(invalidEvidence)).rejects.toMatchObject({
+    code: 'plugin-artifact-invalid',
+  });
+  expect(fx.signals.stage).toHaveLength(2);
+  await fs.writeFile(join(sourceDirectory, 'index.mjs'), 'export default "changed";');
+
+  await expect(fx.store.stage({ sourceDirectory, expectedSource })).rejects.toMatchObject({
+    code: 'plugin-artifact-source-changed',
+  });
+  expect(fx.signals.stage).toHaveLength(3);
+  expect(storeFactory).toHaveBeenCalledTimes(1);
+  expect(await fs.readdir(join(fx.directory, 'artifacts'))).toHaveLength(2);
+  await expect(fx.store.read(expectedSource.digest)).rejects.toMatchObject({
+    code: 'plugin-artifact-not-found',
+  });
 });
 
 it('validates read and stage input before dispatch without changing artifact error codes', async () => {

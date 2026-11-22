@@ -2,12 +2,14 @@ export { ExplicitLocalAuthorityError, PluginHostError } from './errors.js';
 export type { PluginHostErrorCode, PluginHostErrorOptions } from './errors.js';
 
 export { createPluginArtifactStore } from './artifact-store.js';
-export { PluginArtifactError } from './artifact-types.js';
+export { PluginArtifactError, pluginArtifactSourceIdentitySchema } from './artifact-types.js';
 export type {
   PluginArtifact,
   PluginArtifactErrorCode,
+  PluginArtifactSourceIdentity,
   PluginArtifactStore,
   PluginArtifactStoreOptions,
+  PreviewPluginArtifactOptions,
   ReadPluginArtifactOptions,
   StagePluginArtifactOptions,
 } from './artifact-types.js';
@@ -18,13 +20,14 @@ export type { PluginDescriptor } from './descriptor.js';
 export { computeDirectoryDigest, defaultDigestLimits } from './digest.js';
 export type { DigestLimits, DigestOptions, DirectoryDigest } from './digest.js';
 
-export { discoverLocalPlugins } from './discovery.js';
+export { discoverLocalPlugins, inspectLocalPluginDeclarationClaims } from './discovery.js';
 export type {
   DiscoverOptions,
   DiscoveryResult,
   IncompatibleLocalPlugin,
   InvalidLocalPlugin,
   LocalPluginCandidate,
+  LocalPluginDeclarationClaims,
   LocalPluginIssue,
   ReadyLocalPlugin,
 } from './discovery.js';
@@ -87,6 +90,7 @@ export type {
   LocalSourceStamp,
   ManagedLocalCandidate,
   PreparedLocalPlugin,
+  ManagedPreparedIdentity,
   PreparedLocalPluginFailure,
   PreparedLocalPlugins,
 } from './local-source-types.js';

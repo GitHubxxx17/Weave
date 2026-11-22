@@ -1,3 +1,4 @@
+import { PluginError } from '@weave/plugin';
 import * as pluginHost from '@weave/plugin-host';
 import { describe, expect, it, vi } from 'vitest';
 import type {
@@ -5,7 +6,7 @@ import type {
   ManagedSelectionResult,
 } from '../src/managed-selection-manager.js';
 import { createSqlitePluginAuthorityDatabase } from '../src/plugin-authority-store.js';
-import type { ManagedRequest } from '../src/plugin-authority-types.js';
+import { PluginAuthorityError, type ManagedRequest } from '../src/plugin-authority-types.js';
 import { PluginStoreOwnershipError } from '../src/plugin-store-ownership-types.js';
 import { createRealManagedCompositionFixture } from './support/managed-plugin-composition-fixture.js';
 import { activateInput, decisionInput, importInput } from './support/plugin-authority-fixtures.js';
@@ -48,6 +49,11 @@ function decision(
   return selection(decisionInput(kind, requestId, f.authority.snapshotSync(), immediate).request);
 }
 
+function observation(host: ReturnType<Fixture['compose']>) {
+  const { generation, members } = host.coordinator.snapshot();
+  return { generation, members };
+}
+
 function gateCommandRead(f: Fixture) {
   const entered = Promise.withResolvers<AbortSignal>();
   const release = Promise.withResolvers<void>();
@@ -77,10 +83,8 @@ describe('queued managed selection', () => {
       const result = await apply(request);
       expect(result.kind).toBe('committed');
       if (result.kind !== 'committed') throw new Error('Expected a committed result');
-      expect(result.application).toEqual({
-        generation: host.coordinator.generationSnapshot(),
-        status: 'applied',
-      });
+      expect(result.application).toEqual({ status: 'applied' });
+      expect(result.observed).toEqual(observation(host));
       expect(result.savedAuthority).toEqual(f.authority.snapshotSync());
       expect(result.operation.decision.pluginAfter.selection).toMatchObject({
         digest: before.installations[0]!.candidates[0]!.digest,
@@ -96,10 +100,11 @@ describe('queued managed selection', () => {
       const reads = [f.assertHeldSync, f.readOwned, f.readMcp, f.readAuthoritySync, publish, abort];
       for (const spy of reads) spy.mockClear();
 
-      await expect(apply(request)).resolves.toEqual({
+      await expect(apply(request, AbortSignal.abort('caller left'))).resolves.toEqual({
         kind: 'replayed',
         operation: result.operation,
         currentAuthority,
+        observed: observation(host),
       });
       await expect(
         apply({ ...request, command: { ...request.command, expectedTrustSequence: 999 } }),
@@ -128,6 +133,7 @@ describe('queued managed selection', () => {
       const host = f.compose();
       const input = activate(f);
       const initial = host.coordinator.snapshot();
+      const cached = f.authority.snapshotSync();
       const adoption = vi.spyOn(host.localSource!, 'adoptExplicitSelectionSync');
       const publish = vi.spyOn(f.runtime.serverHost, 'commit');
       const abort = vi.spyOn(f.runtime.serverHost.controller()!, 'abortActiveRuns');
@@ -155,6 +161,7 @@ describe('queued managed selection', () => {
         kind: 'replayed',
         operation: external.operation,
         currentAuthority: secondConnection.snapshotSync(),
+        observed: { generation: initial.generation, members: initial.members },
       });
       expect(f.readOwned).toHaveBeenCalledOnce();
       expect(leaseCallsAtReplay).toEqual([2]);
@@ -162,6 +169,7 @@ describe('queued managed selection', () => {
       for (const spy of [f.readMcp, f.readAuthoritySync, adoption, publish, abort])
         expect(spy).not.toHaveBeenCalled();
       expect(host.coordinator.snapshot()).toEqual(initial);
+      expect(host.managed!.cachedAuthoritySync()).toEqual(cached);
     } finally {
       gate.release();
       await Promise.allSettled([pending]);
@@ -199,6 +207,239 @@ describe('queued managed selection', () => {
     }
   });
 
+  it.each([false, true])(
+    'cancels fresh command evidence before any write (reader rejects: %s)',
+    async (rejectRead) => {
+      const f = await createRealManagedCompositionFixture();
+      const entered = Promise.withResolvers<AbortSignal>();
+      const release = Promise.withResolvers<void>();
+      const caller = new AbortController();
+      const reason = Symbol('caller left');
+      let pending: Promise<unknown> | undefined;
+      try {
+        await f.seedManaged('notes', 'unselected', false);
+        const host = f.compose();
+        const request = selection(activate(f).request);
+        const before = f.authority.snapshotSync();
+        const commit = vi.spyOn(f.authority, 'commitSync');
+        f.readOwned.mockImplementationOnce(async (digest, options) => {
+          const artifact = await f.owned.read(digest, options);
+          const signal = options!.signal!;
+          entered.resolve(signal);
+          await release.promise;
+          if (rejectRead) signal.throwIfAborted();
+          return artifact;
+        });
+        pending = host.applyManagedSelection!(request, caller.signal).catch(
+          (cause: unknown) => cause,
+        );
+        const signal = await Promise.race([
+          entered.promise,
+          pending.then(() => {
+            throw new Error('Expected gated evidence');
+          }),
+        ]);
+        caller.abort(reason);
+        release.resolve();
+
+        expect(signal.aborted).toBe(true);
+        await expect(pending).resolves.toMatchObject({
+          code: 'plugin-installer-unavailable',
+          cause: reason,
+        });
+        expect(commit).not.toHaveBeenCalled();
+        expect(f.authority.snapshotSync()).toEqual(before);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([pending]);
+        await f.close();
+      }
+    },
+  );
+
+  it('completes adoption and publication when the client aborts inside the successful commit', async () => {
+    const f = await createRealManagedCompositionFixture();
+    const caller = new AbortController();
+    try {
+      await f.seedManaged('notes', 'selected', false);
+      const host = f.compose();
+      const request = selection(activate(f).request);
+      const commit = f.authority.commitSync;
+      vi.spyOn(f.authority, 'commitSync').mockImplementationOnce((input) => {
+        const saved = commit(input);
+        caller.abort(new Error('caller left'));
+        return saved;
+      });
+
+      const result = await host.applyManagedSelection!(request, caller.signal);
+      expect(caller.signal.aborted).toBe(true);
+      expect(result).toMatchObject({
+        kind: 'committed',
+        application: { status: 'applied' },
+        observed: { generation: { acceptingRuns: true }, members: [{ pluginId: 'notes' }] },
+      });
+      expect(host.managed!.cachedAuthoritySync()).toEqual(f.authority.snapshotSync());
+    } finally {
+      await f.close();
+    }
+  });
+
+  it('rejects stale heads, selection and manifest and missing exact enable trust before reading bytes', async () => {
+    const f = await createRealManagedCompositionFixture();
+    try {
+      await f.seedManaged('notes', 'selected');
+      const host = f.compose();
+      const request = selection(activate(f).request);
+      if (request.command.kind !== 'activate') throw new Error('Expected activation');
+      const staleCommands = [
+        { ...request.command, expectedInstallSequence: 0 },
+        { ...request.command, expectedTrustSequence: 0 },
+        { ...request.command, previousSelection: null },
+        { ...request.command, manifest: { ...request.command.manifest, name: 'Stale' } },
+      ];
+      for (const command of staleCommands) {
+        await expect(host.applyManagedSelection!({ ...request, command })).rejects.toMatchObject({
+          code: 'plugin-authority-conflict',
+        });
+      }
+      f.authority.commitSync(decisionInput('revoke', 'revoke-trust', f.authority.snapshotSync()));
+      await expect(host.applyManagedSelection!(decision(f, 'enable'))).rejects.toMatchObject({
+        code: 'plugin-authority-activation-required',
+      });
+      expect(f.readOwned).not.toHaveBeenCalled();
+    } finally {
+      await f.close();
+    }
+  });
+
+  it.each([
+    'identity',
+    'plugin-artifact-conflict',
+    'plugin-artifact-not-found',
+    'plugin-artifact-corrupt',
+    'plugin-artifact-io',
+  ] as const)(
+    'classifies command artifact read failure %s without reaching commit',
+    async (code) => {
+      const f = await createRealManagedCompositionFixture();
+      try {
+        const artifact = await f.seedManaged('notes', 'selected', false);
+        const host = f.compose();
+        const request = selection(activate(f).request);
+        const commit = vi.spyOn(f.authority, 'commitSync');
+        const cause =
+          code === 'identity' ? undefined : new pluginHost.PluginArtifactError(code, 'private');
+        if (cause === undefined)
+          f.readOwned.mockResolvedValueOnce({ ...artifact, bytes: artifact.bytes + 1 });
+        else f.readOwned.mockRejectedValueOnce(cause);
+        const failed = host.applyManagedSelection!(request);
+        if (code === 'plugin-artifact-io') await expect(failed).rejects.toBe(cause);
+        else await expect(failed).rejects.toMatchObject({ code: 'plugin-artifact-unavailable' });
+        expect(commit).not.toHaveBeenCalled();
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  it.each(['withdrawal', 'publication-and-cancellation'] as const)(
+    'blocks admission on a saved revoke with closed readback and preserves %s failures in order',
+    async (mode) => {
+      const f = await createRealManagedCompositionFixture();
+      try {
+        await f.seedManaged('notes', 'live');
+        const host = f.compose();
+        await host.coordinator.reload();
+        const request = decision(f, 'revoke', 'uncertain-revoke', true);
+        const before = f.authority.snapshotSync();
+        const primary = new Error('commit acknowledgement failed');
+        const proof = new PluginAuthorityError('plugin-authority-closed', 'proof unavailable');
+        const publication = new Error('private publication failure');
+        const blockFailure = new Error('private backstop failure');
+        const commit = f.authority.commitSync;
+        const block = host.coordinator.blockManagedAdoptionFailureSync;
+        const withdraw = host.localSource!.withdrawExplicitSelectionSync;
+        const commitSpy = vi.spyOn(f.authority, 'commitSync').mockImplementationOnce((input) => {
+          expect(commit(input).kind).toBe('committed');
+          vi.spyOn(f.authority, 'snapshotSync').mockImplementationOnce(() => {
+            throw proof;
+          });
+          throw primary;
+        });
+        vi.spyOn(host.coordinator, 'blockManagedAdoptionFailureSync').mockImplementationOnce(
+          (...args) => {
+            block(...args);
+            expect(host.coordinator.generationSnapshot().acceptingRuns).toBe(false);
+            throw blockFailure;
+          },
+        );
+        const withdrawal = vi.spyOn(host.localSource!, 'withdrawExplicitSelectionSync');
+        withdrawal.mockImplementationOnce((...args) => {
+          expect(host.coordinator.generationSnapshot().acceptingRuns).toBe(false);
+          const cancel = withdraw(...args);
+          if (mode === 'withdrawal') {
+            cancel();
+            throw undefined;
+          }
+          return () => {
+            cancel();
+            throw undefined;
+          };
+        });
+        if (mode === 'publication-and-cancellation') {
+          vi.spyOn(host.coordinator, 'observeAuthorityBatchSync').mockImplementationOnce(() => {
+            expect(host.coordinator.generationSnapshot().acceptingRuns).toBe(false);
+            throw publication;
+          });
+        }
+        const revoke = vi.spyOn(host.coordinator, 'retryImmediateRevocation');
+        const cause = await host.applyManagedSelection!(request).catch((error: unknown) => error);
+        expect(cause).toBeInstanceOf(AggregateError);
+        expect(cause).toHaveProperty('name', 'ManagedCommitFailure');
+        const aggregate = cause as AggregateError;
+        expect(aggregate.cause).toBe(primary);
+        expect(aggregate.errors).toStrictEqual([
+          primary,
+          proof,
+          blockFailure,
+          ...(mode === 'publication-and-cancellation' ? [publication] : []),
+          undefined,
+        ]);
+        expect(commitSpy).toHaveBeenCalledOnce();
+        expect(withdrawal).toHaveBeenCalledOnce();
+        expect(revoke).not.toHaveBeenCalled();
+        expect(f.authority.snapshotSync().heads.trustSequence).toBe(before.heads.trustSequence + 1);
+        expect(host.managed!.cachedAuthoritySync()).toEqual(before);
+        expect(host.coordinator.generationSnapshot().acceptingRuns).toBe(false);
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  it('preserves admission and the exact busy exception after matching healthy proof readback', async () => {
+    const f = await createRealManagedCompositionFixture();
+    try {
+      await f.seedManaged('notes', 'live');
+      const host = f.compose();
+      const before = await host.coordinator.reload();
+      const request = decision(f, 'revoke');
+      const busy = new PluginAuthorityError('plugin-authority-busy', 'rolled back');
+      const commit = vi.spyOn(f.authority, 'commitSync').mockImplementationOnce(() => {
+        throw busy;
+      });
+      const proof = vi.spyOn(f.authority, 'snapshotSync');
+      const withdraw = vi.spyOn(host.localSource!, 'withdrawExplicitSelectionSync');
+      await expect(host.applyManagedSelection!(request)).rejects.toBe(busy);
+      expect(commit).toHaveBeenCalledOnce();
+      expect(proof).toHaveBeenCalledTimes(2);
+      expect(withdraw).not.toHaveBeenCalled();
+      expect(observation(host)).toEqual({ generation: before.generation, members: before.members });
+    } finally {
+      await f.close();
+    }
+  });
+
   it('replays a recorded operation after loss while rejecting fresh work and conflicts', async () => {
     const f = await createRealManagedCompositionFixture();
     try {
@@ -223,6 +464,7 @@ describe('queued managed selection', () => {
         kind: 'replayed',
         operation: saved.operation,
         currentAuthority,
+        observed: observation(host),
       });
       await expect(
         host.applyManagedSelection!({
@@ -267,7 +509,15 @@ describe('queued managed selection', () => {
       expect(chosen.digest).toBe(original.digest);
       expect(chosen.activationSequence).toBeGreaterThan(original.activationSequence);
       expect(result.application.status).toBe('applied');
-      expect(result.application.generation.id).toBeGreaterThan(old.generation.id);
+      expect(result.observed.generation.id).toBeGreaterThan(old.generation.id);
+      expect(result.observed.members).toMatchObject([
+        {
+          managedIdentity: {
+            digest: original.digest,
+            activationSequence: chosen.activationSequence,
+          },
+        },
+      ]);
       expect(host.coordinator.snapshot().members.map(({ identity }) => identity)).toEqual([
         JSON.stringify(['notes', original.digest, 'managed', chosen.activationSequence]),
       ]);
@@ -328,11 +578,12 @@ describe('queued managed selection', () => {
       if (result.kind !== 'committed')
         throw new Error('Expected durable decision despite publication failure');
       expect(result.application).toEqual({
-        generation: initial,
         status: 'failed',
+        failureKind: 'publication',
         cause: undefined,
       });
       expect(Object.hasOwn(result.application, 'cause')).toBe(true);
+      expect(result.observed.generation).toEqual(initial);
       expect(f.authority.lookupSync(request).kind).toBe('replayed');
       const adoption = vi.spyOn(host.localSource!, 'adoptExplicitSelectionSync');
       const abort = vi.spyOn(f.runtime.serverHost.controller()!, 'abortActiveRuns');
@@ -342,6 +593,7 @@ describe('queued managed selection', () => {
         kind: 'replayed',
         operation: result.operation,
         currentAuthority: result.savedAuthority,
+        observed: observation(host),
       });
       for (const spy of [
         f.assertHeldSync,
@@ -357,6 +609,47 @@ describe('queued managed selection', () => {
       await f.close();
     }
   });
+
+  it.each(['notes', 'other'] as const)(
+    'classifies a recovered commit failure for %s only when it is the selected target',
+    async (failureId) => {
+      const f = await createRealManagedCompositionFixture();
+      try {
+        await f.seedManaged('notes', 'target', false);
+        await f.seedManaged('other', 'other');
+        const host = f.compose();
+        const failure = new PluginError(
+          'plugin-registration-conflict',
+          'Private provider conflict',
+          {
+            pluginId: failureId,
+          },
+        );
+        const commit = vi.spyOn(f.runtime.serverHost, 'commit').mockImplementationOnce(() => {
+          throw failure;
+        });
+        const result = await host.applyManagedSelection!(selection(activate(f).request));
+        if (result.kind !== 'committed') throw new Error('Expected a committed result');
+        expect(commit).toHaveBeenCalledTimes(2);
+        expect(result.observed.generation.acceptingRuns).toBe(true);
+        expect(result.observed.members.map(({ pluginId }) => pluginId)).toEqual([
+          failureId === 'notes' ? 'other' : 'notes',
+        ]);
+        if (failureId === 'notes') {
+          expect(result.application).toMatchObject({
+            status: 'failed',
+            failureKind: 'publication',
+          });
+          if (result.application.status !== 'failed') throw new Error('Expected failure');
+          expect(result.application.cause).toBe(failure);
+        } else {
+          expect(result.application).toEqual({ status: 'applied' });
+        }
+      } finally {
+        await f.close();
+      }
+    },
+  );
 
   it.each(['notes', 'other'] as const)(
     'keeps the original %s load cause private and applies any surviving target',
@@ -385,9 +678,11 @@ describe('queued managed selection', () => {
         if (result.kind !== 'committed') throw new Error('Expected a committed result');
         const rendered = host.coordinator.snapshot();
         expect(rendered.failed.map(({ pluginId }) => pluginId)).toEqual([failureId]);
-        expect(result.application.generation).toEqual(rendered.generation);
+        expect(result.observed.generation).toEqual(rendered.generation);
         if (failureId === 'notes') {
           expect(result.application.status).toBe('failed');
+          if (result.application.status !== 'failed') throw new Error('Expected failure');
+          expect(result.application.failureKind).toBe('preparation');
           expect(result.application.cause).toMatchObject({ cause: loadFailure });
           expect((result.application.cause as Error).cause).toBe(loadFailure);
         } else {
@@ -421,9 +716,10 @@ describe('queued managed selection', () => {
       expect(firstRuntimeRefresh).toHaveBeenCalledOnce();
       expect(result.application).toEqual({
         status: 'failed',
-        generation: host.coordinator.generationSnapshot(),
+        failureKind: 'preparation',
       });
       expect(Object.hasOwn(result.application, 'cause')).toBe(false);
+      expect(result.observed).toEqual(observation(host));
       expect(f.readOwned.mock.calls.map(([digest]) => digest)).toEqual([target.digest]);
       expect(host.coordinator.snapshot().members).toEqual([]);
       expect(await f.exists(marker)).toBe(false);
@@ -460,8 +756,9 @@ describe('queued managed selection', () => {
       const [failed, applied] = await Promise.all([first, second]);
       if (failed.kind !== 'committed' || applied.kind !== 'committed')
         throw new Error('Expected two committed decisions');
-      expect(failed.application.status).toBe('failed');
-      expect(failed.application.generation).toMatchObject({
+      if (failed.application.status !== 'failed') throw new Error('Expected failure');
+      expect(failed.application.failureKind).toBe('publication');
+      expect(failed.observed.generation).toMatchObject({
         id: before.generation.id,
         acceptingRuns: false,
       });
@@ -470,11 +767,9 @@ describe('queued managed selection', () => {
       expect(failed.savedAuthority.heads.operationSequence + 1).toBe(
         applied.savedAuthority.heads.operationSequence,
       );
-      expect(applied.application).toEqual({
-        status: 'applied',
-        generation: host.coordinator.generationSnapshot(),
-      });
-      expect(applied.application.generation.id).toBeGreaterThan(failed.application.generation.id);
+      expect(applied.application).toEqual({ status: 'applied' });
+      expect(applied.observed).toEqual(observation(host));
+      expect(applied.observed.generation.id).toBeGreaterThan(failed.observed.generation.id);
     } finally {
       release.resolve();
       await Promise.allSettled([first, second]);
@@ -506,9 +801,11 @@ describe('queued managed selection', () => {
       const result = await host.applyManagedSelection!(request);
       if (result.kind !== 'committed')
         throw new Error('Expected durable decision despite adoption failure');
-      expect(result.application).toMatchObject({
-        generation: { id: before.generation.id, acceptingRuns: false },
-        status: 'failed',
+      if (result.application.status !== 'failed') throw new Error('Expected failure');
+      expect(result.application.failureKind).toBe('adoption');
+      expect(result.observed.generation).toMatchObject({
+        id: before.generation.id,
+        acceptingRuns: false,
       });
       expect(result.application.cause).toBeInstanceOf(AggregateError);
       expect((result.application.cause as AggregateError).cause).toBe(primary);
@@ -521,6 +818,7 @@ describe('queued managed selection', () => {
         kind: 'replayed',
         operation: result.operation,
         currentAuthority: result.savedAuthority,
+        observed: observation(host),
       });
       expect(retry).toHaveBeenCalledOnce();
       expect(abort).toHaveBeenCalledOnce();
@@ -559,9 +857,11 @@ describe('queued managed selection', () => {
       if (result.kind !== 'committed') throw new Error('Expected a committed disable');
       expect(observe).toHaveBeenCalledOnce();
       expect(result.savedAuthority).toEqual(f.authority.snapshotSync());
-      expect(result.application).toMatchObject({
-        status: 'failed',
-        generation: { id: before.generation.id, acceptingRuns: false },
+      if (result.application.status !== 'failed') throw new Error('Expected failure');
+      expect(result.application.failureKind).toBe('adoption');
+      expect(result.observed.generation).toMatchObject({
+        id: before.generation.id,
+        acceptingRuns: false,
       });
       expect(retry).toHaveBeenCalledExactlyOnceWith('local-esm', 'notes', 'managed');
       expect(result.application.cause).toBeInstanceOf(AggregateError);
@@ -598,7 +898,7 @@ describe('queued managed selection', () => {
       );
       if (result.kind !== 'committed') throw new Error('Expected a committed uninstall');
       expect(result.application.status).toBe('failed');
-      expect(result.application.generation).toMatchObject({
+      expect(result.observed.generation).toMatchObject({
         id: before.generation.id,
         acceptingRuns: false,
       });
@@ -637,9 +937,11 @@ describe('queued managed selection', () => {
       const result = await host.applyManagedSelection!(decision(f, 'disable'));
       if (result.kind !== 'committed')
         throw new Error('Expected durable decision despite override failure');
-      expect(result.application).toMatchObject({
-        generation: { id: before.generation.id, acceptingRuns: false },
-        status: 'failed',
+      if (result.application.status !== 'failed') throw new Error('Expected failure');
+      expect(result.application.failureKind).toBe('adoption');
+      expect(result.observed.generation).toMatchObject({
+        id: before.generation.id,
+        acceptingRuns: false,
       });
       expect(result.application.cause).toBeInstanceOf(AggregateError);
       expect((result.application.cause as AggregateError).cause).toBe(primary);

@@ -1,11 +1,14 @@
 import { mkdir, symlink, writeFile } from 'node:fs/promises';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { computeDirectoryDigest } from '../src/digest.js';
+import { descriptorFileName, maxDescriptorBytes } from '../src/descriptor.js';
 import {
   discoverLocalPlugins,
+  inspectLocalPluginDeclarationClaims,
   type InvalidLocalPlugin,
   type LocalPluginCandidate,
 } from '../src/discovery.js';
@@ -17,7 +20,10 @@ import {
   writePlugin,
 } from './support/fixtures.js';
 
-afterEach(removeTempDirectories);
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await removeTempDirectories();
+});
 
 async function discover(
   pluginsDirectory: string,
@@ -35,6 +41,250 @@ function invalid(candidate: LocalPluginCandidate): InvalidLocalPlugin {
   expect(candidate.status).toBe('invalid');
   return candidate as InvalidLocalPlugin;
 }
+
+describe('inspectLocalPluginDeclarationClaims', () => {
+  it('claims parsed IDs without inspecting entries, payloads or linked directories', async () => {
+    const root = await makeTempDirectory();
+    const checkout = await makeTempDirectory();
+    const broken = await writePlugin(root, 'a-missing-entry', { manifest: { id: 'real-id' } });
+    await fs.unlink(path.join(broken, 'index.js'));
+    await writePlugin(root, 'b-incompatible', { manifest: { engines: { weave: '^8.0.0' } } });
+    const duplicate = await writePlugin(root, 'c-duplicate', { manifest: { id: 'real-id' } });
+    const malformed = await writePlugin(root, 'd-basename');
+    await writeFile(path.join(malformed, descriptorFileName), '{');
+    await mkdir(path.join(root, 'e-empty'));
+    await writePlugin(root, '.ignored');
+    const linked = await writePlugin(checkout, 'linked');
+    await symlink(linked, path.join(root, 'f-linked'), 'junction');
+    const linkedDescriptor = await writePlugin(root, 'g-linked-descriptor');
+    await fs.unlink(path.join(linkedDescriptor, descriptorFileName));
+    await symlink(
+      path.join(linked, descriptorFileName),
+      path.join(linkedDescriptor, descriptorFileName),
+    );
+
+    const open = vi.spyOn(fs, 'open');
+    const lstat = vi.spyOn(fs, 'lstat');
+    const opendir = vi.spyOn(fs, 'opendir');
+    const realpath = vi.spyOn(fs, 'realpath');
+    await expect(inspectLocalPluginDeclarationClaims({ directory: root })).resolves.toEqual({
+      pluginIds: ['real-id', 'b-incompatible'],
+      complete: true,
+    });
+    expect(open.mock.calls.map(([file]) => file)).toEqual([
+      path.join(broken, descriptorFileName),
+      path.join(root, 'b-incompatible', descriptorFileName),
+      path.join(duplicate, descriptorFileName),
+      path.join(malformed, descriptorFileName),
+    ]);
+    expect(lstat.mock.calls.some(([file]) => String(file).endsWith('index.js'))).toBe(false);
+    expect(opendir).not.toHaveBeenCalled();
+    expect(realpath).not.toHaveBeenCalled();
+  });
+
+  it('distinguishes missing roots from non-directory and unreadable roots', async () => {
+    const root = await makeTempDirectory();
+    const file = path.join(root, 'file');
+    await writeFile(file, 'data');
+    const inspect = (directory: string) => inspectLocalPluginDeclarationClaims({ directory });
+    await expect(inspect(path.join(root, 'missing'))).resolves.toEqual({
+      pluginIds: [],
+      complete: true,
+    });
+    await expect(inspect(file)).resolves.toEqual({ pluginIds: [], complete: false });
+    const denied = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    vi.spyOn(fs, 'readdir').mockRejectedValueOnce(denied);
+    await expect(inspect(root)).resolves.toEqual({ pluginIds: [], complete: false });
+  });
+
+  it('reports a failed listing as incomplete when a descendant disappears but the root exists', async () => {
+    const root = await makeTempDirectory();
+    await writePlugin(root, 'unobserved');
+    const child = path.join(root, 'disappeared');
+    const failure = Object.assign(new Error(`Cannot stat ${child}`), {
+      code: 'ENOENT',
+      syscall: 'lstat',
+      path: child,
+    });
+    // Node resolves unknown Dirent types with lstat and rejects the entire listing on failure.
+    vi.spyOn(fs, 'readdir').mockRejectedValueOnce(failure).mockRejectedValueOnce(failure);
+
+    await expect(inspectLocalPluginDeclarationClaims({ directory: root })).resolves.toEqual({
+      pluginIds: [],
+      complete: false,
+    });
+    await expect(discover(root)).rejects.toMatchObject({
+      code: 'plugin-unreadable',
+      cause: failure,
+    });
+  });
+
+  it('retains the claims observed inside the candidate cap', async () => {
+    const root = await makeTempDirectory();
+    await mkdir(path.join(root, 'a-empty'));
+    const first = await writePlugin(root, 'b-first');
+    await writePlugin(root, 'c-second');
+    const open = vi.spyOn(fs, 'open');
+    await expect(
+      inspectLocalPluginDeclarationClaims({ directory: root, maxCandidates: 1 }),
+    ).resolves.toEqual({
+      pluginIds: ['b-first'],
+      complete: false,
+    });
+    expect(open.mock.calls.map(([file]) => file)).toEqual([path.join(first, descriptorFileName)]);
+  });
+
+  it.each(['lstat', 'open', 'read'] as const)(
+    'retains positive claims when descriptor %s fails and preserves manual diagnostics',
+    async (stage) => {
+      const root = await makeTempDirectory();
+      await writePlugin(root, 'a-known');
+      const blocked = path.join(await writePlugin(root, 'b-blocked'), descriptorFileName);
+      const denied = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      if (stage === 'lstat') {
+        const lstat = fs.lstat;
+        vi.spyOn(fs, 'lstat').mockImplementation((file, options) => {
+          if (file === blocked) return Promise.reject(denied);
+          return lstat(file, options);
+        });
+      } else {
+        const open = fs.open;
+        vi.spyOn(fs, 'open').mockImplementation(async (file, flags, mode) => {
+          if (file === blocked && stage === 'open') throw denied;
+          const handle = await open(file, flags, mode);
+          if (file === blocked) vi.spyOn(handle, 'read').mockRejectedValue(denied);
+          return handle;
+        });
+      }
+
+      await expect(inspectLocalPluginDeclarationClaims({ directory: root })).resolves.toEqual({
+        pluginIds: ['a-known'],
+        complete: false,
+      });
+      const result = await discover(root);
+      expect(Object.keys(result).sort()).toEqual([
+        'candidates',
+        'directory',
+        'exists',
+        'truncated',
+      ]);
+      expect(result.candidates).toMatchObject([
+        { id: 'a-known', status: 'ready' },
+        ...(stage === 'lstat'
+          ? []
+          : [
+              {
+                id: 'b-blocked',
+                status: 'invalid',
+                issue: { code: 'plugin-unreadable' },
+              },
+            ]),
+      ]);
+    },
+  );
+
+  it('checks the descriptor limit against actual bytes after growth', async () => {
+    const root = await makeTempDirectory();
+    const file = path.join(await writePlugin(root, 'growing'), descriptorFileName);
+    const open = fs.open;
+    let bytesRead = 0;
+    vi.spyOn(fs, 'open').mockImplementation(async (target, flags, mode) => {
+      const handle = await open(target, flags, mode);
+      if (target === file) {
+        const read = handle.read.bind(handle);
+        vi.spyOn(handle, 'read').mockImplementation(async (buffer, offset, length, position) => {
+          if (bytesRead === 0) await fs.appendFile(file, ' '.repeat(maxDescriptorBytes));
+          const result = await read(buffer, offset, length, position);
+          bytesRead += result.bytesRead;
+          return result;
+        });
+      }
+      return handle;
+    });
+    const result = await discover(root);
+    expect(bytesRead).toBe(maxDescriptorBytes + 1);
+    expect(result.candidates).toMatchObject([
+      { id: 'growing', status: 'invalid', issue: { code: 'plugin-invalid-descriptor' } },
+    ]);
+    await expect(inspectLocalPluginDeclarationClaims({ directory: root })).resolves.toEqual({
+      pluginIds: [],
+      complete: true,
+    });
+  });
+
+  it('keeps an oversized descriptor diagnostic when the handle also fails to close', async () => {
+    const root = await makeTempDirectory();
+    await writePlugin(root, 'a-known');
+    const file = path.join(await writePlugin(root, 'growing'), descriptorFileName);
+    const original = await fs.readFile(file, 'utf8');
+    const cleanup = Object.assign(new Error('close failed'), { code: 'EIO' });
+    const open = fs.open;
+    vi.spyOn(fs, 'open').mockImplementation(async (target, flags, mode) => {
+      const handle = await open(target, flags, mode);
+      if (target === file) {
+        const close = handle.close.bind(handle);
+        await fs.appendFile(file, ' '.repeat(maxDescriptorBytes));
+        vi.spyOn(handle, 'close').mockImplementation(async () => {
+          await close();
+          throw cleanup;
+        });
+      }
+      return handle;
+    });
+
+    const result = await discover(root);
+    expect(result.candidates[1]).toMatchObject({
+      id: 'growing',
+      status: 'invalid',
+      issue: {
+        code: 'plugin-invalid-descriptor',
+        message: 'weave-plugin.json is larger than 64 KB',
+      },
+    });
+    await writeFile(file, original);
+    await expect(inspectLocalPluginDeclarationClaims({ directory: root })).resolves.toEqual({
+      pluginIds: ['a-known'],
+      complete: false,
+    });
+  });
+
+  it('reads short chunks until EOF or cancellation and closes the descriptor', async () => {
+    const root = await makeTempDirectory();
+    const file = path.join(await writePlugin(root, 'chunked'), descriptorFileName);
+    const open = fs.open;
+    const abort = new AbortController();
+    const reason = new Error('cancel descriptor read');
+    let cancelOnRead = false;
+    const closed = vi.fn();
+    vi.spyOn(fs, 'open').mockImplementation(async (target, flags, mode) => {
+      const handle = await open(target, flags, mode);
+      if (target === file) {
+        const read = handle.read.bind(handle);
+        const close = handle.close.bind(handle);
+        vi.spyOn(handle, 'read').mockImplementation(async (buffer, offset, length, position) => {
+          const result = await read(buffer, offset, Math.min(13, length ?? 13), position);
+          if (cancelOnRead) abort.abort(reason);
+          return result;
+        });
+        vi.spyOn(handle, 'close').mockImplementation(async () => {
+          await close();
+          closed();
+          if (cancelOnRead) throw new Error('close failed');
+        });
+      }
+      return handle;
+    });
+    await expect(inspectLocalPluginDeclarationClaims({ directory: root })).resolves.toEqual({
+      pluginIds: ['chunked'],
+      complete: true,
+    });
+    cancelOnRead = true;
+    await expect(
+      inspectLocalPluginDeclarationClaims({ directory: root }, abort.signal),
+    ).rejects.toBe(reason);
+    expect(closed).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe('discoverLocalPlugins', () => {
   describe('a sound plugin', () => {

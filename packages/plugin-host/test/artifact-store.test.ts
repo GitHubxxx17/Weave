@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { Dir } from 'node:fs';
 import fs, {
   access,
   mkdir,
@@ -41,6 +42,489 @@ async function expectNoPublication(managedRoot: string): Promise<void> {
     expect(entries).toEqual([]);
   }
 }
+
+async function reviewedSource(sourceDirectory: string): Promise<host.PluginArtifactSourceIdentity> {
+  const { manifest } = host.parseDescriptor(
+    await readFile(path.join(sourceDirectory, 'weave-plugin.json'), 'utf8'),
+  );
+  return { sourceDirectory, manifest, ...(await host.computeDirectoryDigest(sourceDirectory)) };
+}
+
+test('previews normalized data without creating the store or running the entry', async () => {
+  const { root, managedRoot, sourceDirectory } = await fixture();
+  const marker = path.join(root, 'executed');
+  const entry = `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(marker)}, 'executed');\n`;
+  await writeFile(path.join(sourceDirectory, 'index.mjs'), entry);
+  await mkdir(path.join(sourceDirectory, '.git'));
+  await writeFile(path.join(sourceDirectory, '.git', 'config'), 'ignored');
+  const links = await makeTempDirectory();
+  await symlink(root, path.join(links, 'linked'), 'junction');
+  const requested = path.join(links, 'linked', 'sample');
+  const store = host.createPluginArtifactStore({ directory: managedRoot });
+
+  const preview = await store.preview({ sourceDirectory: requested });
+  expect(preview).toEqual(await reviewedSource(sourceDirectory));
+  expect(preview.files).toBe(2);
+  expect(Object.isFrozen(preview)).toBe(true);
+  expect(Object.isFrozen(preview.manifest)).toBe(true);
+  expect(Object.isFrozen(preview.manifest.contributes)).toBe(true);
+  expect(Object.isFrozen(preview.manifest.contributes?.commands)).toBe(true);
+  expect(Object.isFrozen(preview.manifest.permissions)).toBe(true);
+  await expect(access(managedRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(access(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('previews without recovering staging or consulting publication capacity', async () => {
+  const { managedRoot, sourceDirectory } = await fixture();
+  await seedOrphans(managedRoot, 64);
+  const operation = path.join(managedRoot, 'staging', randomUUID());
+  await mkdir(operation, { recursive: true });
+  const opendir = fs.opendir;
+  vi.spyOn(fs, 'opendir').mockImplementation((file, options) => {
+    if (String(file).startsWith(managedRoot + path.sep)) throw new Error('Store traversed');
+    return opendir(file, options);
+  });
+  const store = host.createPluginArtifactStore({ directory: managedRoot });
+
+  await expect(store.preview({ sourceDirectory })).resolves.toMatchObject({ files: 2 });
+  await expect(access(operation)).resolves.toBeUndefined();
+});
+
+test.each([
+  ['malformed descriptor', 'plugin-artifact-invalid'],
+  ['ignored entry', 'plugin-artifact-invalid'],
+  ['unsupported engine', 'plugin-artifact-invalid'],
+  ['reserved ID', 'plugin-artifact-invalid'],
+  ['payload depth bound', 'plugin-artifact-too-large'],
+  ['linked payload directory', 'plugin-artifact-unsupported-file'],
+  ['overlap', 'plugin-artifact-invalid'],
+])('preview validates the %s without writing', async (violation, code) => {
+  const { root, managedRoot, sourceDirectory } = await fixture();
+  let directory = managedRoot;
+  if (violation === 'malformed descriptor') {
+    await writeFile(path.join(sourceDirectory, 'weave-plugin.json'), '{');
+  } else if (violation === 'ignored entry') {
+    await writePlugin(root, 'sample', { entry: '.git/index.mjs' });
+  } else if (violation === 'unsupported engine') {
+    await writePlugin(root, 'sample', { manifest: { engines: { weave: '^2.0.0' } } });
+  } else if (violation === 'payload depth bound') {
+    await mkdir(path.join(sourceDirectory, ...Array<string>(65).fill('d')), { recursive: true });
+  } else if (violation === 'linked payload directory') {
+    await symlink(root, path.join(sourceDirectory, 'linked'), 'junction');
+  } else if (violation === 'overlap') {
+    directory = path.join(sourceDirectory, '.weave-store');
+  }
+  const store = host.createPluginArtifactStore({
+    directory,
+    hostVersion: '1.0.0',
+    reservedIds: violation === 'reserved ID' ? ['sample'] : [],
+  });
+
+  await expect(store.preview({ sourceDirectory })).rejects.toMatchObject({ code });
+  await expect(access(directory)).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('rejects malformed review evidence before reading the filesystem', async () => {
+  const { managedRoot, sourceDirectory } = await fixture();
+  const expected = await reviewedSource(sourceDirectory);
+  const store = host.createPluginArtifactStore({ directory: managedRoot });
+  const candidates = [
+    { ...expected, sourceDirectory: 'relative' },
+    { ...expected, sourceDirectory: sourceDirectory + '\0' },
+    { ...expected, digest: 'A'.repeat(64) },
+    { ...expected, files: 0 },
+    { ...expected, bytes: Number.MAX_SAFE_INTEGER + 1 },
+    { ...expected, manifest: { ...expected.manifest, contributes: undefined } },
+    { ...expected, manifest: { ...expected.manifest, permissions: undefined } },
+    { ...expected, manifest: { ...expected.manifest, extra: true } },
+    { ...expected, extra: true },
+  ];
+  const lstat = vi.spyOn(fs, 'lstat');
+  for (const expectedSource of candidates) {
+    expect(host.pluginArtifactSourceIdentitySchema?.safeParse(expectedSource).success).toBe(false);
+    await expect(store.stage({ sourceDirectory, expectedSource })).rejects.toMatchObject({
+      code: 'plugin-artifact-invalid',
+    });
+  }
+  expect(lstat).not.toHaveBeenCalled();
+});
+
+test.each(['digest', 'files', 'bytes', 'manifest'] as const)(
+  'rejects a changed pre-copy %s',
+  async (field) => {
+    const { managedRoot, sourceDirectory } = await fixture();
+    const store = host.createPluginArtifactStore({ directory: managedRoot });
+    const expectedSource = await reviewedSource(sourceDirectory);
+    const mkdir = vi.spyOn(fs, 'mkdir');
+    const changes = {
+      digest: { digest: '1'.repeat(64) },
+      files: { files: expectedSource.files + 1 },
+      bytes: { bytes: expectedSource.bytes + 1 },
+      manifest: { manifest: { ...expectedSource.manifest, name: 'Different name' } },
+    };
+
+    await expect(
+      store.stage({
+        sourceDirectory,
+        expectedSource: { ...expectedSource, ...changes[field] },
+      }),
+    ).rejects.toMatchObject({ code: 'plugin-artifact-source-changed' });
+    expect(
+      mkdir.mock.calls.some(([directory]) =>
+        String(directory).startsWith(path.join(managedRoot, 'staging') + path.sep),
+      ),
+    ).toBe(false);
+    await expectNoPublication(managedRoot);
+  },
+);
+
+test('cleans reviewed staging when source bytes change during copy', async () => {
+  const { managedRoot, sourceDirectory } = await fixture();
+  const store = host.createPluginArtifactStore({ directory: managedRoot });
+  const expectedSource = await reviewedSource(sourceDirectory);
+  const staging = path.join(managedRoot, 'staging');
+  const open = fs.open;
+  vi.spyOn(fs, 'open').mockImplementation(async (file, flags, mode) => {
+    const handle = await open(file, flags, mode);
+    if (
+      String(file).startsWith(staging + path.sep) &&
+      path.basename(String(file)) === 'index.mjs'
+    ) {
+      await writeFile(path.join(sourceDirectory, 'index.mjs'), 'edited while copying');
+    }
+    return handle;
+  });
+
+  await expect(store.stage({ sourceDirectory, expectedSource })).rejects.toMatchObject({
+    code: 'plugin-artifact-source-changed',
+  });
+  expect(await readFile(path.join(sourceDirectory, 'index.mjs'), 'utf8')).toBe(
+    'edited while copying',
+  );
+  expect(await readdir(staging)).toEqual([]);
+  await expectNoPublication(managedRoot);
+});
+
+test('preserves cancellation after the final requested-path check and cleans reviewed staging', async () => {
+  const { root, managedRoot, sourceDirectory } = await fixture();
+  const alias = path.join(await makeTempDirectory(), 'alias');
+  await symlink(root, alias, 'junction');
+  const requested = path.join(alias, 'sample');
+  const store = host.createPluginArtifactStore({ directory: managedRoot });
+  const expectedSource = await reviewedSource(sourceDirectory);
+  const caller = new AbortController();
+  const reason = Object.assign(new Error('cancel at publication'), { code: 'ENOENT' });
+  const realpath = fs.realpath;
+  let checks = 0;
+  vi.spyOn(fs, 'realpath').mockImplementation(async (file, options) => {
+    const result = await realpath(file, options);
+    if (file === requested && ++checks === 2) caller.abort(reason);
+    return result;
+  });
+
+  await expect(
+    store.stage({ sourceDirectory: requested, expectedSource, signal: caller.signal }),
+  ).rejects.toBe(reason);
+  expect(checks).toBe(2);
+  expect(await readdir(path.join(managedRoot, 'staging'))).toEqual([]);
+  await expectNoPublication(managedRoot);
+});
+
+test.each(['staged snapshot', 'published object'])(
+  'preserves corruption classification for a reviewed %s',
+  async (target) => {
+    const { managedRoot, sourceDirectory } = await fixture();
+    const store = host.createPluginArtifactStore({ directory: managedRoot });
+    const expectedSource = await reviewedSource(sourceDirectory);
+    const artifacts = path.join(managedRoot, 'artifacts');
+    const staging = path.join(managedRoot, 'staging');
+    if (target === 'published object') {
+      const artifact = await store.stage({ sourceDirectory });
+      await writeFile(artifact.entry, 'tampered');
+    } else {
+      const opendir = fs.opendir;
+      vi.spyOn(fs, 'opendir').mockImplementation(async (file, options) => {
+        if (file === artifacts) {
+          const [operation] = await readdir(staging);
+          await writeFile(path.join(staging, operation!, 'payload', 'index.mjs'), 'tampered');
+        }
+        return opendir(file, options);
+      });
+    }
+
+    await expect(store.stage({ sourceDirectory, expectedSource })).rejects.toMatchObject({
+      code: target === 'published object' ? 'plugin-artifact-conflict' : 'plugin-artifact-corrupt',
+    });
+    expect(await readdir(staging)).toEqual([]);
+    expect(await readdir(artifacts)).toEqual(
+      target === 'published object' ? [expectedSource.digest] : [],
+    );
+  },
+);
+
+test.each(['missing', 'root link', 'malformed descriptor', 'payload bound'])(
+  'invalidates a reviewed %s source before copying',
+  async (change) => {
+    const { root, managedRoot, sourceDirectory } = await fixture();
+    const expectedSource = await reviewedSource(sourceDirectory);
+    if (change === 'missing' || change === 'root link') {
+      const moved = path.join(root, 'moved');
+      await fs.rename(sourceDirectory, moved);
+      if (change === 'root link') await symlink(moved, sourceDirectory, 'junction');
+    } else if (change === 'malformed descriptor') {
+      await writeFile(path.join(sourceDirectory, 'weave-plugin.json'), '{');
+    } else {
+      await mkdir(path.join(sourceDirectory, ...Array<string>(65).fill('d')), { recursive: true });
+    }
+    const store = host.createPluginArtifactStore({ directory: managedRoot });
+
+    await expect(store.stage({ sourceDirectory, expectedSource })).rejects.toMatchObject({
+      code: 'plugin-artifact-source-changed',
+      ...(change === 'missing' ? { cause: { code: 'ENOENT' } } : {}),
+    });
+    await expectNoPublication(managedRoot);
+  },
+);
+
+test.each([
+  ['new object', 'bytes'],
+  ['new object', 'ancestor'],
+  ['new object', 'root directory'],
+  ['reuse', 'bytes'],
+  ['reuse', 'ancestor'],
+])('rechecks reviewed %s source %s after destination checks', async (publication, change) => {
+  const { root, managedRoot, sourceDirectory } = await fixture();
+  const expectedSource = await reviewedSource(sourceDirectory);
+  const store = host.createPluginArtifactStore({ directory: managedRoot });
+  const anotherRoot = await makeTempDirectory();
+  const replacement = await writePlugin(anotherRoot, 'sample', { entry: 'index.mjs' });
+  const alias = path.join(await makeTempDirectory(), 'alias');
+  await symlink(root, alias, 'junction');
+  const requested = path.join(alias, 'sample');
+  const artifacts = path.join(managedRoot, 'artifacts');
+  const object = path.join(artifacts, expectedSource.digest);
+  if (publication === 'reuse') await store.stage({ sourceDirectory });
+
+  let changed = false;
+  async function changeSource() {
+    changed = true;
+    if (change === 'bytes') {
+      await writeFile(path.join(sourceDirectory, 'index.mjs'), 'export default "edited"');
+    } else if (change === 'ancestor') {
+      await fs.rmdir(alias).catch((error: unknown) => {
+        expect(error).toMatchObject({ code: 'ENOTDIR' });
+        return unlink(alias);
+      });
+      await symlink(anotherRoot, alias, 'junction');
+    } else {
+      await fs.rename(sourceDirectory, path.join(root, 'moved'));
+      await fs.rename(replacement, sourceDirectory);
+      await writeFile(path.join(sourceDirectory, 'index.mjs'), 'export default "replacement"');
+    }
+  }
+
+  const lstat = fs.lstat;
+  const boundary = publication === 'reuse' ? path.join(object, 'payload', 'index.mjs') : object;
+  const occurrence = publication === 'reuse' ? 1 : 2;
+  let checks = 0;
+  vi.spyOn(fs, 'lstat').mockImplementation(async (file, options) => {
+    if (file === boundary && ++checks === occurrence) await changeSource();
+    return lstat(file, options);
+  });
+
+  await expect(store.stage({ sourceDirectory: requested, expectedSource })).rejects.toMatchObject({
+    code: 'plugin-artifact-source-changed',
+  });
+  expect(changed).toBe(true);
+  expect(await readdir(artifacts)).toEqual(publication === 'reuse' ? [expectedSource.digest] : []);
+  expect(await readdir(path.join(managedRoot, 'staging'))).toEqual([]);
+});
+
+test('reuses a reviewed artifact at capacity with equivalent manifest key order', async () => {
+  const { managedRoot, sourceDirectory } = await fixture();
+  const store = host.createPluginArtifactStore({ directory: managedRoot });
+  const original = await reviewedSource(sourceDirectory);
+  const { id, name, ...rest } = original.manifest;
+  const expectedSource = { ...original, manifest: { name, id, ...rest } };
+  const existing = await store.stage({ sourceDirectory });
+  await seedOrphans(managedRoot, 63);
+
+  await expect(store.stage({ sourceDirectory, expectedSource })).resolves.toEqual(existing);
+  expect(await readdir(path.join(managedRoot, 'staging'))).toEqual([]);
+});
+
+test.each([
+  ['source', 'ENOENT', 'plugin-artifact-source-changed'],
+  ['source', 'EIO', 'plugin-artifact-io'],
+  ['destination', 'ENOENT', 'plugin-artifact-io'],
+  ['destination', 'ENOTDIR', 'plugin-artifact-io'],
+])('classifies a reviewed copy %s failure of %s', async (side, code, expectedCode) => {
+  const { managedRoot, sourceDirectory } = await fixture();
+  const store = host.createPluginArtifactStore({ directory: managedRoot });
+  const expectedSource = await reviewedSource(sourceDirectory);
+  const cause = Object.assign(new Error('copy filesystem failure'), { code });
+  const staging = path.join(managedRoot, 'staging');
+  const open = fs.open;
+  let sourceOpens = 0;
+  vi.spyOn(fs, 'open').mockImplementation((file, flags, mode) => {
+    if (
+      (side === 'source' &&
+        file === path.join(sourceDirectory, 'index.mjs') &&
+        ++sourceOpens === 2) ||
+      (side === 'destination' && String(file).startsWith(staging + path.sep))
+    ) {
+      throw cause;
+    }
+    return open(file, flags, mode);
+  });
+
+  await expect(store.stage({ sourceDirectory, expectedSource })).rejects.toMatchObject({
+    code: expectedCode,
+    cause,
+  });
+  expect(await readdir(staging)).toEqual([]);
+  await expectNoPublication(managedRoot);
+});
+
+test.each(['source', 'published object'])(
+  'preserves a file close failure for a reviewed %s',
+  async (target) => {
+    const { managedRoot, sourceDirectory } = await fixture();
+    const store = host.createPluginArtifactStore({ directory: managedRoot });
+    const expectedSource = await reviewedSource(sourceDirectory);
+    const existing =
+      target === 'published object' ? await store.stage({ sourceDirectory }) : undefined;
+    const entry = existing?.entry ?? path.join(sourceDirectory, 'index.mjs');
+    const cause = Object.assign(new Error('close failed'), { code: 'ENOENT' });
+    const open = fs.open;
+    vi.spyOn(fs, 'open').mockImplementation(async (file, flags, mode) => {
+      const handle = await open(file, flags, mode);
+      if (file === entry) {
+        const close = handle.close;
+        vi.spyOn(handle, 'close').mockImplementation(async () => {
+          await close.call(handle);
+          throw cause;
+        });
+      }
+      return handle;
+    });
+
+    await expect(store.stage({ sourceDirectory, expectedSource })).rejects.toMatchObject({
+      code: 'plugin-artifact-io',
+      cause,
+    });
+    expect(await readdir(path.join(managedRoot, 'staging'))).toEqual([]);
+    expect(await readdir(path.join(managedRoot, 'artifacts'))).toEqual(
+      existing ? [existing.digest] : [],
+    );
+  },
+);
+
+function failDirectoryClose(
+  shouldFail: (directory: string) => boolean,
+  cause: NodeJS.ErrnoException,
+) {
+  const close = Dir.prototype.close;
+  vi.spyOn(Dir.prototype, 'close').mockImplementation(function (
+    this: Dir,
+    callback?: Parameters<Dir['close']>[0],
+  ) {
+    // Node binds the callback overload inside the native directory iterator.
+    const fail = shouldFail(this.path);
+    if (callback !== undefined) {
+      return close.call(this, (error) => callback(error ?? (fail ? cause : null)));
+    }
+    return new Promise<void>((resolve, reject) => {
+      close.call(this, (error) => {
+        if (error !== null) reject(error);
+        else if (fail) reject(cause);
+        else resolve();
+      });
+    });
+  });
+}
+
+test.each([
+  ['source', 'ENOENT'],
+  ['source during copy', 'ENOTDIR'],
+  ['published object', 'ELOOP'],
+])('preserves directory close %s failure with errno %s', async (target, code) => {
+  const { managedRoot, sourceDirectory } = await fixture();
+  const store = host.createPluginArtifactStore({ directory: managedRoot });
+  const expectedSource = await store.preview({ sourceDirectory });
+  const existing =
+    target === 'published object' ? await store.stage({ sourceDirectory }) : undefined;
+  const directory = existing?.directory ?? sourceDirectory;
+  const cause = Object.assign(new Error('directory close failed'), { code });
+  let closes = 0;
+  failDirectoryClose(
+    (candidate) =>
+      candidate === directory && ++closes === (target === 'source during copy' ? 2 : 1),
+    cause,
+  );
+
+  await expect(store.stage({ sourceDirectory, expectedSource })).rejects.toMatchObject({
+    code: 'plugin-artifact-io',
+    cause,
+  });
+  expect(await readdir(path.join(managedRoot, 'staging'))).toEqual([]);
+  expect(await readdir(path.join(managedRoot, 'artifacts'))).toEqual(
+    existing ? [existing.digest] : [],
+  );
+});
+
+test.each(['filesystem failure', 'caller cancellation'])(
+  'preserves reviewed directory %s together with failed cleanup',
+  async (failure) => {
+    const { managedRoot, sourceDirectory } = await fixture();
+    const store = host.createPluginArtifactStore({ directory: managedRoot });
+    const expectedSource = await store.preview({ sourceDirectory });
+    const caller = new AbortController();
+    const primary =
+      failure === 'caller cancellation'
+        ? 'operation cancelled while traversing'
+        : Object.assign(new Error('directory entry check failed'), { code: 'EIO' });
+    const cleanup = Object.assign(new Error('directory close failed'), { code: 'ENOENT' });
+    failDirectoryClose((directory) => directory === sourceDirectory, cleanup);
+    const lstat = fs.lstat;
+    vi.spyOn(fs, 'lstat').mockImplementation((file, options) => {
+      if (file === path.join(sourceDirectory, 'index.mjs')) {
+        if (failure === 'caller cancellation') caller.abort(primary);
+        throw primary;
+      }
+      return lstat(file, options);
+    });
+
+    await expect(
+      store.stage({ sourceDirectory, expectedSource, signal: caller.signal }),
+    ).rejects.toMatchObject({
+      code: 'plugin-artifact-io',
+      cause: { errors: [primary, cleanup] },
+    });
+    await expectNoPublication(managedRoot);
+  },
+);
+
+test('keeps a published artifact when reviewed reuse hits a transient filesystem failure', async () => {
+  const { managedRoot, sourceDirectory } = await fixture();
+  const store = host.createPluginArtifactStore({ directory: managedRoot });
+  const expectedSource = await store.preview({ sourceDirectory });
+  const existing = await store.stage({ sourceDirectory, expectedSource });
+  const cause = Object.assign(new Error('file descriptor limit reached'), { code: 'EMFILE' });
+  const open = fs.open;
+  const spy = vi.spyOn(fs, 'open').mockImplementation((file, flags, mode) => {
+    if (file === existing.entry) throw cause;
+    return open(file, flags, mode);
+  });
+
+  await expect(store.stage({ sourceDirectory, expectedSource })).rejects.toMatchObject({
+    code: 'plugin-artifact-io',
+    cause,
+  });
+  expect(await readdir(path.join(managedRoot, 'staging'))).toEqual([]);
+  spy.mockRestore();
+  await expect(store.read(existing.digest)).resolves.toEqual(existing);
+});
 
 test('publishes a fixed, data-only copy with the original directory digest', async () => {
   const root = await makeTempDirectory();
@@ -377,6 +861,121 @@ test('rejects a published payload that exceeds the directory-depth bound', async
   await expect(access(deep)).resolves.toBeUndefined();
 });
 
+test.each(['store root', 'artifacts container'] as const)(
+  'classifies a non-directory installed %s as corrupt',
+  async (target) => {
+    const { managedRoot, sourceDirectory } = await fixture();
+    const store = host.createPluginArtifactStore({ directory: managedRoot });
+    const artifact = await store.stage({ sourceDirectory });
+    const directory = target === 'store root' ? managedRoot : path.join(managedRoot, 'artifacts');
+    await fs.rm(directory, { recursive: true });
+    await writeFile(directory, 'unexpected file');
+
+    await expect(store.read(artifact.digest)).rejects.toMatchObject({
+      code: 'plugin-artifact-corrupt',
+    });
+    await expect(readFile(directory, 'utf8')).resolves.toBe('unexpected file');
+  },
+);
+
+test.each(['store root normalization', 'payload open', 'entry resolution'] as const)(
+  'preserves installed %s filesystem failures as I/O',
+  async (target) => {
+    const { managedRoot, sourceDirectory } = await fixture();
+    const store = host.createPluginArtifactStore({ directory: managedRoot });
+    const artifact = await store.stage({ sourceDirectory });
+    const cause = Object.assign(new Error('file descriptor limit reached'), { code: 'EMFILE' });
+    const { realpath, open, lstat } = fs;
+    if (target === 'store root normalization') {
+      vi.spyOn(fs, 'realpath').mockImplementation((file, options) => {
+        if (file === managedRoot) throw cause;
+        return realpath(file, options);
+      });
+    } else if (target === 'payload open') {
+      vi.spyOn(fs, 'open').mockImplementation((file, flags, mode) => {
+        if (file === artifact.entry) throw cause;
+        return open(file, flags, mode);
+      });
+    } else {
+      vi.spyOn(fs, 'lstat').mockImplementation((file, options) => {
+        if (file === artifact.entry && options === undefined) throw cause;
+        return lstat(file, options);
+      });
+    }
+
+    await expect(store.read(artifact.digest)).rejects.toMatchObject({
+      code: 'plugin-artifact-io',
+      cause,
+    });
+  },
+);
+
+test.each(['payload file', 'payload directory'] as const)(
+  'preserves primary and cleanup I/O failures in order for an installed %s',
+  async (target) => {
+    const { managedRoot, sourceDirectory } = await fixture();
+    const store = host.createPluginArtifactStore({ directory: managedRoot });
+    const artifact = await store.stage({ sourceDirectory });
+    const primary = Object.assign(new Error('installed payload read failed'), { code: 'EIO' });
+    const cleanup = Object.assign(new Error('installed handle close failed'), { code: 'EIO' });
+    if (target === 'payload file') {
+      const open = fs.open;
+      vi.spyOn(fs, 'open').mockImplementation(async (file, flags, mode) => {
+        const handle = await open(file, flags, mode);
+        if (file === artifact.entry) {
+          const close = handle.close.bind(handle);
+          vi.spyOn(handle, 'read').mockRejectedValue(primary);
+          vi.spyOn(handle, 'close').mockImplementation(async () => {
+            await close();
+            throw cleanup;
+          });
+        }
+        return handle;
+      });
+    } else {
+      failDirectoryClose((directory) => directory === artifact.directory, cleanup);
+      const lstat = fs.lstat;
+      vi.spyOn(fs, 'lstat').mockImplementation((file, options) => {
+        if (file === artifact.entry) throw primary;
+        return lstat(file, options);
+      });
+    }
+
+    await expect(store.read(artifact.digest)).rejects.toMatchObject({
+      code: 'plugin-artifact-io',
+      cause: { errors: [primary, cleanup] },
+    });
+  },
+);
+
+test('keeps an installed payload close failure as I/O when its errno resembles damage', async () => {
+  const { managedRoot, sourceDirectory } = await fixture();
+  const store = host.createPluginArtifactStore({ directory: managedRoot });
+  const artifact = await store.stage({ sourceDirectory });
+  const cause = Object.assign(new Error('installed directory close failed'), { code: 'ENOENT' });
+  failDirectoryClose((directory) => directory === artifact.directory, cause);
+
+  await expect(store.read(artifact.digest)).rejects.toMatchObject({
+    code: 'plugin-artifact-io',
+    cause,
+  });
+});
+
+test('preserves the exact cancellation reason during installed entry resolution', async () => {
+  const { managedRoot, sourceDirectory } = await fixture();
+  const store = host.createPluginArtifactStore({ directory: managedRoot });
+  const artifact = await store.stage({ sourceDirectory });
+  const controller = new AbortController();
+  const reason = Object.assign(new Error('cancel installed read'), { code: 'ELOOP' });
+  const lstat = fs.lstat;
+  vi.spyOn(fs, 'lstat').mockImplementation((file, options) => {
+    if (file === artifact.entry && options === undefined) controller.abort(reason);
+    return lstat(file, options);
+  });
+
+  await expect(store.read(artifact.digest, { signal: controller.signal })).rejects.toBe(reason);
+});
+
 test('retains an occupied digest path introduced before the final staging check', async () => {
   const { managedRoot, sourceDirectory } = await fixture();
   const store = host.createPluginArtifactStore({ directory: managedRoot });
@@ -414,6 +1013,8 @@ test('distinguishes digest syntax, absent artifacts and directories under the wr
     code: 'plugin-artifact-not-found',
   });
   await expect(store.read(absent)).rejects.toMatchObject({ code: 'plugin-artifact-corrupt' });
+  await fs.rm(path.join(managedRoot, 'artifacts'), { recursive: true });
+  await expect(store.read(absent)).rejects.toMatchObject({ code: 'plugin-artifact-not-found' });
 });
 
 async function seedOrphans(managedRoot: string, count: number): Promise<string[]> {

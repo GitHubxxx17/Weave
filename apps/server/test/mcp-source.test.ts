@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { McpClientError, type ConnectMcpOptions, type McpConnection } from '@weave/mcp-client';
 import { createSqliteMcpAuthorityStore } from '../src/mcp-authority-store.js';
+import { normalizeMcpServerConfig } from '../src/mcp-environment.js';
 import { createMcpExtensionSource, type McpExtensionSourceOptions } from '../src/mcp-source.js';
 import { createExtensionCoordinator } from '../src/extension-coordinator.js';
 import type { ExtensionSource } from '../src/extension-types.js';
@@ -232,6 +233,139 @@ describe('MCP source authority and generation ownership', () => {
     expect(result.servers.map(({ state }) => state)).toEqual(['untrusted', 'disabled', 'failed']);
     expect(f.source.declaredPluginIds()).toEqual(['mcp-untrusted', 'mcp-disabled', 'mcp-broken']);
   });
+
+  it('reads newer persisted declarations without installing or publishing MCP authority', async () => {
+    const install = vi.fn((apply: () => void) => apply());
+    const f = await fixture(undefined, { installAuthoritySync: install });
+    await f.manager.configure(0, f.config);
+    const before = f.registered.snapshot();
+    const generation = f.coordinator.snapshot();
+    const cached = await f.store.read();
+    const draft = await normalizeMcpServerConfig({ ...f.config, id: 'draft' });
+    const newer = await f.store.mutate(
+      { kind: 'create', config: draft },
+      {
+        expectedSequence: cached.sequence,
+        knownPrefix: cached.events,
+      },
+    );
+    await f.store.mutate(
+      { kind: 'remove', serverId: 'fixture' },
+      {
+        expectedSequence: newer.sequence,
+        knownPrefix: newer.events,
+      },
+    );
+    install.mockClear();
+    const read = vi.spyOn(f.store, 'read');
+    try {
+      await expect(
+        f.source.inspectDeclaredPluginIds(new AbortController().signal),
+      ).resolves.toEqual(['mcp-draft']);
+      expect(read).toHaveBeenCalledExactlyOnceWith({ knownPrefix: cached.events });
+      expect(f.source.declaredPluginIds()).toEqual(['mcp-fixture']);
+      expect(f.registered.snapshot()).toEqual(before);
+      expect(f.coordinator.snapshot()).toEqual(generation);
+      expect(install).not.toHaveBeenCalled();
+      expect(f.connect).not.toHaveBeenCalled();
+    } finally {
+      read.mockRestore();
+    }
+  });
+
+  it('rejects malformed and rewritten logs without invoking live authority failure hooks', async () => {
+    const install = vi.fn((apply: () => void) => apply());
+    const failure = vi.fn((cause: unknown): never => {
+      throw cause;
+    });
+    const f = await fixture(undefined, {
+      installAuthoritySync: install,
+      onAuthorityFailureSync: failure,
+    });
+    await f.manager.configure(0, f.config);
+    const valid = await f.store.read();
+    const before = f.registered.snapshot();
+    const generation = f.coordinator.snapshot();
+    const read = vi.spyOn(f.store, 'read');
+    install.mockClear();
+    try {
+      for (const invalid of [
+        { ...valid, records: [] },
+        { sequence: 0, records: [], events: [] },
+        {
+          ...valid,
+          events: valid.events.map((event) => ({
+            ...event,
+            occurredAt: '2010-01-01T00:00:00.000Z',
+          })),
+        },
+      ]) {
+        read.mockResolvedValueOnce(invalid);
+        await expect(
+          f.source.inspectDeclaredPluginIds(new AbortController().signal),
+        ).rejects.toMatchObject({ code: 'mcp-authority-protocol' });
+      }
+      expect(f.source.declaredPluginIds()).toEqual(['mcp-fixture']);
+      expect(f.registered.snapshot()).toEqual(before);
+      expect(f.coordinator.snapshot()).toEqual(generation);
+      expect(install).not.toHaveBeenCalled();
+      expect(failure).not.toHaveBeenCalled();
+      expect(f.connect).not.toHaveBeenCalled();
+    } finally {
+      read.mockRestore();
+    }
+  });
+
+  it('uses the same cached prefix across a detached read even if live authority advances', async () => {
+    const f = await fixture();
+    await f.manager.configure(0, f.config);
+    const prior = await f.store.read();
+    const release = deferred();
+    const read = vi.spyOn(f.store, 'read').mockImplementationOnce(async () => {
+      await release.promise;
+      return prior;
+    });
+    try {
+      const result = f.source.inspectDeclaredPluginIds(new AbortController().signal);
+      expect(read).toHaveBeenCalledExactlyOnceWith({ knownPrefix: prior.events });
+      await f.manager.configure(1, { ...f.config, id: 'newer' });
+      release.resolve();
+      await expect(result).resolves.toEqual(['mcp-fixture']);
+      expect(f.source.declaredPluginIds()).toEqual(['mcp-fixture', 'mcp-newer']);
+    } finally {
+      release.resolve();
+      read.mockRestore();
+    }
+  });
+
+  it.each(['abort', 'close'] as const)(
+    'checks %s before and after a detached store read',
+    async (stop) => {
+      const f = await fixture();
+      const before = await f.store.read();
+      const release = deferred();
+      const controller = new AbortController();
+      const reason = new Error('cancel detached read');
+      const read = vi.spyOn(f.store, 'read').mockImplementationOnce(async () => {
+        await release.promise;
+        return before;
+      });
+      try {
+        const result = f.source.inspectDeclaredPluginIds(controller.signal);
+        if (stop === 'abort') controller.abort(reason);
+        else await f.source.close();
+        release.resolve();
+        for (const operation of [result, f.source.inspectDeclaredPluginIds(controller.signal)]) {
+          if (stop === 'abort') await expect(operation).rejects.toBe(reason);
+          else await expect(operation).rejects.toMatchObject({ code: 'mcp-closed' });
+        }
+        expect(read).toHaveBeenCalledOnce();
+      } finally {
+        release.resolve();
+        read.mockRestore();
+      }
+    },
+  );
 
   it('releases a removed declaration while its pinned allocation drains', async () => {
     const started = deferred();

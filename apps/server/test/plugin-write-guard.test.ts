@@ -220,4 +220,56 @@ describe('plugin write guard', () => {
       200,
     );
   });
+
+  it.each([
+    ['/plugins/managed', { Host: 'evil.example' }, 403],
+    ['/plugins/managed/preview', { Origin: 'https://evil.example' }, 403],
+    ['/plugins/managed/notes/enable', { 'Sec-Fetch-Site': 'cross-site' }, 403],
+    ['/plugins/managed/unknown/deep', { 'Content-Type': 'text/plain' }, 415],
+    ['/plugins/managed/unknown/deep', {}, 404],
+  ])('uses the shared write guard and no-store on %s', async (path, override, status) => {
+    const response = await app().request(path, {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...override },
+      body: '{}',
+    });
+    expect(response.status).toBe(status);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+  });
+
+  it('keeps CORS behavior on managed preflights, rejected writes, and nearby routes', async () => {
+    const origin = 'http://localhost:5173';
+    const configured = app(origin);
+    for (const [path, requester, allowed] of [
+      ['/plugins/managed', origin, origin],
+      ['/plugins/managed/notes/disable', 'http://localhost:5174', null],
+      ['/plugins/managed/unknown', origin, origin],
+    ] as const) {
+      const response = await configured.request(path, {
+        method: 'OPTIONS',
+        headers: { Origin: requester, 'Access-Control-Request-Method': 'POST' },
+      });
+      expect(response.status).toBe(204);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(response.headers.get('access-control-allow-origin')).toBe(allowed);
+    }
+    const blocked = await configured.request('/plugins/managed/preview', {
+      method: 'POST',
+      headers: { ...jsonHeaders, Origin: origin, Host: 'evil.example' },
+      body: '{}',
+    });
+    expect(blocked.status).toBe(403);
+    expect(blocked.headers.get('cache-control')).toBe('no-store');
+    expect(blocked.headers.get('access-control-allow-origin')).toBe(origin);
+    const legacy = await configured.request('/plugins/managed/enable', {
+      method: 'POST',
+      headers: { ...jsonHeaders, Origin: origin },
+      body: '{}',
+    });
+    expect(legacy.status).toBe(200);
+    expect(legacy.headers.get('cache-control')).toBe('no-store');
+    const neighbor = await configured.request('/plugins/managed-other');
+    expect(neighbor.status).toBe(404);
+    expect(neighbor.headers.get('cache-control')).toBeNull();
+  });
 });

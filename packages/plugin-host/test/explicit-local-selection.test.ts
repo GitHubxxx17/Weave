@@ -1,9 +1,10 @@
-import { readFile, rm, writeFile } from 'node:fs/promises';
+import { readFile, rename, rm, writeFile } from 'node:fs/promises';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { commandsExtensionPoint, createPluginKernel, type PluginCommand } from '@weave/plugin';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 
 import {
   createLocalPluginSource,
@@ -51,9 +52,9 @@ it('exposes combined eligibility and keeps the legacy manual identity', async ()
     expect(candidates.map(localSourceCandidateIdentity)).toEqual([
       JSON.stringify(['a', manual.ready[0]!.digest]),
     ]);
-    expect((await source.prepare(snapshot.stamp, prepareOptions())).items[0]?.origin).toBe(
-      'manual',
-    );
+    const prepared = (await source.prepare(snapshot.stamp, prepareOptions())).items[0];
+    expect(prepared?.origin).toBe('manual');
+    expect(prepared).not.toHaveProperty('managedIdentity');
   } finally {
     await source.close();
   }
@@ -164,12 +165,78 @@ it('requires a completed manual scan and accepts a genuinely absent manual root'
   const { source, input } = await fixture();
   const unscanned = source.adoptExplicitSelectionSync(input);
   expect(unscanned.managedEligible).toEqual([]);
+  expect(source.mayReadManagedSync(id)).toBe(false);
   expect((await source.prepare(unscanned.stamp, prepareOptions())).items).toEqual([]);
   const scanned = await source.refresh();
   expect(scanned.discovery).toMatchObject({ exists: false, truncated: false, candidates: [] });
   expect(scanned.plugins).toEqual([]);
   expect(scanned.managedEligible).toMatchObject([{ id, origin: 'managed' }]);
+  expect(source.mayReadManagedSync(id)).toBe(true);
   await source.close();
+});
+
+it('withdraws managed readiness before rethrowing an ordinary root failure and recovers', async () => {
+  const { directory, source, input } = await fixture();
+  await writePlugin(directory, 'manual');
+  await source.refresh();
+  const before = source.adoptExplicitSelectionSync(input);
+  expect(before.managedEligible).toMatchObject([{ id }]);
+
+  const previous = `${directory}-previous`;
+  await rename(directory, previous);
+  await writeFile(directory, 'a file at the configured root');
+  try {
+    await expect(source.refresh()).rejects.toMatchObject({
+      code: 'plugin-unreadable',
+      cause: { code: 'ENOTDIR' },
+    });
+    expect(source.snapshot()).toEqual({
+      ...before,
+      managedEligible: [],
+      stamp: { ...before.stamp, revision: before.stamp.revision + 1 },
+    });
+    expect(source.mayReadManagedSync(id)).toBe(false);
+  } finally {
+    await rm(directory);
+    await rename(previous, directory);
+  }
+  try {
+    expect((await source.refresh()).managedEligible).toEqual(before.managedEligible);
+    expect(source.mayReadManagedSync(id)).toBe(true);
+  } finally {
+    await source.close();
+  }
+});
+
+it('withdraws managed readiness and retains manual rows after a listing fails on a child', async () => {
+  const { directory, source, input } = await fixture();
+  await writePlugin(directory, 'manual');
+  await source.refresh();
+  const before = source.adoptExplicitSelectionSync(input);
+  expect(before.managedEligible).toMatchObject([{ id }]);
+
+  const failure = Object.assign(new Error('Directory entry disappeared'), {
+    code: 'ENOENT',
+    syscall: 'lstat',
+    path: path.join(directory, 'disappeared'),
+  });
+  const read = vi.spyOn(fs, 'readdir').mockRejectedValueOnce(failure);
+  try {
+    await expect(source.refresh()).rejects.toMatchObject({
+      code: 'plugin-unreadable',
+      cause: failure,
+    });
+    expect(source.snapshot()).toEqual({
+      ...before,
+      managedEligible: [],
+      stamp: { ...before.stamp, revision: before.stamp.revision + 1 },
+    });
+    expect(source.mayReadManagedSync(id)).toBe(false);
+    expect((await source.refresh()).managedEligible).toEqual(before.managedEligible);
+  } finally {
+    read.mockRestore();
+    await source.close();
+  }
 });
 
 it('applies sticky and baseline reservations, denies selected IDs, and suppresses readiness on truncation', async () => {
@@ -195,12 +262,14 @@ it('applies sticky and baseline reservations, denies selected IDs, and suppresse
   await source.refresh();
   const denied = source.adoptExplicitSelectionSync({ ...input, deniedIds: [id] });
   expect(denied.managedEligible).toEqual([]);
+  expect(source.mayReadManagedSync(id)).toBe(true);
   const reserved = createLocalPluginSource({
     ...options,
     discovery: { directory, reservedIds: [id] },
   });
   await reserved.refresh();
   expect(reserved.adoptExplicitSelectionSync(input).managedEligible).toEqual([]);
+  expect(reserved.mayReadManagedSync(id)).toBe(false);
   await writePlugin(directory, id, files);
   expect((await reserved.refresh()).discovery.candidates[0]).toMatchObject({ status: 'invalid' });
   await rm(path.join(directory, id), { recursive: true });
@@ -211,6 +280,7 @@ it('applies sticky and baseline reservations, denies selected IDs, and suppresse
   const truncated = await source.refresh();
   expect(truncated.discovery).toMatchObject({ truncated: true, candidates: [{ id: 'a' }] });
   expect(truncated.managedEligible).toEqual([]);
+  expect(source.mayReadManagedSync(id)).toBe(false);
   await trustStore.append({ kind: 'disabled', pluginId: id });
   const log = await trustStore.events();
   const disabled = source.adoptExplicitSelectionSync({ ...input, trustEvents: log });
@@ -385,7 +455,12 @@ it('detaches input, preserves equivalent stamps, and rechecks activation identit
   const prepared = await source.prepare(current.stamp, prepareOptions());
   expect(prepared.items).toMatchObject([
     { id: 'a', origin: 'manual', identity: manualIdentity },
-    { id, origin: 'managed', identity: managedIdentity },
+    {
+      id,
+      origin: 'managed',
+      identity: managedIdentity,
+      managedIdentity: { digest: ready.digest, activationSequence: selection.activationSequence },
+    },
   ]);
   const kernel = createPluginKernel();
   try {

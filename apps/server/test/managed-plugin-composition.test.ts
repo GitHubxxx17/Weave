@@ -1,4 +1,5 @@
 import { rm, writeFile } from 'node:fs/promises';
+import fs from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import * as pluginHost from '@weave/plugin-host';
@@ -9,10 +10,20 @@ import {
   type RecordedPluginTrustEvent,
 } from '@weave/plugin-host';
 import { createLocalExtensionSource } from '../src/local-extension-source.js';
+import {
+  commitManagedCommandSync,
+  invalidateManagedCommandAuthoritySync,
+  ManagedCommitFailure,
+} from '../src/managed-command-commit.js';
+import {
+  createManagedAuthorityObserverBuffer,
+  createManagedPluginComposition,
+} from '../src/managed-plugin-composition.js';
 import { McpAuthorityError } from '../src/mcp-authority-store.js';
+import { createMcpExtensionSource } from '../src/mcp-source.js';
 import type { ExtensionAuthorityChange } from '../src/extension-types.js';
 import { createRealManagedCompositionFixture } from './support/managed-plugin-composition-fixture.js';
-import { decisionInput } from './support/plugin-authority-fixtures.js';
+import { artifact, decisionInput, importInput } from './support/plugin-authority-fixtures.js';
 
 function deferred() {
   let resolve!: () => void;
@@ -23,6 +34,110 @@ function deferred() {
 }
 
 describe('selected managed authority', () => {
+  it('collects both fallback failures with zero ready targets after a readable but uncertain import', async () => {
+    const f = await createRealManagedCompositionFixture();
+    const local = createLocalExtensionSource({
+      discovery: { directory: f.pluginsDirectory },
+      trustStore: f.authority.trust,
+    });
+    const mcp = createMcpExtensionSource({ store: f.mcpStore });
+    try {
+      await f.seedManaged('prior', 'prior', false);
+      const before = f.authority.snapshotSync();
+      const input = importInput('uncertain', before.heads.installSequence, artifact());
+      const buffer = createManagedAuthorityObserverBuffer(vi.fn());
+      const composition = createManagedPluginComposition(
+        { initialAuthority: before, readAuthoritySync: f.readAuthoritySync },
+        buffer,
+        () => ({ local, mcp }),
+        vi.fn(),
+      );
+      const blockManagedAdoptionFailureSync = vi.fn();
+      const primary = new ExplicitLocalAuthorityError('original explicit failure');
+      const commitSync = vi.fn((pending: typeof input) => {
+        expect(f.authority.commitSync(pending).kind).toBe('committed');
+        throw primary;
+      });
+      const withdraw = vi
+        .spyOn(local, 'withdrawExplicitSelectionSync')
+        .mockImplementationOnce(() => {
+          throw undefined;
+        });
+      const deny = vi.spyOn(mcp, 'setDeniedPluginIdsSync').mockImplementationOnce(() => {
+        throw undefined;
+      });
+      const invalidate = vi.spyOn(composition, 'invalidateAuthoritySync');
+      let captured: unknown;
+      try {
+        commitManagedCommandSync(
+          { commitSync, snapshotSync: f.authority.snapshotSync },
+          input,
+          before,
+          (cause, ids) => {
+            invalidateManagedCommandAuthoritySync(
+              { blockManagedAdoptionFailureSync },
+              composition,
+              cause,
+              ids,
+            );
+          },
+        );
+      } catch (cause: unknown) {
+        captured = cause;
+      }
+      expect(captured).toBeInstanceOf(ManagedCommitFailure);
+      expect((captured as ManagedCommitFailure).cause).toBe(primary);
+      expect((captured as ManagedCommitFailure).errors).toStrictEqual([
+        primary,
+        undefined,
+        undefined,
+      ]);
+      expect(commitSync).toHaveBeenCalledExactlyOnceWith(input);
+      expect(blockManagedAdoptionFailureSync).toHaveBeenCalledExactlyOnceWith(
+        'local-esm',
+        new Set(['prior', 'notes']),
+      );
+      expect(withdraw).toHaveBeenCalledOnce();
+      expect(deny).toHaveBeenCalledOnce();
+      const marker = invalidate.mock.calls[0]![0];
+      expect(marker).toBeInstanceOf(ExplicitLocalAuthorityError);
+      expect(marker).not.toBe(primary);
+      expect(marker).toHaveProperty('cause', primary);
+      expect(composition.cachedAuthoritySync()).toBe(before);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it('caches the confirmed save before a paired adoption can fail to start', async () => {
+    const f = await createRealManagedCompositionFixture();
+    try {
+      const initialAuthority = f.authority.snapshotSync();
+      await f.seedManaged('notes', 'saved', false);
+      const saved = f.authority.snapshotSync();
+      const buffer = createManagedAuthorityObserverBuffer(vi.fn());
+      const getSources = vi.fn(() => ({ local: undefined, mcp: undefined }));
+      const managed = createManagedPluginComposition(
+        { initialAuthority, readAuthoritySync: f.readAuthoritySync },
+        buffer,
+        getSources,
+        vi.fn(),
+      );
+      const block = vi.fn();
+      buffer.runSync(() => {
+        expect(() => managed.adoptCommittedAuthoritySync(saved, block)).toThrow(AggregateError);
+      });
+      expect(block).toHaveBeenCalledOnce();
+      getSources.mockClear();
+      expect(managed.cachedAuthoritySync()).toBe(saved);
+      expect(f.readAuthoritySync).not.toHaveBeenCalled();
+      expect(f.readOwned).not.toHaveBeenCalled();
+      expect(getSources).not.toHaveBeenCalled();
+    } finally {
+      await f.close();
+    }
+  });
+
   it.each([
     ['digest', (artifact: PluginArtifact) => ({ ...artifact, digest: '0'.repeat(64) })],
     [
@@ -254,6 +369,55 @@ describe('selected managed authority', () => {
       await host.coordinator.reload();
       expect(f.readOwned).not.toHaveBeenCalled();
       expect(host.coordinator.snapshot().members).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it('withdraws managed readiness and skips selected artifact reads on an incomplete ordinary scan', async () => {
+    const onKernelSetup = vi.fn();
+    const f = await createRealManagedCompositionFixture({ onKernelSetup });
+    try {
+      await f.seedManaged('notes', 'managed');
+      await f.seedManual('healthy', 'manual');
+      const blocked = await f.seedManual('unreadable', 'manual', false);
+      const host = f.compose();
+      await host.coordinator.reload();
+      const current = f.runtime.serverHost.controller()!.current();
+      const lstat = fs.lstat;
+      const descriptor = join(blocked.directory, 'weave-plugin.json');
+      const denied = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      const fault = vi.spyOn(fs, 'lstat').mockImplementation((file, options) => {
+        if (file === descriptor) return Promise.reject(denied);
+        return lstat(file, options);
+      });
+      onKernelSetup.mockImplementationOnce(() => {
+        throw new Error('failed manual-only assembly');
+      });
+      f.readOwned.mockClear();
+      try {
+        await host.coordinator.reload().catch(() => undefined);
+        expect(f.readOwned).not.toHaveBeenCalled();
+        expect(host.localSource!.snapshot().eligible).toMatchObject([{ pluginId: 'healthy' }]);
+        expect(host.coordinator.generationSnapshot().acceptingRuns).toBe(false);
+        expect(f.runtime.serverHost.controller()!.current()).toBe(current);
+        await expect(f.runTool('notes')).rejects.toMatchObject({
+          code: 'plugin-generation-blocked',
+        });
+
+        await host.coordinator.reload();
+        expect(f.readOwned).not.toHaveBeenCalled();
+        expect(host.coordinator.snapshot().members).toMatchObject([{ pluginId: 'healthy' }]);
+        expect(host.coordinator.generationSnapshot().acceptingRuns).toBe(true);
+      } finally {
+        fault.mockRestore();
+      }
+      await host.coordinator.reload();
+      expect(f.readOwned).toHaveBeenCalled();
+      expect(host.coordinator.snapshot().members).toMatchObject([
+        { pluginId: 'healthy' },
+        { pluginId: 'notes' },
+      ]);
     } finally {
       await f.close();
     }
@@ -591,6 +755,40 @@ describe('selected managed authority', () => {
       expect(await host.localSource!.discoveredPluginIds()).toEqual(['manual']);
       expect(f.readOwned).not.toHaveBeenCalled();
       expect(f.readMcp).not.toHaveBeenCalled();
+    } finally {
+      await f.close();
+    }
+  });
+
+  it('inspects fresh manual declarations without refreshing live authority or admission', async () => {
+    const f = await createRealManagedCompositionFixture();
+    try {
+      await f.seedManaged('notes', 'managed');
+      const readTrust = vi.fn(f.authority.trust.events);
+      const host = f.compose({ localTrustStore: { ...f.authority.trust, events: readTrust } });
+      await host.coordinator.reload();
+      const before = host.localSource!.snapshot();
+      const generation = host.coordinator.snapshot();
+      const admission = host.coordinator.generationSnapshot();
+      await f.seedManual('notes', 'colliding manual declaration', false);
+      f.readOwned.mockClear();
+      f.readMcp.mockClear();
+      f.readAuthoritySync.mockClear();
+      readTrust.mockClear();
+
+      await expect(
+        host.localSource!.inspectDeclarationClaims(new AbortController().signal),
+      ).resolves.toEqual({
+        pluginIds: ['notes'],
+        complete: true,
+      });
+      expect(host.localSource!.snapshot()).toEqual(before);
+      expect(host.coordinator.snapshot()).toEqual(generation);
+      expect(host.coordinator.generationSnapshot()).toEqual(admission);
+      expect(f.readOwned).not.toHaveBeenCalled();
+      expect(f.readMcp).not.toHaveBeenCalled();
+      expect(f.readAuthoritySync).not.toHaveBeenCalled();
+      expect(readTrust).not.toHaveBeenCalled();
     } finally {
       await f.close();
     }

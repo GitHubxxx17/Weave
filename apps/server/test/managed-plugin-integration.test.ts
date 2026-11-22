@@ -83,6 +83,10 @@ const stickyTrustIssue = {
   code: 'plugin-trust-invalid',
   message: 'Managed plugin trust requires the combined managed API',
 };
+const stickyHttpIssue = {
+  code: 'plugin-managed-review-required',
+  message: 'Use the managed plugin review to change this plugin.',
+};
 
 function ownershipLoss() {
   return new PluginStoreOwnershipError('plugin-store-ownership-lost', 'Private lease failure');
@@ -270,8 +274,8 @@ describe('joint managed, manual and MCP Generation', () => {
       ] as const) {
         const response = await app.request('/plugins/notes/' + path, request);
         expect({ status: response.status, body: await response.json() }).toEqual({
-          status: 400,
-          body: { error: stickyTrustIssue },
+          status: 409,
+          body: { error: stickyHttpIssue },
         });
       }
       expect(f.authority.snapshotSync()).toEqual(before);
@@ -380,8 +384,8 @@ describe('joint managed, manual and MCP Generation', () => {
       release.resolve();
       const result = await response;
       expect({ status: result.status, body: await result.json() }).toEqual({
-        status: 400,
-        body: { error: stickyTrustIssue },
+        status: 409,
+        body: { error: stickyHttpIssue },
       });
       expect(append).not.toHaveBeenCalled();
       expect(await override.events()).toEqual(prior);
@@ -447,7 +451,7 @@ describe('joint managed, manual and MCP Generation', () => {
           command: input.request.command,
         });
         if (application.kind !== 'committed') throw new Error('Expected committed activation');
-        expect(application.application.status).toBe('failed');
+        if (application.application.status !== 'failed') throw new Error('Expected failure');
         expect(
           phase === 'import'
             ? (application.application.cause as Error).cause
@@ -1037,7 +1041,9 @@ describe('joint managed, manual and MCP Generation', () => {
     const release = Promise.withResolvers<void>();
     let oldTurn: Promise<unknown> | undefined;
     try {
-      await f.seedManaged('notes', 'retained');
+      const artifact = await f.seedManaged('notes', 'retained');
+      const activationSequence =
+        f.authority.snapshotSync().installations[0]!.selection!.activationSequence;
       await f.seedMcp('remote');
       const first = echoConnection(async (_name, _args, options) => {
         entered.resolve(options!.signal!);
@@ -1050,6 +1056,9 @@ describe('joint managed, manual and MCP Generation', () => {
         .mockImplementation(async () => echoConnection());
       const host = f.compose({ mcpConnect: connect });
       const original = await host.coordinator.reload();
+      expect(original.members.find(({ sourceId }) => sourceId === 'mcp')).not.toHaveProperty(
+        'managedIdentity',
+      );
       const tool = original.members.find(({ sourceId }) => sourceId === 'mcp')!.manifest
         .contributes!.tools![0]!;
       oldTurn = f.runTool([tool, 'notes'], 'retired-managed');
@@ -1070,7 +1079,14 @@ describe('joint managed, manual and MCP Generation', () => {
           generationId: original.generation.id,
           current: false,
           members: expect.arrayContaining([
-            expect.objectContaining({ pluginId: 'notes', origin: 'managed' }),
+            expect.objectContaining({
+              pluginId: 'notes',
+              origin: 'managed',
+              managedIdentity: {
+                digest: artifact.digest,
+                activationSequence,
+              },
+            }),
           ]),
         }),
       );
@@ -1099,6 +1115,7 @@ describe('joint managed, manual and MCP Generation', () => {
         kind: 'replayed',
         operation: repeated.operation,
         currentAuthority: repeated.savedAuthority,
+        observed: repeated.observed,
       });
       expect(retry).toHaveBeenCalledOnce();
       expect(abort).toHaveBeenCalledOnce();

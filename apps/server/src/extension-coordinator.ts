@@ -45,25 +45,34 @@ export interface ExtensionMutationContext {
 
 export type ManagedMutationStep<Replay, Saved> =
   | { disposition: 'skip-rebuild'; replay: Replay }
+  | { disposition: 'committed-no-rebuild'; saved: Saved }
   | { disposition: 'rebuild'; saved: Saved }
   | { disposition: 'committed-failed'; saved: Saved; cause: unknown };
 
 type ManagedAttributedFailure = ExtensionIdentity & {
   readonly sourceId: string;
+  readonly failureKind: Exclude<ManagedApplicationFailureKind, 'adoption'>;
   readonly cause: unknown;
 };
 
+export type ManagedApplicationFailureKind = 'adoption' | 'preparation' | 'publication';
+
 type ManagedMutationOutcome =
+  | { kind: 'not-required' }
   | { kind: 'completed'; attributedFailures?: readonly ManagedAttributedFailure[] }
-  | { kind: 'failed'; cause: unknown };
+  | { kind: 'failed'; failureKind: 'adoption' | 'publication'; cause: unknown };
+
+export interface ManagedRuntimeObservation {
+  readonly generation: ExtensionGenerationSnapshot;
+  readonly members: readonly ExtensionMember[];
+}
 
 export type ManagedMutationCompletion<Replay, Saved> =
-  | { kind: 'replayed'; replay: Replay }
+  | { kind: 'replayed'; replay: Replay; observed: ManagedRuntimeObservation }
   | {
       kind: 'committed';
       saved: Saved;
-      generation: ExtensionGenerationSnapshot;
-      members: readonly ExtensionMember[];
+      observed: ManagedRuntimeObservation;
       outcome: ManagedMutationOutcome;
     };
 
@@ -542,19 +551,19 @@ export function createExtensionCoordinator(
       sourceId: string,
       item: ExtensionIdentity,
       reason: unknown,
-      original?: { cause: unknown },
+      attribution?: Pick<ManagedAttributedFailure, 'cause' | 'failureKind'>,
     ): void {
       const keys = excluded.get(sourceId)!;
       if (keys.has(item.identity)) throw new Error('Extension exclusions must increase on retry');
       keys.add(item.identity);
       const { pluginId, identity } = item;
-      if (original !== undefined)
+      if (attribution !== undefined)
         diagnostics?.attributed.push({
           sourceId,
           pluginId,
           identity,
           ...originOf(item),
-          cause: original.cause,
+          ...attribution,
         });
       failures.push({
         sourceId,
@@ -570,7 +579,11 @@ export function createExtensionCoordinator(
 
     type OwnedItem = { sourceId: string; item: PreparedExtensionItem };
 
-    function attribute(items: readonly OwnedItem[], original: unknown): void {
+    function attribute(
+      items: readonly OwnedItem[],
+      original: unknown,
+      failureKind: ManagedAttributedFailure['failureKind'],
+    ): void {
       if (authorityMarker(original) !== undefined) throw original;
       const reason = items.reduce(
         (current, { item }) => item.normalizeError?.(current) ?? current,
@@ -586,7 +599,7 @@ export function createExtensionCoordinator(
         throw reason;
       }
       const { sourceId, item } = blamed[0]!;
-      exclude(sourceId, item, reason, { cause: original });
+      exclude(sourceId, item, reason, { cause: original, failureKind });
     }
 
     function excludeUnready(items: readonly OwnedItem[]): boolean {
@@ -691,7 +704,10 @@ export function createExtensionCoordinator(
                 identityFailure = { ...failure, sourceId: source.id };
                 break;
               }
-              exclude(source.id, failure, failure.error, { cause: failure.error });
+              exclude(source.id, failure, failure.error, {
+                cause: failure.error,
+                failureKind: 'preparation',
+              });
             }
             if (identityFailure !== undefined) break;
           }
@@ -704,7 +720,7 @@ export function createExtensionCoordinator(
             } catch (original: unknown) {
               if (authorityMarker(original) !== undefined) throw original;
               checkIteration();
-              attribute(items, original);
+              attribute(items, original, 'preparation');
               continue;
             }
             checkIteration();
@@ -731,6 +747,9 @@ export function createExtensionCoordinator(
                   pluginId: item.pluginId,
                   identity: item.identity,
                   ...originOf(item),
+                  ...(item.managedIdentity === undefined
+                    ? {}
+                    : { managedIdentity: item.managedIdentity }),
                   ...(item.instanceId === undefined ? {} : { instanceId: item.instanceId }),
                   manifest: item.plugin.manifest,
                 })),
@@ -761,7 +780,7 @@ export function createExtensionCoordinator(
                 } catch (original: unknown) {
                   if (authorityMarker(original) !== undefined) throw original;
                   checkIteration();
-                  attribute(items, original);
+                  attribute(items, original, 'publication');
                   continue;
                 }
                 activeByGeneration.set(next.id, nextMembers);
@@ -847,11 +866,18 @@ export function createExtensionCoordinator(
     operation: (context: ExtensionMutationContext) => Promise<ManagedMutationStep<Replay, Saved>>,
   ): Promise<ManagedMutationCompletion<Replay, Saved>> {
     return enqueueMutation(sourceId, async (context) => {
+      const observe = (): ManagedRuntimeObservation => ({
+        generation: generationSnapshot(),
+        members: structuredClone(members),
+      });
       const step = await operation(context);
-      if (step.disposition === 'skip-rebuild') return { kind: 'replayed', replay: step.replay };
+      if (step.disposition === 'skip-rebuild')
+        return { kind: 'replayed', replay: step.replay, observed: observe() };
       let outcome: ManagedMutationOutcome;
       if (step.disposition === 'committed-failed') {
-        outcome = { kind: 'failed', cause: step.cause };
+        outcome = { kind: 'failed', failureKind: 'adoption', cause: step.cause };
+      } else if (step.disposition === 'committed-no-rebuild') {
+        outcome = { kind: 'not-required' };
       } else {
         const diagnostics: ManagedRebuildDiagnostics = { attributed: [] };
         try {
@@ -862,14 +888,13 @@ export function createExtensionCoordinator(
         }
         outcome =
           diagnostics.terminal !== undefined
-            ? { kind: 'failed', cause: diagnostics.terminal.cause }
+            ? { kind: 'failed', failureKind: 'publication', cause: diagnostics.terminal.cause }
             : { kind: 'completed', attributedFailures: diagnostics.attributed };
       }
       return {
         kind: 'committed',
         saved: step.saved,
-        generation: generationSnapshot(),
-        members: structuredClone(members),
+        observed: observe(),
         outcome,
       };
     });

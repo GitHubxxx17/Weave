@@ -118,7 +118,7 @@ The Server wrapper is:
 interface OwnedPluginArtifactStore extends PluginArtifactStore {
   readonly binding: ManagedStoreBinding;
   assertHeldSync(): void;
-  quiesce(): Promise<void>; // reject new stage/read, drain started calls; keep lock
+  quiesce(): Promise<void>; // reject new artifact calls, drain started calls; keep lock
   close(): Promise<void>; // quiesce then release lock; caller has drained consumers
 }
 async function openOwnedPluginArtifactStore(options: {
@@ -131,11 +131,13 @@ async function openOwnedPluginArtifactStore(options: {
 }): Promise<OwnedPluginArtifactStore>;
 ```
 
-The wrapper privately creates exactly ONE 6.1 store only after lease and main
-registration succeed. It exposes guarded `stage/read`, not the raw underlying
-store or owner DB/SQL handle. It tracks in-flight calls without a new scheduling
-queue; the existing artifact queue still serializes its instance. Later 6.2c/d
-uses the sole coordinator for application/admin order.
+The wrapper privately creates exactly one artifact store after lease and main
+registration succeed. It exposes guarded `stage` and `read`, and the
+[Stage 6.2d installer contract](2026-11-22-managed-plugin-installer-api-design.md#read-only-review-and-exact-staging)
+adds guarded `preview` and reviewed `stage` input. Raw store and owner DB
+handles remain private. The wrapper tracks all artifact calls through
+quiescence, and the artifact queue still serializes its instance. Stage 6.2c/d
+uses the sole coordinator for authority and Generation order.
 
 `onOwnershipLost` is a required synchronous observer for the lifecycle owner to
 block affected managed admission before an ownership error escapes/another await.
@@ -490,7 +492,7 @@ repeat plugin command or a reason to append a new trust decision.
 
 Each returned wrapper retains one private ownership-loss `AbortController`
 (named `ownershipLossAbort` below). It is separate from caller cancellation and is never exposed
-or reset/reused for a later owner. Every underlying 6.1 `stage/read` receives an
+or reset/reused for a later owner. Every underlying artifact call receives an
 effective signal combining the caller's optional signal with this loss signal:
 
 ```ts
@@ -502,9 +504,9 @@ const signal =
 
 `AbortSignal.any` is available below Node 24.4 (Node 20.3/18.17) and needs no
 polyfill/dependency or package contract change. Always pass the effective signal
-on both operations, including `read(digest, {signal})` with no caller signal.
+on all operations, including `read(digest, {signal})` with no caller signal.
 
-`stage/read` validates options, verifies held/open ownership and borrowed authority
+Every artifact call validates options and verifies held/open ownership and borrowed authority
 availability, adds an in-flight completion ticket to a private Set BEFORE
 synchronously calling the single private artifact store with that signal, then
 attaches settlement to that returned promise. The ticket always resolves in

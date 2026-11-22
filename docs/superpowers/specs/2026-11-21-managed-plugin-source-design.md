@@ -5,9 +5,10 @@ delivers selected, trusted managed ESM through the same Generation as manual ESM
 and MCP. Stage 6.2c.1 delivered the reusable `@weave/plugin-host` capabilities
 in PR #87 at `0e61168`. Stage 6.2c.2 uses that baseline to wire the Server
 composition and end-to-end behavior.
-Stage 6.2d owns installer HTTP, preview and import workflows, first-import
-collision prevention, and managed catalog DTOs. Stage 6.3 owns Studio and
-Desktop product integration.
+The [Stage 6.2d installer design](2026-11-22-managed-plugin-installer-api-design.md)
+defines installer HTTP, preview and import workflows, first-import collision
+prevention, and managed catalog DTOs. Stage 6.3 owns Studio and Desktop
+product integration.
 
 This extends the unified extension composition and local ESM trust contracts
 in [Foundation](../../architecture/foundation.md),
@@ -128,6 +129,14 @@ requires a completed, non-truncated manual scan. A completed scan of a
 missing manual directory meets this requirement. Managed eligibility also
 requires a folded, enabled trust record with exactly matching digest and
 manifest. The snapshot's `plugins` and `discovery` remain manual projections.
+
+Stage 6.2d keeps declaration completeness private and exposes the same manual
+namespace predicate through `LocalPluginSourceController.mayReadManagedSync(id)`.
+Server delegates the routine selected-artifact read gate to this method. An
+incomplete ordinary scan withdraws managed readiness, and a failed root scan
+preserves prior manual rows while withdrawing readiness before rethrowing the
+legacy discovery error. See the
+[installer design](2026-11-22-managed-plugin-installer-api-design.md#reviewed-selection-and-readback).
 
 Adoption replaces the cached projection and synchronously notifies the observer
 after assignment. Recompute the manual and managed results against the latest
@@ -463,6 +472,12 @@ in 6.2b.
 
 ### Queued durable decisions
 
+This section records the Stage 6.2c.2 selection contract. Stage 6.2d extends it
+with a caller precommit signal, a committed no-rebuild disposition for import,
+exact typed managed membership and fresh or replay runtime observation inside
+the ticket. The [installer design](2026-11-22-managed-plugin-installer-api-design.md#reviewed-selection-and-readback)
+defines the extended contract and fail-closed commit readback.
+
 Server exposes the following only within owned composition:
 
 ```ts
@@ -572,7 +587,10 @@ before mutation, before immediate retry, and again before any awaited branch
 can return idempotent success. Preserve the existing trust transaction
 backstop. For a custom override, check current sticky authority synchronously
 at the override append dispatch as well. Use the existing safe invalid-trust
-error for a sticky ID.
+error for a sticky ID. Stage 6.2d preserves that trust-store code through a
+typed error and projects HTTP 409 `plugin-managed-review-required` for
+well-formed legacy ID mutations, including through the Server's separate
+authority assertion when the local ESM manager is disabled.
 
 ### Legacy public projection
 
@@ -593,6 +611,11 @@ safe codes and messages. Use the existing `plugin-load-failed` code with
 whole-candidate failures with managed or unknown attribution. Keep original
 causes private. Catalog GETs project cached state.
 
+Stage 6.2d adds a dedicated managed catalog and decision projection using
+typed published digest and activation sequence. Its memory-only catalog uses
+the latest validated or committed authority cache with the current Generation.
+Managed mutations and replay use their own ticket observations.
+
 ### Shutdown and failed startup
 
 Install the owned consumer drain before startup can acquire a wrapper. Begin
@@ -604,6 +627,8 @@ before cancelling active turns and disposing the controller, sources and
 ServerHost. Direct and manual disposal retain their current cancellation
 order. Keep Session persistence open through terminal writes and close idle
 SSE before awaiting HTTP close.
+Stage 6.2d closes installer preview admission before this sequence and the
+wrapper drains dispatched preview calls along with stage and read.
 Unowned stop continues through the existing cleanup phases and returns its
 first cleanup failure unchanged, even when later phases also fail.
 

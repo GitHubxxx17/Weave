@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { PluginHostError, type PluginHostSnapshot, type ReloadResult } from '@weave/plugin-host';
 import { PluginTrustStoreError } from '../src/plugin-trust-store.js';
 import { createApp } from '../src/app.js';
@@ -234,6 +234,27 @@ describe('local plugin HTTP management', () => {
     expect(response.status).toBe(404);
     expect(await response.json()).toMatchObject({ error: { code: 'plugin-management-disabled' } });
   });
+
+  it.each([
+    ['POST', '/plugins/sticky/trust', '{}'],
+    ['POST', '/plugins/ordinary/enable', 'bad'],
+    ['POST', '/plugins/sticky/enable', '{"extra": true}'],
+    ['POST', '/plugins/sticky/disable?immediate=1', '{}'],
+    ['DELETE', '/plugins/sticky/trust?immediate=true&immediate=false', '{}'],
+    ['POST', '/plugins/INVALID/enable', '{}'],
+  ])(
+    'reports disabled for malformed legacy %s %s without consulting sticky authority',
+    async (method, path, body) => {
+      const assertManualPluginIdSync = vi.fn();
+      const app = createApp({ status: 'running' } as never, { assertManualPluginIdSync });
+      const response = await app.request(path, { method, headers, body });
+      expect(response.status).toBe(404);
+      expect(await response.json()).toMatchObject({
+        error: { code: 'plugin-management-disabled' },
+      });
+      expect(assertManualPluginIdSync).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ['plugin-not-found', 404],

@@ -19,6 +19,8 @@ import {
   type ManagedPluginCompositionOptions,
 } from './managed-plugin-composition.js';
 import { createManagedSelectionManager } from './managed-selection-manager.js';
+import { createManagedPluginInstaller } from './managed-plugin-installer.js';
+import type { OwnedPluginArtifactStore } from './owned-plugin-artifact-store.js';
 
 /** Trust persistence remains open until administration and generation draining finish. */
 export interface ClosablePluginTrustStore extends PluginTrustStore {
@@ -43,6 +45,7 @@ interface ServerExtensionOptions {
     readonly connect?: typeof connectMcp;
   };
   readonly managed?: ManagedPluginCompositionOptions;
+  readonly installerStore?: Pick<OwnedPluginArtifactStore, 'preview' | 'stage'>;
   readonly runnerOptions: Omit<ServerAgentRunnerOptions, 'kernelPlugins'> & {
     readonly hostVersion: string;
   };
@@ -202,16 +205,35 @@ export function createServerExtensionCoordinator(
     options.managed.selectionAuthority !== undefined
       ? createManagedSelectionManager(coordinator, options.managed.selectionAuthority, managed)
       : undefined;
+  const installer =
+    local !== undefined &&
+    managed !== undefined &&
+    options.installerStore !== undefined &&
+    options.managed?.selectionAuthority !== undefined &&
+    applyManagedSelection !== undefined
+      ? createManagedPluginInstaller({
+          coordinator,
+          authority: options.managed.selectionAuthority,
+          store: options.installerStore,
+          composition: managed,
+          inspectLocalClaims: local.inspectDeclarationClaims,
+          ...(mcp === undefined ? {} : { inspectMcpIds: mcp.inspectDeclaredPluginIds }),
+          reservedIds: new Set(reservedIds),
+          applySelection: applyManagedSelection,
+        })
+      : undefined;
   coordinatedHosts.add(runtime.serverHost);
   return {
     coordinator,
     managed,
     applyManagedSelection,
+    installer,
     localSource: local,
     adoptInitialAuthoritySync: managed?.adoptInitialAuthoritySync,
     pluginHost: local?.facade(coordinator, options.local?.dispose),
     mcpManager: mcp?.facade(coordinator),
     async closeUnpublished() {
+      installer?.closeSync();
       try {
         const outcomes = await Promise.allSettled([local?.close(), mcp?.close()]);
         const failures = outcomes.flatMap((outcome) =>
