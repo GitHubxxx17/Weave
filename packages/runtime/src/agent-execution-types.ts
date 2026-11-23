@@ -216,6 +216,7 @@ export type AgentExecutionErrorCode =
   | 'execution-not-active'
   | 'execution-not-queued'
   | 'execution-request-conflict'
+  | 'execution-task-session-read-only'
   | 'execution-closed'
   | 'execution-output-limit'
   | 'execution-admission-uncertain'

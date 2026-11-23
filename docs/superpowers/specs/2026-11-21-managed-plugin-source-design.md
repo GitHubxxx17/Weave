@@ -457,7 +457,8 @@ refreshes skip managed payloads and can still assemble compliant unmanaged
 membership from the paired snapshots.
 Published MCP allocations retain their iteration signal listener until disposal.
 Their signal stays independent of the permanent loss signal, preserving active
-and retired pins and their resources. Keep the existing local fallback
+and retired ordinary Turn pins and their resources. Agent Task retained leases
+and their child runs are revoked on ownership loss. Keep the existing local fallback
 invalidation of unresolved raw local preparations as a separate cancellation.
 
 Install `assertManagedStartSync` as `assertCanStartSync` on the exact wrapped

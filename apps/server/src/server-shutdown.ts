@@ -8,6 +8,8 @@ import type { PluginAuthorityDatabase } from './plugin-authority-types.js';
 import type { PluginMarketplaceManager } from './plugin-marketplace-manager.js';
 
 export interface ServerShutdownResources {
+  readonly agentTaskService?:
+    { readonly closeSync: () => void; readonly drain: () => Promise<void> } | undefined;
   readonly agentExecutionService?: Pick<AgentExecutionService, 'closeSync' | 'drain'> | undefined;
   readonly panelService?: Pick<PanelService, 'closeSync' | 'drain'> | undefined;
   readonly server?: ServerType | undefined;
@@ -88,6 +90,7 @@ export function createServerShutdown(options: ServerShutdownOptions): ServerShut
   let resources: ServerShutdownResources | undefined;
   let httpClose: Promise<CleanupOutcome> | undefined;
   let quiesced = false;
+  let agentWritersDrained = false;
   let consumersDrained = false;
   let settledCleanup = false;
   let wrapperReleased = false;
@@ -101,8 +104,11 @@ export function createServerShutdown(options: ServerShutdownOptions): ServerShut
     if (!outcome.ok) cleanupCauses.push(outcome.cause);
   }
 
-  function hasUnfinishedManagedResources(): boolean {
+  function hasUnfinishedResources(): boolean {
     return (
+      (!agentWritersDrained &&
+        (resources?.agentExecutionService !== undefined ||
+          resources?.agentTaskService !== undefined)) ||
       (resources?.owned !== undefined && !wrapperReleased) ||
       (resources?.authority !== undefined && !authorityClosed)
     );
@@ -118,8 +124,10 @@ export function createServerShutdown(options: ServerShutdownOptions): ServerShut
       authority,
       pluginMarketplaceManager,
       panelService,
+      agentTaskService,
       agentExecutionService,
     } = resources;
+    agentTaskService?.closeSync();
     agentExecutionService?.closeSync();
     panelService?.closeSync();
     installer?.closeSync();
@@ -127,8 +135,20 @@ export function createServerShutdown(options: ServerShutdownOptions): ServerShut
     // Start HTTP close before cancellation. Its completion can depend on Agent SSE.
     if (server !== undefined) httpClose ??= settle(() => closeServer(server));
     // Finish execution terminal facts before any Generation consumer is disposed.
-    if (!settledCleanup && agentExecutionService !== undefined)
-      await record(() => agentExecutionService.drain());
+    if (
+      !agentWritersDrained &&
+      (agentTaskService !== undefined || agentExecutionService !== undefined)
+    ) {
+      // A rejected drain is an incomplete barrier. Its materializer, terminal
+      // writer or settlement reconciliation still owns these Stores. Retry the
+      // same services before disposing consumers or closing persistence.
+      const drained = await settle(async () => {
+        await agentTaskService?.drain();
+        await agentExecutionService?.drain();
+      });
+      if (!drained.ok) return [drained.cause];
+      agentWritersDrained = true;
+    }
     if (owned !== undefined && !consumersDrained) {
       const quiesce = async () => {
         if (quiesced) return;
@@ -203,7 +223,7 @@ export function createServerShutdown(options: ServerShutdownOptions): ServerShut
     const current = {
       outcome,
       stop: outcome.then((causes) => {
-        if (hasUnfinishedManagedResources()) {
+        if (hasUnfinishedResources()) {
           attempt = undefined;
         } else if (failedStartupError !== undefined) {
           failedStartupCleanups.delete(failedStartupError);
@@ -238,7 +258,7 @@ export function createServerShutdown(options: ServerShutdownOptions): ServerShut
       const error = new AggregateError([cause, ...failures], 'Server startup cleanup failed', {
         cause,
       });
-      if (hasUnfinishedManagedResources()) {
+      if (hasUnfinishedResources()) {
         failedStartupError = error;
         failedStartupCleanups.set(error, stop);
       }

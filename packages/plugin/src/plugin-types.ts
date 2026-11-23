@@ -2,17 +2,35 @@ import { type LlmClient, type LlmProviderRegistration, type LlmProviderType } fr
 import {
   toolDefinitionSchema,
   type RegisteredToolDefinition,
+  type ToolApprovalRequirement,
   type ToolDefinition,
+  type ToolExecutionContext,
 } from '@weave/runtime';
 import { z } from 'zod';
 import { PluginError, type PluginErrorCode } from './plugin-errors.js';
 import { assertNameDeclared } from './declaration.js';
 import { type PluginCapability, type PluginManifest } from './manifest.js';
 
+type PluginToolContext = Omit<ToolExecutionContext, 'toolAuthority' | 'executionId'>;
+export type PluginToolDefinition<TInput, TOutput> = Omit<
+  ToolDefinition<TInput, TOutput>,
+  'execute' | 'approval'
+> & {
+  readonly approval?:
+    | (Omit<ToolApprovalRequirement<TInput>, 'summarize'> & {
+        readonly summarize: (
+          input: TInput,
+          context: PluginToolContext,
+        ) => ReturnType<ToolApprovalRequirement<TInput>['summarize']>;
+      })
+    | undefined;
+  readonly execute: (input: TInput, context: PluginToolContext) => Promise<TOutput> | TOutput;
+};
+
 /** Methods exposed to a trusted plugin during setup. */
 export interface PluginContext {
   /** Adds a validated Tool definition to the plugin's pending registrations. */
-  registerTool<TInput, TOutput>(tool: ToolDefinition<TInput, TOutput>): void;
+  registerTool<TInput, TOutput>(tool: PluginToolDefinition<TInput, TOutput>): void;
   /** Adds a validated LLM Provider to the plugin's pending registrations. */
   registerProvider(provider: LlmProviderRegistration): void;
 }
@@ -101,7 +119,7 @@ export function createPluginContext(manifest: PluginManifest): StagedPluginConte
   const providers: LlmProviderRegistration[] = [];
 
   return {
-    registerTool<TInput, TOutput>(tool: ToolDefinition<TInput, TOutput>): void {
+    registerTool<TInput, TOutput>(tool: PluginToolDefinition<TInput, TOutput>): void {
       if (!manifest.capabilities.includes('tool')) {
         throw createCapabilityError('tool', manifest.id);
       }

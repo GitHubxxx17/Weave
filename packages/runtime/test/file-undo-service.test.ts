@@ -170,6 +170,41 @@ it('serializes cooperating writes after the whole restore operation', async () =
   await later;
   expect(await readFile(join(f.root, 'a'), 'utf8')).toBe('later write');
 });
+it('checks the synchronous undo permit again after the durable operation starts', async () => {
+  const f = await fixture();
+  const append = f.store.append.bind(f.store);
+  let permit = true;
+  let entered!: () => void;
+  let release!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  f.store.append = async (session, events) => {
+    const saved = await append(session, events);
+    if (events[0]?.type === 'workspace.undo-started') {
+      entered();
+      await gate;
+    }
+    return saved;
+  };
+  const undo = createFileUndoService({ store: f.store }).undo({
+    ...f.input,
+    assertMutationCurrent: () => {
+      if (!permit) throw new Error('Folder permit revoked');
+    },
+  });
+  await started;
+  permit = false;
+  release();
+  await expect(undo).rejects.toThrow('Folder permit revoked');
+  expect(await readFile(join(f.root, 'a'), 'utf8')).toBe('after');
+  expect(await readFile(join(f.root, 'b'), 'utf8')).toBe('created');
+  const events = await f.store.read('s');
+  expect(events.some((event) => event.type === 'workspace.undo-file')).toBe(false);
+});
 it('normalizes real path aliases before durable intent on the actual filesystem', async () => {
   const f = await fixture();
   await writeFile(join(f.root, 'Case'), 'A');

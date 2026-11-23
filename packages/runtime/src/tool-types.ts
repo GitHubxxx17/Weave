@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { ApprovalRisk } from './approval-types.js';
+import type { AgentToolAuthority } from './agent-tool-authority.js';
 
 const nonEmptyStringSchema = z.string().min(1);
 const nonNegativeFiniteNumberSchema = z.number().finite().nonnegative();
@@ -23,6 +24,8 @@ export type ToolPermissionMode = z.infer<typeof toolPermissionModeSchema>;
  */
 export interface ToolExecutionContext {
   readonly turnId?: string | undefined;
+  readonly executionId?: string | undefined;
+  readonly toolAuthority?: AgentToolAuthority | undefined;
   readonly toolCallId?: string | undefined;
   /** Cooperative cancellation signal for the current invocation. */
   readonly signal: AbortSignal;
@@ -88,6 +91,8 @@ export type RegisteredToolDefinition = ToolDefinition<never, unknown>;
 /** Input accepted by one Tool Pipeline invocation. */
 export interface ToolExecutionRequest {
   readonly turnId?: string | undefined;
+  readonly executionId?: string | undefined;
+  readonly toolAuthority?: AgentToolAuthority | undefined;
   /** Provider-generated id used to correlate the tool result. */
   readonly toolCallId: string;
   /** Registered tool name. */
@@ -112,6 +117,10 @@ export const toolExecutionRequestSchema: z.ZodType<ToolExecutionRequest> = z
     arguments: z.string(),
     sessionId: nonEmptyStringSchema.optional(),
     turnId: nonEmptyStringSchema.optional(),
+    executionId: nonEmptyStringSchema.optional(),
+    toolAuthority: z
+      .custom<AgentToolAuthority>((value) => typeof value === 'object' && value !== null)
+      .optional(),
     signal: z.instanceof(AbortSignal).optional(),
     timeoutMs: nonNegativeFiniteNumberSchema.optional(),
     permissionMode: toolPermissionModeSchema.optional(),

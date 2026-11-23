@@ -349,15 +349,26 @@ function reconcileExecution(
   if (cleanup === undefined && stored === undefined)
     return { kind: 'awaiting-cleanup', ...missing };
 
-  const firstIntent = summary.cancellation?.reason;
+  const firstIntent = summary.cancellation;
   if (executionStatus === 'cancelled' && firstIntent !== undefined) {
+    const intentEvent = parent.events[firstIntent.sequence - 1];
+    const priorTerminalCause = (reason: unknown) =>
+      terminal.payload.reason === reason &&
+      (reason === 'task-cancelled' ||
+        (intentEvent?.type === 'agent.task.cancel-requested' &&
+          Date.parse(terminal.occurredAt) < Date.parse(intentEvent.occurredAt)));
     const cleanupCause = taskStopReasonSchema.safeParse(cleanup?.reason);
-    if (cleanupCause.success && cleanupCause.data !== firstIntent)
+    if (
+      cleanupCause.success &&
+      cleanupCause.data !== firstIntent.reason &&
+      !priorTerminalCause(cleanupCause.data)
+    )
       return blocked('cleanup-mismatch');
     if (
       stored?.status === 'cancelled' &&
       stored.reason !== 'task-cancelled' &&
-      stored.reason !== firstIntent
+      stored.reason !== firstIntent.reason &&
+      !priorTerminalCause(stored.reason)
     )
       return blocked('settlement-mismatch');
   }

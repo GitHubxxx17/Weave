@@ -15,6 +15,8 @@ The host binds each accepted child to a retained lease of the actual running par
 
 All cross-Session effects use preallocated identities and exact reconciliation. Unknown append outcomes retain conservative fences and capacity. Restart interrupts unfinished work without replaying model or tool side effects. Shutdown drains materializers and actual execution cleanup before closing stores; incomplete cleanup or uncertain durable state remains retryable.
 
+Stop All records an append-only root operation with up to four preallocated task IDs before writing per-task cancellation intents. An empty target list is durable. Retrying the same operation uses its original targets after restart, and the first per-task cause remains authoritative.
+
 ## Consequences
 
 The first version has depth one, four live tasks per root, sixteen globally, bounded observation and result JSON, and ten-minute cooperative deadlines. The child Composer is read-only and Runtime permanently enforces one-shot origin across HTTP, host and restart paths. Shared Project files have no automatic worktree or OS isolation; concurrent writes can conflict. This design does not promise hard token/cost limits or arbitrary plugin sandboxing.

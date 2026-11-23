@@ -20,6 +20,9 @@ export interface ApprovalRequest {
   readonly risk: ApprovalRisk;
   readonly inputSummary: unknown;
   readonly sessionId?: string | undefined;
+  /** Run attribution supplied by the shared Tool Pipeline. */
+  readonly turnId?: string | undefined;
+  readonly executionId?: string | undefined;
   readonly status: ApprovalStatus;
   readonly createdAt: string;
   readonly resolvedAt?: string | undefined;
@@ -118,6 +121,8 @@ export const approvalRequestSchema: z.ZodType<ApprovalRequest> = z.object({
   risk: approvalRiskSchema,
   inputSummary: z.unknown(),
   sessionId: nonEmptyStringSchema.optional(),
+  turnId: nonEmptyStringSchema.optional(),
+  executionId: nonEmptyStringSchema.optional(),
   status: approvalStatusSchema,
   createdAt: nonEmptyStringSchema,
   resolvedAt: nonEmptyStringSchema.optional(),

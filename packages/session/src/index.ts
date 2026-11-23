@@ -21,6 +21,7 @@ export {
   agentTaskFactDigest,
   agentTaskOriginPayloadSchema,
   agentTaskSettledPayloadSchema,
+  agentTasksStopRequestedPayloadSchema,
 } from './agent-task-events.js';
 export type {
   AgentTaskAccepted,
@@ -30,6 +31,7 @@ export type {
   AgentTaskProject,
   AgentTaskSettled,
   AgentTaskToolIdentity,
+  AgentTasksStopRequested,
 } from './agent-task-events.js';
 export type { SessionAgentTask, SessionAgentTasks } from './agent-task-projection.js';
 

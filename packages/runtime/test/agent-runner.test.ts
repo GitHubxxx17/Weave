@@ -3334,6 +3334,84 @@ describe('Agent Runner LLM middleware', () => {
 
     expect(failure).toMatchObject({ message: 'middleware bug' });
   });
+
+  it.each(['detached', 'abandoned', 'throws', 'yielding cleanup'] as const)(
+    'awaits Provider iterator cleanup when LLM middleware leaves a %s delegation',
+    async (outcome) => {
+      const entered = Promise.withResolvers<void>();
+      const cleaning = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const store = createInMemorySessionEventStore();
+      let providerCalls = 0;
+      let delegated: AsyncIterable<StreamEvent> | undefined;
+      let continueLate: (() => AsyncIterable<StreamEvent>) | undefined;
+      let detached: Promise<unknown> | undefined;
+      let cleaned = false;
+      const runner = createAgentRunner({
+        llm: {
+          stream(_request, options) {
+            providerCalls += 1;
+            return (async function* () {
+              try {
+                entered.resolve();
+                if (outcome === 'abandoned' || outcome === 'yielding cleanup')
+                  yield { type: 'text-delta' as const, text: 'ignored' };
+                await new Promise<void>((resolve) => {
+                  if (options?.signal?.aborted) resolve();
+                  else options?.signal?.addEventListener('abort', () => resolve(), { once: true });
+                });
+              } finally {
+                cleaning.resolve();
+                if (outcome === 'yielding cleanup')
+                  yield { type: 'text-delta' as const, text: 'ignored cleanup' };
+                await release.promise;
+                cleaned = true;
+              }
+            })();
+          },
+        },
+        sessionStore: store,
+        llmMiddleware: async (call, next) => {
+          continueLate = () => next(call);
+          delegated = next(call);
+          const iterator = delegated[Symbol.asyncIterator]();
+          detached = iterator.next().catch((error: unknown) => error);
+          await entered.promise;
+          if (outcome === 'abandoned' || outcome === 'yielding cleanup') await detached;
+          if (outcome === 'throws') throw new Error('early middleware error');
+          return (async function* () {
+            yield* answer;
+          })();
+        },
+      });
+      let settled = false;
+      const result = collect(runner.run(validRequest))
+        .catch((error: unknown) => error)
+        .finally(() => {
+          settled = true;
+        });
+      try {
+        await entered.promise;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(settled).toBe(false);
+        expect(
+          (await store.read(validRequest.sessionId)).some(({ type }) => type === 'turn.completed'),
+        ).toBe(false);
+        await cleaning.promise;
+        expect(() => continueLate!()).toThrow();
+        expect(() => delegated![Symbol.asyncIterator]()).toThrow();
+      } finally {
+        release.resolve();
+        await result;
+        await detached;
+      }
+      expect(providerCalls).toBe(1);
+      expect(cleaned).toBe(true);
+      if (outcome === 'throws')
+        expect(await result).toMatchObject({ message: 'early middleware error' });
+      else expect(await result).toContainEqual(expect.objectContaining({ type: 'completed' }));
+    },
+  );
 });
 
 it('holds the durable turn start behind the host admission gate', async () => {

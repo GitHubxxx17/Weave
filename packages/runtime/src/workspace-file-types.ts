@@ -148,7 +148,10 @@ export interface WorkspaceFileSnapshotHook {
 /** Limits and Workspace boundary supplied when file tools are created. */
 export type WorkspaceFileToolOptions = WorkspaceFileToolLimits &
   WorkspaceFileSnapshotHook &
-  WorkspaceSource;
+  WorkspaceSource & {
+    /** Host-only check immediately before each filesystem effect. */
+    readonly assertMutationCurrent?: ((context: ToolExecutionContext) => void) | undefined;
+  };
 
 /** The file tools exposed by the Runtime. */
 export interface WorkspaceFileTools {

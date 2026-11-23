@@ -9,9 +9,12 @@ export interface GenerationRunner<R extends GenerationRequest, E> {
 
 export interface RunningGenerationScope<R extends GenerationRequest, E> {
   retain(): RetainedGenerationLease<R, E>;
+  readonly admitRetainedStart?: () => void;
 }
 
 export interface RetainedGenerationLease<R extends GenerationRequest, E> {
+  readonly revocationSignal: AbortSignal;
+  assertCanStartSync(): void;
   run(request: R): AsyncIterable<E>;
   closeStarts(reason?: unknown): void;
   abort(reason?: unknown): void;
@@ -22,6 +25,7 @@ export interface RunnerGeneration<R extends GenerationRequest, E, T> {
   readonly id: number;
   readonly runner: GenerationRunner<R, E>;
   readonly resources: T;
+  readonly explicitRetainedStart?: true;
   readonly assertCanStartSync?: (() => undefined) | undefined;
   dispose(): void | Promise<void>;
 }
@@ -42,6 +46,11 @@ export interface GenerationController<R extends GenerationRequest, E, T> {
   replace(next: RunnerGeneration<R, E, T>, options?: { immediate?: boolean }): Promise<void>;
   blockNewRuns(error: Error): void;
   closeRetainedStarts(generation: RunnerGeneration<R, E, T>, reason?: unknown): void;
+  closeRetainedStartsBatch(
+    generations: readonly RunnerGeneration<R, E, T>[],
+    reason?: unknown,
+  ): void;
+  abortRetainedWorkBatch(generations: readonly RunnerGeneration<R, E, T>[], reason?: unknown): void;
   abortActiveRuns(reason?: unknown): void;
   dispose(): Promise<void>;
 }
@@ -125,24 +134,47 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
     };
   }
 
+  function selectGenerations(selected: readonly RunnerGeneration<R, E, T>[]): GenerationState[] {
+    const requested = new Set(selected);
+    return [...generations].filter(({ generation }) => requested.has(generation));
+  }
+
+  function closeRetainedStartsBatch(
+    selected: readonly RunnerGeneration<R, E, T>[],
+    reason?: unknown,
+  ): void {
+    const states = selectGenerations(selected);
+    const leases = states.flatMap((state) => [...state.leases]);
+    for (const state of states) closeRetainedStartFence(state, reason);
+    const unstarted = leases.filter((lease) => lease.reservePreparingRevocation(reason));
+    const runs = unstarted.flatMap(({ child }) => (child?.isRunning() ? [child] : []));
+    for (const run of runs) run.reserveCancellation(reason);
+    for (const lease of leases) lease.notifyRevocation();
+    for (const run of runs) run.cancel();
+  }
+
   function cancelWork(states: GenerationState[], runs: Run[], reason?: unknown): void {
     // Establish all fences and reserve the first reasons before notifying abort listeners.
     const targets = new Set(runs);
-    for (const state of states) {
-      closeRetainedStartFence(state, reason);
-      for (const lease of state.leases) {
-        lease.closeStarts(reason);
-        if (lease.child) targets.add(lease.child);
-      }
+    const leases = states.flatMap((state) => [...state.leases]);
+    for (const state of states) closeRetainedStartFence(state, reason);
+    for (const lease of leases) {
+      lease.reserveRevocation(reason);
+      if (lease.child) targets.add(lease.child);
     }
     for (const run of targets) run.reserveCancellation(reason);
+    for (const lease of leases) lease.notifyRevocation();
     for (const run of targets) run.cancel();
   }
 
   class RetainedLease implements RetainedGenerationLease<R, E> {
+    private readonly revocation = new AbortController();
+    readonly revocationSignal = this.revocation.signal;
     child: Run | undefined;
     private fence: { readonly reason: unknown } | undefined;
+    private revocationReason: { readonly reason: unknown } | undefined;
     private producing = false;
+    private startAdmitted = false;
     private releaseRequested = false;
 
     constructor(readonly state: GenerationState) {
@@ -163,6 +195,21 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
       };
     }
 
+    reserveRevocation(reason?: unknown): void {
+      this.closeStarts(this.state.retainedFence?.reason);
+      this.revocationReason ??= { reason };
+    }
+
+    reservePreparingRevocation(reason?: unknown): boolean {
+      if (this.startAdmitted) return false;
+      this.reserveRevocation(reason);
+      return true;
+    }
+
+    notifyRevocation(): void {
+      if (this.revocationReason) this.revocation.abort(this.revocationReason.reason);
+    }
+
     abort(reason?: unknown): void {
       this.closeStarts(reason);
       this.child?.cancel(reason);
@@ -179,8 +226,21 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
       assertRetainedAdmission(this.state);
     }
 
+    assertCanStartSync(): void {
+      this.assertCanStart();
+      checkGuard(this.state);
+      this.assertCanStart();
+    }
+
     childStarted(): void {
       this.producing = true;
+      if (!this.state.generation.explicitRetainedStart) this.startAdmitted = true;
+    }
+
+    admitChildStart(assertRunCurrent: () => void): void {
+      this.assertCanStartSync();
+      assertRunCurrent();
+      this.startAdmitted = true;
     }
 
     childSettled(): void {
@@ -322,7 +382,17 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
       this.phase = 'running';
       state.active.add(this);
       this.retained?.childStarted();
-      const scope: RunningGenerationScope<R, E> = { retain: () => this.retain(state) };
+      const scope: RunningGenerationScope<R, E> = {
+        retain: () => this.retain(state),
+        ...(this.retained && state.generation.explicitRetainedStart
+          ? {
+              admitRetainedStart: () => {
+                this.assertCanRetain(state);
+                this.retained!.admitChildStart(() => this.assertCanRetain(state));
+              },
+            }
+          : {}),
+      };
       // Runner creation and abort listeners can call dispose before pump returns a promise.
       let settle!: (production: Promise<void>) => void;
       this.production = new Promise((resolve) => {
@@ -344,6 +414,8 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
       this.assertCanRetain(state);
       const lease = new RetainedLease(state);
       return {
+        revocationSignal: lease.revocationSignal,
+        assertCanStartSync: () => lease.assertCanStartSync(),
         run: (request) => lease.run(request),
         closeStarts: (reason) => lease.closeStarts(reason),
         abort: (reason) => lease.abort(reason),
@@ -538,12 +610,11 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
       blocked = error;
     },
     closeRetainedStarts(generation, reason) {
-      for (const state of generations) {
-        if (state.generation === generation) {
-          closeRetainedStartFence(state, reason);
-          return;
-        }
-      }
+      closeRetainedStartsBatch([generation], reason);
+    },
+    closeRetainedStartsBatch,
+    abortRetainedWorkBatch(selected, reason) {
+      cancelWork(selectGenerations(selected), [], reason);
     },
     abortActiveRuns(reason) {
       const runs = [...sessions.values()].flat().filter((run) => run.isRunning());

@@ -1,4 +1,13 @@
 export { createRuntime } from './runtime.js';
+export { AgentTaskError, createAgentTaskService } from './agent-task-service.js';
+export type {
+  AgentTaskErrorCode,
+  AgentTaskService,
+  AgentTaskServiceOptions,
+  AgentTaskSpawnReceipt,
+} from './agent-task-service.js';
+export { AgentTaskHostError } from './agent-task-host.js';
+export type { AgentTaskHost, AgentTaskLifetime, AgentTaskReservation } from './agent-task-host.js';
 export { createAgentExecutionService } from './agent-execution-service.js';
 export {
   AgentExecutionError,
@@ -227,6 +236,7 @@ export type {
 
 export {
   workspaceRootIdentity,
+  workspaceRootIdentitySync,
   workspaceFileIdentity,
   fileContentDigest,
   withWorkspaceMutation,
@@ -234,6 +244,23 @@ export {
 export { createFileUndoService, FileUndoError } from './file-undo-service.js';
 export type { FileUndoInput, FileUndoReviewInput, FileUndoResponse } from './file-undo-service.js';
 
+export {
+  agentToolAuthorityParent,
+  createAgentToolAuthority,
+  deriveAgentToolAuthority,
+  describeAgentToolAuthority,
+  readAgentToolAuthority,
+} from './agent-tool-authority.js';
+export type {
+  AgentToolAuthority,
+  AgentToolRunIdentity,
+  AgentToolAuthoritySettings,
+  AgentToolAuthorityView,
+  AgentToolInvocationAuthority,
+  AgentToolAuthorityLifetime,
+  CreateAgentToolAuthorityOptions,
+  DeriveAgentToolAuthorityOptions,
+} from './agent-tool-authority.js';
 export {
   agentTaskExecutionIdentity,
   agentTaskExecutionInput,
@@ -250,3 +277,22 @@ export type {
   TaskExecutionCleanup,
   TaskProjectRelation,
 } from './agent-task-types.js';
+export {
+  adaptTaskRunnerLease,
+  getBoundTaskExecutionPort,
+  mintTaskLaunchAuthority,
+} from './agent-task-execution.js';
+export type {
+  AdaptTaskRunnerLeaseOptions,
+  BoundTaskExecutionPort,
+  BoundTaskLaunch,
+  MintTaskLaunchAuthorityOptions,
+  TaskLaunchAuthority,
+  TaskRunnerLease,
+} from './agent-task-execution.js';
+export { createAgentTaskObserver } from './agent-task-observer.js';
+export type { AgentTaskObserver, AgentTaskTreeSnapshot } from './agent-task-observer.js';
+export { createAgentTaskTools } from './agent-task-tools.js';
+export type { AgentTaskTools } from './agent-task-tools.js';
+export { boundAgentTaskEnvelope } from './agent-task-result.js';
+export type { AgentTaskEnvelope } from './agent-task-result.js';

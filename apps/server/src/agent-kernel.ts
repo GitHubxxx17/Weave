@@ -45,6 +45,9 @@ import {
   createWorkspacePolicy,
   createWorkspaceSearchTools,
   type ApprovalBroker,
+  type RegisteredToolDefinition,
+  type ToolExecutionContext,
+  type ToolExecutionRequest,
   type ToolPipeline,
   type ToolRegistry,
   type WorkspaceResolver,
@@ -68,6 +71,8 @@ export interface AgentKernelAssembly {
   readonly toolResultMaxBytes?: number | undefined;
   readonly skillPorts?: SkillToolPorts | undefined;
   readonly resolveWorkspaceRoot?: ((sessionId: string) => Promise<string | undefined>) | undefined;
+  readonly resolveWorkspace?: WorkspaceResolver | undefined;
+  readonly assertWorkspaceMutationCurrent?: ((context: ToolExecutionContext) => void) | undefined;
   readonly commandEnvironment?: (() => NodeJS.ProcessEnv | Promise<NodeJS.ProcessEnv>) | undefined;
   /**
    * Plugins registered through `registerServerPlugins`. They join the kernel
@@ -84,6 +89,9 @@ export interface AssembledAgentKernel {
   readonly kernel: PluginKernel;
   /** The resolved Tool Pipeline, wrapped to fan out `weave.tools.result`. */
   readonly toolPipeline: ToolPipeline;
+  /** Exact tool definitions are paired with the kernel's successful contribution owners. */
+  readonly toolOwner: (definition: RegisteredToolDefinition) => string | undefined;
+  readonly registerHostTool: ToolRegistry['register'];
   /**
    * Plugin-contributed system-prompt sections as they reach the prompt: ordered
    * by `order` ascending, trimmed, blank ones dropped, each with its plugin.
@@ -95,6 +103,13 @@ export interface AssembledAgentKernel {
   readonly commands: readonly CommandListItem[];
   readonly skills: readonly AttributedSkillContribution[];
   readonly panels: readonly BoundPanelDefinition[];
+}
+
+function pluginToolRequest(request: ToolExecutionRequest) {
+  const view = { ...request };
+  delete view.toolAuthority;
+  delete view.executionId;
+  return Object.freeze(view);
 }
 
 /**
@@ -128,6 +143,8 @@ export async function assembleAgentKernel(
   const { toolRegistry, providerRegistry, approvalBroker, sessionStore } = assembly;
   const { timeoutMs, resolveWorkspaceRoot } = assembly;
   const kernel = createPluginKernel({ hostVersion: assembly.hostVersion ?? serverHostVersion });
+  const toolOwners = new WeakMap(toolRegistry.list().map((tool) => [tool, 'server-tool-host']));
+  const toolOwner = (definition: RegisteredToolDefinition) => toolOwners.get(definition);
 
   // Plugins record their own events through a Session Store that accepts only
   // the events they registered: they cannot write the core events (turns,
@@ -160,6 +177,7 @@ export async function assembleAgentKernel(
             registry,
             approvalBroker: broker,
             timeoutMs,
+            allowHostToolContext: (definition) => toolOwner(definition) === 'server-tool-host',
             ...(assembly.toolResultMaxBytes === undefined
               ? {}
               : { maxResultBytes: assembly.toolResultMaxBytes }),
@@ -168,24 +186,35 @@ export async function assembleAgentKernel(
             ...(kernel.hooks.count(toolAroundHook) === 0
               ? {}
               : {
-                  around: (request, next) => kernel.hooks.runWrap(toolAroundHook, request, next),
+                  around: (request, next) =>
+                    kernel.hooks.runWrap(toolAroundHook, pluginToolRequest(request), (wrapped) =>
+                      next({
+                        ...wrapped,
+                        toolAuthority: request.toolAuthority,
+                        executionId: request.executionId,
+                      }),
+                    ),
                 }),
             ...(kernel.hooks.count(toolPolicyHook) === 0
               ? {}
-              : { policy: (request) => kernel.hooks.runDecide(toolPolicyHook, request) }),
+              : {
+                  policy: (request) =>
+                    kernel.hooks.runDecide(toolPolicyHook, pluginToolRequest(request)),
+                }),
           }),
       });
       env.contribute(toolsExtensionPoint, (api) => {
-        if (resolveWorkspaceRoot !== undefined) {
-          const resolveWorkspace: WorkspaceResolver = async ({ sessionId }) => {
-            if (sessionId === undefined) {
-              return undefined;
-            }
-            const root = await resolveWorkspaceRoot(sessionId);
-            return root === undefined ? undefined : createWorkspacePolicy({ root });
-          };
+        if (assembly.resolveWorkspace !== undefined || resolveWorkspaceRoot !== undefined) {
+          const resolveWorkspace: WorkspaceResolver =
+            assembly.resolveWorkspace ??
+            (async ({ sessionId }) => {
+              const root =
+                sessionId === undefined ? undefined : await resolveWorkspaceRoot?.(sessionId);
+              return root === undefined ? undefined : createWorkspacePolicy({ root });
+            });
           const fileTools = createWorkspaceFileTools({
             resolveWorkspace,
+            assertMutationCurrent: assembly.assertWorkspaceMutationCurrent,
             onFileWriteIntent: async ({ sessionId, ...payload }) => {
               if (sessionId === undefined) throw new Error('File capture requires a Session');
               await sessionStore.append(sessionId, [
@@ -262,6 +291,15 @@ export async function assembleAgentKernel(
 
     const generation = await kernel.seal();
     const basePipeline = await generation.resolve(toolPipelineRef);
+    for (const { manifest, contributed } of generation.plugins()) {
+      for (const name of contributed.tools) {
+        const tool = toolRegistry.get(name);
+        if (tool === undefined || toolOwners.has(tool)) {
+          throw new Error('Tool registry contribution ownership is inconsistent');
+        }
+        toolOwners.set(tool, manifest.id);
+      }
+    }
     // Resolving the provider registry collects the providers plugins contributed.
     await generation.resolve(llmProviderRegistryRef);
     // Resolving the event registry collects the events plugins defined, so
@@ -356,6 +394,14 @@ export async function assembleAgentKernel(
     return {
       kernel,
       toolPipeline,
+      toolOwner,
+      registerHostTool(tool) {
+        toolRegistry.register(tool);
+        const registered = toolRegistry.get(tool.name);
+        if (registered === undefined)
+          throw new Error('Host tool registration could not be verified');
+        toolOwners.set(registered, 'server-tool-host');
+      },
       promptSections,
       plugins,
       commands,

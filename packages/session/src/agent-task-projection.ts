@@ -6,6 +6,7 @@ import {
   type AgentTaskDispatched,
   type AgentTaskOrigin,
   type AgentTaskSettled,
+  type AgentTasksStopRequested,
 } from './agent-task-events.js';
 
 type FactAtSequence<T> = Readonly<T> & { readonly sequence: number };
@@ -30,6 +31,7 @@ export interface SessionAgentTask {
 export interface SessionAgentTasks {
   readonly origin?: FactAtSequence<AgentTaskOrigin>;
   readonly tasks: readonly SessionAgentTask[];
+  readonly stopOperations?: readonly FactAtSequence<AgentTasksStopRequested>[];
 }
 
 interface TaskState {
@@ -42,6 +44,7 @@ export interface AgentTaskProjectionState {
   origin?: FactAtSequence<AgentTaskOrigin>;
   childExecution?: 'queued' | 'claimed';
   readonly tasks: Map<string, TaskState>;
+  readonly stopOperations: Map<string, FactAtSequence<AgentTasksStopRequested>>;
   readonly assignedIds: Set<string>;
   readonly callsByTurn: Map<string, Set<string>>;
 }
@@ -49,6 +52,7 @@ export interface AgentTaskProjectionState {
 export function createAgentTaskProjectionState(): AgentTaskProjectionState {
   return {
     tasks: new Map(),
+    stopOperations: new Map(),
     assignedIds: new Set(),
     callsByTurn: new Map(),
   };
@@ -68,6 +72,22 @@ export function applyAgentTaskEvent(
     )
       throw invalid('Task origin must be the unique first child fact');
     state.origin = { ...event.payload, sequence: event.sequence };
+    return;
+  }
+
+  if (event.type === 'agent.tasks.stop-requested') {
+    if (state.origin !== undefined) throw invalid('Child task Sessions cannot own stop operations');
+    const { operationId, taskIds } = event.payload;
+    const previous = state.stopOperations.get(operationId);
+    if (previous !== undefined) {
+      if (
+        taskIds.length !== previous.taskIds.length ||
+        taskIds.some((id) => !previous.taskIds.includes(id))
+      )
+        throw invalid('Task stop operation replay conflicts');
+      return;
+    }
+    state.stopOperations.set(operationId, { ...event.payload, sequence: event.sequence });
     return;
   }
 
@@ -213,9 +233,13 @@ export function applyAgentTaskEvent(
 }
 
 export function snapshotAgentTasks(state: AgentTaskProjectionState): SessionAgentTasks | undefined {
-  if (state.origin === undefined && state.tasks.size === 0) return undefined;
+  if (state.origin === undefined && state.tasks.size === 0 && state.stopOperations.size === 0)
+    return undefined;
   return structuredClone({
     ...(state.origin === undefined ? {} : { origin: state.origin }),
     tasks: Array.from(state.tasks.values(), ({ task }) => task),
+    ...(state.stopOperations.size === 0
+      ? {}
+      : { stopOperations: [...state.stopOperations.values()] }),
   });
 }

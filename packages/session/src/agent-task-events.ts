@@ -115,6 +115,15 @@ export const agentTaskSettledPayloadSchema = z.strictObject({
   ...parentFact,
   settlement: taskSettlementSchema,
 });
+export const agentTasksStopRequestedPayloadSchema = z.strictObject({
+  version: z.literal(1),
+  operationId: taskIdentifierSchema,
+  taskIds: z
+    .array(taskIdSchema)
+    .max(4)
+    .readonly()
+    .refine((ids) => new Set(ids).size === ids.length),
+});
 
 export const taskFactSchemas = [
   z.strictObject({
@@ -131,6 +140,10 @@ export const taskFactSchemas = [
     payload: agentTaskCancelRequestedPayloadSchema,
   }),
   z.strictObject({ type: z.literal('agent.task.settled'), payload: agentTaskSettledPayloadSchema }),
+  z.strictObject({
+    type: z.literal('agent.tasks.stop-requested'),
+    payload: agentTasksStopRequestedPayloadSchema,
+  }),
 ] as const;
 
 export type AgentTaskAccepted = z.infer<typeof agentTaskAcceptedPayloadSchema>;
@@ -138,6 +151,7 @@ export type AgentTaskOrigin = z.infer<typeof agentTaskOriginPayloadSchema>;
 export type AgentTaskDispatched = z.infer<typeof agentTaskDispatchedPayloadSchema>;
 export type AgentTaskCancelRequested = z.infer<typeof agentTaskCancelRequestedPayloadSchema>;
 export type AgentTaskSettled = z.infer<typeof agentTaskSettledPayloadSchema>;
+export type AgentTasksStopRequested = z.infer<typeof agentTasksStopRequestedPayloadSchema>;
 export type AgentTaskProject = z.infer<typeof taskProjectSchema>;
 export type AgentTaskToolIdentity = z.infer<typeof taskToolIdentitySchema>;
 

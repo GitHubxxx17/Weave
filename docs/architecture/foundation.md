@@ -250,6 +250,9 @@ Runtime owns bounded one-shot child Session admission, exact materialization,
 cross-log reconciliation and observation through the existing Execution Service.
 Parent facts and immutable child origin remain durable; deltas, approval state,
 retained leases and live cancellation authority remain transient.
+Root Stop All facts preserve the exact target list, including empty lists, for
+operation retries across Server restart. Per-task cancellation retains the first
+cause.
 
 Generic plugin-host retained leases pin the actual parent Generation and pass
 through its existing Session queue. Server binds private run authority and the

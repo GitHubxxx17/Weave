@@ -1,6 +1,16 @@
 import { freezeExecutionInput } from './agent-execution-input.js';
 import { createFileContextCapture } from './agent-file-context.js';
-import { createAgentExecutionService, type AgentExecutionService } from '@weave/runtime';
+import {
+  createAgentExecutionService,
+  createAgentTaskService,
+  createAgentTaskObserver,
+  createAgentTaskTools,
+  getBoundTaskExecutionPort,
+  type AgentExecutionService,
+  type AgentTaskService,
+  type AgentTaskObserver,
+} from '@weave/runtime';
+import { createAgentTaskHost } from './agent-task-composition.js';
 import { createPanelService } from './plugin-panel-service.js';
 import type { PanelService } from './plugin-panel-types.js';
 import { mkdir } from 'node:fs/promises';
@@ -14,6 +24,11 @@ import { z } from 'zod';
 import { resolveSkillsDirectory } from './skill-path.js';
 import { createSkillCatalogService } from './skill-catalog.js';
 import { createApp } from './app.js';
+import { createAgentTaskWorkspaceBindings } from './agent-task-workspace.js';
+import {
+  createProjectFolderAuthority,
+  type ProjectFolderAuthority,
+} from './project-folder-authority.js';
 import { createSessionService } from './session-service.js';
 import { createWorkspaceRootResolver } from './workspace-root.js';
 import { createServerLlmProviders } from './llm-providers.js';
@@ -154,6 +169,7 @@ export async function startServer(
   const runtime = createServerRuntime({ sessionStoreFactory, providerSettings });
   let providerSettingsStore: ProviderSettingsStore | undefined;
   let projectStore: ProjectStore | undefined;
+  let projectFolderAuthority: ProjectFolderAuthority | undefined;
   let manualTrustStore: ClosablePluginTrustStore | undefined;
   let authority: PluginAuthorityDatabase | undefined;
   let owned: OwnedPluginArtifactStore | undefined;
@@ -169,6 +185,8 @@ export async function startServer(
   let pluginMarketplaceManager: PluginMarketplaceManager | undefined;
   let server: ServerType | undefined;
   let agentExecutionService: AgentExecutionService | undefined;
+  let agentTaskService: AgentTaskService | undefined;
+  let agentTaskObserver: AgentTaskObserver | undefined;
   const shutdown = createServerShutdown({
     resources: () => ({
       server,
@@ -179,10 +197,17 @@ export async function startServer(
       installer,
       pluginMarketplaceManager,
       agentExecutionService,
+      agentTaskService,
     }),
-    disposeHost: () => disposeServerPlugins(runtime),
+    disposeHost: () => {
+      agentTaskObserver?.close();
+      return disposeServerPlugins(runtime);
+    },
     stopRuntime: () => runtime.stop(),
-    closeProjectStore: () => projectStore?.close(),
+    closeProjectStore: async () => {
+      projectFolderAuthority?.closeSync();
+      await projectStore?.close();
+    },
     closeProviderSettingsStore: () => providerSettingsStore?.close(),
     closeManualTrustStore: () => manualTrustStore?.close(),
     closeMcpAuthorityStore: () => mcpAuthorityStore?.close(),
@@ -211,6 +236,12 @@ export async function startServer(
         : createSqliteProviderSettingsStore({ filename: databaseFile }));
     const projects = options.projectStore ?? createSqliteProjectStore({ filename: databaseFile });
     projectStore = projects;
+    projectFolderAuthority = createProjectFolderAuthority(projects);
+    const resolveWorkspaceRoot = createWorkspaceRootResolver(projects);
+    const agentTaskWorkspace = createAgentTaskWorkspaceBindings(
+      projectFolderAuthority,
+      resolveWorkspaceRoot,
+    );
     const providerSettingsManager: ProviderSettingsManager | undefined =
       providerSettingsStore === undefined || options.providerSecretCodec === undefined
         ? undefined
@@ -234,14 +265,29 @@ export async function startServer(
       projectStore: projects,
       sessionStore,
       withSessionIdle: (sessionId, operation) =>
-        agentExecutionService === undefined
-          ? operation()
-          : agentExecutionService.withSessionIdle(sessionId, operation),
+        agentTaskService === undefined
+          ? agentExecutionService === undefined
+            ? operation()
+            : agentExecutionService.withSessionIdle(sessionId, operation)
+          : agentTaskService.withTaskSessionsIdle(sessionId, () =>
+              agentExecutionService!.withSessionIdle(sessionId, operation),
+            ),
     });
+    const taskTools = createAgentTaskTools({
+      service: {
+        spawn: (input, context) => agentTaskService!.spawn(input, context),
+        requestCancel: (...args) => agentTaskService!.requestCancel(...args),
+      },
+      observer: {
+        status: (...args) => agentTaskObserver!.status(...args),
+        wait: (...args) => agentTaskObserver!.wait(...args),
+      },
+    });
+    for (const tool of Object.values(taskTools)) runtime.serverHost.hostTools().register(tool);
     const runnerOptions = Object.freeze({
       hostVersion: serverHostVersion,
       skillsDirectory: resolveSkillsDirectory({ ...options, databaseFile }),
-      resolveWorkspaceRoot: createWorkspaceRootResolver(projects),
+      agentTaskWorkspace,
       ...(maxSteps === undefined ? {} : { maxSteps }),
     }) satisfies ServerAgentRunnerOptions;
     await createServerAgentRunner(runtime, runnerOptions);
@@ -351,12 +397,28 @@ export async function startServer(
         throw new Error('Execution Session is no longer attached to a Project');
       },
     });
+    agentTaskService = createAgentTaskService({
+      sessionStore,
+      execution: getBoundTaskExecutionPort(agentExecutionService),
+      host: createAgentTaskHost({
+        sessionStore,
+        projectStore: projects,
+        projectFolders: projectFolderAuthority,
+        workspace: agentTaskWorkspace,
+      }),
+    });
+    agentTaskObserver = createAgentTaskObserver({
+      service: agentTaskService,
+      approvalBroker: runtime.get(approvalBrokerService),
+    });
     const knownSessionIds = new Set<string>();
     for (const project of await projects.listProjects()) {
       for (const ref of await projects.listSessionRefs(project.id))
         knownSessionIds.add(ref.sessionId);
     }
-    await agentExecutionService.recover([...knownSessionIds]);
+    await agentTaskService.recover([...knownSessionIds], (sessionIds) =>
+      agentExecutionService!.recover(sessionIds),
+    );
 
     let resolveListening!: () => void;
     let rejectListening!: (error: unknown) => void;
@@ -371,7 +433,10 @@ export async function startServer(
           panelService,
           agentRunner: coordinator.runner,
           agentExecutionService,
+          agentTaskService,
+          agentTaskObserver,
           projectStore: projects,
+          projectFolderAuthority,
           sessionService,
           skillCatalogService: createSkillCatalogService({
             current: () => runtime.serverHost.controller()?.current(),

@@ -17,7 +17,14 @@ export class ExecutionHttpError extends Error {
 }
 
 /** Runs before CORS so preflight cannot skip local control-plane admission. */
-export function registerAgentExecutionGuards(app: Hono, studioOrigin?: string): void {
+export function registerAgentExecutionGuards(
+  app: Hono,
+  studioOrigin?: string,
+  prefixes: readonly string[] = [
+    '/sessions/:sessionId/executions',
+    '/sessions/:sessionId/executions/*',
+  ],
+): void {
   const guard: MiddlewareHandler = async (context, next) => {
     context.header('Cache-Control', 'no-store');
     let allowed =
@@ -69,8 +76,7 @@ export function registerAgentExecutionGuards(app: Hono, studioOrigin?: string): 
     }
     return next();
   };
-  app.use('/sessions/:sessionId/executions', guard);
-  app.use('/sessions/:sessionId/executions/*', guard);
+  for (const prefix of prefixes) app.use(prefix, guard);
 }
 
 export async function readExecutionJson(request: Request, maxBytes: number): Promise<unknown> {

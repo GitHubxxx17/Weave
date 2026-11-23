@@ -2,15 +2,21 @@ import { z } from 'zod';
 import type { Context, Hono } from 'hono';
 import {
   createFileUndoService,
-  createWorkspacePolicy,
   FileUndoError,
+  type FileUndoInput,
   type Runtime,
 } from '@weave/runtime';
 import type { ProjectStore } from '@weave/workspace';
 import { readFileUndoRequest } from './file-undo-guard.js';
+import {
+  ProjectFolderAuthorityError,
+  type ProjectFolderAuthority,
+} from './project-folder-authority.js';
 import { getServerSessionStore } from './runtime.js';
+
 export interface FileUndoAppOptions {
   readonly projectStore?: ProjectStore | undefined;
+  readonly projectFolderAuthority?: ProjectFolderAuthority | undefined;
 }
 const id = z.string().min(1).max(128);
 const undoBodySchema = z.object({ turnId: id, operationId: id, requestId: id }).strict();
@@ -39,51 +45,70 @@ function errorResponse(context: Context, error: unknown) {
     503,
   );
 }
+
+function mapAuthorityError(error: unknown): never {
+  if (error instanceof ProjectFolderAuthorityError) {
+    if (error.code === 'task-project-relation-changed')
+      throw new FileUndoError('undo-session-not-found', 'Session was not found in this Project');
+    if (error.code === 'task-project-folder-changed' || error.code === 'task-project-root-changed')
+      throw new FileUndoError('undo-root-changed', 'Project folder changed');
+  }
+  throw error;
+}
+
 /** HTTP validation and Project admission only; Runtime owns restoration. */
 export function registerFileUndoRoutes(
   app: Hono,
   runtime: Runtime,
   options: FileUndoAppOptions,
 ): void {
-  async function inputFor(context: Context, turnId: string) {
+  async function withInput<T>(
+    context: Context,
+    turnId: string,
+    operation: (input: Omit<FileUndoInput, 'operationId' | 'requestId'>) => Promise<T>,
+  ): Promise<T> {
     const projectId = context.req.param('projectId');
     const sessionId = context.req.param('sessionId');
     if (!projectId || !sessionId)
       throw new FileUndoError('undo-invalid-input', 'Project and Session are required');
     const projects = options.projectStore;
-    if (projects === undefined)
+    const authority = options.projectFolderAuthority;
+    if (projects === undefined || authority === undefined)
       throw new FileUndoError('undo-unavailable', 'File undo is unavailable');
     const project = await projects.getProject(projectId);
     if (project === undefined)
       throw new FileUndoError('undo-project-not-found', 'Project was not found');
-    const folder = project.folderPath;
-    if (folder === undefined)
+    if (project.folderPath === undefined)
       throw new FileUndoError('undo-no-workspace', 'Project folder is not set');
-    async function admit() {
-      const current = await projects!.getProject(projectId!);
-      if (current?.folderPath !== folder)
-        throw new FileUndoError('undo-root-changed', 'Project folder changed');
-      const refs = await projects!.listSessionRefs(projectId!);
-      if (!refs.some((ref) => ref.sessionId === sessionId))
+    const binding = await authority.capture(sessionId).catch(mapAuthorityError);
+    try {
+      if (authority.snapshot(binding).projectId !== projectId)
         throw new FileUndoError('undo-session-not-found', 'Session was not found in this Project');
+      const workspace = await authority.resolve(binding, sessionId);
+      if (workspace === undefined)
+        throw new FileUndoError('undo-no-workspace', 'Project folder is not set');
+      return await operation({
+        projectId,
+        sessionId,
+        turnId,
+        workspace,
+        assertMutationCurrent: () => authority.assertEffectCurrentSync(binding),
+      });
+    } catch (error) {
+      mapAuthorityError(error);
+    } finally {
+      authority.release(binding);
     }
-    await admit();
-    return {
-      projectId,
-      sessionId,
-      turnId,
-      workspace: createWorkspacePolicy({ root: folder }),
-      admit,
-    };
   }
   app.get('/projects/:projectId/sessions/:sessionId/file-undo', async (context) => {
     context.header('Cache-Control', 'no-store');
     try {
       const query = reviewQuerySchema.safeParse(context.req.query());
       if (!query.success) throw new FileUndoError('undo-invalid-input', 'turnId is required');
-      const input = await inputFor(context, query.data.turnId);
       return context.json(
-        await createFileUndoService({ store: getServerSessionStore(runtime) }).review(input),
+        await withInput(context, query.data.turnId, (input) =>
+          createFileUndoService({ store: getServerSessionStore(runtime) }).review(input),
+        ),
       );
     } catch (error) {
       return errorResponse(context, error);
@@ -100,12 +125,13 @@ export function registerFileUndoRoutes(
           'undo-invalid-input',
           'turnId, operationId and requestId are required',
         );
-      const input = await inputFor(context, parsed.data.turnId);
       return context.json(
-        await createFileUndoService({ store: getServerSessionStore(runtime) }).undo({
-          ...input,
-          ...parsed.data,
-        }),
+        await withInput(context, parsed.data.turnId, (input) =>
+          createFileUndoService({ store: getServerSessionStore(runtime) }).undo({
+            ...input,
+            ...parsed.data,
+          }),
+        ),
       );
     } catch (error) {
       return errorResponse(context, error);

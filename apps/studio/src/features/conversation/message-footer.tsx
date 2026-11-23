@@ -19,6 +19,7 @@ export interface MessageFooterProps {
   /** Only the last Turn of a Session can be retried. */
   readonly canRetry: boolean;
   readonly disabled: boolean;
+  readonly readOnly?: boolean;
   readonly retryUnavailableReason?: string | undefined;
   readonly onRetry: () => void;
   readonly onQuote: () => void;
@@ -37,6 +38,7 @@ export function MessageFooter({
   text,
   canRetry,
   disabled,
+  readOnly = false,
   retryUnavailableReason,
   onRetry,
   onQuote,
@@ -85,7 +87,7 @@ export function MessageFooter({
       )}
       <div className="message-footer-actions">
         <span className="message-footer-time">{timeLabel}</span>
-        {canRetry ? (
+        {readOnly ? null : canRetry ? (
           <button
             className="message-action"
             type="button"

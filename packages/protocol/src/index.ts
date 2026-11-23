@@ -37,6 +37,16 @@ export type {
   TaskSettlement,
   TaskStopReason,
 } from './agent-task.js';
+export {
+  agentTaskViewStatusSchema,
+  agentTaskResultPointerSchema,
+  agentTaskViewSchema,
+} from './agent-task-view.js';
+export type {
+  AgentTaskViewStatus,
+  AgentTaskResultPointer,
+  AgentTaskView,
+} from './agent-task-view.js';
 
 export {
   fileReferenceSchema,

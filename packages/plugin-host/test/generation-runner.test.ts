@@ -735,6 +735,138 @@ function cancellableSource(
 }
 
 describe('retained generations', () => {
+  it('fences every selected generation before notifying the first retained lease', async () => {
+    const finish = gate();
+    const scopes = new Map<string, RunningGenerationScope<Request, Event>>();
+    const run: GenerationRunner<Request, Event>['run'] = (request, scope) => {
+      if (scope) scopes.set(request.sessionId, scope);
+      return source([request.value], { wait: finish.promise });
+    };
+    const first = generation(1, run);
+    const second = generation(2, run);
+    const controller = createGenerationRunner(first);
+    const firstParent = collect(controller.runner.run({ sessionId: 'first', value: 'parent' }));
+    await controller.replace(second);
+    const secondParent = collect(controller.runner.run({ sessionId: 'second', value: 'parent' }));
+    const firstLease = scopes.get('first')!.retain();
+    const secondLease = scopes.get('second')!.retain();
+    const reason = new Error('authority withdrawn');
+    const laterReason = new Error('second withdrawal');
+    const attempts: unknown[] = [];
+    firstLease.revocationSignal.addEventListener('abort', () => {
+      try {
+        attempts.push(secondLease.run({ sessionId: 'child', value: 'child' }));
+      } catch (error) {
+        attempts.push(error);
+      }
+      controller.closeRetainedStarts(second, laterReason);
+    });
+    try {
+      controller.closeRetainedStartsBatch([first, second], reason);
+      expect(attempts).toEqual([reason]);
+      expect(secondLease.revocationSignal.reason).toBe(reason);
+    } finally {
+      firstLease.release();
+      secondLease.release();
+      finish.resolve();
+      await Promise.all([firstParent, secondParent]);
+      await controller.dispose();
+    }
+  });
+
+  it('notifies preparing revocation after every lease is fenced while a running child continues', async () => {
+    const finishParent = gate();
+    const finishChild = gate();
+    let scope: RunningGenerationScope<Request, Event> | undefined;
+    const original = generation(1, async function* (request, runningScope) {
+      if (request.value === 'parent') {
+        scope = runningScope;
+        yield 'parent';
+        await finishParent.promise;
+      } else {
+        yield 'child';
+        await finishChild.promise;
+      }
+    });
+    const controller = createGenerationRunner(original);
+    const parentOutput = controller.runner.run({ sessionId: 'parent', value: 'parent' });
+    const parent = parentOutput[Symbol.asyncIterator]();
+    await parent.next();
+    const first = scope!.retain();
+    const second = scope!.retain();
+    const running = scope!.retain();
+    const child = running.run({ sessionId: 'child', value: 'child' })[Symbol.asyncIterator]();
+    await child.next();
+    try {
+      let notified = false;
+      const reason = new Error('withdrawn');
+      first.revocationSignal.addEventListener('abort', () => {
+        notified = true;
+        expect(() => second.assertCanStartSync()).toThrow(reason);
+      });
+      controller.closeRetainedStarts(original, reason);
+      expect(notified).toBe(true);
+      expect(first.revocationSignal.reason).toBe(reason);
+      expect(running.revocationSignal.aborted).toBe(false);
+      controller.abortActiveRuns(reason);
+      expect(running.revocationSignal.reason).toBe(reason);
+    } finally {
+      finishParent.resolve();
+      finishChild.resolve();
+      await parent.next();
+      await child.next();
+      first.release();
+      second.release();
+      running.release();
+      await controller.dispose();
+    }
+  });
+
+  it('checks retained preparation admission without consuming the one child run', async () => {
+    const finish = gate();
+    let scope: RunningGenerationScope<Request, Event> | undefined;
+    let rejectGuard = false;
+    const denial = new Error('authority unavailable');
+    const original = {
+      ...generation(1, async function* (request, runningScope) {
+        if (request.value === 'parent') {
+          scope = runningScope;
+          yield 'parent';
+          await finish.promise;
+        } else yield 'child';
+      }),
+      assertCanStartSync() {
+        if (rejectGuard) throw denial;
+        return undefined;
+      },
+    };
+    const controller = createGenerationRunner(original);
+    const parent = controller.runner.run({ sessionId: 'parent', value: 'parent' });
+    const iterator = parent[Symbol.asyncIterator]();
+    await iterator.next();
+    const lease = scope!.retain();
+    try {
+      expect(() => lease.assertCanStartSync()).not.toThrow();
+      rejectGuard = true;
+      expect(() => lease.assertCanStartSync()).toThrow(denial);
+      rejectGuard = false;
+      await controller.replace(
+        generation(2, async function* () {
+          yield 'new';
+        }),
+      );
+      expect(() => lease.assertCanStartSync()).not.toThrow();
+      expect(await collect(lease.run({ sessionId: 'child', value: 'child' }))).toEqual(['child']);
+      controller.closeRetainedStarts(original, denial);
+      expect(() => lease.assertCanStartSync()).toThrow(denial);
+    } finally {
+      finish.resolve();
+      await iterator.next();
+      lease.release();
+      await controller.dispose();
+    }
+  });
+
   it('keeps a retiring generation pinned while its child waits behind ordinary Session work', async () => {
     const finishParent = gate();
     const oldDisposed = gate();
@@ -968,6 +1100,55 @@ describe('retained generations', () => {
     queued.release();
     running.release();
     await controller.dispose();
+  });
+
+  it('rejects explicit child admission if the Generation guard aborts the request', async () => {
+    const abort = new AbortController();
+    const enterAdmission = gate();
+    let parentScope: RunningGenerationScope<Request, Event> | undefined;
+    let admission: { readonly accepted: boolean } | undefined;
+    const old = {
+      ...generation(1, async function* (request, scope) {
+        if (request.value === 'parent') {
+          parentScope = scope;
+          yield 'parent';
+          return;
+        }
+        await enterAdmission.promise;
+        try {
+          scope!.admitRetainedStart!();
+          admission = { accepted: true };
+        } catch {
+          admission = { accepted: false };
+        }
+      }),
+      explicitRetainedStart: true as const,
+      assertCanStartSync(): undefined {
+        if (admissionPending) abort.abort();
+        return undefined;
+      },
+    };
+    let admissionPending = false;
+    const controller = createGenerationRunner(old);
+    const parent = controller.runner.run({ sessionId: 'parent', value: 'parent' });
+    const parentIterator = parent[Symbol.asyncIterator]();
+    await parentIterator.next();
+    const lease = parentScope!.retain();
+    try {
+      const child = collect(
+        lease.run({ sessionId: 'child', value: 'child', signal: abort.signal }),
+      );
+      admissionPending = true;
+      enterAdmission.resolve();
+      await child;
+      expect(abort.signal.aborted).toBe(true);
+      expect(admission).toEqual({ accepted: false });
+    } finally {
+      enterAdmission.resolve();
+      await parentIterator.return?.();
+      lease.release();
+      await controller.dispose();
+    }
   });
 
   it('blocks retained admission during a host block and honors prior permanent fences after commit', async () => {

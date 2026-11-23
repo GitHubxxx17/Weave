@@ -27,6 +27,7 @@ export async function restoreFileSnapshot(
 export async function restoreFileSnapshotLocked(
   snapshot: RestorableFileSnapshot,
   workspace: WorkspacePolicy,
+  assertMutationCurrent?: () => void,
 ): Promise<RestoreFileOutcome> {
   const result = (status: FileUndoResult['status'], reason: string): FileUndoResult => ({
     path: snapshot.path,
@@ -53,13 +54,14 @@ export async function restoreFileSnapshotLocked(
     Buffer.byteLength(snapshot.afterContent, 'utf8') > 1_000_000
   )
     return result('unavailable', 'snapshot-size');
+  let target: string;
   try {
     if ((await workspaceRootIdentity(workspace.root)) !== snapshot.rootIdentity)
       return result('unavailable', 'workspace-root-changed');
     const root = await resolveRealRoot(workspace.root);
     const candidate = resolveLexicalPath(workspace, snapshot.path, 'write');
     const segments = path.relative(workspace.root, candidate.absolutePath).split(path.sep);
-    let target = root;
+    target = root;
     let metadata;
     for (let i = 0; i < segments.length; i++) {
       target = path.join(target, segments[i]!);
@@ -90,10 +92,6 @@ export async function restoreFileSnapshotLocked(
       (await workspaceFileIdentity(target)) !== snapshot.fileIdentity
     )
       return result('conflict', 'file-identity-changed');
-    if (snapshot.existedBefore)
-      await writeFile(target, snapshot.previousContent, { encoding: 'utf8', flag: 'w' });
-    else await unlink(target);
-    return result('restored', 'restored-before-state');
   } catch (error) {
     if (
       error instanceof Error &&
@@ -102,6 +100,15 @@ export async function restoreFileSnapshotLocked(
       (error.code.includes('outside-root') || error.code.includes('invalid-input'))
     )
       return result('conflict', 'unsafe-path');
+    return result('failed', 'filesystem-error');
+  }
+  assertMutationCurrent?.();
+  try {
+    if (snapshot.existedBefore)
+      await writeFile(target, snapshot.previousContent, { encoding: 'utf8', flag: 'w' });
+    else await unlink(target);
+    return result('restored', 'restored-before-state');
+  } catch {
     return result('failed', 'filesystem-error');
   }
 }

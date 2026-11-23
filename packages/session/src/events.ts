@@ -332,6 +332,7 @@ const [
   taskDispatchedSchema,
   taskCancelRequestedSchema,
   taskSettledSchema,
+  tasksStopRequestedSchema,
 ] = taskFactSchemas;
 const persistedEventSchemas = [
   taskAcceptedSchema.extend(taskFactEnvelope),
@@ -339,6 +340,7 @@ const persistedEventSchemas = [
   taskDispatchedSchema.extend(taskFactEnvelope),
   taskCancelRequestedSchema.extend(taskFactEnvelope),
   taskSettledSchema.extend(taskFactEnvelope),
+  tasksStopRequestedSchema.extend(taskFactEnvelope),
   z.object({
     eventId: nonEmptyStringSchema,
     sessionId: nonEmptyStringSchema,

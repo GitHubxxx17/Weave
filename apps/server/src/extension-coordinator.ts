@@ -5,6 +5,7 @@ import {
   type HostUiMemberIdentity,
 } from './plugin-panel-types.js';
 import { PanelError } from './plugin-panel-errors.js';
+import { ManagedGenerationOwnershipError } from './extension-authority-errors.js';
 import { PluginError, type KernelPlugin } from '@weave/plugin';
 import {
   ExplicitLocalAuthorityError,
@@ -287,13 +288,16 @@ export function createExtensionCoordinator(
       throw new PanelError('panel-unavailable');
   }
   const unsubscribePublication = options.host.subscribePublicationSync(() => invalidateUiSync());
-  const activeByGeneration = new Map<number, readonly ExtensionMember[]>();
+  const activeByGeneration = new Map<
+    number,
+    { readonly generation: ServerGeneration; readonly members: readonly ExtensionMember[] }
+  >();
   let desiredRevision = 0;
   let members: readonly ExtensionMember[] = [];
   let failed: readonly ExtensionFailure[] = [];
   let error: LocalPluginIssue | undefined;
   let blocked: PluginHostError | undefined;
-  let ownershipBlock: PluginHostError | undefined;
+  let ownershipBlock: ManagedGenerationOwnershipError | undefined;
   let uiOwnershipLost = false;
   let running: Promise<void> | undefined;
   let closing: Promise<void> | undefined;
@@ -305,16 +309,20 @@ export function createExtensionCoordinator(
   function blockManagedOwnershipLossSync(): void {
     if (uiOwnershipLost) return;
     uiOwnershipLost = true;
-    if (ownershipBlock !== undefined || !members.some(({ origin }) => origin === 'managed')) {
-      invalidateUiSync();
-      return;
+    const managed = [...activeByGeneration.values()]
+      .filter(({ members: retainedMembers }) =>
+        retainedMembers.some(({ origin }) => origin === 'managed'),
+      )
+      .map(({ generation }) => generation);
+    if (managed.length > 0) {
+      const reason = new ManagedGenerationOwnershipError();
+      if (!closed && managed.includes(controller.current())) {
+        ownershipBlock = reason;
+        controller.blockNewRuns(reason);
+      }
+      controller.abortRetainedWorkBatch(managed, reason);
     }
-    ownershipBlock = new PluginHostError(
-      'plugin-generation-blocked',
-      'Managed plugin store ownership was lost',
-    );
     invalidateUiSync();
-    if (!closed) controller.blockNewRuns(ownershipBlock);
   }
 
   function blockForChangedAuthority(): void {
@@ -322,7 +330,6 @@ export function createExtensionCoordinator(
       'plugin-generation-blocked',
       'Extension trust changed; new runs wait for a compliant generation',
     );
-    invalidateUiSync();
     controller.blockNewRuns(ownershipBlock ?? blocked);
   }
 
@@ -337,7 +344,7 @@ export function createExtensionCoordinator(
       )
     )
       blockForChangedAuthority();
-    else invalidateUiSync();
+    invalidateUiSync();
   }
 
   function observeAuthorityBatchSync(changes: ReadonlyMap<string, ExtensionAuthorityChange>): void {
@@ -355,17 +362,29 @@ export function createExtensionCoordinator(
       immediate ||= change.immediate && change.affectedIds.length > 0;
     }
     if (changed.size === 0) return;
-    invalidateUiSync();
-    const unauthorized = members.some(
-      (member) =>
-        changed.get(member.sourceId)?.eligible.some((item) => matches(item, member)) === false,
-    );
-    if (unauthorized) blockForChangedAuthority();
+    // A normal publication can leave a running parent or a preparing child in
+    // an older generation. A later withdrawal fences every matching original
+    // object permanently, even when current members no longer mention it.
+    const affected = [...activeByGeneration.values()]
+      .filter(({ members: retainedMembers }) =>
+        retainedMembers.some(
+          (member) =>
+            changed.get(member.sourceId)?.eligible.some((item) => matches(item, member)) === false,
+        ),
+      )
+      .map(({ generation }) => generation);
+    if (affected.includes(controller.current())) blockForChangedAuthority();
     if (immediate) {
       controller.abortActiveRuns(
         ownershipBlock ?? blocked ?? new Error('Extension admission changed'),
       );
+    } else if (affected.length > 0) {
+      controller.closeRetainedStartsBatch(
+        affected,
+        new PluginHostError('plugin-generation-blocked', 'Extension authority was withdrawn'),
+      );
     }
+    invalidateUiSync();
   }
   const observe: ExtensionAuthorityObserver = (sourceId, change) => {
     observeAuthorityBatchSync(new Map([[sourceId, change]]));
@@ -412,10 +431,10 @@ export function createExtensionCoordinator(
   function retainedGenerations(): readonly RetainedExtensionGeneration[] {
     const currentId = controller.current().id;
     return structuredClone(
-      [...activeByGeneration].map(([generationId, retainedMembers]) => ({
-        generationId,
-        current: generationId === currentId,
-        members: retainedMembers,
+      [...activeByGeneration.values()].map(({ generation, members }) => ({
+        generationId: generation.id,
+        current: generation.id === currentId,
+        members,
       })),
     );
   }
@@ -429,7 +448,7 @@ export function createExtensionCoordinator(
     pluginId: string,
     origin?: ExtensionIdentity['origin'],
   ): boolean {
-    for (const active of activeByGeneration.values()) {
+    for (const { members: active } of activeByGeneration.values()) {
       if (
         active.some(
           (member) =>
@@ -874,26 +893,31 @@ export function createExtensionCoordinator(
               }
 
               if (valid) {
+                const previousBlock = blocked;
+                // Publication listeners can withdraw authority as soon as the host changes its pointer.
+                activeByGeneration.set(next.id, { generation: next, members: nextMembers });
                 try {
                   retirement = options.host.commit(next).retirement;
                 } catch (original: unknown) {
+                  activeByGeneration.delete(next.id);
                   if (authorityMarker(original) !== undefined) throw original;
                   checkIteration();
                   attribute(items, original, 'publication');
                   continue;
                 }
-                activeByGeneration.set(next.id, nextMembers);
                 candidate = undefined;
                 // Retirement and publication listeners may synchronously publish C during B.
                 // B still owns its normal retirement, but cannot overwrite C's current binding.
-                if (controller.current().id === next.id) members = freezePanel(nextMembers);
-                if (controller.current().id === next.id) memberGenerationId = next.id;
-                if (controller.current().id === next.id) failed = [...failures];
-                if (controller.current().id === next.id) error = undefined;
-                if (controller.current().id === next.id) blocked = undefined;
-                if (controller.current().id === next.id && ownershipBlock !== undefined)
-                  controller.blockNewRuns(ownershipBlock);
-                if (controller.current().id === next.id) invalidateUiSync();
+                if (controller.current() === next) {
+                  members = freezePanel(nextMembers);
+                  memberGenerationId = next.id;
+                  failed = [...failures];
+                  error = undefined;
+                  if (blocked === previousBlock) blocked = undefined;
+                  const admissionBlock = closed ? blocked : (ownershipBlock ?? blocked);
+                  if (admissionBlock !== undefined) controller.blockNewRuns(admissionBlock);
+                  invalidateUiSync();
+                }
               }
             }
           }

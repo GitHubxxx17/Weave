@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -144,6 +144,46 @@ describe('Workspace File contracts', () => {
 });
 
 describe('Workspace File Tools', () => {
+  it.each(['write_file', 'edit_file'] as const)(
+    'checks the synchronous mutation permit after %s capture waits',
+    async (name) => {
+      const root = await createWorkspace();
+      let permit = true;
+      let reachedSnapshot!: () => void;
+      let endSnapshot!: () => void;
+      const reached = new Promise<void>((resolve) => {
+        reachedSnapshot = resolve;
+      });
+      const end = new Promise<void>((resolve) => {
+        endSnapshot = resolve;
+      });
+      const tools = createWorkspaceFileTools({
+        workspace: createWorkspacePolicy({ root }),
+        onFileSnapshot: async () => {
+          reachedSnapshot();
+          await end;
+        },
+        assertMutationCurrent: () => {
+          if (!permit) throw new Error('Folder permit revoked');
+        },
+      });
+      const context = { signal: new AbortController().signal };
+      const mutation =
+        name === 'write_file'
+          ? tools.writeFile.execute({ path: 'new/sub/file', content: 'new' }, context)
+          : tools.editFile.execute(
+              { path: 'README.md', oldText: 'Hello', newText: 'Edited' },
+              context,
+            );
+      await reached;
+      permit = false;
+      endSnapshot();
+      await expect(mutation).rejects.toThrow('Folder permit revoked');
+      await expect(stat(join(root, 'new'))).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(await readFile(join(root, 'README.md'), 'utf8')).toBe('Hello Weave');
+    },
+  );
+
   it('reads UTF-8 text through the Tool Pipeline', async () => {
     const root = await createWorkspace();
     const { pipeline } = createPipeline(root);

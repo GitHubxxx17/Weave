@@ -4,11 +4,18 @@ import {
   type RegisteredToolDefinition,
   type ToolApprovalSummary,
   type ToolDefinition,
+  type ToolExecutionContext,
   type ToolExecutionRequest,
   type ToolExecutionResult,
 } from './tool-types.js';
 import { ApprovalError, type ApprovalDecision, type ApprovalBroker } from './approval-types.js';
 import { approvalRequiredForMode } from './approval-risk.js';
+import {
+  assertAuthorizedTool,
+  beginAgentToolExecution,
+  bindToolApproval,
+  checkAgentToolCheckpoint,
+} from './agent-tool-authority.js';
 import type { ToolRegistry } from './tool-registry.js';
 
 export const defaultToolResultMaxBytes = 32_000;
@@ -65,6 +72,8 @@ export interface ToolPipelineOptions {
   readonly around?: ToolAround | undefined;
   /** Security policy for each call, inside `around`; see {@link ToolPolicy}. */
   readonly policy?: ToolPolicy | undefined;
+  /** Host policy for exposing private authority to tool implementations. */
+  readonly allowHostToolContext?: ((tool: RegisteredToolDefinition) => boolean) | undefined;
 }
 
 /** Public execution boundary for all registered tools. */
@@ -225,6 +234,7 @@ function withAround(
   pipeline: ToolPipeline,
   around: ToolAround,
   maxResultBytes: number,
+  registry: ToolRegistry,
 ): ToolPipeline {
   return {
     async execute(requestInput): Promise<ToolExecutionResult> {
@@ -235,10 +245,21 @@ function withAround(
         });
       }
       const request = Object.freeze(parsedRequest.data);
+      if (request.toolAuthority !== undefined) {
+        assertAuthorizedTool(request, registry, registry.get(request.name));
+      }
 
       let result: unknown;
+      let acceptingAttempts = true;
+      const pendingAttempts = new Set<Promise<ToolExecutionResult>>();
       try {
         result = await around(request, (next) => {
+          if (!acceptingAttempts) {
+            throw new ToolExecutionError(
+              'tool-invalid-input',
+              'Tool middleware invocation is closed',
+            );
+          }
           // Normalize once before identity comparisons: plugin accessors must
           // not return one identity here and a different one during execution.
           const parsedNext = toolExecutionRequestSchema.safeParse(next);
@@ -255,6 +276,8 @@ function withAround(
             nextRequest.toolCallId !== request.toolCallId ||
             nextRequest.sessionId !== request.sessionId ||
             nextRequest.turnId !== request.turnId ||
+            nextRequest.executionId !== request.executionId ||
+            nextRequest.toolAuthority !== request.toolAuthority ||
             nextRequest.signal !== request.signal ||
             nextRequest.permissionMode !== request.permissionMode
           ) {
@@ -263,7 +286,11 @@ function withAround(
               'Tool middleware changed invocation identity',
             );
           }
-          return pipeline.execute(nextRequest);
+          const attempt = pipeline.execute(nextRequest);
+          pendingAttempts.add(attempt);
+          const forget = () => pendingAttempts.delete(attempt);
+          void attempt.then(forget, forget);
+          return attempt;
         });
       } catch (error: unknown) {
         if (error instanceof ToolExecutionError) {
@@ -279,6 +306,14 @@ function withAround(
           `Tool "${request.name}" around middleware failed`,
           { cause: error },
         );
+      } finally {
+        acceptingAttempts = false;
+        await Promise.allSettled(pendingAttempts);
+      }
+      if (request.signal?.aborted === true) {
+        throw new ToolExecutionError('tool-cancelled', 'Tool execution was cancelled', {
+          cause: createAbortError(),
+        });
       }
       return checkAroundResult(request, result, maxResultBytes);
     },
@@ -364,6 +399,7 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
       const request = Object.freeze(parsedRequest.data);
 
       const tool = options.registry.get(request.name);
+      const authority = assertAuthorizedTool(request, options.registry, tool);
       if (tool === undefined) {
         throw new ToolExecutionError('tool-not-found', `Tool "${request.name}" was not found`);
       }
@@ -381,8 +417,53 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
       const controller = new AbortController();
       const signal = createCombinedSignal(request.signal, controller);
       const effectiveTimeoutMs = request.timeoutMs ?? timeoutMs;
+      const publicContext = {
+        signal,
+        ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
+        ...(request.turnId === undefined ? {} : { turnId: request.turnId }),
+        toolCallId: request.toolCallId,
+      };
+      const hostContext: ToolExecutionContext = Object.freeze({
+        ...publicContext,
+        ...(request.toolAuthority === undefined
+          ? {}
+          : {
+              toolAuthority: request.toolAuthority,
+              executionId: request.executionId,
+            }),
+      });
+      const context =
+        request.toolAuthority !== undefined && options.allowHostToolContext?.(tool) === false
+          ? Object.freeze(publicContext)
+          : hostContext;
       let timedOut = false;
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+      function assertCurrent(): void {
+        if (timedOut) {
+          throw new ToolExecutionError('tool-timeout', `Tool "${request.name}" timed out`);
+        }
+        if (signal.aborted) {
+          throw new ToolExecutionError('tool-cancelled', 'Tool execution was cancelled', {
+            cause: createAbortError(),
+          });
+        }
+        assertAuthorizedTool(request, options.registry, options.registry.get(request.name));
+      }
+
+      async function checkHostAuthority(): Promise<void> {
+        assertCurrent();
+        try {
+          await checkAgentToolCheckpoint(authority, hostContext);
+        } catch (cause: unknown) {
+          assertCurrent();
+          throw new ToolExecutionError(
+            'tool-not-permitted',
+            'The tool failed its host authority check',
+            { cause },
+          );
+        }
+      }
 
       if (request.signal?.aborted) {
         throw new ToolExecutionError('tool-cancelled', 'Tool execution was cancelled', {
@@ -406,6 +487,10 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
           throw new ToolExecutionError('tool-timeout', `Tool "${request.name}" timed out`);
         }
 
+        if (authority !== undefined) {
+          await checkHostAuthority();
+          assertCurrent();
+        }
         const toolWithApproval = tool as unknown as ToolDefinition<unknown, unknown>;
         let forceApproval = false;
         if (options.policy !== undefined) {
@@ -451,13 +536,12 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
           }
 
           let summary: ToolApprovalSummary;
+          if (authority !== undefined && options.policy !== undefined) {
+            await checkHostAuthority();
+            assertCurrent();
+          }
           try {
-            const pendingSummary = approval.summarize(inputResult.data, {
-              signal,
-              ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
-              ...(request.turnId === undefined ? {} : { turnId: request.turnId }),
-              toolCallId: request.toolCallId,
-            });
+            const pendingSummary = approval.summarize(inputResult.data, { ...context });
             summary = isPromiseLike(pendingSummary) ? await pendingSummary : pendingSummary;
           } catch (error: unknown) {
             if (timedOut) {
@@ -478,18 +562,27 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
           }
 
           let decision: ApprovalDecision;
+          if (authority !== undefined) {
+            await checkHostAuthority();
+            assertCurrent();
+          }
           try {
-            decision = await approvalBroker.request({
-              toolCallId: request.toolCallId,
-              toolName: request.name,
-              operation: approval.operation,
-              summary: summary.summary,
-              risk: approval.risk,
-              inputSummary: summary.inputSummary,
-              ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
-              signal,
-              ...(effectiveTimeoutMs === undefined ? {} : { timeoutMs: effectiveTimeoutMs }),
-            });
+            decision = await approvalBroker.request(
+              bindToolApproval(
+                {
+                  toolCallId: request.toolCallId,
+                  toolName: request.name,
+                  operation: approval.operation,
+                  summary: summary.summary,
+                  risk: approval.risk,
+                  inputSummary: summary.inputSummary,
+                  ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
+                  signal,
+                  ...(effectiveTimeoutMs === undefined ? {} : { timeoutMs: effectiveTimeoutMs }),
+                },
+                authority,
+              ),
+            );
           } catch (error: unknown) {
             if (error instanceof ApprovalError) {
               if (timedOut) {
@@ -520,13 +613,13 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
         }
 
         let result: unknown;
+        if (authority !== undefined) {
+          await checkHostAuthority();
+          assertCurrent();
+        }
+        const endExecution = beginAgentToolExecution(context, request);
         try {
-          result = await (tool as RegisteredToolDefinition).execute(inputResult.data, {
-            signal,
-            ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
-            ...(request.turnId === undefined ? {} : { turnId: request.turnId }),
-            toolCallId: request.toolCallId,
-          });
+          result = await (tool as RegisteredToolDefinition).execute(inputResult.data, context);
         } catch (error: unknown) {
           if (timedOut) {
             throw new ToolExecutionError('tool-timeout', `Tool "${request.name}" timed out`, {
@@ -541,6 +634,8 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
           throw new ToolExecutionError('tool-execution-failed', `Tool "${request.name}" failed`, {
             cause: error,
           });
+        } finally {
+          endExecution();
         }
 
         if (timedOut) {
@@ -579,5 +674,5 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
 
   return options.around === undefined
     ? pipeline
-    : withAround(pipeline, options.around, maxResultBytes);
+    : withAround(pipeline, options.around, maxResultBytes, options.registry);
 }

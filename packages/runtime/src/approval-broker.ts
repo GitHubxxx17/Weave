@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { consumeToolApproval } from './agent-tool-authority.js';
 import {
   ApprovalError,
   createApprovalRequestInputSchema,
@@ -114,6 +115,7 @@ export function createApprovalBroker(): ApprovalBroker {
 
   return {
     request(input): Promise<ApprovalDecision> {
+      const provenance = consumeToolApproval(input);
       const parsedInput = parseInput(input);
       if (parsedInput.signal?.aborted) {
         return Promise.reject(createAbortError());
@@ -134,6 +136,7 @@ export function createApprovalBroker(): ApprovalBroker {
         risk: parsedInput.risk,
         inputSummary: parsedInput.inputSummary,
         ...(parsedInput.sessionId === undefined ? {} : { sessionId: parsedInput.sessionId }),
+        ...provenance,
         status: 'pending',
         createdAt: createdAt.toISOString(),
         ...(expiresAt === undefined ? {} : { expiresAt }),

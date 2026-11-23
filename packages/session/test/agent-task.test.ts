@@ -96,7 +96,60 @@ const preparationSettled = {
 };
 const created: NewSessionEvent = { type: 'session.created', payload: {} };
 
+const stopAll = {
+  type: 'agent.tasks.stop-requested',
+  payload: { version: 1, operationId: 'stop-all', taskIds: [taskId] },
+};
+
 describe('Agent task Session facts', () => {
+  it('projects empty and preallocated stop targets before any acceptance and replays exact targets', async () => {
+    const store = createInMemorySessionEventStore();
+    const cache = createSessionProjectionCache(store);
+    const empty = {
+      ...stopAll,
+      payload: { ...stopAll.payload, operationId: 'empty-stop', taskIds: [] },
+    };
+    await store.append(parentSessionId, [created]);
+    for (const fact of [empty, stopAll, stopAll]) {
+      await store.append(parentSessionId, [newSessionEventSchema.parse(fact)]);
+      expect(await cache.project(parentSessionId)).toEqual(
+        projectSession(await store.read(parentSessionId)),
+      );
+    }
+    expect((await cache.project(parentSessionId))?.agentTasks).toMatchObject({
+      stopOperations: [
+        { ...empty.payload, sequence: 2 },
+        { ...stopAll.payload, sequence: 3 },
+      ],
+      tasks: [],
+    });
+  });
+
+  it('rejects conflicting stop snapshots, duplicate targets, and snapshots in a child origin', async () => {
+    const store = createInMemorySessionEventStore();
+    const fact = newSessionEventSchema.parse(stopAll);
+    const conflict = newSessionEventSchema.parse({
+      ...stopAll,
+      payload: { ...stopAll.payload, taskIds: [] },
+    });
+    expect(
+      newSessionEventSchema.safeParse({
+        ...stopAll,
+        payload: { ...stopAll.payload, taskIds: [taskId, taskId] },
+      }).success,
+    ).toBe(false);
+    await store.append(parentSessionId, [created, fact, conflict]);
+    const parent = await store.read(parentSessionId);
+    expect(() => projectSession(parent)).toThrow(/stop operation.*conflict/i);
+    await store.append(childSessionId, [
+      created,
+      newSessionEventSchema.parse({ type: 'agent.task.origin', payload: origin }),
+      fact,
+    ]);
+    const child = await store.read(childSessionId);
+    expect(() => projectSession(child)).toThrow(/child task/i);
+  });
+
   it('projects the same bounded task summary incrementally, including exact replay', async () => {
     const store = createInMemorySessionEventStore();
     const cache = createSessionProjectionCache(store);

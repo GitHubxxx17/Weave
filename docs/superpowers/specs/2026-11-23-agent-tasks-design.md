@@ -51,6 +51,7 @@ core facts 均 version:1，plugin writer 无权追加：
 - child 的第一个原子 batch 为 `session.created + agent.task.origin`。origin 含 task/root/parent、parent accepted sequence/digest、预分配 execution IDs 和 `admissionClass:'agent-task-once'`。不是普通可续聊 Session。
 - 父 `agent.task.dispatched`：child execution.accepted 的确切 sequence/digest；只在重读确认后追加。child 可先于 dispatched 结束，reconciler 仍按 accepted IDs 校验。
 - 父 `agent.task.cancel-requested`：host operationId、目标 task 与安全 reason。是 durable intent，资源是否清理单独表示。
+- 根 `agent.tasks.stop-requested`：`{version:1,operationId,taskIds}`，记录全停操作原始目标。每个根的 operationId 对应 0–4 个互不重复的预分配 task UUID，可包含接纳结果尚未确认的任务。重放同一事实时目标集合保持一致，不同集合视为冲突。子 Session 不允许该事实。
 - 父 `agent.task.settled` 使用下列判别 union。每个 task 最多一个 terminal，重复 exact bytes 可重放；冲突不覆盖。
 
 ```ts
@@ -154,7 +155,7 @@ lease 状态至少 `open -> start-closed -> aborted/released`，start-closed 不
 | 事件 | 已 running child | 已 accepted 未 start child | 父再次 retain/start |
 | --- | --- | --- | --- |
 | 普通 reload（无 authority withdrawal） | 原代继续 | 原 lease 可在原代 start | 仍 running 的父可取原代 lease；不落新代 |
-| 非 immediate disable/revoke/authority withdrawal | 现有 run 沿现有非 immediate 语义完成 | 受影响旧代 lease 永久 start-closed，任务安全取消/失败 | 拒绝；重新启用须新代新任务 |
+| 非 immediate disable/revoke/authority withdrawal | 已通过 Server retained start admission 的 child 沿现有语义完成 | 受影响旧代、尚未通过 Server retained start admission 的 child 永久 start-closed 并安全取消/失败 | 拒绝；重新启用须新代新任务 |
 | immediate disable/revoke/forced reload | 合作式 abort，清理后释放 | 永久 fencing + abort，不再 start | 拒绝，即使父尚未 cleanup |
 | managed ownership loss / host admission failure | child abort、禁止新工具准入 | fencing + abort | 拒绝，不能 lease 绕过 guard |
 | shutdown/dispose | abort 并等待实际 cleanup | fencing + abort | 同步拒绝 |
@@ -164,6 +165,8 @@ lease 状态至少 `open -> start-closed -> aborted/released`，start-closed 不
 Provider 明确选择：继承父本轮解析后的 **provider ID、model ID、sampling、reasoningEffort 和 permissionMode**，并设置 useProviderDefaults:false；不继承 host client/endpoint/key 的快照。host Provider client/descriptor 在 child 实际 run start 从 live host registry 解析，再由 Runner 在 child Turn 内固定。起动前更新 host endpoint/key 会影响 child，删除导致安全 unavailable，删除重建按当前配置解析；UI/说明不得称“沿用父凭据/连接”。plugin Provider client 仍由父 Generation 固定。任何 credentials/client handle 均不持久化。context descriptor 在 child start 解析，不能冒称与父完全同 context budget。
 
 工具 authority 捕获父本轮允许的 exact owner/name/definition identity。read-only 仅允许 `readOnly===true`，workspace 允许父本轮集合，二者均排除四个 task tools。opaque authority 绑定 execution/run/token 并在 tool around 的 next invariants 中强制相同；同名新定义不可替代。Pipeline lookup/execution 独立拒绝越权，policy 只能更严。
+
+普通根 Turn 的真实调用通过 token、调用身份和 registry 复核后，若工具名在捕获快照和 registry 中均不存在，保留 `tool-not-found`。child 调用未授权工具、调用身份不符或已捕获定义发生变化时返回 `tool-not-permitted`。这两类拒绝均发生在 around、policy 和审批之前。
 
 模型名单、base instruction 工具说明使用同一 authority view。**每次实际 Provider request 在 middleware 最终 next 委派的 base continuation 中、真正调用 Provider 之前** 验证工具集合：middleware 可删除条目；不可新增 name、重复 name、替换同名 description/parameters 或越过 definition identity 的原始 public schema snapshot。不能等 Provider 返回后才检查。instructions 与最终 request 均受同一 captured authority 约束，request 允许进一步收窄。该校验和原 provider/model/signal/context-budget 校验都保留。middleware 合成的未授权 tool call 仍由 Pipeline 拒绝。可信进程内插件可执行任意本机代码的既有信任事实不变，这不是 OS sandbox。
 
@@ -187,14 +190,18 @@ Execution pump 在其 gate **释放后** 通知不可变 cleanup outcome；termi
 
 资源与 bookkeeping 分开：Generation lease 在 materializer 不可能 late-start、execution pump/iterator/tool cleanup 结束且 child finished 已 durable（或已确认无 execution acceptance）后释放，不等待 parent settled append 或整个 Generation dispose。task capacity 直到 parent settled durable 才归还；parent append uncertain 保守 blocked/保留容量，但不无限保留已无执行的 plugin 资源。child terminal persistence uncertain 时先 fence/drain live资源，再保留 evidence/reservation 到 reconcile，不用旧 lease 重新 launch。所有 release 幂等。
 
-status/wait 不改变事实或领取结果。tree observer 有 transient process `epoch` 与 root `revision`（safe integer）；每任务记录 terminalRevision 和当前 pendingApprovalIds/changeRevision。root SSE cursor 是 strict `{epoch,rootSessionId,revision}` 的 opaque 编码，与 durable sequence 分开、不可跨 root。wait cursor 另外绑定去重排序后目标 ID 集合的 `targetSetDigest`，不能用于不同集合；变更 targets 要省略 after 或获得新 snapshot，避免未观察的 sibling terminal 被一个全 root revision 隐藏。spawn receipt 的观察 cursor 仅覆盖该新 task。subscribe-before-snapshot 取一致 view：
+status/wait 不改变事实或领取结果。tree observer 为每个缓存的 root 维护 transient `epoch` 与 `revision`（safe integer）。每任务记录 terminalRevision 和当前 pendingApprovalIds/changeRevision。root SSE cursor 是 strict `{epoch,rootSessionId,revision}` 的 opaque 编码，与 durable sequence 分开、不可跨 root。wait cursor 另外绑定去重排序后目标 ID 集合的 `targetSetDigest`，不能用于不同集合。变更 targets 要省略 after 或获得新 snapshot，避免未观察的 sibling terminal 被一个全 root revision 隐藏。spawn receipt 的观察 cursor 仅覆盖该新 task。subscribe-before-snapshot 取一致 view：
 
 - 无 after 或旧 epoch：返回当前已 terminal/已有 pending approval 的 actionable snapshot（reason 为 terminal/approval）；若均无则等待。epoch reset 不 suppress body。
 - 同 epoch：只在目标有 revision > after 的 terminal 或当前 pending approval 时立即返回；已消耗 terminal 不反复唤醒，也不重复大正文。一个 consumed terminal + 一个 running 可以等待后者。只消费观察窗口，不是 dequeue；status/full pointer 随时可读。
 - pending approval 在 subscribe 前创建也能从 snapshot 唤醒；已解决且当前无 pending 不伪造待批，若无 terminal 则继续等；新 pending/terminal race 不丢。所有目标均 terminal 且已消费时立即返回 `allSettled:true,changed:false` 无正文，模型说明不得再等待此组。
 - timeout 返回当前 snapshot、cursor、`timedOut:true`，0 是 snapshot；wait abort 只撤订阅，不 cancel task。不持任何 admission/root/Session mutex。observer 数量/frame/byte 有界，慢 consumer 断开重连。
 
+有活动 wait 或树订阅的 root 保留当前 epoch 和 revision。最多缓存最近使用的 64 个无订阅 root，驱逐后重新读取时生成新 epoch。旧 epoch 的 wait/SSE cursor 触发完整观测，旧分页 cursor 要求重新读取首页。重新订阅或读取缓存 root 时，从 Task Service 和 Broker 刷新快照，继续有效 cursor 的消费位置。Broker 通知只匹配有订阅的 root 中未结算 child 的 exact Session/execution/Turn 标识。
+
 所有四个工具输出完整 JSON <=24,576 UTF-8 bytes（默认 Pipeline 32,000 下有效），最多4个 detailed task results，每个初始纯文本 preview <=4,096 UTF-8 bytes、title<=480 bytes、固定 IDs<=240 ASCII chars、安全 reason<=80 ASCII chars。status 列表最多16条只含<=256-byte preview；page cursor<=600 ASCII chars，approvalId最多4条/task，更多用 count + child link。full-result pointer 是有界 sessionId/executionId/turnId/messageId 与 safe-integer watermark 的结构，不由模型提供任意 URL；UI 根据这些 ID 构造入口。
+
+公开 task view 使用 `taskId/rootSessionId/parentSessionId/parentTurnId/childSessionId/childExecutionId/childTurnId/title/access/acceptedAt/status/resultKind/preview/previewTruncated/pendingApprovalIds/pendingApprovalCount`；可选 `reason/settledAt/result`。status 是 `preparing/queued/running/cancelling/blocked/completed/failed/cancelled/interrupted`，待批由 pending IDs/count 表示，不冒充 durable terminal。live 状态不得携带 `settledAt`，live 状态和 preparation terminal 的 `resultKind` 固定为 `none`，不携带结果 pointer 或正文。execution terminal 的非 `none` 结果必须有完整 pointer，若 preview 被预算压缩为空必须保留 `previewTruncated:true`；`completed` 只能使用 `final-answer` 或 `none`。result 仅含 `sessionId/executionId/turnId/messageId/terminalSequence`，对应已验证 child 原文指针；公开 view 不含 prompt、settings、工具 authority 或任意 URL。所有 bounded tool envelope 使用 `{tasks,cursor,truncated}`，可加 `timedOut/changed/allSettled/nextCursor` 的观察字段；这些字段不落持久日志。
 
 先生成全部 required metadata，再对 text/preview codepoint-safe 限长；每次以 `Buffer.byteLength(JSON.stringify(envelope),'utf8')` 实测。若超限，按返回顺序轮转缩减最长 display preview，保留每个 taskId/status/resultKind/full pointer；耗尽 preview 后可缩 title，不删任务身份，不截 URL/指针。每条 `previewTruncated` 和 envelope `truncated` 明确；metadata 自身超限抛固定 `agent-task-result-too-large`。quotes/backslashes/controls 都计 escaping；不能只加4×4KiB。若 host 自配 Pipeline cap 更小，仍可能由 Pipeline 截断，文档明确默认 cap 保证，不提高全局限制。
 
@@ -202,9 +209,17 @@ cancel 在 task gate 内追加幂等 intent并永久 fence（无论 preparing/ac
 
 父自然完成/失败，children 可继续；不自动建父 Turn。根 Studio Stop 明确为“停止本轮及其派生子任务”：在 task gate 永久冻结 exact parent Turn 的 spawn，快照已 accepted/preparing 子任务，再锁外取消 exact parent execution/children；新父 Turn 可正常开始。还有“停止全部子任务”只影响该 root 当前 live tasks，显式批量 operation 最多4条。子页 Stop 只停该 task。archive/delete root/child 在 task gate 检查 no live/preparing/blocked-owned task，再用既有 withSessionIdle，避免 TOCTOU；否则409。终态 child 可归档/tombstone，父历史指针仍存在；rename不变。
 
+全停在同一个 Task gate 内先确认根 Stop 事实，再追加尚未记录的任务取消意图。写入新根 Stop 事实前，在同一个 gate 内确认根 Session 尚未删除。已有操作仅重放原目标。操作结果未知时按同一 operationId 和原始目标精确核对，后续接纳的任务不纳入该批次。重启从根 Stop 事实恢复原目标与尚缺的单任务意图，保留已有的首个取消原因。旧日志可按已记录的单任务取消事实恢复已知目标。
+
+Server 调用 Runtime `stopParentTurn(rootSessionId, parentTurnId, operationId)` 冻结该 Turn 后停止父 execution。`withTaskSessionsIdle(sessionId, operation)` 在 Task gate 检查该 Session 的任务归属与活动状态，将内部 `agent-task-busy` 映射为 HTTP 409。Server 在 `operation` 内保持既有 Execution/Session idle 校验及归档或删除原子序列。
+
+HTTP 观察和控制固定使用 `GET /sessions/:sessionId/tasks`、`GET /sessions/:sessionId/tasks/:taskId`、`GET /sessions/:sessionId/tasks/events`、`POST /sessions/:sessionId/tasks/:taskId/cancel` 与 `POST /sessions/:sessionId/tasks/stop-all`；不提供 HTTP spawn。子 Session detail 只补安全 `taskOrigin:{taskId,rootSessionId,parentSessionId}`，tree 路径的子 Session 解析到同一 root，并验证二者仍属于唯一相同 Project。cancel/stop-all body 为严格 `{operationId}`，stop-all 在 Runtime gate 内快照当前任务。树事件只含 bounded allowlist metadata 和 root cursor，最多保留64帧/256KiB，断开仅移除观察者。父 execution cancel 先在 Task gate 冻结其 exact Turn 并请求派生任务停止，再取消父 execution；子 execution cancel 转到所属 task 控制，均复用原 Broker approval IDs。
+
 ## 9. 恢复与关闭
 
 listen 前从 Project refs 的 root Sessions 扫父 accepted，按预分配 child ID 读取（即使 attach 未完成），建立 task authority/admission index，再执行 task-aware execution recover。origin class 永久生效；普通 child POST在重启后仍拒绝。cross-log reconciler 验证所有双向 IDs/digests/watermarks，未知/冲突 blocked，不覆盖。
+
+Server 在 listen 前调用 Runtime `recover(rootSessionIds, recoverExecutions)`。Runtime 先登记已发现的父接受事实和子身份，再通过回调委托 Execution 修复合法 Session 的 durable terminal。回调必须绑定启动时尚未接纳运行的 Execution service，可重复尝试相同 Session 的持久化修复。读取未知或跨日志身份冲突的 child 保留 blocked 记录，等确切证据可用再修复。Root prefix 读取失败阻止启动。
 
 - 已 child finished durable：验证 terminal + resultKind/指针，补缺 dispatched/父 execution settlement，不调用模型。
 - accepted 后 child缺失/未 execution accepted：永久 fence materialization、确认无 acceptance；已有 durable host stop intent 时写 preparation cancelled 并保留首个 reason，否则 preparation interrupted（没有伪 Turn）。attach未完成可保留审计但不再发起工作。
@@ -219,9 +234,9 @@ listen 前从 Project refs 的 root Sessions 扫父 accepted，按预分配 chil
 
 ## 10. HTTP、Studio 与验收
 
-薄路由：GET `/sessions/:rootId/agent-tasks` 分页 summary、`.../events` 单树bounded SSE、`.../:taskId` metadata/child/result pointers，POST `.../:taskId/cancel`、`.../cancel` stop-all。spawn首版只有模型 shared Pipeline，无HTTPspawn；所有现有 execution launch入口额外强制one-shot origin。沿用loopback Host/Origin/Sec-Fetch/JSON guards，Session可见性、exact Project/root membership、strict ID/query/cursor/body。Approval仍走原Broker API，无task approve新权限。
+薄路由：GET `/sessions/:sessionId/tasks` 分页 summary、`.../events` 单树bounded SSE、`.../:taskId` metadata/child/result pointers，POST `.../:taskId/cancel`、`.../stop-all` stop-all。spawn首版只有模型 shared Pipeline，无HTTPspawn；所有现有 execution launch入口额外强制one-shot origin。沿用loopback Host/Origin/Sec-Fetch/JSON guards，Session可见性、exact Project/root membership、strict ID/query/cursor/body。Approval仍走原Broker API，无task approve新权限。
 
-SSE只发allowlist metadata、有限preview/pending IDs，不传播prompt/authority descriptor或全部child tokens；最多64帧/256KiB订阅队列与snapshot cap，满则关闭观察并重连。epoch/cursor防stale GET覆盖新SSE及root切换ABA；断连不拥有执行。
+SSE只发allowlist metadata、有限preview/pending IDs，不传播prompt/authority descriptor或全部child tokens；最多64帧/256KiB订阅队列与snapshot cap，满则关闭观察并重连。树快照显式携带 `epoch`、`rootSessionId` 和 `revision`，客户端无需解析 opaque cursor 即可丢弃过期 GET 或其他 root 的更新。树快照和状态分页按未结算优先、最新接纳优先排序；树快照含首16条、`totalCount` 及可选 `nextCursor`。完整树 JSON 不超过24,576字节，预览最多256字节。翻页游标精确绑定根修订，变化后需取新首页。断连不拥有执行。
 
 Studio用语义列表/轻量SVG线展示四个子节点，无依赖。显示title/access/status/resultKind/reason/activity/elapsed/approvalCount、打开/停止、parent breadcrumb与只读子Composer。父审批聚合可信后代的同一个approvalId；打开child定位call。终态显示final/partial/none，截断有全文入口，step-limit明确“未完成答复”。workspace显示共享文件夹/并发写冲突说明；Provider说明继承IDs/sampling，host连接配置以child start为准。父草稿不因进入child丢失；parent toolbar完成/失败/审批badge更新但不自动发消息。
 
@@ -235,8 +250,20 @@ Studio用语义列表/轻量SVG线展示四个子节点，无依赖。显示titl
 
 GenerationRunner 采用兼容的 `run(request, scope?)` 第二参数形式：仅在实际 Session 队首、guard 成功且 running pin 已建立后，由 controller mint 私有 running scope。scope 的 retain 产生一次 child run 的 lease；lease 的 run 仍经过原 Session queue。retain 立即持准备 pin，release 幂等且不等待 Generation dispose，真实 iterator cleanup 前不释放 pin。scope 在父完成后不能再次 retain；已接纳的 lease 独立存活。controller 用原 Generation 对象身份关闭后续 retained starts，禁止模型数字 ID 选择。普通 reload 不关闭原代 start；受影响的 authority withdrawal 单调关闭旧代，重新 publish 不重开旧 lease。
 
+Server 的准备阶段通过 retained lease 的同步 `assertCanStartSync()` 复核原代 admission 与 guard；该检查不创建 run、不选择新代，也不消费一次执行名额。检查在 guard 返回后再次复核单调 fence，防止 guard 重入撤销。实际 Session 队首仍独立重复检查。
+
+Retained lease 另有只读 `revocationSignal`：普通 reload 和父自然结束不触发；显式 generation start withdrawal、immediate/forced abort 与 host ownership loss 会触发。普通 start withdrawal 只通知尚未实际起动的 lease，既有 running child 继续；immediate/ownership abort 通知所有受影响 lease。plugin-host 通过 `closeRetainedStartsBatch` 与 `abortRetainedWorkBatch` 按原 Generation 对象身份选取控制范围。通知前批量建立 starts fence，保留首个 lease revocation 与 run cancellation 原因，防止同步 listener 重入。
+
+Server Generation 使用显式 retained start admission（Generation `explicitRetainedStart` 和 scope `admitRetainedStart`）。进入 Generation pump 只建立 cleanup pin。Runtime 完成 Project 和 Session 等待后，在启动 Turn 原子 append 前同步通过私有 Generation scope 复核并确认 start admission。在这个时点前，普通撤销通知并取消已经进入 pump 的 child；通过后，普通撤销允许该 child 完成本轮。append 发出后即可能已提交，因此判定以同步准入为界，不能等待异步 append 回执。immediate 撤销仍取消所有受影响 child。未启用显式准入的 generic runner 保留 pump 入口语义。普通 root Turn 保留其 Generation pin，不参与 retained start admission。
+
+Runner 将本轮 signal 传给私有 Server turn admission，并在读取 Session 后复核取消。若取消使 pinned Project authority 在 turn admission 中失效，则以 AbortError 停止启动。尚未发布 Turn 的合作式取消正常结束 iterator cleanup，Session 读写错误和真实 cleanup 失败继续上报。
+
+Server 在同一 authority batch 内先阻止受影响 current 的普通 admission，再调用 retained start 批量关闭或既有的全量 immediate abort，最后发布 UI invalidation。Managed ownership loss 对包含 managed 成员的所有未清理 Generation 批量 abort retained lease 及其 child run，包括仍有 pin 的已退役 Generation。已开始的普通 Turn 沿现有 ownership 规则保留资源并完成。若 current 未包含 managed 成员，普通 admission 保持可用。Server 内部的 `ManagedGenerationOwnershipError` 保留 `plugin-generation-blocked` 错误码并映射到 `ownership-lost`。其他 lease revocation 原因映射到 `generation-revoked`。Task lifetime 将首个原因追加为 durable intent，generic plugin-host 不导入 Runtime 词汇。
+
 Server 根据已有 activeByGeneration 的确切来源与完整成员身份，对所有未清理 Generation 维护永久 start fence，不能只检查 current。真实 running scope 适配为 Runtime 私有 WeakMap 识别的非 JSON run token，贯穿 instructions、最终模型请求与 Tool Pipeline；外部 executionIdentity 结构值不赋予 authority。around 委派保持相同 token 引用。工具允许集同时捕获 owner、exact definition 引用与独立深度 public schema snapshot，防止同名替换及嵌套 schema 变更。
 
 Project folder fence 在唯一 Server 修改入口内、写事务前同步生效；最终文件 mutation queue 内采用同步 fence/permit 检查，避免持 root mutation queue 后反向等待 Project gate。folderRevision 与 pinned real root 的检查仍覆盖 summary、审批后 execute 和最终写入准入。
+
+Server 私有绑定表只以实际 child `AgentToolAuthority` 对象索引 `ProjectFolderBinding`。绑定随 host 从真实父 `agent_spawn` 派生，子工具、turn admission、项目说明与 Skills 使用同一 pinned resolver。普通根 Session 保留动态解析。Server 在进入 undo 的 root queue 前捕获和校验 Project binding；Runtime file/undo 接收同步 effect 许可回调，在每次实际 mkdir/write/unlink 前调用。回调不进入 plugin context，也不获取 Project gate。
 
 Bound launch 与 unresolved acceptance 的 replay 分支共用原 execution gate，并在 install/first next 前重核原 authority 的永久 fence；没有 acceptance 后外部再绑定 runner 的窗口。cleanup 通知在 gate 外发布，不等待父日志或 Generation dispose。Server shutdown 遇到未结束 writer/materializer 或不确定 durable append 时返回可重试 incomplete，停止关闭相关 Store；不能以 record-and-continue 抛弃仍可能写入的资源。

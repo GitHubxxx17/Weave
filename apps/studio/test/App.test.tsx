@@ -7,6 +7,7 @@ import { AgentStreamError, streamAgentRun } from '../src/features/agent/agent-st
 import { App } from '../src/app/App.js';
 import type { AgentExecutionSnapshot } from '../src/features/agent/agent-execution-types.js';
 import type { AgentStreamHandlers } from '../src/features/agent/agent-types.js';
+import type { AgentTaskView } from '../src/features/tasks/task-types.js';
 import {
   planningRef,
   planningSkill,
@@ -544,6 +545,276 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe('Agent Tasks in Studio', () => {
+  const root = sessionIds.local;
+  const task: AgentTaskView = {
+    taskId: '00000000-0000-4000-8000-000000000001',
+    rootSessionId: root,
+    parentSessionId: root,
+    parentTurnId: 'parent-turn',
+    childSessionId: '00000000-0000-4000-8000-000000000002',
+    childExecutionId: '00000000-0000-4000-8000-000000000003',
+    childTurnId: '00000000-0000-4000-8000-000000000004',
+    title: '检查变更',
+    access: 'read-only',
+    acceptedAt: '2026-11-23T00:00:00.000Z',
+    status: 'running',
+    resultKind: 'none',
+    preview: '',
+    previewTruncated: false,
+    pendingApprovalIds: ['child-approval'],
+    pendingApprovalCount: 1,
+  };
+  const approval = {
+    approvalId: 'child-approval',
+    toolCallId: 'child-tool',
+    sessionId: task.childSessionId,
+    executionId: task.childExecutionId,
+    turnId: task.childTurnId,
+    toolName: 'workspace.search',
+    operation: 'tool.execute',
+    summary: '查询变更文件',
+    risk: 'low',
+    inputSummary: {},
+    status: 'pending',
+    createdAt: '2026-11-23T00:00:01.000Z',
+  };
+
+  function installTasks(
+    options: {
+      listChild?: boolean;
+      delayDetail?: Promise<void>;
+      tasks?: readonly AgentTaskView[];
+    } = {},
+  ): void {
+    const fallback = fetchMock.getMockImplementation()!;
+    const tasks = options.tasks ?? [task];
+    const snapshot = {
+      tasks,
+      cursor: 'tree-1',
+      epoch: 'epoch',
+      revision: 1,
+      rootSessionId: root,
+      changed: true,
+      totalCount: tasks.length,
+      truncated: false,
+    };
+    function eventStream(event: string, value: unknown): Response {
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode(`event: ${event}\ndata: ${JSON.stringify(value)}\n\n`),
+            );
+          },
+        }),
+        { headers: { 'content-type': 'text/event-stream' } },
+      );
+    }
+    fetchMock.mockImplementation(async (input, init) => {
+      const path = new URL(String(input), 'http://weave.local').pathname;
+      if (path === '/projects' && options.listChild) {
+        const response: Response = await fallback(input, init);
+        const body = await response.json();
+        body.projects[0].sessions.push(sessionSummary(task.childSessionId, task.title));
+        return Response.json(body);
+      }
+      if (path === `/sessions/${task.childSessionId}`) {
+        await options.delayDetail;
+        return Response.json({
+          ...sessionDetail(task.childSessionId, task.title, [
+            {
+              role: 'assistant',
+              turnId: task.childTurnId,
+              content: [],
+              toolCalls: [
+                {
+                  id: approval.toolCallId,
+                  name: approval.toolName,
+                  arguments: '{"query":"child only"}',
+                },
+              ],
+            },
+            {
+              role: 'assistant',
+              turnId: task.childTurnId,
+              content: [{ type: 'text', text: '子任务输出' }],
+            },
+          ]),
+          taskOrigin: { taskId: task.taskId, rootSessionId: root, parentSessionId: root },
+        });
+      }
+      if (path === `/sessions/${root}/tasks/events`) return eventStream('tasks', snapshot);
+      if (path === `/sessions/${root}/tasks`) return Response.json(snapshot);
+      if (
+        path === `/sessions/${root}/tasks/${task.taskId}/cancel` ||
+        path === `/sessions/${root}/tasks/stop-all`
+      ) {
+        return Response.json({ tasks: [task] }, { status: 202 });
+      }
+      if (path === '/approvals/stream')
+        return eventStream('approval.snapshot', {
+          approvals: [
+            approval,
+            {
+              ...approval,
+              approvalId: 'wrong-execution',
+              summary: '其他执行审批',
+              executionId: 'mismatch',
+            },
+            { ...approval, approvalId: 'wrong-turn', summary: '其他轮次审批', turnId: 'mismatch' },
+          ],
+        });
+      if (path === '/approvals/child-approval/reject')
+        return Response.json({ ...approval, status: 'rejected' });
+      return fallback(input, init);
+    });
+  }
+
+  it('keeps the parent draft and one task stream while opening a previously unlisted child', async () => {
+    const detail = Promise.withResolvers<void>();
+    installTasks({ delayDetail: detail.promise });
+    await renderApp();
+    const taskDisclosure = await screen.findByText('并行子任务（1） · 有待审批');
+    (taskDisclosure.parentElement as HTMLDetailsElement).open = true;
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '先保留这条草稿' } });
+    fireEvent.change(screen.getByLabelText('委派说明'), { target: { value: '检查覆盖范围' } });
+    fireEvent.click(screen.getByRole('button', { name: '添加到会话草稿' }));
+    const draft = (screen.getByLabelText('发送消息') as HTMLTextAreaElement).value;
+    expect(draft).toContain(
+      '先保留这条草稿\n\n请将以下工作委派给子任务，访问权限为只读（read-only）',
+    );
+    expect(streamAgentRunMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '打开子会话：检查变更' }));
+    expect((screen.getByLabelText('发送消息') as HTMLTextAreaElement).value).toBe(draft);
+    expect(
+      fetchMock.mock.calls.filter(([input]) => String(input).includes('/tasks/events')),
+    ).toHaveLength(1);
+    await act(async () => detail.resolve());
+    await screen.findByText('子任务输出');
+    expect(screen.getByText('子会话只读。返回父会话继续发送。')).toBeTruthy();
+    expect(screen.queryByLabelText('发送消息')).toBeNull();
+    fireEvent.submit(screen.getByText('子会话只读。返回父会话继续发送。').closest('form')!);
+    fireEvent.click(screen.getByRole('button', { name: '停止子任务' }));
+    fireEvent.click(screen.getByRole('button', { name: '返回父会话' }));
+    expect((screen.getByLabelText('发送消息') as HTMLTextAreaElement).value).toBe(draft);
+    (screen.getByText('并行子任务（1） · 有待审批').parentElement as HTMLDetailsElement).open =
+      true;
+    fireEvent.click(screen.getByRole('button', { name: '停止全部子任务' }));
+    expect(
+      fetchMock.mock.calls.filter(([input]) => String(input).includes('/tasks/events')),
+    ).toHaveLength(1);
+    expect(
+      fetchMock.mock.calls
+        .filter(([, init]) => init?.method === 'POST')
+        .map(([input]) => String(input)),
+    ).toEqual([
+      `/sessions/${root}/tasks/${task.taskId}/cancel`,
+      `/sessions/${root}/tasks/stop-all`,
+    ]);
+    expect(streamAgentRunMock).not.toHaveBeenCalled();
+  });
+
+  it('opens the exact durable message through its merged Turn card', async () => {
+    const pointer = {
+      sessionId: task.childSessionId,
+      executionId: task.childExecutionId,
+      turnId: task.childTurnId,
+      messageId: `${task.childSessionId}-message-2`,
+      terminalSequence: 4,
+    };
+    installTasks({
+      tasks: [
+        {
+          ...task,
+          status: 'failed',
+          settledAt: '2026-11-23T00:00:08.000Z',
+          resultKind: 'partial',
+          reason: 'agent-step-limit',
+          preview: '预览',
+          result: pointer,
+          pendingApprovalIds: [],
+          pendingApprovalCount: 0,
+        },
+      ],
+    });
+    const scrolls: string[] = [];
+    const previousScroll = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value(this: HTMLElement) {
+        scrolls.push(this.id);
+      },
+    });
+    try {
+      await renderApp();
+      const disclosure = await screen.findByText('并行子任务（1）');
+      (disclosure.parentElement as HTMLDetailsElement).open = true;
+      fireEvent.click(screen.getByRole('button', { name: '查看全文：检查变更' }));
+      await waitFor(() => expect(scrolls).toContain(`message-${pointer.turnId}`));
+      expect(screen.getByText('子任务输出')).toBeTruthy();
+    } finally {
+      if (previousScroll === undefined)
+        Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView');
+      else Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', previousScroll);
+    }
+  });
+
+  it('shows only exactly attributed child approvals in the parent and locates the tool call', async () => {
+    installTasks();
+    await renderApp();
+    const card = await screen.findByRole('article', { name: '待审批：查询变更文件' });
+    expect(screen.queryByText('其他执行审批')).toBeNull();
+    expect(screen.queryByText('其他轮次审批')).toBeNull();
+    fireEvent.click(within(card).getByRole('button', { name: '查看参数' }));
+    await screen.findByText('子任务输出');
+    await waitFor(() =>
+      expect(document.activeElement?.hasAttribute('data-tool-parameters')).toBe(true),
+    );
+    fireEvent.click(screen.getByRole('button', { name: '返回父会话' }));
+    fireEvent.click(
+      within(screen.getByRole('article', { name: '待审批：查询变更文件' })).getByRole('button', {
+        name: '拒绝工具调用',
+      }),
+    );
+    await waitFor(() => expect(screen.queryByText('查询变更文件')).toBeNull());
+    const requests = fetchMock.mock.calls.filter(([input]) =>
+      String(input).startsWith('/approvals/'),
+    );
+    expect(requests.map(([input]) => input)).toEqual([
+      '/approvals/stream',
+      '/approvals/child-approval/reject',
+    ]);
+  });
+
+  it('waits for Session Detail before enabling a refreshed child composer', async () => {
+    let finishDetail!: () => void;
+    const delayDetail = new Promise<void>((resolve) => {
+      finishDetail = resolve;
+    });
+    installTasks({ listChild: true, delayDetail });
+    render(<App />);
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([input]) => String(input) === `/sessions/${task.childSessionId}`,
+        ),
+      ).toBe(true),
+    );
+    expect(screen.queryByLabelText('发送消息')).toBeNull();
+    await act(async () => finishDetail());
+    await screen.findByText('子会话只读。返回父会话继续发送。');
+    expect(screen.queryByRole('button', { name: '发送' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '返回父会话' }));
+    expect(await screen.findByLabelText('发送消息')).toBeTruthy();
+    expect(
+      fetchMock.mock.calls
+        .filter(([input]) => String(input).includes('/tasks/events'))
+        .map(([input]) => input),
+    ).toEqual([`/sessions/${root}/tasks/events`]);
+  });
+});
+
 describe('Studio Agent Chat', () => {
   it.each([false, true])(
     'reads the plugin catalog at startup without writes (restored=%s)',
@@ -839,7 +1110,7 @@ describe('Studio Agent Chat', () => {
     expect(screen.getByLabelText('Agent 工作流')).toBe(workflow);
     expect(workflow.scrollTop).toBe(137);
     expect(screen.getByLabelText<HTMLTextAreaElement>('发送消息').value).toBe('返回后继续编辑');
-    expect(screen.getByRole('button', { name: '停止运行' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '停止本轮及派生任务' })).toBeTruthy();
     expect(screen.getByText('市场浏览时仍然收到回复')).toBeTruthy();
     expect(document.querySelector('.preview-panel iframe')).toBe(frame);
     expect(screen.getByRole('tab', { name: '预览' }).getAttribute('aria-selected')).toBe('true');
@@ -1724,7 +1995,7 @@ describe('Studio Agent Chat', () => {
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
 
     // The active session is running, yet switching controls stay enabled.
-    expect(screen.getByRole('button', { name: '停止运行' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '停止本轮及派生任务' })).toBeTruthy();
     expect((screen.getByRole('button', { name: '新建会话' }) as HTMLButtonElement).disabled).toBe(
       false,
     );
@@ -1747,7 +2018,7 @@ describe('Studio Agent Chat', () => {
     // Switching back shows the first session's run still in progress.
     fireEvent.click(screen.getByRole('button', { name: /本地 Agent 演示/ }));
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: '停止运行' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: '停止本轮及派生任务' })).toBeTruthy();
     });
   });
 
@@ -1819,7 +2090,7 @@ describe('Studio Agent Chat', () => {
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     fireEvent.click(screen.getByRole('button', { name: '更多操作' }));
     fireEvent.click(screen.getByRole('menuitem', { name: '清空运行状态' }));
-    expect(screen.getByRole('button', { name: '停止运行' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '停止本轮及派生任务' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /Session event store/ }));
     await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeTruthy());
     openInstalledPlugins();
@@ -2500,7 +2771,7 @@ describe('Studio Agent Chat', () => {
         .getAllByRole<HTMLButtonElement>('button', { name: '审阅本轮文件' })
         .every((button) => button.disabled),
     ).toBe(true);
-    fireEvent.click(screen.getByRole('button', { name: '停止运行' }));
+    fireEvent.click(screen.getByRole('button', { name: '停止本轮及派生任务' }));
     await waitFor(() =>
       expect(api.mock.calls.some(([url]) => String(url).endsWith('/handoff-next/cancel'))).toBe(
         true,
@@ -2903,7 +3174,7 @@ describe('Studio Agent Chat', () => {
       'keep queued draft',
     );
     expect(screen.getByText('keep current answer')).toBeTruthy();
-    expect(screen.getByRole('button', { name: '停止运行' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '停止本轮及派生任务' })).toBeTruthy();
     expect(document.querySelector('.message-list')?.textContent).not.toContain('keep queued draft');
     await waitFor(() =>
       expect(
@@ -3084,10 +3355,10 @@ describe('Studio Agent Chat', () => {
     await renderApp();
     fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '取消这次运行' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
-    fireEvent.click(screen.getByRole('button', { name: '停止运行' }));
+    fireEvent.click(screen.getByRole('button', { name: '停止本轮及派生任务' }));
     expect(document.querySelector('.message-list')?.textContent).not.toContain('取消这次运行');
     expect(signal?.aborted).toBe(false);
-    expect(screen.getByRole('button', { name: '停止运行' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '停止本轮及派生任务' })).toBeTruthy();
     act(() => {
       handlers?.onReceipt?.(execution);
       handlers?.onSnapshot?.(execution);
@@ -3097,7 +3368,7 @@ describe('Studio Agent Chat', () => {
         true,
       ),
     );
-    expect(screen.getByRole('button', { name: '停止运行' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '停止本轮及派生任务' })).toBeTruthy();
     act(() => {
       handlers?.onStatus?.({
         cursor: 'epoch:execution-stop:3',
@@ -3106,7 +3377,7 @@ describe('Studio Agent Chat', () => {
       });
       resolveRun();
     });
-    expect(screen.getByRole('button', { name: '停止运行' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '停止本轮及派生任务' })).toBeTruthy();
     durable = true;
     await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeTruthy(), {
       timeout: 3000,
@@ -3171,7 +3442,7 @@ describe('Studio Agent Chat', () => {
     await renderApp();
     await waitFor(() => expect(screen.getByText('whole recovered answer')).toBeTruthy());
     expect(screen.getAllByText('recovered question')).toHaveLength(1);
-    expect(screen.getByRole('button', { name: '停止运行' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '停止本轮及派生任务' })).toBeTruthy();
     expect(streamAgentRunMock).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /Session event store/ }));
     await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeTruthy());
@@ -3311,7 +3582,7 @@ describe('Studio Agent Chat', () => {
       act(() => releaseTerminal?.());
       await waitFor(() => expect(observations).toBe(2));
       expect(screen.getByText('live exact text')).toBeTruthy();
-      expect(screen.getByRole('button', { name: '停止运行' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: '停止本轮及派生任务' })).toBeTruthy();
       expect(
         screen
           .getAllByRole<HTMLButtonElement>('button', { name: '审阅本轮文件' })
@@ -3478,7 +3749,7 @@ describe('Studio Agent Chat', () => {
             : '出错';
       expect(screen.getByText(expectedLabel, { selector: '.run-status' })).toBeTruthy();
       expect(screen.queryByText('live partial')).toBeNull();
-      expect(screen.queryByRole('button', { name: '停止运行' })).toBeNull();
+      expect(screen.queryByRole('button', { name: '停止本轮及派生任务' })).toBeNull();
     },
   );
 

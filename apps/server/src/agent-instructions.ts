@@ -1,7 +1,11 @@
 import { execFile } from 'node:child_process';
 import { open, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { defaultCommandShell, type ToolPermissionMode } from '@weave/runtime';
+import {
+  defaultCommandShell,
+  type AgentToolAuthority,
+  type ToolPermissionMode,
+} from '@weave/runtime';
 
 /** Largest part of a project's AGENTS.md included in the instructions. */
 export const maxProjectInstructionsBytes = 32 * 1024;
@@ -142,7 +146,9 @@ const workspaceToolNames: ReadonlySet<string> = new Set([
  */
 export function createAgentInstructions(options: {
   readonly tools: () => readonly InstructionTool[];
-  readonly resolveWorkspaceRoot?: ((sessionId: string) => Promise<string | undefined>) | undefined;
+  readonly resolveWorkspaceRoot?:
+    | ((sessionId: string, toolAuthority?: AgentToolAuthority) => Promise<string | undefined>)
+    | undefined;
   readonly environment?: Partial<AgentEnvironment> | undefined;
   /**
    * Extra system-prompt sections contributed by plugins, already ordered.
@@ -153,18 +159,19 @@ export function createAgentInstructions(options: {
 }): (context: {
   readonly sessionId: string;
   readonly permissionMode?: ToolPermissionMode | undefined;
+  readonly toolAuthority?: AgentToolAuthority | undefined;
+  readonly tools?: readonly InstructionTool[] | undefined;
 }) => Promise<string> {
   const environment: AgentEnvironment = { ...defaultEnvironment, ...options.environment };
 
-  return async ({ sessionId, permissionMode = 'ask' }) => {
-    const tools = options.tools();
+  return async ({ sessionId, toolAuthority, permissionMode = 'ask', tools = options.tools() }) => {
     const names = new Set(tools.map((tool) => tool.name));
     const protectedNames = tools.filter((tool) => tool.readOnly !== true).map((tool) => tool.name);
     const usesWorkspace = tools.some((tool) => workspaceToolNames.has(tool.name));
     const folder =
       options.resolveWorkspaceRoot === undefined
         ? undefined
-        : await options.resolveWorkspaceRoot(sessionId);
+        : await options.resolveWorkspaceRoot(sessionId, toolAuthority);
 
     const sections: string[] = [
       [

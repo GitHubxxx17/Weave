@@ -27,6 +27,8 @@ export interface FileUndoReviewInput {
 export interface FileUndoInput extends FileUndoReviewInput {
   readonly operationId: string;
   readonly requestId: string;
+  /** Host-only check immediately before each restore filesystem effect. */
+  readonly assertMutationCurrent?: (() => void) | undefined;
 }
 export class FileUndoError extends Error {
   constructor(
@@ -115,6 +117,7 @@ export function createFileUndoService({ store }: { readonly store: SessionEventS
     if (!parsed.success)
       throw new FileUndoError('undo-invalid-input', 'Undo identifiers are invalid');
     return withWorkspaceMutation(input.workspace.root, async () => {
+      input.assertMutationCurrent?.();
       await input.admit?.();
       const events = await store.read(input.sessionId);
       const request = {
@@ -152,6 +155,7 @@ export function createFileUndoService({ store }: { readonly store: SessionEventS
       );
       if (operation !== undefined && operation.payload.rootIdentity !== rootIdentity)
         throw new FileUndoError('undo-root-changed', 'Project folder identity changed');
+      input.assertMutationCurrent?.();
       if (!operations.some((event) => event.payload.requestId === request.requestId))
         await store.append(input.sessionId, [
           { type: 'workspace.undo-started', payload: { ...request, rootIdentity } },
@@ -176,7 +180,11 @@ export function createFileUndoService({ store }: { readonly store: SessionEventS
         const result =
           prior?.type === 'workspace.undo-file'
             ? prior.payload.result
-            : await restoreFileSnapshotLocked(snapshot, input.workspace);
+            : await restoreFileSnapshotLocked(
+                snapshot,
+                input.workspace,
+                input.assertMutationCurrent,
+              );
         if (prior === undefined)
           await store.append(input.sessionId, [
             { type: 'workspace.undo-file', payload: { ...request, result } },

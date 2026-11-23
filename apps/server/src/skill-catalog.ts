@@ -19,6 +19,7 @@ import {
   type SkillSummary,
 } from '@weave/protocol';
 import { builtinSkills } from './skill-builtins.js';
+import type { AgentToolAuthority } from '@weave/runtime';
 import { SkillError, safeSkillError } from './skill-errors.js';
 
 export const skillSha256 = (text: string): string =>
@@ -42,7 +43,11 @@ export interface SkillObservation {
   readonly definitions: ReadonlyMap<string, SkillDefinition>;
 }
 export interface GenerationSkillCatalog {
-  observe(sessionId: string, signal?: AbortSignal): Promise<SkillObservation>;
+  observe(
+    sessionId: string,
+    signal?: AbortSignal,
+    toolAuthority?: AgentToolAuthority,
+  ): Promise<SkillObservation>;
   pin(
     observation: SkillObservation,
     ref: SkillRef,
@@ -51,7 +56,9 @@ export interface GenerationSkillCatalog {
 }
 export interface GenerationSkillCatalogOptions {
   readonly generation: number;
-  readonly resolveWorkspaceRoot?: ((sessionId: string) => Promise<string | undefined>) | undefined;
+  readonly resolveWorkspaceRoot?:
+    | ((sessionId: string, toolAuthority?: AgentToolAuthority) => Promise<string | undefined>)
+    | undefined;
   readonly userDirectory?: string | false | undefined;
   readonly pluginSkills:
     readonly AttributedSkillContribution[] | (() => readonly AttributedSkillContribution[]);
@@ -157,13 +164,13 @@ export function createGenerationSkillCatalog(
   options: GenerationSkillCatalogOptions,
 ): GenerationSkillCatalog {
   return {
-    async observe(sessionId, signal) {
+    async observe(sessionId, signal, toolAuthority) {
       signal?.throwIfAborted();
       const definitions = new Map<string, SkillDefinition>();
       const issues: SkillIssue[] = [];
       let complete = true;
       let truncated = false;
-      const workspace = await options.resolveWorkspaceRoot?.(sessionId);
+      const workspace = await options.resolveWorkspaceRoot?.(sessionId, toolAuthority);
       const roots: { root: SkillRootInput; kind: 'project' | 'user'; prefix: string }[] = [];
       if (workspace !== undefined) {
         const hash = await rootIdentity(workspace);
