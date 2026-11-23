@@ -33,6 +33,7 @@ export const projectSchema = z.object({
   name: nonEmptyStringSchema,
   folderName: nonEmptyStringSchema,
   folderPath: z.string().min(1).optional(),
+  folderRevision: z.int().nonnegative(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
 });
@@ -55,6 +56,7 @@ export interface Project {
   readonly name: string;
   readonly folderName: string;
   readonly folderPath: string | undefined;
+  readonly folderRevision: number;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
