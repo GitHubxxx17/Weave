@@ -421,7 +421,10 @@ describe('static community marketplace', () => {
       expect(body.indexSource.id).toBe('weave');
       expect(
         body.entries.filter((entry: { kind: string }) => entry.kind === 'github'),
-      ).toMatchObject([{ id: 'weave-official-skills', category: 'official', kind: 'github' }]);
+      ).toMatchObject([
+        { id: 'weave-official-skills', category: 'official', kind: 'github' },
+        { id: 'weave-web', category: 'official', kind: 'github' },
+      ]);
       expect(body.entries.some((entry: { id: string }) => entry.id === 'community-notes')).toBe(
         false,
       );

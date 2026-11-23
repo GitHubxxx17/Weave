@@ -39,3 +39,16 @@
 ## 发行顺序
 
 内容 PR 仅注册空的官方插件 family，不提供伪造 pin。内容 squash 后，下一独立发行 PR 使用真实完整 merge SHA 从 GitHub 获取安装目录，核对 manifest、Git blob 和目录摘要，再生成市场条目。安装使用说明见插件 README；设计与官方参考版本见 [设计文档](../superpowers/specs/2026-11-23-web-plugin-design.md)。
+
+首个 `0.1.0` 内容 PR #106 已合并，固定来源为：
+
+- 仓库：`https://github.com/githubxxx17/weave`
+- 提交：`ecfe2e889b9897ee6ea249b2ed7469585114ab2a`
+- 子目录：`plugins/official/weave-web`
+- 本地已审阅目录摘要：`0f49e3b917772ae871080e7a97cd5016caa942a2211f668caad3b219128dc522`，3 个文件、49,134 字节。
+
+独立发行主题先登记该完整 manifest 与来源元组，再用实际 `pnpm marketplace:entry` 从 GitHub 获取提交、树元数据和三个原始文件，校验 Git blob SHA、大小与 Host descriptor 后生成 submission；随后实际生成的默认目录包含两个需安装的官方包。没有使用本地 receipt 替换远程获取，没有改变 TLS、地址规则或请求超时。首次 CLI 获取成功并生成了提交文件；额外三次远程目录摘要复核先后遇到两次 `plugin-github-timeout` 和一次连接超时，未完成独立摘要比对。这里的目录摘要来自本地已审阅产物，不将它冒充额外远程复核成功。实际 CLI 已校验每个下载文件的 Git blob SHA 与提交树身份，但不能据此声称公网获取持续稳定。
+
+市场条目只提供发现和固定来源，不代表已安装、已信任或已激活；后续仍走现有预览、导入和独立审阅。错误合法 SHA、source 源码子目录、版本、host、权限、工具或 manifest 差异，以及混入未知发行都会拒绝。精确镜像保留官方维护归属，同时独立展示索引运营来源；非法刷新保留最后有效快照。本次远程获取与内容阶段的本地浏览器安装分开验证，不声称浏览器已经完成远程安装。
+
+2026-11-23 发行工作树的本轮完整 `pnpm check` 已退出 0，格式、lint、类型、测试与构建全部通过；13 个包汇总 263 个测试文件、4,794 个用例（未改动包复用 Turborepo 缓存，Server 本轮实际执行 95 个文件、1,756 个用例）。此前完整检查只失败于默认市场测试仍精确预期一个官方 Skills 条目；加入真实联网发行后，断言已明确包括两个官方 GitHub 条目，独立审查的 6 个文件、87 个用例及本轮完整检查均通过。重新执行的 `pnpm marketplace:check` 返回 2 plugins, up to date；`pnpm web-plugin:verify` 退出 0，确认实际 CLI 重建产物逐字节一致及安装生命周期，12 次模型请求、12 个工具结果，仍明确 `liveProviderValidation:false`。上述是发行内容与本地验证完成的证据；发行 PR、精确 head CI 与合并完成后才视为市场发布完成。
