@@ -66,7 +66,9 @@ export type {
   GenerationController,
   GenerationRequest,
   GenerationRunner,
+  RetainedGenerationLease,
   RunnerGeneration,
+  RunningGenerationScope,
 } from './generation-runner.js';
 
 export { createPluginHost } from './host.js';
