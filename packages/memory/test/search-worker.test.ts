@@ -3,9 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import type { Worker, WorkerOptions } from 'node:worker_threads';
+import { DatabaseSync } from 'node:sqlite';
+import type { Worker } from 'node:worker_threads';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createSqliteMemoryStore } from '../src/index.js';
+import { createSqliteMemoryStore, type SqliteMemoryStoreOptions } from '../src/index.js';
 import type { MemoryCommitGuard, MemoryStore } from '../src/types.js';
 
 const scope = { kind: 'project' as const, projectId: 'd495a6df-265d-4fc7-93c8-a4452c197b62' };
@@ -22,9 +23,7 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 function open(
-  options: {
-    searchWorkerFactory?: (url: URL, options: WorkerOptions) => Pick<Worker, 'once' | 'terminate'>;
-  } = {},
+  options: Pick<SqliteMemoryStoreOptions, 'databaseFactory' | 'searchWorkerFactory'> = {},
 ) {
   const dir = mkdtempSync(join(tmpdir(), 'weave-search-'));
   dirs.push(dir);
@@ -210,8 +209,25 @@ describe('bounded memory search workers', () => {
     await Promise.all(outcomes);
   });
   it('enforces the candidate cap across two scopes while allowing separate queries', async () => {
-    const store = open();
-    for (let i = 0; i < 10001; i += 1) save(store, `record ${i}`, i < 5000 ? scope : user);
+    let fixtureDatabase!: DatabaseSync;
+    const store = open({
+      databaseFactory(filename) {
+        fixtureDatabase = new DatabaseSync(filename);
+        // This fixture measures query bounds, not 10,000 individual fsyncs.
+        // Keep real Store commits/projections and restore durability before reads.
+        fixtureDatabase.exec('PRAGMA synchronous = OFF');
+        return fixtureDatabase;
+      },
+    });
+    try {
+      for (let i = 0; i < 10000; i += 1) save(store, `record ${i}`, i < 5000 ? scope : user);
+    } finally {
+      fixtureDatabase.exec('PRAGMA synchronous = FULL');
+    }
+    expect(
+      (await store.search({ scopes: [scope, user], limit: 1, query: 'missing' })).entries,
+    ).toHaveLength(0);
+    save(store, 'record 10000', user);
     await expect(
       store.search({ scopes: [scope, user], limit: 1, query: 'missing' }),
     ).rejects.toMatchObject({ code: 'memory-limit' });
