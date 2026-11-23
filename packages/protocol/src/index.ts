@@ -2,6 +2,43 @@ export { contentPartSchema } from './content.js';
 export type { ContentPart } from './content.js';
 
 export {
+  agentTaskCancelInputSchema,
+  agentTaskSpawnInputSchema,
+  agentTaskStatusInputSchema,
+  agentTaskWaitInputSchema,
+  taskAccessSchema,
+  taskDigestSchema,
+  taskExecutionReasonSchema,
+  taskExecutionStatusSchema,
+  taskIdentifierSchema,
+  taskIdSchema,
+  taskPreparationReasonSchema,
+  taskPreparationStatus,
+  taskPreviewMaxBytes,
+  taskPromptSchema,
+  taskReasonSchema,
+  taskResultKindSchema,
+  taskSequenceSchema,
+  taskSettlementSchema,
+  taskStopReasonSchema,
+  taskTitleSchema,
+} from './agent-task.js';
+export type {
+  AgentTaskCancelInput,
+  AgentTaskSpawnInput,
+  AgentTaskStatusInput,
+  AgentTaskWaitInput,
+  TaskAccess,
+  TaskExecutionReason,
+  TaskExecutionStatus,
+  TaskPreparationReason,
+  TaskReason,
+  TaskResultKind,
+  TaskSettlement,
+  TaskStopReason,
+} from './agent-task.js';
+
+export {
   fileReferenceSchema,
   fileReferencesSchema,
   fileAttachmentSummarySchema,

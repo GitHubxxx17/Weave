@@ -12,6 +12,13 @@ import {
 import type { ToolCall } from '@weave/protocol';
 import { sessionEventSchema, type SessionEvent } from './events.js';
 import {
+  applyAgentTaskEvent,
+  createAgentTaskProjectionState,
+  snapshotAgentTasks,
+  type AgentTaskProjectionState,
+  type SessionAgentTasks,
+} from './agent-task-projection.js';
+import {
   applyFileContextEvent,
   createFileContextProjectionState,
   type FileContextMessageBinding,
@@ -123,6 +130,7 @@ export interface SessionProjection {
   readonly deletedAt: string | undefined;
   readonly messages: readonly SessionMessage[];
   readonly turns: readonly SessionTurn[];
+  readonly agentTasks?: SessionAgentTasks;
   readonly lastSequence: number;
 }
 
@@ -176,6 +184,7 @@ export interface ProjectionState {
   turnById: Map<string, MutableTurn>;
   activeTurnId: string | undefined;
   fileContexts: FileContextProjectionState;
+  agentTasks: AgentTaskProjectionState;
   lastSequence: number;
 }
 
@@ -204,6 +213,7 @@ export function createProjectionState(): ProjectionState {
     turnById: new Map<string, MutableTurn>(),
     activeTurnId: undefined,
     fileContexts: createFileContextProjectionState(),
+    agentTasks: createAgentTaskProjectionState(),
     lastSequence: 0,
   };
 }
@@ -238,6 +248,10 @@ export function applyEvent(state: ProjectionState, event: SessionEvent): void {
   if (event.sequence !== state.lastSequence + 1) {
     throw invalidOrder('Session event sequences must be continuous and increasing');
   }
+  if (state.deletedAt !== undefined) {
+    throw invalidOrder('A deleted Session cannot receive more events');
+  }
+  applyAgentTaskEvent(state.agentTasks, event, invalidOrder);
 
   let fileBinding: FileContextMessageBinding | undefined;
   try {
@@ -256,8 +270,6 @@ export function applyEvent(state: ProjectionState, event: SessionEvent): void {
 
   if (event.type === 'session.created') {
     throw invalidOrder('session.created can only appear once as the first event');
-  } else if (state.deletedAt !== undefined) {
-    throw invalidOrder('A deleted Session cannot receive more events');
   } else if (event.type === 'session.renamed') {
     state.title = event.payload.title;
   } else if (event.type === 'session.archived') {
@@ -495,11 +507,13 @@ export function applyEvent(state: ProjectionState, event: SessionEvent): void {
  * produces fresh objects so a caller can never mutate the retained state.
  */
 export function snapshotProjection(state: ProjectionState): SessionProjection {
+  const agentTasks = snapshotAgentTasks(state.agentTasks);
   return {
     sessionId: state.sessionId,
     title: state.title,
     archivedAt: state.archivedAt,
     deletedAt: state.deletedAt,
+    ...(agentTasks === undefined ? {} : { agentTasks }),
     messages: state.messages.map((message) => ({
       ...message,
       ...(message.fileAttachments === undefined

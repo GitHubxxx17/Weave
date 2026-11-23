@@ -233,3 +233,20 @@ export {
 } from './workspace-mutation.js';
 export { createFileUndoService, FileUndoError } from './file-undo-service.js';
 export type { FileUndoInput, FileUndoReviewInput, FileUndoResponse } from './file-undo-service.js';
+
+export {
+  agentTaskExecutionIdentity,
+  agentTaskExecutionInput,
+  agentTaskFactDigest,
+  agentTaskOrigin,
+  agentTaskRequestDigest,
+  reconcileAgentTask,
+} from './agent-task-reconcile.js';
+export type {
+  AgentTaskParentPrefix,
+  AgentTaskReconciliation,
+  AgentTaskReconciliationBlock,
+  BoundTaskIdentity,
+  TaskExecutionCleanup,
+  TaskProjectRelation,
+} from './agent-task-types.js';
