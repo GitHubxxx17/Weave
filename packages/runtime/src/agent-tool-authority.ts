@@ -57,6 +57,8 @@ export interface AgentToolAuthorityLifetime {
 export interface CreateAgentToolAuthorityOptions extends AgentToolAuthorityLifetime {
   readonly registry: ToolRegistry;
   readonly ownerOf: (tool: RegisteredToolDefinition) => string | undefined;
+  /** Synchronous host classification, captured once for each exact root entry. */
+  readonly rootOnlyTool?: ((tool: RegisteredToolDefinition) => boolean) | undefined;
 }
 
 export interface DeriveAgentToolAuthorityOptions extends AgentToolAuthorityLifetime {
@@ -69,6 +71,7 @@ interface CapturedTool {
   readonly definition: RegisteredToolDefinition;
   readonly publicTool: InstructionTool;
   readonly identity: AgentTaskToolIdentity;
+  readonly rootOnly: boolean;
 }
 
 interface RunState {
@@ -151,9 +154,14 @@ export function createAgentToolAuthority(
       throw new TypeError('Tool registry ownership cannot be verified');
     }
     const snapshot = publicTool(definition);
+    const rootOnly = options.rootOnlyTool?.(definition) ?? false;
+    if (typeof rootOnly !== 'boolean') {
+      throw new TypeError('Root-only tool classification must be synchronous');
+    }
     entries.set(snapshot.name, {
       definition,
       publicTool: snapshot,
+      rootOnly,
       identity: Object.freeze({
         ownerId,
         name: snapshot.name,
@@ -214,6 +222,13 @@ export function readAgentToolAuthority(
 ): AgentToolInvocationAuthority {
   const request = activeExecutions.get(context);
   if (request === undefined || context.signal.aborted) throw denied();
+  return readAgentToolInvocation(request);
+}
+
+/** Internal host reader; the Pipeline owns the request binding. */
+export function readAgentToolInvocation(
+  request: ToolExecutionRequest,
+): AgentToolInvocationAuthority {
   const state = boundCall(request);
   assertAuthorizedTool(request, state.registry, state.registry.get(request.name));
   return Object.freeze({
@@ -234,7 +249,9 @@ export function deriveAgentToolAuthority(
   const entries = new Map(
     [...state.entries].filter(
       ([name, entry]) =>
-        !taskToolNames.has(name) && (options.access === 'workspace' || entry.publicTool.readOnly),
+        !entry.rootOnly &&
+        !taskToolNames.has(name) &&
+        (options.access === 'workspace' || entry.publicTool.readOnly),
     ),
   );
   return mint(

@@ -1061,6 +1061,55 @@ describe('Studio Agent Chat', () => {
     expect(screen.queryByRole('menuitem', { name: /插件/ })).toBeNull();
   });
 
+  it('keeps the active stream and draft mounted while managing Memory', async () => {
+    let handlers: AgentStreamHandlers | undefined;
+    let signal: AbortSignal | undefined;
+    streamAgentRunMock.mockImplementation((_request, next, options) => {
+      handlers = next;
+      signal = options?.signal;
+      return new Promise<void>(() => undefined);
+    });
+    const workspaceFetch = fetchMock;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === '/memory/scopes')
+          return Promise.resolve(
+            Response.json({
+              scopes: [
+                {
+                  scope: { kind: 'user' },
+                  name: '个人记忆',
+                  access: { scope: { kind: 'user' }, level: 'disabled', settingRevision: 0 },
+                },
+              ],
+            }),
+          );
+        if (String(input).startsWith('/memory/records?'))
+          return Promise.resolve(Response.json({ records: [] }));
+        return workspaceFetch(input, init);
+      }),
+    );
+    await renderApp();
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: 'keep running' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(handlers).toBeDefined());
+    const draft = screen.getByLabelText<HTMLTextAreaElement>('发送消息');
+    fireEvent.change(draft, { target: { value: 'my preserved draft' } });
+    const chat = screen.getByRole('region', { name: '智能对话' });
+    fireEvent.click(screen.getByRole('button', { name: '记忆' }));
+    expect(await screen.findByRole('region', { name: '长期记忆' })).toBeDefined();
+    expect(chat.isConnected).toBe(true);
+    expect(signal?.aborted).toBe(false);
+    act(() => handlers?.onEvent({ type: 'text-delta', text: 'Memory navigation stream event' }));
+    fireEvent.click(screen.getByRole('button', { name: '工作台' }));
+    expect(screen.getByRole('region', { name: '智能对话' })).toBe(chat);
+    expect(screen.getByLabelText('发送消息')).toBe(draft);
+    expect(draft.value).toBe('my preserved draft');
+    expect(screen.getByText('Memory navigation stream event')).toBeDefined();
+    expect(streamAgentRunMock).toHaveBeenCalledTimes(1);
+  });
+
   it('preserves the active conversation draft, stream and preview DOM across marketplace navigation', async () => {
     let handlers: AgentStreamHandlers | undefined;
     let signal: AbortSignal | undefined;

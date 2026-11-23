@@ -151,10 +151,19 @@ describe('managed plugin startup', () => {
     const first = await startLive({ ...options, managedPluginStore: allowUnbound });
     expect(first.port).toBeGreaterThan(0);
     expect(existsSync(root)).toBe(true);
-    await expect(startLive(options)).rejects.toMatchObject({ code: 'plugin-store-busy' });
+    // Memory is acquired before managed plugins during full Server startup.
+    await expect(startLive(options)).rejects.toMatchObject({ code: 'memory-busy' });
+    expect(serve).toHaveBeenCalledTimes(1);
+    await expect(acquire(options).startup).rejects.toMatchObject({ code: 'plugin-store-busy' });
+    const liveHealth = await fetch(`http://127.0.0.1:${first.port}/health`);
+    expect(liveHealth.status).toBe(200);
+    await expect(liveHealth.json()).resolves.toEqual({ status: 'ok', runtime: 'running' });
     await first.stop();
     const restarted = await startLive(options);
     expect(restarted.pluginHost?.dispose).toBe(restarted.stop);
+    const restartedHealth = await fetch(`http://127.0.0.1:${restarted.port}/health`);
+    expect(restartedHealth.status).toBe(200);
+    await expect(restartedHealth.json()).resolves.toEqual({ status: 'ok', runtime: 'running' });
   });
 
   it('rejects a preexisting sticky override before listen and leaves it caller-owned', async () => {

@@ -825,6 +825,19 @@ cancellation state machine.
 
 ### Product references
 
+On 2026-11-23, explicit memory checked Codex
+[`a0995c2b2b68248960c69cb812b5f4898dac7e4c` memory protocol](https://github.com/openai/codex/blob/a0995c2b2b68248960c69cb812b5f4898dac7e4c/codex-rs/app-server-protocol/src/protocol/v2/memory.rs),
+Harness
+[`4b399c39a6d1479cd84ca591b4d7c88e24d38a96` memory guide](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/docs/user/guide/mcp-memory.md)
+and Kiro's official [Memory](https://kiro.dev/docs/memory/) and
+[CLI context](https://kiro.dev/docs/cli/chat/context/) documents. Weave adopts
+explicit revisions and provenance, inspectable project/personal scopes, disabled
+defaults and observable cross-Session acceptance. It uses stable Project UUIDs,
+keeps human review distinct from Agent approval, and adds its own append-only
+receipts and exact Pipeline authority. Automatic learning, consolidation and
+semantic search are deferred. The [memory reference audit](../superpowers/specs/2026-11-23-long-term-memory-design.md#10-实际核对的官方参考)
+records the inspected sources and these choices.
+
 On 2026-11-23 the web plugin checked Tavily's official Search endpoint documentation,
 Codex `a0995c2b2b68248960c69cb812b5f4898dac7e4c` external search output, Harness
 `4b399c39a6d1479cd84ca591b4d7c88e24d38a96` web-fetch policy/search provider, Kiro
@@ -1327,3 +1340,25 @@ ExtensionCoordinator。配置与信任保存于独立 append-only MCP authority 
 连接/stale/EOF 是瞬态状态，不进入 durable facts。同步发布前复验资源存活，
 旧代资源随最后回合释放，关闭失败保留 allocation 配额和归属。HTTP仅调用管理
 窄接口，Studio可从 /mcp 与 /plugins 的同一 generation 判断配置和实际运行状态。
+
+## Long-term memory
+
+Explicit project and opt-in personal memories use the independent `@weave/memory`
+leaf (`protocol -> memory -> server`). Runtime owns scope and caller authority,
+exact Tool Pipeline write attempts, and current reviewed-source permits through
+ports. Server alone composes the SQLite sidecar and verified Session membership;
+Studio uses guarded HTTP. Record and access events remain append-only; current,
+history, request receipts and scope heads are derived. One Server holds a separate
+SQLite ownership transaction while the data WAL supports bounded read-only search
+workers. Uncertain commits and incomplete shutdown retain ownership for exact
+reconciliation and retry.
+
+Agent writes remain `agent-authored` after approval or automatic execution. Only
+explicit local-user edits or exact-version review create `user-reviewed` versions.
+Children can read their verified Project memory and never acquire save/delete or
+personal-memory authority. Root definitions remain visible while live Service
+checks enforce disabled/read-only/read-write settings. No automatic learning,
+context injection, FTS or embedding is added in this slice. Contracts and the
+verified Codex, Kiro and Harness reference choices are recorded before code in
+[the memory design](../superpowers/specs/2026-11-23-long-term-memory-design.md)
+and [ADR 0012](../adr/0012-memory-authority-store.md).

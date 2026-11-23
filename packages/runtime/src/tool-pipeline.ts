@@ -17,6 +17,12 @@ import {
   checkAgentToolCheckpoint,
 } from './agent-tool-authority.js';
 import type { ToolRegistry } from './tool-registry.js';
+import { isMemoryError } from './memory-errors.js';
+import {
+  assertMemoryToolAuthority,
+  beginMemoryToolAttempt,
+  memoryToolConfiguration,
+} from './memory-tool-attempt.js';
 
 export const defaultToolResultMaxBytes = 32_000;
 
@@ -235,6 +241,7 @@ function withAround(
   around: ToolAround,
   maxResultBytes: number,
   registry: ToolRegistry,
+  allowHostToolContext: ToolPipelineOptions['allowHostToolContext'],
 ): ToolPipeline {
   return {
     async execute(requestInput): Promise<ToolExecutionResult> {
@@ -245,6 +252,12 @@ function withAround(
         });
       }
       const request = Object.freeze(parsedRequest.data);
+      assertMemoryToolAuthority(
+        request,
+        registry,
+        registry.get(request.name),
+        allowHostToolContext,
+      );
       if (request.toolAuthority !== undefined) {
         assertAuthorizedTool(request, registry, registry.get(request.name));
       }
@@ -399,6 +412,7 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
       const request = Object.freeze(parsedRequest.data);
 
       const tool = options.registry.get(request.name);
+      assertMemoryToolAuthority(request, options.registry, tool, options.allowHostToolContext);
       const authority = assertAuthorizedTool(request, options.registry, tool);
       if (tool === undefined) {
         throw new ToolExecutionError('tool-not-found', `Tool "${request.name}" was not found`);
@@ -415,7 +429,12 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
       }
 
       const controller = new AbortController();
-      const signal = createCombinedSignal(request.signal, controller);
+      const memory = memoryToolConfiguration(tool);
+      const invocationSignal = createCombinedSignal(request.signal, controller);
+      const signal =
+        memory?.signal === undefined
+          ? invocationSignal
+          : AbortSignal.any([invocationSignal, memory.signal]);
       const effectiveTimeoutMs = request.timeoutMs ?? timeoutMs;
       const publicContext = {
         signal,
@@ -436,6 +455,8 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
         request.toolAuthority !== undefined && options.allowHostToolContext?.(tool) === false
           ? Object.freeze(publicContext)
           : hostContext;
+      const summaryContext = Object.freeze({ ...context });
+      let memoryAttempt: ReturnType<typeof beginMemoryToolAttempt> | undefined;
       let timedOut = false;
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
@@ -449,6 +470,13 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
           });
         }
         assertAuthorizedTool(request, options.registry, options.registry.get(request.name));
+        if (memory !== undefined)
+          assertMemoryToolAuthority(
+            request,
+            options.registry,
+            options.registry.get(request.name),
+            options.allowHostToolContext,
+          );
       }
 
       async function checkHostAuthority(): Promise<void> {
@@ -487,6 +515,17 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
           throw new ToolExecutionError('tool-timeout', `Tool "${request.name}" timed out`);
         }
 
+        if (memory !== undefined) {
+          memoryAttempt = beginMemoryToolAttempt({
+            definition: tool,
+            request,
+            registry: options.registry,
+            context,
+            summaryContext,
+            assertCurrent,
+          });
+        }
+
         if (authority !== undefined) {
           await checkHostAuthority();
           assertCurrent();
@@ -518,6 +557,7 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
         // Approval metadata, and in any permission mode.
         const approval =
           toolWithApproval.approval ?? (forceApproval ? policyApproval(request) : undefined);
+        let approved = false;
         if (
           approval !== undefined &&
           (forceApproval ||
@@ -541,8 +581,17 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
             assertCurrent();
           }
           try {
-            const pendingSummary = approval.summarize(inputResult.data, { ...context });
-            summary = isPromiseLike(pendingSummary) ? await pendingSummary : pendingSummary;
+            const endPreview =
+              memory?.classification === 'root-write' ? memoryAttempt!.beginPreview() : undefined;
+            try {
+              const pendingSummary = approval.summarize(
+                inputResult.data,
+                memory === undefined ? { ...context } : summaryContext,
+              );
+              summary = isPromiseLike(pendingSummary) ? await pendingSummary : pendingSummary;
+            } finally {
+              endPreview?.();
+            }
           } catch (error: unknown) {
             if (timedOut) {
               throw new ToolExecutionError('tool-timeout', `Tool "${request.name}" timed out`, {
@@ -554,11 +603,16 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
                 cause: error,
               });
             }
+            if (memory !== undefined && isMemoryError(error)) {
+              throw new ToolExecutionError(error.code, error.message);
+            }
             // A summary failure is a tool failure (for example an edit whose text
             // no longer matches); no Approval is created for it.
-            throw new ToolExecutionError('tool-execution-failed', `Tool "${request.name}" failed`, {
-              cause: error,
-            });
+            throw new ToolExecutionError(
+              'tool-execution-failed',
+              `Tool "${request.name}" failed`,
+              memory === undefined ? { cause: error } : undefined,
+            );
           }
 
           let decision: ApprovalDecision;
@@ -610,7 +664,11 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
               `Tool "${request.name}" approval ended with ${decision.status}`,
             );
           }
+          approved = true;
+          if (memory?.classification === 'root-write') memoryAttempt!.approve();
         }
+
+        if (memory?.classification === 'root-write' && !approved) memoryAttempt!.automatic();
 
         let result: unknown;
         if (authority !== undefined) {
@@ -618,6 +676,7 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
           assertCurrent();
         }
         const endExecution = beginAgentToolExecution(context, request);
+        const endMemoryExecution = memoryAttempt?.beginExecute();
         try {
           result = await (tool as RegisteredToolDefinition).execute(inputResult.data, context);
         } catch (error: unknown) {
@@ -631,10 +690,16 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
               cause: error,
             });
           }
-          throw new ToolExecutionError('tool-execution-failed', `Tool "${request.name}" failed`, {
-            cause: error,
-          });
+          if (memory !== undefined && isMemoryError(error)) {
+            throw new ToolExecutionError(error.code, error.message);
+          }
+          throw new ToolExecutionError(
+            'tool-execution-failed',
+            `Tool "${request.name}" failed`,
+            memory === undefined ? { cause: error } : undefined,
+          );
         } finally {
+          endMemoryExecution?.();
           endExecution();
         }
 
@@ -664,6 +729,7 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
           ...limitUtf8(content, maxResultBytes),
         };
       } finally {
+        memoryAttempt?.close();
         if (timeoutId !== undefined) {
           clearTimeout(timeoutId);
         }
@@ -674,5 +740,11 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
 
   return options.around === undefined
     ? pipeline
-    : withAround(pipeline, options.around, maxResultBytes, options.registry);
+    : withAround(
+        pipeline,
+        options.around,
+        maxResultBytes,
+        options.registry,
+        options.allowHostToolContext,
+      );
 }

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { WithMemoryMembershipMutation } from './memory-scope.js';
 import type {
   AgentPlan,
   ContextBreakdown,
@@ -115,6 +116,7 @@ export interface SessionListResult {
 export interface SessionServiceOptions {
   readonly projectStore: ProjectStore;
   readonly sessionStore: SessionEventStore;
+  readonly withMemoryMembershipMutation?: WithMemoryMembershipMutation;
   /** Serializes lifecycle mutation with durable execution admission. */
   readonly withSessionIdle?: <T>(sessionId: string, operation: () => Promise<T>) => Promise<T>;
 }
@@ -247,6 +249,8 @@ function assertProjectExists(project: Project | undefined, projectId: string): P
  */
 export function createSessionService(options: SessionServiceOptions): SessionService {
   const { projectStore, sessionStore } = options;
+  const withMemoryMembershipMutation: WithMemoryMembershipMutation =
+    options.withMemoryMembershipMutation ?? ((_sessionId, operation) => operation());
   const withSessionIdle =
     options.withSessionIdle ?? (<T>(_id: string, operation: () => Promise<T>) => operation());
   // Read-through incremental projection: a Session's history is parsed once and
@@ -286,34 +290,36 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
       assertProjectExists(await projectStore.getProject(projectId), projectId);
 
       const sessionId = randomUUID();
-      await sessionStore.append(sessionId, [
-        {
-          type: 'session.created',
-          payload: title === undefined ? {} : { title },
-        },
-      ]);
+      return withMemoryMembershipMutation(sessionId, async () => {
+        await sessionStore.append(sessionId, [
+          {
+            type: 'session.created',
+            payload: title === undefined ? {} : { title },
+          },
+        ]);
 
-      try {
-        await projectStore.attachSession(projectId, sessionId);
-      } catch (error) {
         try {
-          await sessionStore.append(sessionId, [
-            {
-              type: 'session.deleted',
-              payload: { reason: 'project-session-attach-failed' },
-            },
-          ]);
-        } catch (compensationError) {
-          throw new AggregateError(
-            [error, compensationError],
-            'Session creation and compensation failed',
-            { cause: compensationError },
-          );
+          await projectStore.attachSession(projectId, sessionId);
+        } catch (error) {
+          try {
+            await sessionStore.append(sessionId, [
+              {
+                type: 'session.deleted',
+                payload: { reason: 'project-session-attach-failed' },
+              },
+            ]);
+          } catch (compensationError) {
+            throw new AggregateError(
+              [error, compensationError],
+              'Session creation and compensation failed',
+              { cause: compensationError },
+            );
+          }
+          throw error;
         }
-        throw error;
-      }
 
-      return detailFor(sessionId, await readProjection(sessionId));
+        return detailFor(sessionId, await readProjection(sessionId));
+      });
     },
 
     async get(sessionId: string): Promise<SessionDetail> {
@@ -403,10 +409,12 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
         if (projection.deletedAt !== undefined) {
           return detailFor(sessionId, projection);
         }
-        return appendLifecycleEvent(sessionId, projection, {
-          type: 'session.deleted',
-          payload: {},
-        });
+        return withMemoryMembershipMutation(sessionId, () =>
+          appendLifecycleEvent(sessionId, projection, {
+            type: 'session.deleted',
+            payload: {},
+          }),
+        );
       });
     },
 

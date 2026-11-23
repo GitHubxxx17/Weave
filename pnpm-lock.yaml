@@ -68,6 +68,9 @@ importers:
       '@weave/mcp-client':
         specifier: workspace:*
         version: link:../../packages/mcp-client
+      '@weave/memory':
+        specifier: workspace:*
+        version: link:../../packages/memory
       '@weave/plugin':
         specifier: workspace:*
         version: link:../../packages/plugin
@@ -172,6 +175,19 @@ importers:
       '@modelcontextprotocol/client':
         specifier: 2.4.0
         version: 2.4.0(patch_hash=47bca2758a8afa398d647cfc022ecfc6a83a5175a05cfb6b61bb13e19a329cf5)
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@types/node':
+        specifier: 24.10.1
+        version: 24.10.1
+
+  packages/memory:
+    dependencies:
+      '@weave/protocol':
+        specifier: workspace:*
+        version: link:../protocol
       zod:
         specifier: 4.6.7
         version: 4.6.7

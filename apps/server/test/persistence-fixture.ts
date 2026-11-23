@@ -12,7 +12,18 @@ export function createTemporaryDatabaseFile(): {
   const filename = join(tmpdir(), `weave-server-${randomUUID()}.sqlite`);
   return {
     filename,
-    cleanup: () => rm(filename, { force: true }),
+    cleanup: async () => {
+      await Promise.all(
+        [
+          filename,
+          `${filename}.memory.sqlite`,
+          `${filename}.memory.sqlite-wal`,
+          `${filename}.memory.sqlite-shm`,
+          `${filename}.memory.sqlite.owner.sqlite`,
+          `${filename}.memory.sqlite.owner.sqlite-journal`,
+        ].map((path) => rm(path, { force: true })),
+      );
+    },
   };
 }
 

@@ -1,4 +1,5 @@
 import { createLlmProviderRegistry } from '@weave/llm';
+import type { ServerMemoryTools } from './memory-composition.js';
 import {
   llmRequestHook,
   turnEndHook,
@@ -76,6 +77,7 @@ export interface ServerRuntimeOptions {
 export const defaultToolTimeoutMs = 10 * 60 * 1000;
 
 export interface ServerAgentRunnerOptions {
+  readonly memory?: ServerMemoryTools;
   /** Product compatibility version passed to every generation's kernel. */
   readonly hostVersion?: string;
   /** Returns the absolute Workspace folder of a Session, when its Project has one. */
@@ -250,6 +252,7 @@ export async function assembleServerGeneration(
     kernelPlugins: options.kernelPlugins,
   });
   try {
+    options.memory?.install(assembled.registerHostTool);
     skills = [...assembled.skills];
     const { promptSections } = assembled;
     const { hooks } = assembled.kernel;
@@ -341,6 +344,7 @@ export async function assembleServerGeneration(
             identity: { ...request.executionIdentity, sessionId: request.sessionId },
             registry: toolRegistry,
             ownerOf: assembled.toolOwner,
+            rootOnlyTool: options.memory?.rootOnlyTool,
           });
           authorityScopes.set(token, scope);
           return runner.run({ ...request, toolAuthority: token });

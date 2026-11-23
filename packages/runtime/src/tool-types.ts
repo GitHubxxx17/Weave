@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { ApprovalRisk } from './approval-types.js';
 import type { AgentToolAuthority } from './agent-tool-authority.js';
+import type { MemoryErrorCode } from './memory-errors.js';
 
 const nonEmptyStringSchema = z.string().min(1);
 const nonNegativeFiniteNumberSchema = z.number().finite().nonnegative();
@@ -152,6 +153,7 @@ export const toolDefinitionSchema = z
 
 /** Stable failure categories exposed by the Tool Pipeline boundary. */
 export type ToolExecutionErrorCode =
+  | MemoryErrorCode
   | 'tool-invalid-input'
   | 'tool-not-found'
   | 'tool-not-permitted'

@@ -172,6 +172,96 @@ function runner(
 }
 
 describe('Agent tool authority', () => {
+  it('refuses asynchronous root-only classifiers instead of treating them as unrestricted', () => {
+    const fixtures = tools();
+    fixtures.register(tool('save_memory', false));
+    expect(() =>
+      createAgentToolAuthority({
+        identity: root,
+        ...fixtures,
+        rootOnlyTool: (() => Promise.resolve(true)) as unknown as (
+          tool: RegisteredToolDefinition,
+        ) => boolean,
+      }),
+    ).toThrow(TypeError);
+  });
+
+  it.each(['read-only', 'workspace'] as const)(
+    'excludes captured root-only entries from %s children and their Provider tools',
+    async (access) => {
+      const fixtures = tools();
+      fixtures.register(tool('search_memory', true));
+      fixtures.register(tool('read_memory', true));
+      // Mark a read-only declaration too: root authority must take precedence
+      // over the generic workspace/readOnly inheritance rule.
+      const save = fixtures.register(tool('save_memory', true));
+      const remove = fixtures.register(tool('delete_memory', false));
+      let childAuthority: AgentToolAuthority | undefined;
+      fixtures.register(
+        tool('agent_spawn', false, (_input, context) => {
+          childAuthority = deriveAgentToolAuthority(context, { identity: child, access });
+        }),
+      );
+      let classifyAsRootOnly = true;
+      const token = createAgentToolAuthority({
+        identity: root,
+        ...fixtures,
+        rootOnlyTool: (definition: RegisteredToolDefinition) =>
+          classifyAsRootOnly && (definition === save || definition === remove),
+      });
+      // Classification belongs to the captured exact entry at mint time.
+      classifyAsRootOnly = false;
+      await drain(
+        runner(provider([callTool('agent_spawn'), [finish]]), fixtures.registry).run(
+          input(root, token),
+        ),
+      );
+      expect(describeAgentToolAuthority(childAuthority!).tools.map(({ name }) => name)).toEqual([
+        'search_memory',
+        'read_memory',
+      ]);
+      const requests: LlmRequest[] = [];
+      const childRequest = {
+        ...input(child, childAuthority),
+        ...describeAgentToolAuthority(childAuthority!).settings,
+      };
+      let instructionsTools: readonly string[] | undefined;
+      let intercepted = false;
+      const events = await Array.fromAsync(
+        createAgentRunner({
+          llm: provider([callTool('save_memory'), [finish]], requests),
+          sessionStore: await childStore(childRequest),
+          toolRegistry: fixtures.registry,
+          toolPipeline: createToolPipeline({
+            registry: fixtures.registry,
+            around: async (request, next) => {
+              intercepted = true;
+              return next(request);
+            },
+          }),
+          instructions: (request) => {
+            instructionsTools = request.tools?.map(({ name }) => name);
+            return 'Authorized child instructions';
+          },
+        }).run(childRequest),
+      );
+      expect(instructionsTools).toEqual(['search_memory', 'read_memory']);
+      expect(intercepted).toBe(false);
+      expect(
+        requests.every((request) =>
+          request.tools?.every(({ name }) => name !== 'save_memory' && name !== 'delete_memory'),
+        ),
+      ).toBe(true);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'tool-result',
+          status: 'failed',
+          errorCode: 'tool-not-permitted',
+        }),
+      );
+    },
+  );
+
   it('rejects forged run tokens and an exact token bound to another run', async () => {
     const fixtures = tools();
     const requests: LlmRequest[] = [];

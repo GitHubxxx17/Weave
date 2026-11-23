@@ -447,3 +447,123 @@ describe('panel read shutdown ownership', () => {
     expect(options.stopRuntime).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('Memory shutdown durability barrier', () => {
+  it.each(['stop', 'failStartup'] as const)(
+    'preserves consumers and dependencies on incomplete memory drain during %s',
+    async (method) => {
+      const calls: string[] = [];
+      const incomplete = new Error('memory receipt unavailable');
+      let blocked = true;
+      const memory = {
+        closeSync() {
+          calls.push('memory-fence');
+        },
+        async drain() {
+          calls.push('memory-drain');
+          if (blocked) throw incomplete;
+        },
+        async close() {
+          calls.push('memory-close');
+        },
+      };
+      const options = cleanupOptions(() => ({
+        memory,
+        agentTaskService: {
+          closeSync() {
+            calls.push('task-fence');
+          },
+          async drain() {
+            calls.push('task-drain');
+          },
+        },
+        agentExecutionService: {
+          closeSync() {
+            calls.push('execution-fence');
+          },
+          async drain() {
+            calls.push('execution-drain');
+          },
+        },
+      }));
+      options.disposeHost.mockImplementation(async () => {
+        calls.push('consumers-close');
+      });
+      options.stopRuntime.mockImplementation(async () => {
+        calls.push('session-close');
+      });
+      options.closeProjectStore.mockImplementation(() => {
+        calls.push('project-close');
+      });
+      const shutdown = createServerShutdown(options);
+      const startup = new Error('listen failed');
+      const first = await (
+        method === 'stop' ? shutdown.stop() : shutdown.failStartup(startup)
+      ).catch((cause: unknown) => cause);
+      expect(calls[0]).toBe('memory-fence');
+      expect(first).toEqual(
+        method === 'stop' ? incomplete : expect.objectContaining({ errors: [startup, incomplete] }),
+      );
+      expect(calls).toEqual([
+        'memory-fence',
+        'task-fence',
+        'execution-fence',
+        'task-drain',
+        'execution-drain',
+        'memory-drain',
+      ]);
+      blocked = false;
+      if (method === 'stop') await shutdown.stop();
+      else await retryFailedServerStartupCleanup(first);
+      expect(calls.filter((call) => call === 'memory-drain')).toHaveLength(2);
+      expect(calls.indexOf('memory-close')).toBeLessThan(calls.indexOf('consumers-close'));
+      expect(calls.indexOf('memory-close')).toBeLessThan(calls.indexOf('session-close'));
+      expect(calls.indexOf('memory-close')).toBeLessThan(calls.indexOf('project-close'));
+    },
+  );
+
+  it('retries memory close and retains dependencies when the owner release is incomplete', async () => {
+    const calls: string[] = [];
+    let blocked = true;
+    const options = cleanupOptions(() => ({
+      memory: {
+        closeSync() {
+          calls.push('fence');
+        },
+        async drain() {
+          calls.push('drain');
+        },
+        async close() {
+          calls.push('close');
+          if (blocked) throw new Error('owner release incomplete');
+        },
+      },
+    }));
+    options.disposeHost.mockImplementation(async () => {
+      calls.push('consumers');
+    });
+    const shutdown = createServerShutdown(options);
+    await expect(shutdown.stop()).rejects.toThrow('owner release incomplete');
+    expect(calls).toEqual(['fence', 'drain', 'close']);
+    blocked = false;
+    await shutdown.stop();
+    expect(calls).toEqual(['fence', 'drain', 'close', 'fence', 'close', 'consumers']);
+  });
+
+  it('publishes one stop promise before synchronous memory fence callback reentry', async () => {
+    let reentered: Promise<void> | undefined;
+    const options = cleanupOptions(() => ({
+      memory: {
+        closeSync() {
+          reentered = shutdown.stop();
+        },
+        async drain() {},
+        async close() {},
+      },
+    }));
+    const shutdown = createServerShutdown(options);
+    const stop = shutdown.stop();
+    expect(reentered).toBe(stop);
+    await stop;
+  });
+});

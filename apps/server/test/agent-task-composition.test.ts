@@ -14,6 +14,7 @@ import { expect, it, vi } from 'vitest';
 import { createAgentTaskHost } from '../src/agent-task-composition.js';
 import { createAgentTaskWorkspaceBindings } from '../src/agent-task-workspace.js';
 import { createSessionService } from '../src/session-service.js';
+import { createMemoryScopeResolver } from '../src/memory-scope.js';
 import { createProjectFolderAuthority } from '../src/project-folder-authority.js';
 import {
   assembleServerGeneration,
@@ -109,6 +110,7 @@ it.each([
     const workspace = createAgentTaskWorkspaceBindings(folders);
     await runtime.start();
     const store = getServerSessionStore(runtime);
+    const memoryScopes = createMemoryScopeResolver({ sessionStore: store, projectStore: projects });
     await store.append('root', [{ type: 'session.created', payload: {} }]);
     await projects.attachSession(project.id, 'root');
     runtime.serverHost.hostTools().register({
@@ -132,6 +134,7 @@ it.each([
       projectStore: projects,
       projectFolders: folders,
       workspace,
+      withMemoryMembershipMutation: memoryScopes.withMemoryMembershipMutation,
     });
     const tasks = createAgentTaskService({
       sessionStore: store,
@@ -142,6 +145,17 @@ it.each([
           const reservation = await host.reserve(input);
           return {
             ...reservation,
+            async attachExact(...args) {
+              const evidence = await memoryScopes.captureMemorySessionScope(args[0].childSessionId);
+              expect(evidence.membership).toEqual({ kind: 'none' });
+              await reservation.attachExact(...args);
+              expect(() => evidence.assertCurrentSync()).toThrowError(
+                expect.objectContaining({ code: 'memory-scope-forbidden' }),
+              );
+              expect(
+                (await memoryScopes.captureMemorySessionScope(args[0].childSessionId)).membership,
+              ).toEqual({ kind: 'unique', projectId: args[0].project.projectId });
+            },
             async createExact(...args) {
               createEntered.resolve();
               await allowCreate.promise;

@@ -1,4 +1,23 @@
 export { createRuntime } from './runtime.js';
+export { MemoryError } from './memory-errors.js';
+export { createMemoryService } from './memory-service.js';
+export type { MemoryService, MemoryWriteIntent, MemoryReadPage } from './memory-service.js';
+export { createMemoryTools } from './memory-tools.js';
+export type { MemoryTools } from './memory-tools.js';
+export type { MemoryErrorCode } from './memory-errors.js';
+export type {
+  MemoryScopeEvidence,
+  MemoryLocalScopeEvidence,
+  MemorySessionMembership,
+  MemoryStorePort,
+  MemoryStoreWritePort,
+  MemoryServiceOptions,
+  MemoryInvalidation,
+  BeforeMemoryCommit,
+  ReviewedMemoryCapture,
+  ReviewedMemorySource,
+} from './memory-types.js';
+export { memoryCallerAuthority, configureMemoryToolDefinition } from './memory-tool-attempt.js';
 export { AgentTaskError, createAgentTaskService } from './agent-task-service.js';
 export type {
   AgentTaskErrorCode,
