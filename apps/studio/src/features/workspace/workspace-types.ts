@@ -181,6 +181,14 @@ export const turnSummarySchema = z.object({
 export const sessionDetailSchema = sessionSummarySchema.extend({
   messages: z.array(messageSchema),
   turns: z.array(turnSummarySchema).default([]),
+  taskOrigin: z
+    .strictObject({
+      taskId: z.uuid(),
+      rootSessionId: nonEmptyStringSchema,
+      parentSessionId: nonEmptyStringSchema,
+    })
+    .refine((origin) => origin.rootSessionId === origin.parentSessionId)
+    .optional(),
 });
 
 export type TurnUsage = z.infer<typeof turnUsageSchema>;

@@ -318,6 +318,8 @@ async function writeWorkspaceFile(
     input.content,
     async () => {
       for (const directory of plan.missingDirectories) {
+        checkSignal(context);
+        options.assertMutationCurrent?.(context);
         try {
           await mkdir(directory);
         } catch (error: unknown) {
@@ -335,6 +337,8 @@ async function writeWorkspaceFile(
           }
         }
       }
+      checkSignal(context);
+      options.assertMutationCurrent?.(context);
       try {
         await writeFile(plan.target, input.content, {
           encoding: 'utf8',
@@ -396,6 +400,8 @@ async function editWorkspaceFile(
     true,
     plan.updated,
     async () => {
+      checkSignal(context);
+      options.assertMutationCurrent?.(context);
       try {
         await writeFile(target, plan.updated, {
           encoding: 'utf8',

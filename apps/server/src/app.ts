@@ -3,6 +3,7 @@ import {
   registerAgentExecutionRoutes,
   type AgentExecutionAppOptions,
 } from './agent-execution-api.js';
+import { registerAgentTaskRoutes, type AgentTaskAppOptions } from './agent-task-api.js';
 import {
   registerPanelGuards,
   registerPanelRoutes,
@@ -17,6 +18,7 @@ import { registerApprovalRoutes, type ApprovalAppOptions } from './approval-api.
 import { registerAgentRoutes, type AgentAppOptions } from './agent-api.js';
 import { registerSessionRoutes, type SessionAppOptions } from './session-api.js';
 import { registerWorkspaceRoutes, type WorkspaceAppOptions } from './workspace-api.js';
+import { createProjectFolderAuthority } from './project-folder-authority.js';
 import { registerSkillRoutes, type SkillAppOptions } from './skill-api.js';
 import { registerFileUndoGuards } from './file-undo-guard.js';
 import { registerFileUndoRoutes } from './file-undo-api.js';
@@ -48,6 +50,7 @@ export interface AppOptions
     ApprovalAppOptions,
     AgentAppOptions,
     AgentExecutionAppOptions,
+    AgentTaskAppOptions,
     SessionAppOptions,
     WorkspaceAppOptions,
     FileAppOptions,
@@ -69,6 +72,14 @@ export interface AppOptions
 export function createApp(runtime: Runtime, options?: AppOptions): Hono {
   const app = new Hono();
   const studioOrigin = options?.studioOrigin;
+  const workspaceOptions = {
+    ...options,
+    projectFolderAuthority:
+      options?.projectFolderAuthority ??
+      (options?.projectStore === undefined
+        ? undefined
+        : createProjectFolderAuthority(options.projectStore)),
+  };
 
   // Hono's trailing wildcard matches the collection as well as descendants.
   app.use('/plugins/managed/*', async (context, next) => {
@@ -78,6 +89,10 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
 
   registerPanelGuards(app, options ?? {});
   registerAgentExecutionGuards(app, studioOrigin);
+  registerAgentExecutionGuards(app, studioOrigin, [
+    '/sessions/:sessionId/tasks',
+    '/sessions/:sessionId/tasks/*',
+  ]);
   registerFileUndoGuards(app, options ?? {});
 
   if (studioOrigin !== undefined) {
@@ -102,12 +117,13 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
   });
 
   registerApprovalRoutes(app, runtime, options ?? {});
-  registerWorkspaceRoutes(app, options ?? {});
-  registerFileUndoRoutes(app, runtime, options ?? {});
+  registerWorkspaceRoutes(app, workspaceOptions);
+  registerFileUndoRoutes(app, runtime, workspaceOptions);
   registerFileRoutes(app, options ?? {});
   registerSessionRoutes(app, options ?? {});
   registerAgentRoutes(app, runtime, options ?? {});
   registerAgentExecutionRoutes(app, options ?? {});
+  registerAgentTaskRoutes(app, options ?? {});
   registerSkillRoutes(app, options ?? {});
   registerProviderRoutes(app, options ?? {});
   registerPluginRoutes(app, options ?? {});

@@ -1,7 +1,9 @@
+import { createHash } from 'node:crypto';
 import type { Context, Hono } from 'hono';
 import { z } from 'zod';
 import {
   AgentExecutionError,
+  AgentTaskError,
   agentExecutionCursorSchema,
   agentExecutionLaunchSchema,
   agentExecutionQueueReorderSchema,
@@ -13,17 +15,24 @@ import {
 import type { ProjectStore } from '@weave/workspace';
 import { detachedEventStream } from './detached-event-stream.js';
 import { ExecutionHttpError, readExecutionJson } from './agent-execution-guard.js';
-import { SessionServiceError, type SessionService } from './session-service.js';
+import {
+  agentTaskErrorResponse,
+  resolveAgentTaskRoot,
+  type AgentTaskAppOptions,
+} from './agent-task-api.js';
+import { SessionServiceError, type SessionDetail, type SessionService } from './session-service.js';
 
 export interface AgentExecutionAppOptions {
   readonly agentExecutionService?: AgentExecutionService | undefined;
   readonly sessionService?: SessionService | undefined;
   readonly projectStore?: ProjectStore | undefined;
+  readonly agentTaskService?: AgentTaskAppOptions['agentTaskService'];
 }
 
 function errorResponse(context: Context, error: unknown): Response {
   if (error instanceof ExecutionHttpError)
     return context.json({ error: { code: error.code, message: error.message } }, error.status);
+  if (error instanceof AgentTaskError) return agentTaskErrorResponse(context, error);
   if (error instanceof AgentExecutionError) {
     const status =
       error.code === 'execution-not-found'
@@ -37,6 +46,7 @@ function errorResponse(context: Context, error: unknown): Response {
                 'execution-queue-conflict',
                 'execution-not-queued',
                 'execution-not-active',
+                'execution-task-session-read-only',
                 'execution-file-changed',
               ].includes(error.code)
             ? 409
@@ -85,7 +95,7 @@ export function executionEventStream(
 export function registerAgentExecutionRoutes(app: Hono, options: AgentExecutionAppOptions): void {
   async function serviceFor(
     context: Context,
-  ): Promise<{ service: AgentExecutionService; sessionId: string }> {
+  ): Promise<{ service: AgentExecutionService; sessionId: string; detail: SessionDetail }> {
     const sessionId = z.string().min(1).max(240).safeParse(context.req.param('sessionId'));
     if (!sessionId.success)
       throw new AgentExecutionError('execution-invalid-input', 'Invalid Session identifier');
@@ -115,7 +125,7 @@ export function registerAgentExecutionRoutes(app: Hono, options: AgentExecutionA
     const detail = await options.sessionService.get(sessionId.data);
     if (detail.deletedAt !== undefined)
       throw new AgentExecutionError('execution-not-found', 'Execution Session was not found');
-    return { service, sessionId: sessionId.data };
+    return { service, sessionId: sessionId.data, detail };
   }
   function executionIdFor(context: Context): string {
     const parsed = z.string().min(1).max(240).safeParse(context.req.param('executionId'));
@@ -264,8 +274,44 @@ export function registerAgentExecutionRoutes(app: Hono, options: AgentExecutionA
           'execution-invalid-input',
           'Cancel expects an empty JSON object',
         );
-      const { service, sessionId } = await serviceFor(context);
-      return context.json(await service.cancel(sessionId, executionIdFor(context)), 202);
+      const { service, sessionId, detail } = await serviceFor(context);
+      const executionId = executionIdFor(context);
+      const tasks = options.agentTaskService;
+      const { taskOrigin } = detail;
+      if (tasks === undefined) {
+        if (taskOrigin !== undefined)
+          throw new AgentTaskError('agent-task-closed', 'Agent task control is unavailable');
+        return context.json(await service.cancel(sessionId, executionId), 202);
+      }
+
+      const execution = await service.get(sessionId, executionId);
+      // Hash the existing identity so retry IDs remain bounded even for legacy IDs.
+      const operationId = `execution-stop:${createHash('sha256')
+        .update(JSON.stringify([sessionId, executionId]))
+        .digest('hex')}`;
+      const root = await resolveAgentTaskRoot(
+        detail,
+        options.sessionService!,
+        options.projectStore!,
+      );
+      if (taskOrigin !== undefined) {
+        const task = tasks.snapshot(root).find(({ taskId }) => taskId === taskOrigin.taskId);
+        if (
+          task?.childSessionId !== sessionId ||
+          task.childExecutionId !== executionId ||
+          task.childTurnId !== execution.turnId
+        )
+          throw new AgentExecutionError('execution-not-found', 'Task execution was not found');
+        await tasks.requestCancel(root, [taskOrigin.taskId], operationId, 'task-cancelled');
+        return context.json(await service.get(sessionId, executionId), 202);
+      }
+      if (execution.status === 'queued')
+        throw new AgentExecutionError(
+          'execution-not-active',
+          'Queued execution requires explicit queue cancellation',
+        );
+      await tasks.stopParentTurn(root, execution.turnId, operationId);
+      return context.json(await service.cancel(sessionId, executionId), 202);
     } catch (error) {
       return errorResponse(context, error);
     }

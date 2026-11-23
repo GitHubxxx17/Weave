@@ -14,6 +14,27 @@ export {
 } from './events.js';
 export type { NewSessionEvent, PluginEventType, SessionEvent, SessionEventType } from './events.js';
 
+export {
+  agentTaskAcceptedPayloadSchema,
+  agentTaskCancelRequestedPayloadSchema,
+  agentTaskDispatchedPayloadSchema,
+  agentTaskFactDigest,
+  agentTaskOriginPayloadSchema,
+  agentTaskSettledPayloadSchema,
+  agentTasksStopRequestedPayloadSchema,
+} from './agent-task-events.js';
+export type {
+  AgentTaskAccepted,
+  AgentTaskCancelRequested,
+  AgentTaskDispatched,
+  AgentTaskOrigin,
+  AgentTaskProject,
+  AgentTaskSettled,
+  AgentTaskToolIdentity,
+  AgentTasksStopRequested,
+} from './agent-task-events.js';
+export type { SessionAgentTask, SessionAgentTasks } from './agent-task-projection.js';
+
 export { readSessionEventsOptionsSchema, sessionIdSchema, SessionStoreError } from './store.js';
 export type { SessionEventStore, SessionStoreErrorCode } from './store.js';
 

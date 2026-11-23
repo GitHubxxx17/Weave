@@ -50,6 +50,11 @@ export interface SessionSummary {
 export interface SessionDetail extends SessionSummary {
   readonly messages: readonly SessionMessage[];
   readonly turns: readonly SessionTurnSummary[];
+  readonly taskOrigin?: {
+    readonly taskId: string;
+    readonly rootSessionId: string;
+    readonly parentSessionId: string;
+  };
 }
 
 /** A durable message with the metadata needed by Studio timelines. */
@@ -148,8 +153,18 @@ function summaryFor(sessionId: string, projection: SessionProjection): SessionSu
 }
 
 function detailFor(sessionId: string, projection: SessionProjection): SessionDetail {
+  const origin = projection.agentTasks?.origin;
   return {
     ...summaryFor(sessionId, projection),
+    ...(origin === undefined
+      ? {}
+      : {
+          taskOrigin: {
+            taskId: origin.taskId,
+            rootSessionId: origin.rootSessionId,
+            parentSessionId: origin.parentSessionId,
+          },
+        }),
     messages: projection.messages.map((item) => ({
       ...item.message,
       messageId: item.messageId,

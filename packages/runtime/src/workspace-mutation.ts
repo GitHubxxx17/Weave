@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { realpathSync, statSync } from 'node:fs';
 import { realpath, stat } from 'node:fs/promises';
 
 const roots = new Map<string, Promise<unknown>>();
@@ -18,6 +19,13 @@ export function workspaceObjectIdentity(metadata: {
 export async function workspaceRootIdentity(root: string): Promise<string> {
   const canonical = await realpath(root);
   const metadata = await stat(canonical, { bigint: true });
+  if (!metadata.isDirectory()) throw new Error('Workspace root is not a directory');
+  return fileContentDigest(`${canonical}\0${workspaceObjectIdentity(metadata)}`);
+}
+export function workspaceRootIdentitySync(root: string): string {
+  const canonical = realpathSync(root);
+  const metadata = statSync(canonical, { bigint: true });
+  if (!metadata.isDirectory()) throw new Error('Workspace root is not a directory');
   return fileContentDigest(`${canonical}\0${workspaceObjectIdentity(metadata)}`);
 }
 export async function workspaceFileIdentity(target: string): Promise<string> {

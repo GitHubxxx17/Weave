@@ -4,21 +4,36 @@ export interface GenerationRequest {
 }
 
 export interface GenerationRunner<R extends GenerationRequest, E> {
+  run(request: R, scope?: RunningGenerationScope<R, E>): AsyncIterable<E>;
+}
+
+export interface RunningGenerationScope<R extends GenerationRequest, E> {
+  retain(): RetainedGenerationLease<R, E>;
+  readonly admitRetainedStart?: () => void;
+}
+
+export interface RetainedGenerationLease<R extends GenerationRequest, E> {
+  readonly revocationSignal: AbortSignal;
+  assertCanStartSync(): void;
   run(request: R): AsyncIterable<E>;
+  closeStarts(reason?: unknown): void;
+  abort(reason?: unknown): void;
+  release(): void;
 }
 
 export interface RunnerGeneration<R extends GenerationRequest, E, T> {
   readonly id: number;
   readonly runner: GenerationRunner<R, E>;
   readonly resources: T;
+  readonly explicitRetainedStart?: true;
   readonly assertCanStartSync?: (() => undefined) | undefined;
   dispose(): void | Promise<void>;
 }
 
 export interface GenerationCommit {
   /**
-   * Waits for disposal that can start at commit time. If a running turn still
-   * pins the previous generation, the last such turn starts its disposal.
+   * Waits for disposal that can start at commit time. Otherwise the final
+   * running turn or retained lease to release its pin starts disposal.
    */
   readonly retirement: Promise<void>;
 }
@@ -30,16 +45,14 @@ export interface GenerationController<R extends GenerationRequest, E, T> {
   commit(next: RunnerGeneration<R, E, T>, options?: { immediate?: boolean }): GenerationCommit;
   replace(next: RunnerGeneration<R, E, T>, options?: { immediate?: boolean }): Promise<void>;
   blockNewRuns(error: Error): void;
+  closeRetainedStarts(generation: RunnerGeneration<R, E, T>, reason?: unknown): void;
+  closeRetainedStartsBatch(
+    generations: readonly RunnerGeneration<R, E, T>[],
+    reason?: unknown,
+  ): void;
+  abortRetainedWorkBatch(generations: readonly RunnerGeneration<R, E, T>[], reason?: unknown): void;
   abortActiveRuns(reason?: unknown): void;
   dispose(): Promise<void>;
-}
-
-interface GenerationState<R extends GenerationRequest, E, T> {
-  readonly generation: RunnerGeneration<R, E, T>;
-  readonly abort: AbortController;
-  active: number;
-  retired: boolean;
-  disposal?: Promise<void>;
 }
 
 interface PendingNext<E> {
@@ -51,7 +64,16 @@ interface PendingNext<E> {
 export function createGenerationRunner<R extends GenerationRequest, E, T>(
   initial: RunnerGeneration<R, E, T>,
 ): GenerationController<R, E, T> {
-  const generations = new Set<GenerationState<R, E, T>>();
+  interface GenerationState {
+    readonly generation: RunnerGeneration<R, E, T>;
+    readonly active: Set<Run>;
+    readonly leases: Set<RetainedLease>;
+    retainedFence?: { readonly reason: unknown };
+    retired: boolean;
+    disposal?: Promise<void>;
+  }
+
+  const generations = new Set<GenerationState>();
   const sessions = new Map<string, Run[]>();
   const advancingSessions = new Set<string>();
   const disposalErrors: unknown[] = [];
@@ -60,16 +82,20 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
   let closed = false;
   let closing: Promise<void> | undefined;
 
-  function stateFor(generation: RunnerGeneration<R, E, T>): GenerationState<R, E, T> {
-    const state = { generation, abort: new AbortController(), active: 0, retired: false };
+  function stateFor(generation: RunnerGeneration<R, E, T>): GenerationState {
+    const state: GenerationState = {
+      generation,
+      active: new Set(),
+      leases: new Set(),
+      retired: false,
+    };
     generations.add(state);
     return state;
   }
 
-  function retire(state: GenerationState<R, E, T>): Promise<void> | undefined {
-    if (!state.retired || state.active > 0) return undefined;
+  function retire(state: GenerationState): Promise<void> | undefined {
+    if (!state.retired || state.active.size > 0 || state.leases.size > 0) return undefined;
     if (!state.disposal) {
-      state.abort.abort();
       // Store the promise before calling external disposal code, including synchronous throws.
       state.disposal = Promise.resolve()
         .then(() => state.generation.dispose())
@@ -81,6 +107,152 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
         });
     }
     return state.disposal;
+  }
+
+  function checkGuard(state: GenerationState): void {
+    const guard = state.generation.assertCanStartSync;
+    if (guard === undefined) return;
+    if (typeof guard !== 'function') {
+      throw new TypeError('Generation start guard must be a function');
+    }
+    const result: unknown = Reflect.apply(guard, state.generation, []);
+    if (result !== undefined) {
+      void Promise.resolve(result).catch(() => undefined);
+      throw new TypeError('Generation start guard must return undefined synchronously');
+    }
+  }
+
+  function assertRetainedAdmission(state: GenerationState): void {
+    if (state.retainedFence) throw state.retainedFence.reason;
+    if (closed) throw new Error('Generation runner is disposed');
+    if (blocked) throw blocked;
+  }
+
+  function closeRetainedStartFence(state: GenerationState, reason?: unknown): void {
+    state.retainedFence ??= {
+      reason: reason === undefined ? new Error('Generation retained starts are closed') : reason,
+    };
+  }
+
+  function selectGenerations(selected: readonly RunnerGeneration<R, E, T>[]): GenerationState[] {
+    const requested = new Set(selected);
+    return [...generations].filter(({ generation }) => requested.has(generation));
+  }
+
+  function closeRetainedStartsBatch(
+    selected: readonly RunnerGeneration<R, E, T>[],
+    reason?: unknown,
+  ): void {
+    const states = selectGenerations(selected);
+    const leases = states.flatMap((state) => [...state.leases]);
+    for (const state of states) closeRetainedStartFence(state, reason);
+    const unstarted = leases.filter((lease) => lease.reservePreparingRevocation(reason));
+    const runs = unstarted.flatMap(({ child }) => (child?.isRunning() ? [child] : []));
+    for (const run of runs) run.reserveCancellation(reason);
+    for (const lease of leases) lease.notifyRevocation();
+    for (const run of runs) run.cancel();
+  }
+
+  function cancelWork(states: GenerationState[], runs: Run[], reason?: unknown): void {
+    // Establish all fences and reserve the first reasons before notifying abort listeners.
+    const targets = new Set(runs);
+    const leases = states.flatMap((state) => [...state.leases]);
+    for (const state of states) closeRetainedStartFence(state, reason);
+    for (const lease of leases) {
+      lease.reserveRevocation(reason);
+      if (lease.child) targets.add(lease.child);
+    }
+    for (const run of targets) run.reserveCancellation(reason);
+    for (const lease of leases) lease.notifyRevocation();
+    for (const run of targets) run.cancel();
+  }
+
+  class RetainedLease implements RetainedGenerationLease<R, E> {
+    private readonly revocation = new AbortController();
+    readonly revocationSignal = this.revocation.signal;
+    child: Run | undefined;
+    private fence: { readonly reason: unknown } | undefined;
+    private revocationReason: { readonly reason: unknown } | undefined;
+    private producing = false;
+    private startAdmitted = false;
+    private releaseRequested = false;
+
+    constructor(readonly state: GenerationState) {
+      state.leases.add(this);
+    }
+
+    run(request: R): AsyncIterable<E> {
+      this.assertCanStart();
+      if (this.child) throw new Error('Generation lease already has a run');
+      const run = new Run(request, this);
+      this.child = run;
+      return run.output;
+    }
+
+    closeStarts(reason?: unknown): void {
+      this.fence ??= {
+        reason: reason === undefined ? new Error('Generation lease starts are closed') : reason,
+      };
+    }
+
+    reserveRevocation(reason?: unknown): void {
+      this.closeStarts(this.state.retainedFence?.reason);
+      this.revocationReason ??= { reason };
+    }
+
+    reservePreparingRevocation(reason?: unknown): boolean {
+      if (this.startAdmitted) return false;
+      this.reserveRevocation(reason);
+      return true;
+    }
+
+    notifyRevocation(): void {
+      if (this.revocationReason) this.revocation.abort(this.revocationReason.reason);
+    }
+
+    abort(reason?: unknown): void {
+      this.closeStarts(reason);
+      this.child?.cancel(reason);
+    }
+
+    release(): void {
+      this.closeStarts();
+      this.releaseRequested = true;
+      this.releasePin();
+    }
+
+    assertCanStart(): void {
+      if (this.fence) throw this.fence.reason;
+      assertRetainedAdmission(this.state);
+    }
+
+    assertCanStartSync(): void {
+      this.assertCanStart();
+      checkGuard(this.state);
+      this.assertCanStart();
+    }
+
+    childStarted(): void {
+      this.producing = true;
+      if (!this.state.generation.explicitRetainedStart) this.startAdmitted = true;
+    }
+
+    admitChildStart(assertRunCurrent: () => void): void {
+      this.assertCanStartSync();
+      assertRunCurrent();
+      this.startAdmitted = true;
+    }
+
+    childSettled(): void {
+      this.producing = false;
+      this.releasePin();
+    }
+
+    private releasePin(): void {
+      if (this.releaseRequested && !this.producing && this.state.leases.delete(this)) {
+        retire(this.state);
+      }
+    }
   }
 
   function startSessionHead(sessionId: string): void {
@@ -99,10 +271,19 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
     }
   }
 
-  class Run implements AsyncIterableIterator<E> {
+  class Run {
+    readonly output: AsyncIterableIterator<E> = {
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+      next: () => this.next(),
+      return: () => this.return(),
+    };
     private phase: 'idle' | 'queued' | 'running' | 'finished' = 'idle';
     private guardInProgress = false;
+    private producerEnded = false;
     private readonly abort = new AbortController();
+    private cancellation?: { readonly reason: unknown };
     private readonly buffer: E[] = [];
     private readonly waiting: PendingNext<E>[] = [];
     private returned = false;
@@ -111,18 +292,17 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
     private cleanupSignal: (() => void) | undefined;
     private production: Promise<void> = Promise.resolve();
     private iterator: AsyncIterator<E> | undefined;
-    private iteratorClose: Promise<IteratorResult<E>> | undefined;
+    private iteratorClose: Promise<IteratorResult<E> | undefined> | undefined;
     private cleanupError: unknown;
     private hasCleanupError = false;
     private cleanupErrorReported = false;
 
-    constructor(private readonly request: R) {}
+    constructor(
+      private readonly request: R,
+      private readonly retained?: RetainedLease,
+    ) {}
 
-    [Symbol.asyncIterator](): AsyncIterableIterator<E> {
-      return this;
-    }
-
-    next(): Promise<IteratorResult<E>> {
+    private next(): Promise<IteratorResult<E>> {
       if (this.phase === 'idle') this.enqueue();
       return new Promise((resolve, reject) => {
         this.waiting.push({ resolve, reject });
@@ -130,7 +310,7 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
       });
     }
 
-    async return(): Promise<IteratorResult<E>> {
+    private async return(): Promise<IteratorResult<E>> {
       this.returned = true;
       this.buffer.length = 0;
       this.cancel();
@@ -148,6 +328,14 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
       if (blocked) {
         this.finish(blocked);
         return;
+      }
+      if (this.retained) {
+        try {
+          this.retained.assertCanStart();
+        } catch (cause: unknown) {
+          this.finish(cause, true);
+          return;
+        }
       }
       this.phase = 'queued';
       const signal = this.request.signal;
@@ -169,19 +357,16 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
         this.release();
         return;
       }
-      const state = current;
+      const state = this.retained?.state ?? current;
       this.guardInProgress = true;
       try {
-        const guard = state.generation.assertCanStartSync;
-        if (guard !== undefined) {
-          if (typeof guard !== 'function') {
-            throw new TypeError('Generation start guard must be a function');
-          }
-          const result: unknown = Reflect.apply(guard, state.generation, []);
-          if (result !== undefined) {
-            void Promise.resolve(result).catch(() => undefined);
-            throw new TypeError('Generation start guard must return undefined synchronously');
-          }
+        this.retained?.assertCanStart();
+        checkGuard(state);
+        if (this.phase !== 'queued') return;
+        this.retained?.assertCanStart();
+        if (blocked) throw blocked;
+        if (!this.retained && state !== current) {
+          throw new Error('Current generation changed during start admission');
         }
       } catch (cause: unknown) {
         const wasQueued = this.phase === 'queued';
@@ -194,40 +379,78 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
       }
 
       if (this.phase !== 'queued') return;
-      if (closed || blocked) {
-        this.finish(blocked);
-        this.release();
-        return;
-      }
-      if (state !== current) {
-        this.finish(new Error('Current generation changed during start admission'));
-        this.release();
-        return;
-      }
-
       this.phase = 'running';
-      state.active += 1;
-      const onAbort = () => this.cancel(state.abort.signal.reason);
-      state.abort.signal.addEventListener('abort', onAbort, { once: true });
-      this.production = this.pump(state).finally(() => {
-        state.abort.signal.removeEventListener('abort', onAbort);
-        state.active -= 1;
-        retire(state);
-        this.release();
+      state.active.add(this);
+      this.retained?.childStarted();
+      const scope: RunningGenerationScope<R, E> = {
+        retain: () => this.retain(state),
+        ...(this.retained && state.generation.explicitRetainedStart
+          ? {
+              admitRetainedStart: () => {
+                this.assertCanRetain(state);
+                this.retained!.admitChildStart(() => this.assertCanRetain(state));
+              },
+            }
+          : {}),
+      };
+      // Runner creation and abort listeners can call dispose before pump returns a promise.
+      let settle!: (production: Promise<void>) => void;
+      this.production = new Promise((resolve) => {
+        settle = resolve;
       });
+      settle(
+        this.pump(state, scope).finally(() => {
+          state.active.delete(this);
+          this.retained?.childSettled();
+          retire(state);
+          this.release();
+        }),
+      );
+    }
+
+    private retain(state: GenerationState): RetainedGenerationLease<R, E> {
+      this.assertCanRetain(state);
+      checkGuard(state);
+      this.assertCanRetain(state);
+      const lease = new RetainedLease(state);
+      return {
+        revocationSignal: lease.revocationSignal,
+        assertCanStartSync: () => lease.assertCanStartSync(),
+        run: (request) => lease.run(request),
+        closeStarts: (reason) => lease.closeStarts(reason),
+        abort: (reason) => lease.abort(reason),
+        release: () => lease.release(),
+      };
+    }
+
+    private assertCanRetain(state: GenerationState): void {
+      assertRetainedAdmission(state);
+      if (
+        !this.isRunning() ||
+        this.producerEnded ||
+        this.abort.signal.aborted ||
+        this.request.signal?.aborted
+      ) {
+        throw new Error('Generation scope is no longer running');
+      }
     }
 
     settled(): Promise<void> {
       return this.production;
     }
 
-    abortIfRunning(reason?: unknown): void {
-      if (this.phase === 'running') this.cancel(reason);
+    isRunning(): boolean {
+      return this.phase === 'running';
+    }
+
+    reserveCancellation(reason?: unknown): void {
+      this.cancellation ??= { reason };
     }
 
     cancel(reason: unknown = this.request.signal?.reason): void {
-      if (this.abort.signal.aborted) return;
-      this.abort.abort(reason);
+      if (this.phase === 'finished' || this.abort.signal.aborted) return;
+      this.reserveCancellation(reason);
+      this.abort.abort(this.cancellation?.reason);
       // A custom iterator may use return() itself to release a blocked next().
       // Async generators instead unblock next() through the forwarded signal.
       if (this.phase === 'running') this.closeIterator();
@@ -238,26 +461,29 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
       }
     }
 
-    private closeIterator(): Promise<IteratorResult<E>> | undefined {
+    private closeIterator(): Promise<IteratorResult<E> | undefined> | undefined {
       const iterator = this.iterator;
-      if (!iterator?.return) return undefined;
+      if (!iterator) return undefined;
       if (!this.iteratorClose) {
-        this.iteratorClose = Promise.resolve().then(() => iterator.return!());
+        this.iteratorClose = Promise.resolve().then(() => {
+          const close = iterator.return;
+          return close == null ? undefined : Reflect.apply(close, iterator, []);
+        });
         // Cancellation can request close before the pump reaches its finalizer.
         void this.iteratorClose.catch(() => undefined);
       }
       return this.iteratorClose;
     }
 
-    private async pump(state: GenerationState<R, E, T>): Promise<void> {
+    private async pump(state: GenerationState, scope: RunningGenerationScope<R, E>): Promise<void> {
       let exhausted = false;
       let failure: unknown;
       let failed = false;
       try {
-        const iterable = state.generation.runner.run({
-          ...this.request,
-          signal: this.abort.signal,
-        });
+        const iterable = state.generation.runner.run(
+          { ...this.request, signal: this.abort.signal },
+          scope,
+        );
         const iterator = iterable[Symbol.asyncIterator]();
         this.iterator = iterator;
         if (this.abort.signal.aborted) this.closeIterator();
@@ -278,6 +504,7 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
         failed = true;
         if (this.returned && !this.isCancellation(error)) this.recordCleanupError(error);
       } finally {
+        this.producerEnded = true;
         if (!exhausted || this.iteratorClose) {
           try {
             await this.closeIterator();
@@ -362,12 +589,16 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
     blocked = undefined;
     previous.retired = true;
     if (immediate) {
-      for (const state of generations) if (state.retired) state.abort.abort();
+      const retired = [...generations].filter((state) => state.retired);
+      cancelWork(
+        retired,
+        retired.flatMap((state) => [...state.active]),
+      );
     }
     return { retirement: retire(previous) ?? Promise.resolve() };
   };
 
-  const runner: GenerationRunner<R, E> = { run: (request) => new Run(request) };
+  const runner: GenerationRunner<R, E> = { run: (request) => new Run(request).output };
   return {
     runner,
     current: () => current.generation,
@@ -378,29 +609,39 @@ export function createGenerationRunner<R extends GenerationRequest, E, T>(
     blockNewRuns(error) {
       blocked = error;
     },
+    closeRetainedStarts(generation, reason) {
+      closeRetainedStartsBatch([generation], reason);
+    },
+    closeRetainedStartsBatch,
+    abortRetainedWorkBatch(selected, reason) {
+      cancelWork(selectGenerations(selected), [], reason);
+    },
     abortActiveRuns(reason) {
-      for (const run of [...sessions.values()].flat()) run.abortIfRunning(reason);
+      const runs = [...sessions.values()].flat().filter((run) => run.isRunning());
+      cancelWork([...generations], runs, reason);
     },
     dispose() {
       if (!closing) {
         closed = true;
-        for (const queue of [...sessions.values()]) {
-          for (const run of [...queue]) run.cancel();
-        }
-        for (const state of generations) {
-          state.retired = true;
-          state.abort.abort();
-        }
-        closing = (async () => {
+        const runs = [...sessions.values()].flat();
+        const states = [...generations];
+        closing = Promise.resolve().then(async () => {
           // Running turns stay in their Session queue until cancellation has fully settled.
-          await Promise.all([...sessions.values()].flat().map((run) => run.settled()));
-          await Promise.all([...generations].map((state) => retire(state)));
+          await Promise.all(runs.map((run) => run.settled()));
+          await Promise.all(states.map((state) => retire(state)));
           if (disposalErrors.length > 0) {
             throw new AggregateError(disposalErrors, 'Generation disposal failed', {
               cause: disposalErrors[0],
             });
           }
-        })();
+        });
+        cancelWork(states, runs);
+        for (const state of states) {
+          state.retired = true;
+          // The controller owns these leases at shutdown. Running children still hold
+          // their pins through producer cleanup; idle leases have no cleanup to await.
+          for (const lease of state.leases) lease.release();
+        }
       }
       return closing;
     },

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  agentTaskFactDigest,
   projectAgentExecutions,
   projectAgentExecutionQueue,
   type SessionExecutionMetadata,
@@ -8,12 +9,30 @@ import {
   projectSession,
   type NewSessionEvent,
   type SessionExecution,
+  type SessionTurn,
   capturedFileContextSchema,
   executionAcceptedPayloadSchema,
   fileAttachmentSummaries,
   type CapturedFileContext,
 } from '@weave/session';
-import { agentRuntimeEventSchema, type AgentRuntimeEvent } from './agent-types.js';
+import { taskStopReasonSchema, type TaskStopReason } from '@weave/protocol';
+import {
+  agentRuntimeEventSchema,
+  type AgentRunner,
+  type AgentRuntimeEvent,
+} from './agent-types.js';
+import {
+  boundTaskLaunchSchema,
+  readTaskLaunchAuthority,
+  readTaskRunnerLease,
+  registerBoundTaskExecutionPort,
+  taskBindingConflict,
+  type AdaptTaskRunnerLeaseOptions,
+  type BoundTaskExecutionPort,
+  type TaskLaunchAuthority,
+  type TaskRunnerLease,
+} from './agent-task-execution.js';
+import type { TaskExecutionCleanup } from './agent-task-types.js';
 import {
   AgentExecutionError,
   agentExecutionCursorSchema,
@@ -44,6 +63,14 @@ const terminalStatuses = new Set<AgentExecutionStatus>([
   'interrupted',
 ]);
 
+function changeSignal() {
+  let notify!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    notify = resolve;
+  });
+  return { promise, notify };
+}
+
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
   if (value !== null && typeof value === 'object')
@@ -63,6 +90,8 @@ interface Subscriber {
 }
 interface LiveExecution {
   readonly accepted: SessionExecution;
+  readonly task?: BoundExecution;
+  readonly runner: AgentRunner;
   readonly controller: AbortController;
   readonly subscribers: Set<Subscriber>;
   readonly ring: {
@@ -79,6 +108,24 @@ interface LiveExecution {
   durableThroughSequence?: number;
   outputLimited: boolean;
   promise: Promise<void>;
+}
+
+interface BoundExecution {
+  readonly token: TaskLaunchAuthority;
+  readonly authority: ReturnType<typeof readTaskLaunchAuthority>;
+  lease?: { readonly token: TaskRunnerLease; readonly options: AdaptTaskRunnerLeaseOptions };
+  reservation: 'none' | 'unconfirmed' | 'confirmed';
+  stopReason?: TaskStopReason;
+  unstartedFinishReason?: TaskStopReason | 'generation-unavailable';
+  pendingLaunches: number;
+  running?: LiveExecution;
+  finish?: () => Promise<void>;
+  durable?: SessionExecution | null;
+  cleanup?: TaskExecutionCleanup;
+  released: boolean;
+  startsClosed: boolean;
+  issue?: AgentExecutionError;
+  change: ReturnType<typeof changeSignal>;
 }
 
 interface QueueSubscriber {
@@ -110,6 +157,8 @@ export function createAgentExecutionService(
   const live = new Map<string, LiveExecution>();
   const queues = new Map<string, QueueState>();
   const pendingCounts = new Map<string, number>();
+  const bound = new WeakMap<TaskLaunchAuthority, BoundExecution>();
+  const reservedTasks = new Map<string, BoundExecution>();
   let tail = Promise.resolve();
   let queueSequence = 0;
   let closed = false;
@@ -137,6 +186,13 @@ export function createAgentExecutionService(
   };
   const records = async (sessionId: string) =>
     projectAgentExecutions(await options.sessionStore.read(sessionId));
+  const refuseOrdinaryTaskLaunch = (events: readonly SessionEvent[]): void => {
+    if (events.some((event) => event.type === 'agent.task.origin'))
+      throw new AgentExecutionError(
+        'execution-task-session-read-only',
+        'Task Sessions only run their original bound execution',
+      );
+  };
   const digest = (value: unknown): string =>
     createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex');
   const summary = (
@@ -394,17 +450,134 @@ export function createAgentExecutionService(
     void cause;
   };
 
+  const taskStop = (task: BoundExecution): TaskStopReason | undefined => {
+    if (task.stopReason !== undefined) return task.stopReason;
+    const reason = task.authority.getStopReason?.() ?? (closed ? 'shutdown' : undefined);
+    if (reason !== undefined) task.stopReason = taskStopReasonSchema.parse(reason);
+    return task.stopReason;
+  };
+
+  const taskPersistenceError = (admission: boolean, cause: unknown): AgentExecutionError =>
+    new AgentExecutionError(
+      admission ? 'execution-admission-uncertain' : 'execution-persistence-error',
+      admission
+        ? 'Task execution acceptance could not be determined. Retry with the same authority.'
+        : 'Task execution terminal state could not be confirmed. Retry settlement.',
+      { cause },
+    );
+
+  const clearTaskBlock = (sessionId: string): void => {
+    const state = queues.get(sessionId);
+    if (state !== undefined) delete state.error;
+  };
+
+  const signalTask = (task: BoundExecution): void => {
+    const change = task.change;
+    task.change = changeSignal();
+    change.notify();
+  };
+
+  const publishTaskCleanup = (task: BoundExecution): void => {
+    if (task.cleanup !== undefined) return;
+    if (task.stopReason !== undefined && task.lease !== undefined && !task.startsClosed) {
+      task.lease.options.closeStarts?.(task.stopReason);
+      task.startsClosed = true;
+    }
+    const durable = task.durable;
+    if (
+      durable !== undefined &&
+      task.pendingLaunches === 0 &&
+      (durable !== null || task.stopReason !== undefined)
+    ) {
+      if (!task.released) {
+        task.lease?.options.release?.();
+        task.released = true;
+      }
+      const common = {
+        identity: task.authority.identity,
+        launchClosed: true,
+        pendingLaunches: 0,
+        cleanupComplete: true,
+      } as const;
+      if (durable === null)
+        task.cleanup = Object.freeze({
+          ...common,
+          acceptance: 'none',
+          exactAcceptanceAbsent: true,
+        });
+      else if (
+        durable.status !== 'queued' &&
+        durable.status !== 'accepted' &&
+        durable.durableThroughSequence !== undefined
+      ) {
+        const stop = taskStopReasonSchema.safeParse(durable.reason);
+        const reason =
+          durable.status === 'cancelled' && stop.success
+            ? stop.data
+            : durable.status === 'failed' && durable.reason === 'generation-unavailable'
+              ? durable.reason
+              : undefined;
+        task.cleanup = Object.freeze({
+          ...common,
+          acceptance: 'accepted',
+          executionStatus: durable.status,
+          terminalSequence: durable.durableThroughSequence,
+          ...(reason === undefined ? {} : { reason }),
+        });
+      }
+      if (task.cleanup !== undefined) {
+        delete task.running;
+        delete task.finish;
+        delete task.issue;
+        const { sessionId } = task.authority.identity;
+        if (reservedTasks.get(sessionId) === task) reservedTasks.delete(sessionId);
+      }
+    }
+    signalTask(task);
+  };
+
+  const closeInterruptedTurn = (turn: SessionTurn, reason: string): NewSessionEvent[] => [
+    ...turn.steps.flatMap((step): NewSessionEvent[] =>
+      step.status === 'running'
+        ? [
+            {
+              type: 'step.completed',
+              payload: { turnId: turn.turnId, stepId: step.stepId, status: 'failed' },
+            },
+          ]
+        : [],
+    ),
+    { type: 'turn.completed', payload: { turnId: turn.turnId, status: 'failed', reason } },
+  ];
+
   const pump = async (state: LiveExecution): Promise<void> => {
     let failure: unknown;
     let hasFailure = false;
+    let startDenied = false;
     let completion: Extract<AgentRuntimeEvent, { type: 'completed' }> | undefined;
     try {
       if (!state.controller.signal.aborted) {
-        await options.admit(state.accepted.sessionId);
-        if (closed) state.controller.abort();
+        const task = state.task;
+        if (task === undefined) {
+          await options.admit(state.accepted.sessionId);
+          if (closed) state.controller.abort();
+        } else {
+          const stop = taskStop(task);
+          if (stop !== undefined) state.controller.abort(stop);
+          else {
+            try {
+              task.lease!.options.assertCanStartSync();
+            } catch (error: unknown) {
+              startDenied = true;
+              const stop = taskStop(task);
+              if (stop !== undefined) state.controller.abort(stop);
+              throw error;
+            }
+          }
+        }
         state.controller.signal.throwIfAborted();
         status(state, 'running');
-        const stream = options.runner.run({
+        const stream = state.runner.run({
           ...structuredClone(state.accepted.runInput ?? state.accepted.input),
           sessionId: state.accepted.sessionId,
           executionIdentity: {
@@ -423,87 +596,138 @@ export function createAgentExecutionService(
       failure = error;
       hasFailure = true;
     }
-    try {
-      await gate(state.accepted.sessionId, async () => {
-        const persisted = await options.sessionStore.read(state.accepted.sessionId);
-        const started = persisted.some(
-          (item) =>
-            item.type === 'turn.started' &&
-            item.payload.turnId === state.accepted.turnId &&
-            item.payload.executionId === state.accepted.executionId,
-        );
-        const turnTerminal = persisted.find(
-          (item) => item.type === 'turn.completed' && item.payload.turnId === state.accepted.turnId,
-        );
-        if (started && turnTerminal?.type !== 'turn.completed') {
-          markPersistenceError(state, failure);
-          return;
-        }
-        if (!started && !hasFailure && !state.controller.signal.aborted)
-          throw new Error('Runner ended without a durable Turn');
-        const outcome =
-          turnTerminal?.type === 'turn.completed'
-            ? turnTerminal.payload.status
-            : state.controller.signal.aborted
-              ? 'cancelled'
-              : 'failed';
-        const reason =
-          state.error?.code ??
-          (turnTerminal?.type === 'turn.completed' ? turnTerminal.payload.reason : undefined) ??
-          (hasFailure &&
-          typeof failure === 'object' &&
-          failure !== null &&
-          'code' in failure &&
-          typeof failure.code === 'string'
-            ? failure.code
-            : undefined);
-        const appended = await append(state.accepted.sessionId, [
-          {
-            type: 'execution.finished',
-            payload: {
-              executionId: state.accepted.executionId,
-              status: outcome,
-              ...(reason === undefined ? {} : { reason }),
-            },
-          },
-        ]);
-        const terminalSequence = appended.at(-1)?.sequence;
-        if (terminalSequence === undefined)
-          throw new Error('Execution terminal append returned no event');
-        state.durableThroughSequence = terminalSequence;
-        // Queue observers can already be waiting for the first terminal status
-        // notification. Project its confirmed removal before publishing any view.
-        sync(state.accepted.sessionId, [...persisted, ...appended]);
-        // Legacy completion is forwarded only after durability; it is terminal
-        // bookkeeping rather than part of the bounded, reconstructable live view.
-        if (completion !== undefined && !state.outputLimited) {
-          state.sequence += 1;
-          publish(state, {
-            type: 'event',
-            cursor: cursor(state.accepted.executionId, state.sequence),
-            event: completion,
-          });
-        }
-        status(state, outcome);
-        for (const subscriber of state.subscribers) subscriber.finish();
-        state.subscribers.clear();
-        // Detached initial snapshots and subscriber queues own their copies.
-        // Retained subscription handles must not keep the complete live view.
-        state.events.length = 0;
-        state.ring.length = 0;
-        state.ringBytes = 0;
-        state.outputBytes = 0;
-        live.delete(state.accepted.executionId);
-        await claimNext(state.accepted.sessionId);
-      });
-    } catch (error: unknown) {
-      markPersistenceError(state, error);
-    }
+    const finish = async (): Promise<void> => {
+      try {
+        await gate(state.accepted.sessionId, async () => {
+          const task = state.task;
+          if (task?.durable !== undefined) return;
+          const persisted = await options.sessionStore.read(state.accepted.sessionId);
+          const started = persisted.some(
+            (item) =>
+              item.type === 'turn.started' &&
+              item.payload.turnId === state.accepted.turnId &&
+              item.payload.executionId === state.accepted.executionId,
+          );
+          const turnTerminal = persisted.find(
+            (item) =>
+              item.type === 'turn.completed' && item.payload.turnId === state.accepted.turnId,
+          );
+          const missingTerminal = started && turnTerminal?.type !== 'turn.completed';
+          if (missingTerminal && task === undefined) {
+            markPersistenceError(state, failure);
+            return;
+          }
+          const stopBeforeTurn = !started && task !== undefined ? taskStop(task) : undefined;
+          const cancelledBeforeTurn =
+            state.controller.signal.aborted || stopBeforeTurn !== undefined;
+          if (!started && !hasFailure && !cancelledBeforeTurn)
+            throw new Error('Runner ended without a durable Turn');
+          const outcome = missingTerminal
+            ? 'interrupted'
+            : turnTerminal?.type === 'turn.completed'
+              ? turnTerminal.payload.status
+              : cancelledBeforeTurn
+                ? 'cancelled'
+                : 'failed';
+          let reason =
+            (state.outputLimited ? 'execution-output-limit' : undefined) ??
+            (turnTerminal?.type === 'turn.completed' ? turnTerminal.payload.reason : undefined) ??
+            (hasFailure &&
+            typeof failure === 'object' &&
+            failure !== null &&
+            'code' in failure &&
+            typeof failure.code === 'string'
+              ? failure.code
+              : undefined);
+          if (task !== undefined) {
+            if (missingTerminal) reason = 'execution-persistence-error';
+            else if (outcome === 'cancelled') reason = taskStop(task) ?? 'task-cancelled';
+            else if (startDenied && !started) reason = 'generation-unavailable';
+          }
+          const originalFinish =
+            task === undefined
+              ? undefined
+              : persisted.find(
+                  (event) =>
+                    event.type === 'execution.finished' &&
+                    event.payload.executionId === state.accepted.executionId,
+                );
+          const interruptedTurn = missingTerminal
+            ? projectSession(persisted).turns.find((turn) => turn.turnId === state.accepted.turnId)
+            : undefined;
+          const finished =
+            originalFinish?.type === 'execution.finished'
+              ? [originalFinish]
+              : await append(state.accepted.sessionId, [
+                  ...(interruptedTurn === undefined
+                    ? []
+                    : closeInterruptedTurn(interruptedTurn, 'execution-persistence-error')),
+                  {
+                    type: 'execution.finished',
+                    payload: {
+                      executionId: state.accepted.executionId,
+                      status: outcome,
+                      ...(reason === undefined ? {} : { reason }),
+                    },
+                  },
+                ]);
+          const terminalSequence = finished.at(-1)?.sequence;
+          if (terminalSequence === undefined)
+            throw new Error('Execution terminal append returned no event');
+          state.durableThroughSequence = terminalSequence;
+          // Queue observers can already be waiting for the first terminal status
+          // notification. Project its confirmed removal before publishing any view.
+          if (task !== undefined) clearTaskBlock(state.accepted.sessionId);
+          const confirmed = originalFinish === undefined ? [...persisted, ...finished] : persisted;
+          sync(state.accepted.sessionId, confirmed);
+          if (task !== undefined) {
+            task.durable = projectAgentExecutions(confirmed).find(
+              (execution) => execution.executionId === state.accepted.executionId,
+            )!;
+            delete state.error;
+          }
+          // Legacy completion is forwarded only after durability; it is terminal
+          // bookkeeping rather than part of the bounded, reconstructable live view.
+          if (completion !== undefined && !state.outputLimited) {
+            state.sequence += 1;
+            publish(state, {
+              type: 'event',
+              cursor: cursor(state.accepted.executionId, state.sequence),
+              event: completion,
+            });
+          }
+          status(state, task?.durable?.status ?? outcome);
+          for (const subscriber of state.subscribers) subscriber.finish();
+          state.subscribers.clear();
+          // Detached initial snapshots and subscriber queues own their copies.
+          // Retained subscription handles must not keep the complete live view.
+          state.events.length = 0;
+          state.ring.length = 0;
+          state.ringBytes = 0;
+          state.outputBytes = 0;
+          live.delete(state.accepted.executionId);
+          if (task === undefined) await claimNext(state.accepted.sessionId);
+        });
+      } catch (error: unknown) {
+        markPersistenceError(state, error);
+        if (state.task !== undefined) state.task.issue = taskPersistenceError(false, error);
+      } finally {
+        if (state.task !== undefined) publishTaskCleanup(state.task);
+      }
+    };
+    if (state.task !== undefined) state.task.finish = finish;
+    await finish();
   };
 
-  const install = (accepted: SessionExecution): LiveExecution => {
+  const install = (
+    accepted: SessionExecution,
+    runner: AgentRunner = options.runner,
+    task?: BoundExecution,
+  ): LiveExecution => {
     const state: LiveExecution = {
       accepted,
+      runner,
+      ...(task === undefined ? {} : { task }),
       controller: new AbortController(),
       subscribers: new Set(),
       ring: [],
@@ -516,6 +740,7 @@ export function createAgentExecutionService(
       promise: Promise.resolve(),
     };
     live.set(accepted.executionId, state);
+    if (task !== undefined) task.running = state;
     // The barrier releases the mutation gate before entering Runner or plugin code.
     state.promise = (async () => {
       await gate(accepted.sessionId, async () => {
@@ -539,6 +764,7 @@ export function createAgentExecutionService(
     if (head === undefined) return;
     try {
       const { events } = await load(sessionId);
+      if (events.some((event) => event.type === 'agent.task.origin')) return;
       const accepted = projectAgentExecutions(events).find(
         (item) => item.executionId === head.executionId,
       );
@@ -552,6 +778,304 @@ export function createAgentExecutionService(
     } catch {
       block(sessionId);
     }
+  };
+
+  const taskFor = (token: TaskLaunchAuthority): BoundExecution => {
+    const authority = readTaskLaunchAuthority(token);
+    if (authority.service !== undefined && authority.service !== service)
+      throw taskBindingConflict('Task authority belongs to a different execution service');
+    authority.service = service;
+    let task = bound.get(token);
+    if (task === undefined) {
+      task = {
+        token,
+        authority,
+        reservation: 'none',
+        pendingLaunches: 0,
+        released: false,
+        startsClosed: false,
+        change: changeSignal(),
+      };
+      bound.set(token, task);
+    }
+    return task;
+  };
+
+  const loadTask = async (task: BoundExecution, requireOrigin: boolean) => {
+    const { identity, originDigest, inputDigest } = task.authority;
+    const { sessionId } = identity;
+    let events: readonly SessionEvent[];
+    try {
+      events = await options.sessionStore.read(sessionId);
+    } catch (cause: unknown) {
+      block(sessionId);
+      task.issue = taskPersistenceError(task.reservation !== 'confirmed', cause);
+      throw task.issue;
+    }
+    const origin = events.find((event) => event.type === 'agent.task.origin');
+    if (
+      !(events.length === 0 && !requireOrigin) &&
+      (events[0]?.type !== 'session.created' ||
+        origin?.type !== 'agent.task.origin' ||
+        origin.sequence !== 2 ||
+        origin.sessionId !== sessionId ||
+        agentTaskFactDigest(origin.payload) !== originDigest)
+    )
+      throw taskBindingConflict('Child Session does not have the exact task origin');
+    const projection = events.length === 0 ? undefined : projectSession(events);
+    const executions = projectAgentExecutions(events);
+    const accepted = executions[0];
+    if (
+      accepted !== undefined &&
+      (executions.length !== 1 ||
+        accepted.executionId !== identity.executionId ||
+        accepted.requestId !== identity.requestId ||
+        accepted.turnId !== identity.turnId ||
+        accepted.userMessageId !== identity.userMessageId ||
+        accepted.requestDigest !== inputDigest ||
+        agentTaskFactDigest(accepted.input) !== inputDigest ||
+        accepted.dispatch !== 'queued' ||
+        accepted.runInput === undefined ||
+        agentTaskFactDigest(accepted.runInput) !== inputDigest ||
+        accepted.fileContext !== undefined)
+    )
+      throw taskBindingConflict('Child execution does not match the accepted task');
+    if (accepted !== undefined && task.reservation === 'none')
+      throw taskBindingConflict('Child execution has no matching retained binding');
+    if (accepted !== undefined) task.reservation = 'confirmed';
+    else if (task.reservation === 'confirmed')
+      throw taskPersistenceError(true, new Error('Confirmed task acceptance is missing'));
+    else {
+      task.reservation = 'none';
+      if (reservedTasks.get(sessionId) === task && task.stopReason === undefined)
+        reservedTasks.delete(sessionId);
+    }
+    clearTaskBlock(sessionId);
+    sync(sessionId, events);
+    delete task.issue;
+    return { events, accepted, projection };
+  };
+
+  const finishUnstartedTask = async (
+    task: BoundExecution,
+    events: readonly SessionEvent[],
+    accepted: SessionExecution,
+    reason: TaskStopReason | 'generation-unavailable',
+  ): Promise<AgentExecutionSnapshot> => {
+    const { sessionId, executionId } = accepted;
+    const selectedReason = (task.unstartedFinishReason ??= reason);
+    try {
+      const appended = await append(sessionId, [
+        {
+          type: 'execution.finished',
+          payload: {
+            executionId,
+            status: selectedReason === 'generation-unavailable' ? 'failed' : 'cancelled',
+            reason: selectedReason,
+          },
+        },
+      ]);
+      const confirmed = [...events, ...appended];
+      const finished = projectAgentExecutions(confirmed)[0];
+      if (finished?.durableThroughSequence === undefined)
+        throw new Error('Task terminal append was not confirmed');
+      clearTaskBlock(sessionId);
+      sync(sessionId, confirmed);
+      task.durable = finished;
+      notifyQueue(sessionId);
+      return snapshot(finished);
+    } catch (cause: unknown) {
+      block(sessionId);
+      task.issue = taskPersistenceError(false, cause);
+      throw task.issue;
+    }
+  };
+
+  const cancelTaskLocked = async (
+    task: BoundExecution,
+  ): Promise<AgentExecutionSnapshot | undefined> => {
+    const { sessionId } = task.authority.identity;
+    const previous = reservedTasks.get(sessionId);
+    if (previous !== undefined && previous !== task)
+      throw taskBindingConflict('Child Session already has a different task binding');
+    if (task.durable !== undefined)
+      return task.durable === null ? undefined : snapshot(task.durable);
+    const reason = taskStop(task) ?? 'task-cancelled';
+    task.stopReason = reason;
+    reservedTasks.set(sessionId, task);
+    const state = task.running;
+    if (state !== undefined) {
+      if (task.finish === undefined) {
+        if (state.status !== 'cancelling') status(state, 'cancelling');
+        state.controller.abort(reason);
+      }
+      return snapshot(state.accepted, state);
+    }
+    const { events, accepted } = await loadTask(task, false);
+    if (accepted === undefined) {
+      task.durable = null;
+      return undefined;
+    }
+    if (accepted.durableThroughSequence !== undefined) {
+      task.durable = accepted;
+      return snapshot(accepted);
+    }
+    return finishUnstartedTask(task, events, accepted, reason);
+  };
+
+  const boundPort: BoundTaskExecutionPort = {
+    async launchBoundTask(request, token, leaseToken) {
+      const authority = readTaskLaunchAuthority(token);
+      const lease = readTaskRunnerLease(token, leaseToken);
+      const parsed = boundTaskLaunchSchema.safeParse(request);
+      if (!parsed.success)
+        throw new AgentExecutionError('execution-invalid-input', 'Bound task launch is invalid');
+      const { sessionId, requestId, identity, input } = parsed.data;
+      if (
+        agentTaskFactDigest({ sessionId, requestId, ...identity }) !==
+          agentTaskFactDigest(authority.identity) ||
+        agentTaskFactDigest(input) !== authority.inputDigest
+      )
+        throw taskBindingConflict('Task execution identity or input conflicts');
+      const task = taskFor(token);
+      task.pendingLaunches++;
+      try {
+        return await gate(sessionId, async () => {
+          const reserved = reservedTasks.get(sessionId);
+          if (reserved !== undefined && reserved !== task)
+            throw taskBindingConflict('Child Session already has a different task binding');
+          if (task.lease !== undefined && task.lease.token !== leaseToken)
+            throw taskBindingConflict('Child execution already has a different runner lease');
+          if (task.durable !== undefined) {
+            if (task.durable !== null) return snapshot(task.durable);
+            throw new AgentExecutionError('execution-closed', 'Task execution admission is closed');
+          }
+          let { events, accepted, projection } = await loadTask(task, true);
+          if (accepted === undefined) {
+            if (taskStop(task) !== undefined) {
+              task.durable = null;
+              throw new AgentExecutionError(
+                'execution-closed',
+                'Task execution admission is closed',
+              );
+            }
+            if (projection?.archivedAt !== undefined || projection?.deletedAt !== undefined)
+              throw new AgentExecutionError('execution-closed', 'Task Session is not runnable');
+            lease.assertCanStartSync();
+            task.lease = { token: leaseToken, options: lease };
+            task.reservation = 'unconfirmed';
+            reservedTasks.set(sessionId, task);
+            const payload = executionAcceptedPayloadSchema.parse({
+              ...identity,
+              requestId,
+              requestDigest: authority.inputDigest,
+              input: authority.input,
+              runInput: authority.input,
+              dispatch: 'queued',
+            });
+            let appendFailure: unknown;
+            try {
+              await options.sessionStore.append(sessionId, [
+                { type: 'execution.accepted', payload },
+                { type: 'execution.claimed', payload: { executionId: identity.executionId } },
+              ]);
+            } catch (cause: unknown) {
+              appendFailure = cause;
+            }
+            ({ events, accepted, projection } = await loadTask(task, true));
+            if (accepted === undefined) {
+              if (taskStop(task) !== undefined) task.durable = null;
+              throw new AgentExecutionError(
+                'execution-persistence-error',
+                'Task execution acceptance did not commit',
+                { cause: appendFailure },
+              );
+            }
+          }
+          if (accepted.durableThroughSequence !== undefined) {
+            if (task.running === undefined) task.durable = accepted;
+            return snapshot(accepted);
+          }
+          if (task.running !== undefined) return snapshot(accepted, task.running);
+          if (task.unstartedFinishReason !== undefined)
+            return finishUnstartedTask(task, events, accepted, task.unstartedFinishReason);
+          const stop = taskStop(task);
+          if (stop !== undefined) return finishUnstartedTask(task, events, accepted, stop);
+          const acceptanceIndex = events.findIndex((event) => event.type === 'execution.accepted');
+          const claim = events[acceptanceIndex + 1];
+          if (
+            accepted.status !== 'accepted' ||
+            claim?.type !== 'execution.claimed' ||
+            claim.payload.executionId !== accepted.executionId
+          ) {
+            task.issue = taskPersistenceError(
+              true,
+              new Error('Task execution claim is not confirmed'),
+            );
+            block(sessionId);
+            throw task.issue;
+          }
+          if (projection?.archivedAt !== undefined || projection?.deletedAt !== undefined)
+            return finishUnstartedTask(task, events, accepted, 'ownership-lost');
+          try {
+            lease.assertCanStartSync();
+          } catch {
+            return finishUnstartedTask(
+              task,
+              events,
+              accepted,
+              taskStop(task) ?? 'generation-unavailable',
+            );
+          }
+          const state = install(accepted, lease.runner, task);
+          notifyQueue(sessionId);
+          return snapshot(accepted, state);
+        });
+      } finally {
+        task.pendingLaunches--;
+        publishTaskCleanup(task);
+      }
+    },
+    async cancelBoundTask(token) {
+      const task = taskFor(token);
+      const { sessionId } = task.authority.identity;
+      try {
+        const result = await gate(sessionId, () => cancelTaskLocked(task));
+        if (task.finish !== undefined && task.issue !== undefined) {
+          await task.finish();
+          if (task.issue !== undefined) throw task.issue;
+          if (task.durable !== undefined && task.durable !== null) return snapshot(task.durable);
+        }
+        return result;
+      } finally {
+        publishTaskCleanup(task);
+      }
+    },
+    async whenSettled(token) {
+      const task = taskFor(token);
+      const unstartedFinishReason = task.unstartedFinishReason;
+      if (task.finish !== undefined && task.issue !== undefined) await task.finish();
+      else if (unstartedFinishReason !== undefined && task.issue !== undefined) {
+        try {
+          await gate(task.authority.identity.sessionId, async () => {
+            if (task.durable !== undefined) return;
+            const { events, accepted } = await loadTask(task, true);
+            if (accepted === undefined)
+              throw taskBindingConflict('Missing accepted task execution');
+            if (accepted.durableThroughSequence !== undefined) task.durable = accepted;
+            else await finishUnstartedTask(task, events, accepted, unstartedFinishReason);
+          });
+        } finally {
+          publishTaskCleanup(task);
+        }
+      } else if (task.issue !== undefined && task.stopReason !== undefined)
+        await boundPort.cancelBoundTask(token);
+      while (task.cleanup === undefined) {
+        if (task.issue !== undefined) throw task.issue;
+        await task.change.promise;
+      }
+      return task.cleanup;
+    },
   };
 
   const service: AgentExecutionService = {
@@ -577,12 +1101,15 @@ export function createAgentExecutionService(
       };
       // Exact durable replay precedes all lifecycle/default/capacity checks.
       const observedLive = new Map(live);
-      const previous = replay(await records(sessionId), observedLive);
+      const observed = await options.sessionStore.read(sessionId);
+      refuseOrdinaryTaskLaunch(observed);
+      const previous = replay(projectAgentExecutions(observed), observedLive);
       const unresolved = queues.get(sessionId)?.unresolvedAdmission;
       const reconciliation = unresolved?.requestId === frozen.requestId;
       if (previous !== undefined && !reconciliation) return previous;
       return gate(sessionId, async () => {
         const { events, projection } = await load(sessionId);
+        refuseOrdinaryTaskLaunch(events);
         const unresolved = queues.get(sessionId)?.unresolvedAdmission;
         if (unresolved?.requestId === frozen.requestId) {
           if (unresolved.requestDigest !== requestDigest)
@@ -999,6 +1526,7 @@ export function createAgentExecutionService(
       const requestDigest = digest({ kind: 'reorder', ...frozen });
       return gate(sessionId, async () => {
         const { events, projection } = await load(sessionId);
+        refuseOrdinaryTaskLaunch(events);
         const previous = projection.controls.find((item) => item.requestId === frozen.requestId);
         if (previous !== undefined) {
           if (previous.requestDigest !== requestDigest)
@@ -1049,6 +1577,7 @@ export function createAgentExecutionService(
       const requestDigest = digest({ kind: 'cancel', executionId, ...frozen });
       return gate(sessionId, async () => {
         const { events, projection } = await load(sessionId);
+        refuseOrdinaryTaskLaunch(events);
         const previous = projection.controls.find((item) => item.requestId === frozen.requestId);
         if (previous !== undefined) {
           if (previous.requestDigest !== requestDigest)
@@ -1092,6 +1621,7 @@ export function createAgentExecutionService(
     async recover(sessionIds) {
       for (const sessionId of sessionIds)
         await gate(sessionId, async () => {
+          if (reservedTasks.has(sessionId)) return;
           const events = await options.sessionStore.read(sessionId);
           const projection = events.length === 0 ? undefined : projectSession(events);
           for (const accepted of projectAgentExecutions(events)) {
@@ -1102,18 +1632,8 @@ export function createAgentExecutionService(
               continue;
             const turn = projection?.turns.find((item) => item.turnId === accepted.turnId);
             const batch: NewSessionEvent[] = [];
-            if (turn?.status === 'running') {
-              for (const step of turn.steps)
-                if (step.status === 'running')
-                  batch.push({
-                    type: 'step.completed',
-                    payload: { turnId: turn.turnId, stepId: step.stepId, status: 'failed' },
-                  });
-              batch.push({
-                type: 'turn.completed',
-                payload: { turnId: turn.turnId, status: 'failed', reason: 'server-restarted' },
-              });
-            }
+            if (turn?.status === 'running')
+              batch.push(...closeInterruptedTurn(turn, 'server-restarted'));
             batch.push({
               type: 'execution.finished',
               payload: {
@@ -1159,14 +1679,16 @@ export function createAgentExecutionService(
     async drain() {
       service.closeSync();
       let failed = false;
-      const states = await gate('', async () => {
-        const states = [...live.values()];
+      const { states, tasks } = await gate('', async () => {
+        const states = [...live.values()].filter((state) => state.task === undefined);
+        const tasks = [...reservedTasks.values()];
         for (const state of states)
           if (state.status !== 'persistence-error') {
             if (state.status !== 'cancelling') status(state, 'cancelling');
             state.controller.abort();
           }
         for (const [sessionId, state] of queues) {
+          if (reservedTasks.has(sessionId)) continue;
           if (state.error !== undefined) {
             failed = true;
             continue;
@@ -1191,19 +1713,31 @@ export function createAgentExecutionService(
             block(sessionId);
           }
         }
-        return states;
+        return { states, tasks };
       });
+      const taskOutcomes = await Promise.allSettled(
+        tasks.map(async (task) => {
+          await boundPort.cancelBoundTask(task.token);
+          await task.running?.promise;
+          await boundPort.whenSettled(task.token);
+        }),
+      );
       await Promise.all(states.map((state) => state.promise));
       for (const state of queues.values()) {
         if (state.error !== undefined) failed = true;
         for (const subscriber of [...state.subscribers]) subscriber.close();
       }
-      if (failed || states.some((state) => state.status === 'persistence-error'))
+      if (
+        failed ||
+        states.some((state) => state.status === 'persistence-error') ||
+        taskOutcomes.some((outcome) => outcome.status === 'rejected')
+      )
         throw new AgentExecutionError(
           'execution-persistence-error',
           'One or more execution terminal states could not be persisted',
         );
     },
   };
+  registerBoundTaskExecutionPort(service, boundPort);
   return service;
 }

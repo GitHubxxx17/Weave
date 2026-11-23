@@ -3,7 +3,6 @@ import type {
   AgentRunner,
   LlmCall,
   SessionEventStore,
-  ToolDefinition,
   ToolExecutionRequest,
   ToolExecutionResult,
   ToolPipeline,
@@ -17,6 +16,7 @@ import { defineHook, type Hook, type PolicyVote } from './hook.js';
 import { cloneDeclarativePanel, type PanelsExtensionApi } from './panels.js';
 import { PluginError } from './plugin-errors.js';
 import type { PluginEventDefinition, PluginEventReader } from './plugin-events.js';
+import type { PluginToolDefinition } from './plugin-types.js';
 import { defineServiceRef, type ServiceRef } from './service.js';
 import { skillContributionSchema, type SkillsExtensionApi } from './skills.js';
 
@@ -77,7 +77,7 @@ export const agentRunnerRef: ServiceRef<AgentRunner> = defineServiceRef({
 
 /** Contributor API for the `weave.tools` extension point. */
 export interface ToolsExtensionApi {
-  addTool<TInput, TOutput>(tool: ToolDefinition<TInput, TOutput>): void | false;
+  addTool<TInput, TOutput>(tool: PluginToolDefinition<TInput, TOutput>): void | false;
 }
 
 /** Tools are contributed here; the Tool Registry owner collects them. */
@@ -327,13 +327,15 @@ export const skillsExtensionPoint: ExtensionPoint<SkillsExtensionApi> = defineEx
 });
 
 /** Security vote before a tool runs; votes merge strictly tighter. */
-export const toolPolicyHook: Hook<ToolExecutionRequest, PolicyVote> = defineHook({
+type PluginToolRequest = Omit<ToolExecutionRequest, 'toolAuthority' | 'executionId'>;
+
+export const toolPolicyHook: Hook<PluginToolRequest, PolicyVote> = defineHook({
   id: 'weave.tools.policy',
   mode: 'decide',
 });
 
 /** Middleware around a single tool execution (retry, timing, result shaping). */
-export const toolAroundHook: Hook<ToolExecutionRequest, ToolExecutionResult> = defineHook({
+export const toolAroundHook: Hook<PluginToolRequest, ToolExecutionResult> = defineHook({
   id: 'weave.tools.around',
   mode: 'wrap',
 });

@@ -3,6 +3,7 @@ import { createInMemorySessionEventStore } from '@weave/session';
 import { createInMemoryProjectStore } from '@weave/workspace';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createApp } from '../src/app.js';
+import { createProjectFolderAuthority } from '../src/project-folder-authority.js';
 import { createSessionService } from '../src/session-service.js';
 
 const resources: Array<{ close: () => Promise<void> }> = [];
@@ -18,10 +19,41 @@ async function createWorkspaceApp() {
   const sessionStore = createInMemorySessionEventStore();
   const sessionService = createSessionService({ projectStore, sessionStore });
   resources.push({ close: () => runtime.stop() }, projectStore, sessionStore);
-  return { app: createApp(runtime, { projectStore, sessionService }), projectStore };
+  const projectFolderAuthority = createProjectFolderAuthority(projectStore);
+  return {
+    app: createApp(runtime, { projectStore, sessionService, projectFolderAuthority }),
+    projectStore,
+    projectFolderAuthority,
+  };
 }
 
 describe('Project HTTP API', () => {
+  it('fences an active binding on same-path folder updates and preserves it on rename', async () => {
+    const { app, projectStore, projectFolderAuthority } = await createWorkspaceApp();
+    const folderPath = process.cwd();
+    const project = await projectStore.createProject({
+      name: 'Weave',
+      folderName: 'weave',
+      folderPath,
+    });
+    await projectStore.attachSession(project.id, 's');
+    const binding = await projectFolderAuthority.capture('s');
+    const signal = projectFolderAuthority.signal(binding);
+    const patch = (body: unknown) =>
+      app.request(`/projects/${project.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    const renamed = await patch({ name: 'renamed' });
+    expect(await renamed.json()).toMatchObject({ name: 'renamed', folderRevision: 0 });
+    expect(signal.aborted).toBe(false);
+    const reset = await patch({ folderPath });
+    expect(reset.status).toBe(200);
+    expect(await reset.json()).toMatchObject({ folderPath, folderRevision: 1 });
+    expect(signal.aborted).toBe(true);
+  });
+
   it('creates a Project and a Session, then lists both', async () => {
     const { app } = await createWorkspaceApp();
 

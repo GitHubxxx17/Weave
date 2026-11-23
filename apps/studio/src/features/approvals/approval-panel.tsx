@@ -183,10 +183,12 @@ function ApprovalCard({
   approval,
   onDecide,
   onInspectToolCall,
+  taskTitle,
 }: {
   readonly approval: ApprovalRequest;
   readonly onDecide: (approvalId: string, decision: 'approve' | 'reject') => Promise<void>;
-  readonly onInspectToolCall?: (toolCallId: string) => void;
+  readonly onInspectToolCall?: () => void;
+  readonly taskTitle?: string | undefined;
 }): ReactElement {
   const [state, setState] = useState<'idle' | 'submitting'>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -221,6 +223,7 @@ function ApprovalCard({
             <span className="approval-risk">{riskLabels[approval.risk]}</span>
           </div>
           <p className="approval-card-detail">
+            {taskTitle === undefined ? null : <span>子任务 {taskTitle}</span>}
             {writeSummary === undefined ? (
               <span>工具 {approval.toolName}</span>
             ) : (
@@ -248,11 +251,7 @@ function ApprovalCard({
               </button>
             )}
             {onInspectToolCall === undefined ? null : (
-              <button
-                className="approval-toggle"
-                type="button"
-                onClick={() => onInspectToolCall(approval.toolCallId)}
-              >
+              <button className="approval-toggle" type="button" onClick={onInspectToolCall}>
                 查看参数
               </button>
             )}
@@ -270,7 +269,7 @@ function ApprovalCard({
             disabled={state === 'submitting'}
             onClick={() => void submit('reject')}
           >
-            拒绝
+            {taskTitle === undefined ? '拒绝' : '拒绝工具调用'}
           </button>
           <button
             className="primary-button"
@@ -296,10 +295,14 @@ export function ApprovalPanel({
   pending,
   onDecide,
   onInspectToolCall,
+  onInspectApproval,
+  taskTitleForApproval,
 }: {
   readonly pending: readonly ApprovalRequest[];
   readonly onDecide: (approvalId: string, decision: 'approve' | 'reject') => Promise<void>;
   readonly onInspectToolCall?: (toolCallId: string) => void;
+  readonly onInspectApproval?: (approval: ApprovalRequest) => void;
+  readonly taskTitleForApproval?: (approval: ApprovalRequest) => string | undefined;
 }): ReactElement | null {
   if (pending.length === 0) {
     return null;
@@ -311,7 +314,12 @@ export function ApprovalPanel({
           key={approval.approvalId}
           approval={approval}
           onDecide={onDecide}
-          {...(onInspectToolCall === undefined ? {} : { onInspectToolCall })}
+          taskTitle={taskTitleForApproval?.(approval)}
+          {...(onInspectApproval !== undefined
+            ? { onInspectToolCall: () => onInspectApproval(approval) }
+            : onInspectToolCall === undefined
+              ? {}
+              : { onInspectToolCall: () => onInspectToolCall(approval.toolCallId) })}
         />
       ))}
     </section>

@@ -297,7 +297,11 @@ export function createTurnSkillController(
         if (closed) throw new SkillError('skill-unavailable', 'Skills are unavailable');
         const signal = AbortSignal.any([context.signal, shutdown.signal]);
         signal.throwIfAborted();
-        const observation = await options.catalog.observe(context.sessionId, signal);
+        const observation = await options.catalog.observe(
+          context.sessionId,
+          signal,
+          context.toolAuthority,
+        );
         signal.throwIfAborted();
         const state: TurnState = {
           sessionId: context.sessionId,

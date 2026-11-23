@@ -14,10 +14,14 @@ import {
   type ProjectSessionRef,
 } from './types.js';
 import {
+  nextProjectFolderRevision,
   sqliteProjectStoreOptionsSchema,
   WorkspaceStoreError,
   type ProjectStore,
 } from './store.js';
+
+const folderRevisionDefinition = `INTEGER NOT NULL DEFAULT 0
+  CHECK (typeof(folder_revision) = 'integer' AND folder_revision BETWEEN 0 AND ${Number.MAX_SAFE_INTEGER})`;
 
 const createTablesSql = `
   CREATE TABLE IF NOT EXISTS projects (
@@ -25,6 +29,7 @@ const createTablesSql = `
     name TEXT NOT NULL,
     folder_name TEXT NOT NULL,
     folder_path TEXT,
+    folder_revision ${folderRevisionDefinition},
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -41,6 +46,9 @@ const createTablesSql = `
     ON project_sessions(project_id, created_at);
 `;
 
+const projectColumns =
+  'project_id, name, folder_name, folder_path, folder_revision, created_at, updated_at';
+
 const closedMessage = 'Workspace Project Store is closed';
 const invalidInputMessage = 'Workspace Project Store input is invalid';
 const ioMessage = 'Workspace Project Store database operation failed';
@@ -53,6 +61,7 @@ interface ProjectRow {
   readonly name: unknown;
   readonly folder_name: unknown;
   readonly folder_path: unknown;
+  readonly folder_revision: unknown;
   readonly created_at: unknown;
   readonly updated_at: unknown;
 }
@@ -92,6 +101,7 @@ function parseProject(row: Record<string, unknown>): Project {
     name: row.name,
     folder_name: row.folder_name,
     folder_path: row.folder_path,
+    folder_revision: row.folder_revision,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -102,6 +112,10 @@ function parseProject(row: Record<string, unknown>): Project {
       name: stored.name,
       folderName: stored.folder_name,
       ...(stored.folder_path === null ? {} : { folderPath: stored.folder_path }),
+      folderRevision:
+        typeof stored.folder_revision === 'bigint'
+          ? Number(stored.folder_revision)
+          : stored.folder_revision,
       createdAt: stored.created_at,
       updatedAt: stored.updated_at,
     });
@@ -112,6 +126,41 @@ function parseProject(row: Record<string, unknown>): Project {
   } catch (error) {
     throw new WorkspaceStoreError('workspace-store-protocol', protocolMessage, { cause: error });
   }
+}
+
+function readProject(database: DatabaseSync, projectId: string): Project | undefined {
+  const statement = database.prepare(`SELECT ${projectColumns} FROM projects WHERE project_id = ?`);
+  // Let the Project schema classify unsafe integers before Node's SQLite API rejects them.
+  statement.setReadBigInts(true);
+  const row = statement.get(projectId);
+  return row === undefined ? undefined : parseProject(row);
+}
+
+function writeTransaction<T>(database: DatabaseSync, write: () => T): T {
+  database.exec('BEGIN IMMEDIATE');
+  try {
+    const result = write();
+    database.exec('COMMIT');
+    return result;
+  } catch (error) {
+    try {
+      database.exec('ROLLBACK');
+    } catch {
+      // Preserve the original Store or database error.
+    }
+    throw error;
+  }
+}
+
+function migrateProjectSchema(database: DatabaseSync): void {
+  writeTransaction(database, () => {
+    database.exec(createTablesSql);
+    // The shared database's user_version belongs to the Session store.
+    const columns = database.prepare('PRAGMA table_info(projects)').all();
+    if (!columns.some((column) => column.name === 'folder_revision')) {
+      database.exec(`ALTER TABLE projects ADD COLUMN folder_revision ${folderRevisionDefinition}`);
+    }
+  });
 }
 
 function parseSessionRef(row: Record<string, unknown>): ProjectSessionRef {
@@ -141,11 +190,16 @@ export function createSqliteProjectStore(options: { readonly filename: string })
     throw invalidInput();
   }
 
-  let database: DatabaseSync;
+  let database: DatabaseSync | undefined;
   try {
-    database = new DatabaseSync(optionsResult.data.filename);
-    database.exec(createTablesSql);
+    database = new DatabaseSync(optionsResult.data.filename, { timeout: 5000 });
+    migrateProjectSchema(database);
   } catch (error) {
+    try {
+      database?.close();
+    } catch {
+      // Preserve the original initialization error.
+    }
     throw new WorkspaceStoreError('workspace-store-io', ioMessage, { cause: error });
   }
 
@@ -165,8 +219,8 @@ export function createSqliteProjectStore(options: { readonly filename: string })
         database
           .prepare(
             `INSERT INTO projects
-              (project_id, name, folder_name, folder_path, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?)`,
+              (${projectColumns})
+             VALUES (?, ?, ?, ?, 0, ?, ?)`,
           )
           .run(
             id,
@@ -185,6 +239,7 @@ export function createSqliteProjectStore(options: { readonly filename: string })
         name: parsed.data.name,
         folderName: parsed.data.folderName,
         folderPath: parsed.data.folderPath,
+        folderRevision: 0,
         createdAt: now,
         updatedAt: now,
       };
@@ -193,14 +248,11 @@ export function createSqliteProjectStore(options: { readonly filename: string })
     async listProjects(): Promise<readonly Project[]> {
       requireOpen(closed);
       try {
-        const rows = database
-          .prepare(
-            `SELECT project_id, name, folder_name, folder_path, created_at, updated_at
-             FROM projects
-             ORDER BY created_at ASC, rowid ASC`,
-          )
-          .all();
-        return rows.map((row) => parseProject(row));
+        const statement = database.prepare(
+          `SELECT ${projectColumns} FROM projects ORDER BY created_at ASC, rowid ASC`,
+        );
+        statement.setReadBigInts(true);
+        return statement.all().map(parseProject);
       } catch (error) {
         if (error instanceof WorkspaceStoreError) {
           throw error;
@@ -213,14 +265,7 @@ export function createSqliteProjectStore(options: { readonly filename: string })
       requireOpen(closed);
       validateIds(projectIdInput);
       try {
-        const row = database
-          .prepare(
-            `SELECT project_id, name, folder_name, folder_path, created_at, updated_at
-             FROM projects
-             WHERE project_id = ?`,
-          )
-          .get(projectIdInput);
-        return row === undefined ? undefined : parseProject(row);
+        return readProject(database, projectIdInput);
       } catch (error) {
         if (error instanceof WorkspaceStoreError) {
           throw error;
@@ -235,27 +280,30 @@ export function createSqliteProjectStore(options: { readonly filename: string })
     ): Promise<Project> {
       requireOpen(closed);
       validateIds(projectIdInput);
-      if (!projectFolderPathSchema.optional().safeParse(folderPathInput).success) {
+      const parsed = projectFolderPathSchema.optional().safeParse(folderPathInput);
+      if (!parsed.success) {
         throw invalidInput();
       }
       try {
-        const result = database
-          .prepare('UPDATE projects SET folder_path = ?, updated_at = ? WHERE project_id = ?')
-          .run(folderPathInput ?? null, new Date().toISOString(), projectIdInput);
-        if (result.changes === 0) {
-          throw projectNotFound();
-        }
-        const row = database
-          .prepare(
-            `SELECT project_id, name, folder_name, folder_path, created_at, updated_at
-             FROM projects
-             WHERE project_id = ?`,
-          )
-          .get(projectIdInput);
-        if (row === undefined) {
-          throw projectNotFound();
-        }
-        return parseProject(row);
+        const connection = database;
+        return writeTransaction(connection, () => {
+          const project = readProject(connection, projectIdInput);
+          if (project === undefined) {
+            throw projectNotFound();
+          }
+          const folderRevision = nextProjectFolderRevision(project.folderRevision);
+          const updatedAt = new Date().toISOString();
+          const result = connection
+            .prepare(
+              `UPDATE projects SET folder_path = ?, folder_revision = ?, updated_at = ?
+               WHERE project_id = ?`,
+            )
+            .run(parsed.data ?? null, folderRevision, updatedAt, projectIdInput);
+          if (result.changes === 0) {
+            throw projectNotFound();
+          }
+          return { ...project, folderPath: parsed.data, folderRevision, updatedAt };
+        });
       } catch (error) {
         if (error instanceof WorkspaceStoreError) {
           throw error;
@@ -277,17 +325,11 @@ export function createSqliteProjectStore(options: { readonly filename: string })
         if (result.changes === 0) {
           throw projectNotFound();
         }
-        const row = database
-          .prepare(
-            `SELECT project_id, name, folder_name, folder_path, created_at, updated_at
-             FROM projects
-             WHERE project_id = ?`,
-          )
-          .get(projectIdInput);
-        if (row === undefined) {
+        const project = readProject(database, projectIdInput);
+        if (project === undefined) {
           throw projectNotFound();
         }
-        return parseProject(row);
+        return project;
       } catch (error) {
         if (error instanceof WorkspaceStoreError) {
           throw error;

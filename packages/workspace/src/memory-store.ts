@@ -9,7 +9,12 @@ import {
   type Project,
   type ProjectSessionRef,
 } from './types.js';
-import { WorkspaceStoreError, type ProjectStore, type WorkspaceStoreErrorCode } from './store.js';
+import {
+  nextProjectFolderRevision,
+  WorkspaceStoreError,
+  type ProjectStore,
+  type WorkspaceStoreErrorCode,
+} from './store.js';
 
 const closedMessage = 'Workspace Project Store is closed';
 const invalidInputMessage = 'Workspace Project Store input is invalid';
@@ -70,6 +75,7 @@ export function createInMemoryProjectStore(): ProjectStore {
         name: parsed.data.name,
         folderName: parsed.data.folderName,
         folderPath: parsed.data.folderPath,
+        folderRevision: 0,
         createdAt: now,
         updatedAt: now,
       };
@@ -106,6 +112,7 @@ export function createInMemoryProjectStore(): ProjectStore {
       const updated: Project = {
         ...project,
         folderPath: folderPathInput,
+        folderRevision: nextProjectFolderRevision(project.folderRevision),
         updatedAt: new Date().toISOString(),
       };
       projects.set(projectIdInput, updated);

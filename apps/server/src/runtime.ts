@@ -11,11 +11,18 @@ import type { SessionEventStore } from '@weave/session';
 import {
   createApprovalBroker,
   createAgentRunner,
+  createAgentToolAuthority,
+  readAgentToolAuthority,
+  ToolExecutionError,
   withWorkspaceMutation,
   createToolRegistry,
   createRuntime,
   createSessionEventStoreService,
   type AgentRunner,
+  type AgentRunRequest,
+  type AgentRuntimeEvent,
+  type AgentToolAuthority,
+  type ToolExecutionContext,
   type ApprovalBroker,
   type Runtime,
   type RuntimeService,
@@ -23,7 +30,7 @@ import {
   type SessionEventStoreFactory,
 } from '@weave/runtime';
 import { createInMemorySessionEventStore } from '@weave/session';
-import type { GenerationCommit } from '@weave/plugin-host';
+import type { GenerationCommit, RunningGenerationScope } from '@weave/plugin-host';
 import { createServerLlmProviders, type ServerLlmProviderSettings } from './llm-providers.js';
 import { createAgentInstructions } from './agent-instructions.js';
 import { assembleAgentKernel } from './agent-kernel.js';
@@ -41,6 +48,8 @@ import { createGenerationSkillCatalog } from './skill-catalog.js';
 import { createTurnSkillController } from './skill-turns.js';
 import { withSkillAuditPipeline } from './skill-audit.js';
 import { serverHostVersion } from './host-version.js';
+import type { AgentTaskWorkspaceBindings } from './agent-task-workspace.js';
+import { ProjectFolderAuthorityError } from './project-folder-authority.js';
 
 export type { ServerRuntime } from './server-host.js';
 
@@ -71,6 +80,8 @@ export interface ServerAgentRunnerOptions {
   readonly hostVersion?: string;
   /** Returns the absolute Workspace folder of a Session, when its Project has one. */
   readonly resolveWorkspaceRoot?: (sessionId: string) => Promise<string | undefined>;
+  /** Shared by the current and retained Generations to resolve bound child Workspaces. */
+  readonly agentTaskWorkspace?: AgentTaskWorkspaceBindings;
   /** Overrides {@link defaultToolTimeoutMs}; mainly for tests. */
   readonly toolTimeoutMs?: number;
   readonly toolResultMaxBytes?: number;
@@ -133,6 +144,20 @@ export async function registerServerPlugins(
 /** Concurrent initial callers share one assembly; explicit replacements stay separate. */
 const initialRunnerCreations = new WeakMap<object, Promise<AgentRunner>>();
 
+type ServerRunningScope = RunningGenerationScope<AgentRunRequest, AgentRuntimeEvent>;
+const authorityScopes = new WeakMap<AgentToolAuthority, ServerRunningScope>();
+
+/** Internal task host port, usable only during the exact parent spawn call. */
+export function retainAgentToolGeneration(context: ToolExecutionContext) {
+  const invocation = readAgentToolAuthority(context);
+  const scope =
+    context.toolAuthority === undefined ? undefined : authorityScopes.get(context.toolAuthority);
+  if (scope === undefined || invocation.toolName !== 'agent_spawn') {
+    throw new Error('The current tool cannot retain its running Generation');
+  }
+  return scope.retain();
+}
+
 /**
  * Creates the Agent Runner after the Runtime has started.
  *
@@ -191,7 +216,8 @@ export async function assembleServerGeneration(
     },
   );
   const sessionStore = runtime.get(host.sessionStoreService);
-  const resolveWorkspaceRoot = options.resolveWorkspaceRoot;
+  const agentTaskWorkspace = options.agentTaskWorkspace;
+  const resolveWorkspaceRoot = agentTaskWorkspace?.resolveRoot ?? options.resolveWorkspaceRoot;
   let skills: import('@weave/plugin').AttributedSkillContribution[] = [];
   const skillCatalog = createGenerationSkillCatalog({
     generation: id,
@@ -217,6 +243,8 @@ export async function assembleServerGeneration(
     skillPorts: skillController,
     toolResultMaxBytes: options.toolResultMaxBytes,
     resolveWorkspaceRoot,
+    resolveWorkspace: agentTaskWorkspace?.resolveWorkspace,
+    assertWorkspaceMutationCurrent: agentTaskWorkspace?.assertMutationCurrent,
     commandEnvironment: options.commandEnvironment,
     registeredPlugins: host.registeredPlugins(),
     kernelPlugins: options.kernelPlugins,
@@ -244,13 +272,35 @@ export async function assembleServerGeneration(
       extraSections: () => promptSections.map((section) => section.text),
     });
 
+    const retainedStarts = new WeakMap<AgentToolAuthority, () => void>();
     const runner = createAgentRunner({
       llmRegistry: providerRegistry,
       sessionStore: runnerStore,
-      turnAdmission: async (sessionId, start) => {
-        const root = await resolveWorkspaceRoot?.(sessionId);
-        if (root === undefined) await start();
-        else await withWorkspaceMutation(root, start);
+      turnAdmission: async (sessionId, start, toolAuthority, signal) => {
+        let root: string | undefined;
+        try {
+          root = await resolveWorkspaceRoot?.(sessionId, toolAuthority);
+        } catch (cause) {
+          if (
+            signal.aborted &&
+            (cause instanceof ProjectFolderAuthorityError ||
+              (cause instanceof ToolExecutionError && cause.code === 'tool-not-permitted'))
+          )
+            throw new DOMException('The operation was aborted', 'AbortError');
+          throw cause;
+        }
+        const startCurrent = () =>
+          start(() => {
+            try {
+              agentTaskWorkspace?.assertRunCurrent(sessionId, toolAuthority);
+              if (toolAuthority !== undefined) retainedStarts.get(toolAuthority)?.();
+            } catch (cause) {
+              if (signal.aborted) throw new DOMException('The operation was aborted', 'AbortError');
+              throw cause;
+            }
+          });
+        if (root === undefined) await startCurrent();
+        else await withWorkspaceMutation(root, startCurrent);
       },
       toolRegistry,
       toolPipeline: withSkillAuditPipeline(assembled.toolPipeline, skillController),
@@ -275,7 +325,27 @@ export async function assembleServerGeneration(
     let disposal: Promise<void> | undefined;
     return {
       id,
-      runner,
+      explicitRetainedStart: true,
+      runner: {
+        run(request, scope) {
+          if (scope?.admitRetainedStart !== undefined && request.toolAuthority !== undefined)
+            retainedStarts.set(request.toolAuthority, scope.admitRetainedStart);
+          if (
+            scope === undefined ||
+            request.executionIdentity === undefined ||
+            request.toolAuthority !== undefined
+          ) {
+            return runner.run(request);
+          }
+          const token = createAgentToolAuthority({
+            identity: { ...request.executionIdentity, sessionId: request.sessionId },
+            registry: toolRegistry,
+            ownerOf: assembled.toolOwner,
+          });
+          authorityScopes.set(token, scope);
+          return runner.run({ ...request, toolAuthority: token });
+        },
+      },
       resources: {
         ...assembled,
         toolRegistry,

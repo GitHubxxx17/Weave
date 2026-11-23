@@ -4,6 +4,7 @@ import {
   executionQueueReorderedPayloadSchema,
   executionFinishedPayloadSchema,
 } from './execution-events.js';
+import { taskFactSchemas } from './agent-task-events.js';
 import {
   fileWriteIntentPayloadSchema,
   fileWritePayloadSchema,
@@ -184,6 +185,7 @@ const promptSectionContentPayloadSchema = z
  * The durable facts supported by the first Session Event Store slice.
  */
 export const sessionEventPayloadSchema = z.discriminatedUnion('type', [
+  ...taskFactSchemas,
   z.object({ type: z.literal('execution.accepted'), payload: executionAcceptedPayloadSchema }),
   z.object({ type: z.literal('execution.finished'), payload: executionFinishedPayloadSchema }),
   z.object({ type: z.literal('execution.claimed'), payload: executionClaimedPayloadSchema }),
@@ -318,7 +320,27 @@ export type SessionEventType = NewSessionEvent['type'];
  */
 export const newSessionEventSchema = z.union([sessionEventPayloadSchema, pluginNewEventSchema]);
 
+const taskFactEnvelope = {
+  eventId: nonEmptyStringSchema,
+  sessionId: nonEmptyStringSchema,
+  sequence: positiveSequenceSchema,
+  occurredAt: z.iso.datetime(),
+};
+const [
+  taskAcceptedSchema,
+  taskOriginSchema,
+  taskDispatchedSchema,
+  taskCancelRequestedSchema,
+  taskSettledSchema,
+  tasksStopRequestedSchema,
+] = taskFactSchemas;
 const persistedEventSchemas = [
+  taskAcceptedSchema.extend(taskFactEnvelope),
+  taskOriginSchema.extend(taskFactEnvelope),
+  taskDispatchedSchema.extend(taskFactEnvelope),
+  taskCancelRequestedSchema.extend(taskFactEnvelope),
+  taskSettledSchema.extend(taskFactEnvelope),
+  tasksStopRequestedSchema.extend(taskFactEnvelope),
   z.object({
     eventId: nonEmptyStringSchema,
     sessionId: nonEmptyStringSchema,

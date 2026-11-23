@@ -11,14 +11,28 @@ import {
   type TokenUsage,
   type ToolCall,
 } from '@weave/protocol';
-import type { NewSessionEvent } from '@weave/session';
-import { projectSession, projectAgentExecutions, projectMessageFileContexts } from '@weave/session';
+import type { NewSessionEvent, SessionEvent } from '@weave/session';
+import {
+  agentTaskFactDigest,
+  projectSession,
+  projectAgentExecutions,
+  projectMessageFileContexts,
+} from '@weave/session';
 import { renderSessionModelHistory } from './file-context-render.js';
+import {
+  activateAgentToolAuthority,
+  agentToolInstructionView,
+  agentToolAuthorityParent,
+  validateAgentProviderTools,
+  withAgentToolInvocation,
+  type AgentToolAuthority,
+} from './agent-tool-authority.js';
 import {
   AgentRunError,
   agentRunRequestSchema,
   type AgentRunner,
   type AgentRunnerOptions,
+  type AgentRunRequest,
   type AgentRuntimeEvent,
   type LlmCall,
   type LlmMiddleware,
@@ -37,6 +51,7 @@ import {
 } from './tool-types.js';
 
 const defaultMaxSteps = 50;
+const maxChildModelSteps = 50;
 
 /** Context window used when a Provider descriptor does not declare one. */
 const defaultContextWindowTokens = 128_000;
@@ -49,6 +64,76 @@ export const defaultAgentMaxToolResultTokens = 8000;
 
 /** Retry attempts for a model step that fails before emitting any output. */
 const maxModelRetries = 2;
+
+function trackProviderDelegation(
+  source: AsyncIterable<StreamEvent>,
+  controller: AbortController,
+  signal: AbortSignal,
+  isOpen: () => boolean,
+): { readonly stream: AsyncIterable<StreamEvent>; close(): Promise<void> } {
+  const iterators = new Map<
+    AsyncIterator<StreamEvent>,
+    { readonly iterator: AsyncIterator<StreamEvent>; close(): Promise<void> }
+  >();
+  const closedError = () =>
+    new AgentRunError('agent-stream-protocol', 'LLM middleware delegation is closed');
+  return {
+    stream: {
+      [Symbol.asyncIterator]() {
+        if (!isOpen()) throw closedError();
+        const sourceIterator = source[Symbol.asyncIterator]();
+        const existing = iterators.get(sourceIterator);
+        if (existing !== undefined) return existing.iterator;
+        const pending = new Set<Promise<IteratorResult<StreamEvent>>>();
+        let done = false;
+        let closing: Promise<void> | undefined;
+        const close = () => {
+          closing ??= (async () => {
+            await Promise.allSettled(pending);
+            if (!done && sourceIterator.return !== undefined) {
+              let result = await sourceIterator.return();
+              // An async generator can still be suspended at a yield in finally.
+              while (!result.done) result = await sourceIterator.next();
+            }
+            done = true;
+          })();
+          return closing;
+        };
+        const iterator: AsyncIterator<StreamEvent> = {
+          next() {
+            if (!isOpen()) return Promise.reject(closedError());
+            if (done || closing !== undefined)
+              return Promise.resolve({ done: true, value: undefined });
+            const step = Promise.resolve().then(() => {
+              signal.throwIfAborted();
+              return sourceIterator.next();
+            });
+            pending.add(step);
+            void step.then(
+              (result) => {
+                if (result.done) done = true;
+                pending.delete(step);
+              },
+              () => pending.delete(step),
+            );
+            return step;
+          },
+          async return() {
+            if (pending.size > 0) controller.abort();
+            await close();
+            return { done: true, value: undefined };
+          },
+        };
+        iterators.set(sourceIterator, { iterator, close });
+        return iterator;
+      },
+    },
+    async close() {
+      controller.abort();
+      await Promise.allSettled([...iterators.values()].map((iterator) => iterator.close()));
+    },
+  };
+}
 
 /**
  * Runs `request` through `middleware` and checks what comes back.
@@ -63,10 +148,19 @@ function middlewareStream(
   request: LlmRequest,
   signal: AbortSignal,
   budget: ContextBudget,
+  toolAuthority: AgentToolAuthority | undefined,
 ): AsyncIterable<StreamEvent> {
+  const { provider, model } = request;
   return {
     async *[Symbol.asyncIterator]() {
+      let acceptingDelegations = true;
+      const delegations = new Set<{
+        readonly close: () => Promise<void>;
+      }>();
       const next = (call: LlmCall): AsyncIterable<StreamEvent> => {
+        if (!acceptingDelegations) {
+          throw new AgentRunError('agent-stream-protocol', 'LLM middleware delegation is closed');
+        }
         const checked = llmRequestSchema.safeParse(call.request);
         if (!checked.success) {
           throw new AgentRunError(
@@ -96,14 +190,14 @@ function middlewareStream(
             { cause: error },
           );
         }
-        if (
-          providerRequest.provider !== request.provider ||
-          providerRequest.model !== request.model
-        ) {
+        if (providerRequest.provider !== provider || providerRequest.model !== model) {
           throw new AgentRunError(
             'agent-stream-protocol',
             'An LLM middleware may not change the provider or model of a request',
           );
+        }
+        if (toolAuthority !== undefined) {
+          validateAgentProviderTools(toolAuthority, providerRequest.tools);
         }
         const sentTokens = providerRequest.messages.reduce(
           (total, message) => total + estimateMessageTokens(message),
@@ -119,19 +213,34 @@ function middlewareStream(
             'The middleware request exceeds the selected model context window',
           );
         }
-        return llm.stream(providerRequest, { signal: AbortSignal.any([signal, call.signal]) });
+        const abortController = new AbortController();
+        const providerSignal = AbortSignal.any([signal, call.signal, abortController.signal]);
+        const source = llm.stream(providerRequest, { signal: providerSignal });
+        const delegation = trackProviderDelegation(
+          source,
+          abortController,
+          providerSignal,
+          () => acceptingDelegations,
+        );
+        delegations.add(delegation);
+        return delegation.stream;
       };
-      const events = await middleware({ request, signal }, next);
-      for await (const event of events) {
-        const checked = streamEventSchema.safeParse(event);
-        if (!checked.success) {
-          throw new AgentRunError(
-            'agent-stream-protocol',
-            'An LLM middleware emitted an invalid stream event',
-            { cause: checked.error },
-          );
+      try {
+        const events = await middleware({ request, signal }, next);
+        for await (const event of events) {
+          const checked = streamEventSchema.safeParse(event);
+          if (!checked.success) {
+            throw new AgentRunError(
+              'agent-stream-protocol',
+              'An LLM middleware emitted an invalid stream event',
+              { cause: checked.error },
+            );
+          }
+          yield event;
         }
-        yield event;
+      } finally {
+        acceptingDelegations = false;
+        await Promise.allSettled([...delegations].map((delegation) => delegation.close()));
       }
     },
   };
@@ -255,6 +364,51 @@ function protocolToolDefinitions(
     description,
     parameters,
   }));
+}
+
+function assertBoundTaskTurn(request: AgentRunRequest, events: readonly SessionEvent[]): void {
+  const origin = events.find((event) => event.type === 'agent.task.origin');
+  const parentSessionId = agentToolAuthorityParent(request.toolAuthority);
+  if (origin === undefined && parentSessionId === undefined) return;
+
+  const identity = request.executionIdentity;
+  const accepted = projectAgentExecutions(events).find(
+    ({ executionId }) => executionId === identity?.executionId,
+  );
+  const effective = accepted?.runInput ?? accepted?.input;
+  if (
+    origin === undefined ||
+    parentSessionId !== origin.payload.parentSessionId ||
+    origin.payload.childSessionId !== request.sessionId ||
+    origin.payload.childExecutionId !== identity?.executionId ||
+    origin.payload.childTurnId !== identity.turnId ||
+    origin.payload.childUserMessageId !== identity.userMessageId ||
+    accepted?.status !== 'accepted' ||
+    accepted.requestId !== `agent-task:${origin.payload.taskId}` ||
+    accepted.turnId !== identity.turnId ||
+    accepted.userMessageId !== identity.userMessageId ||
+    accepted.requestDigest !== agentTaskFactDigest(accepted.input) ||
+    !(
+      [
+        'userMessage',
+        'provider',
+        'model',
+        'temperature',
+        'maxTokens',
+        'reasoningEffort',
+        'useProviderDefaults',
+        'permissionMode',
+        'skills',
+        'files',
+      ] as const
+    ).every((field) => isDeepStrictEqual(effective?.[field], request[field])) ||
+    events.some((event) => event.type === 'turn.started')
+  ) {
+    throw new AgentRunError(
+      'agent-invalid-input',
+      'Task Session requires its exact bound execution',
+    );
+  }
 }
 
 interface ToolCallState {
@@ -530,6 +684,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
 
       const execute = async (): Promise<void> => {
         let modelSteps = 0;
+        let deactivateToolAuthority: (() => void) | undefined;
         try {
           if (!requestResult.success) {
             throw new AgentRunError('agent-invalid-input', 'Agent Run input is invalid');
@@ -543,10 +698,30 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
           const effectiveMaxTokens =
             validRequest.maxTokens ??
             (validRequest.useProviderDefaults === false ? undefined : descriptor?.maxTokens);
+          const { toolAuthority, executionIdentity } = validRequest;
+          const permissionMode: ToolPermissionMode = validRequest.permissionMode ?? 'ask';
+          deactivateToolAuthority = activateAgentToolAuthority(
+            validRequest,
+            options.toolRegistry,
+            {
+              provider: validRequest.provider,
+              model: validRequest.model,
+              useProviderDefaults: false,
+              permissionMode,
+              ...(effectiveTemperature === undefined ? {} : { temperature: effectiveTemperature }),
+              ...(effectiveMaxTokens === undefined ? {} : { maxTokens: effectiveMaxTokens }),
+              ...(validRequest.reasoningEffort === undefined
+                ? {}
+                : { reasoningEffort: validRequest.reasoningEffort }),
+            },
+            signal,
+          );
           sessionId = validRequest.sessionId;
-          const startTurn = async (): Promise<void> => {
+          const startTurn = async (assertCurrent?: () => void): Promise<void> => {
             if (signal.aborted) throw createAbortError();
             let storedEvents = await options.sessionStore.read(validRequest.sessionId);
+            if (signal.aborted) throw createAbortError();
+            assertBoundTaskTurn(validRequest, storedEvents);
             const accepted =
               validRequest.executionIdentity === undefined
                 ? undefined
@@ -602,6 +777,8 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
             }
             projectSession(storedEvents);
 
+            if (signal.aborted) throw createAbortError();
+            assertCurrent?.();
             const messageId = validRequest.executionIdentity?.userMessageId ?? crypto.randomUUID();
             turnId = validRequest.executionIdentity?.turnId ?? crypto.randomUUID();
             stepId = crypto.randomUUID();
@@ -658,7 +835,8 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
             ]);
           };
           if (options.turnAdmission === undefined) await startTurn();
-          else await options.turnAdmission(validRequest.sessionId, startTurn);
+          else
+            await options.turnAdmission(validRequest.sessionId, startTurn, toolAuthority, signal);
           if (turnId === undefined || stepId === undefined)
             throw new Error('Turn admission did not start the turn');
           lifecycleStarted = true;
@@ -677,11 +855,21 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
           let loadedHistory = await loadModelHistory();
           let projectedSession = loadedHistory.session;
           let messages: readonly Message[] = loadedHistory.messages;
-          const permissionMode: ToolPermissionMode = validRequest.permissionMode ?? 'ask';
+          const toolView =
+            toolAuthority === undefined ? undefined : agentToolInstructionView(toolAuthority);
+          const runMaxSteps =
+            agentToolAuthorityParent(toolAuthority) === undefined
+              ? maxSteps
+              : Math.min(maxSteps, maxChildModelSteps);
           const tools =
-            options.toolRegistry === undefined
+            toolView?.map(({ name, description, parameters }) => ({
+              name,
+              description,
+              parameters,
+            })) ??
+            (options.toolRegistry === undefined
               ? undefined
-              : protocolToolDefinitions(options.toolRegistry);
+              : protocolToolDefinitions(options.toolRegistry));
           const instructionText =
             options.instructions === undefined
               ? undefined
@@ -689,6 +877,13 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
                   sessionId: validRequest.sessionId,
                   permissionMode,
                   turnId,
+                  ...(toolAuthority === undefined
+                    ? {}
+                    : {
+                        toolAuthority,
+                        executionId: executionIdentity!.executionId,
+                        tools: toolView,
+                      }),
                   skills: Object.freeze(
                     (validRequest.skills ?? []).map((ref) => Object.freeze({ ...ref })),
                   ),
@@ -702,7 +897,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
               : [{ role: 'system', content: [{ type: 'text', text: instructionText }] }];
 
           while (true) {
-            if (modelSteps >= maxSteps) {
+            if (modelSteps >= runMaxSteps) {
               // Completed tool results stay in the Session; the user can ask the
               // Agent to continue instead of losing the turn to a failure.
               await appendTerminal(
@@ -801,10 +996,24 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
 
               signal.throwIfAborted();
               try {
+                // Each attempt starts with fresh model-facing definitions. Middleware
+                // can propose a narrower request without editing the captured view.
+                const attemptRequest =
+                  toolAuthority === undefined ? llmRequest : structuredClone(llmRequest);
+                if (toolAuthority !== undefined && options.llmMiddleware === undefined) {
+                  validateAgentProviderTools(toolAuthority, attemptRequest.tools);
+                }
                 const stream =
                   options.llmMiddleware === undefined
-                    ? llm.stream(llmRequest, { signal })
-                    : middlewareStream(options.llmMiddleware, llm, llmRequest, signal, budget);
+                    ? llm.stream(attemptRequest, { signal })
+                    : middlewareStream(
+                        options.llmMiddleware,
+                        llm,
+                        attemptRequest,
+                        signal,
+                        budget,
+                        toolAuthority,
+                      );
                 for await (const event of stream) {
                   if (finishSeen) {
                     throw new AgentRunError(
@@ -998,7 +1207,8 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
 
               let result: ToolExecutionResult;
               try {
-                result = await options.toolPipeline.execute({
+                const pipeline = options.toolPipeline;
+                const invocation = {
                   toolCallId: toolCall.id,
                   name: toolCall.name,
                   arguments: toolCall.arguments,
@@ -1006,7 +1216,16 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
                   turnId,
                   permissionMode,
                   signal,
-                });
+                  ...(toolAuthority === undefined
+                    ? {}
+                    : {
+                        toolAuthority,
+                        executionId: executionIdentity!.executionId,
+                      }),
+                };
+                result = await withAgentToolInvocation(invocation, () =>
+                  pipeline.execute(invocation),
+                );
               } catch (error: unknown) {
                 const cancelled = isCancellation(error, signal);
                 const errorCode =
@@ -1152,6 +1371,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
           }
           finish(primaryError, true);
         } finally {
+          deactivateToolAuthority?.();
           internalController.abort();
         }
       };
@@ -1227,7 +1447,14 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
             finish(returnError, true);
             throw returnError;
           }
-          if (hasExecutionError && (hasCompletionPersistenceError || !terminalPersisted)) {
+          const cancelledBeforeTurn =
+            !lifecycleStarted &&
+            executionError instanceof DOMException &&
+            executionError.name === 'AbortError';
+          if (
+            hasExecutionError &&
+            (hasCompletionPersistenceError || (!terminalPersisted && !cancelledBeforeTurn))
+          ) {
             throw executionError;
           }
           finish();

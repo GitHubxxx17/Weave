@@ -18,6 +18,7 @@ import {
 } from '@weave/protocol';
 import type { SessionEventStore } from '@weave/session';
 import { z } from 'zod';
+import type { AgentToolAuthority } from './agent-tool-authority.js';
 import {
   toolPermissionModeSchema,
   type ToolExecutionResult,
@@ -29,6 +30,8 @@ import type { ToolRegistry } from './tool-registry.js';
 const nonEmptyStringSchema = z.string().min(1);
 
 export interface AgentRunRequest {
+  /** Opaque host token. The Runner validates its identity at actual start. */
+  readonly toolAuthority?: AgentToolAuthority | undefined;
   /** Internal host identity; external HTTP request schemas never accept this port. */
   readonly executionIdentity?:
     | { readonly executionId: string; readonly turnId: string; readonly userMessageId: string }
@@ -54,6 +57,9 @@ export interface AgentRunRequest {
  */
 export const agentRunRequestSchema: z.ZodType<AgentRunRequest> = z
   .object({
+    toolAuthority: z
+      .custom<AgentToolAuthority>((value) => typeof value === 'object' && value !== null)
+      .optional(),
     executionIdentity: z
       .object({
         executionId: nonEmptyStringSchema,
@@ -243,7 +249,13 @@ export interface AgentRunnerOptions {
   readonly sessionStore: SessionEventStore;
   /** Host serialization around Session read and the durable turn-start batch only. */
   readonly turnAdmission?:
-    ((sessionId: string, start: () => Promise<void>) => Promise<void>) | undefined;
+    | ((
+        sessionId: string,
+        start: (assertCurrent?: () => void) => Promise<void>,
+        toolAuthority: AgentToolAuthority | undefined,
+        signal: AbortSignal,
+      ) => Promise<void>)
+    | undefined;
   /** Model-visible and executable tool registry; must pair with `toolPipeline`. */
   readonly toolRegistry?: ToolRegistry | undefined;
   /** Shared validation, approval, timeout, cancellation, and execution boundary. */
@@ -279,6 +291,10 @@ export interface AgentInstructionsContext {
   readonly sessionId: string;
   readonly permissionMode: ToolPermissionMode;
   readonly turnId: string;
+  readonly executionId?: string | undefined;
+  readonly toolAuthority?: AgentToolAuthority | undefined;
+  readonly tools?:
+    readonly { readonly name: string; readonly readOnly?: boolean | undefined }[] | undefined;
   readonly skills: readonly SkillRef[];
   readonly signal: AbortSignal;
   readonly maxToolResultTokens: number;

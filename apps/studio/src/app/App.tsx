@@ -99,6 +99,10 @@ import { useSidePanelWidth } from '../features/panel/panel-resizer.js';
 import { contextWarnThreshold, latestContext } from '../features/panel/panel-data.js';
 import { formatTokens, sumUsage } from '../features/conversation/turn-stats.js';
 import { ApprovalPanel, useApprovals } from '../features/approvals/approval-panel.js';
+import { AgentTaskPanel, isSettledTask } from '../features/tasks/task-panel.js';
+import { useAgentTasks } from '../features/tasks/use-agent-tasks.js';
+import type { AgentTaskResultPointer, AgentTaskView } from '../features/tasks/task-types.js';
+import type { ApprovalRequest } from '../features/approvals/approval-api.js';
 import {
   CommandPickerList,
   commandOptionId,
@@ -173,6 +177,7 @@ type ChatMessage = {
   readonly images?: readonly { readonly mediaType: string; readonly data: string }[] | undefined;
   /** Turn that produced an assistant reply; live runs use a temporary id. */
   readonly turnId?: string | undefined;
+  readonly durableMessageIds?: readonly string[];
 };
 
 type StudioSession = {
@@ -182,7 +187,13 @@ type StudioSession = {
   readonly archivedAt: string | null;
   readonly messages: readonly ChatMessage[];
   readonly turns: readonly TurnSummary[];
+  readonly detailKnown: boolean;
+  readonly taskOrigin?: SessionDetail['taskOrigin'];
 };
+
+type TaskTranscriptTarget =
+  | { readonly sessionId: string; readonly result: AgentTaskResultPointer }
+  | { readonly sessionId: string; readonly toolCallId: string; readonly turnId: string };
 
 type StudioProject = {
   readonly id: string;
@@ -723,6 +734,9 @@ function toChatMessages(
         text: existing.text + text,
         reasoning: existing.reasoning + reasoning,
         tools: [...existing.tools, ...tools],
+        ...(message.messageId === undefined
+          ? {}
+          : { durableMessageIds: [...(existing.durableMessageIds ?? []), message.messageId] }),
       };
       turnCard.set(existing.turnId as string, merged);
       result.splice(result.indexOf(existing), 1, merged);
@@ -736,6 +750,7 @@ function toChatMessages(
       reasoning,
       tools,
       occurredAt: message.occurredAt ?? '',
+      ...(message.messageId === undefined ? {} : { durableMessageIds: [message.messageId] }),
       ...(message.turnId === undefined ? {} : { turnId: message.turnId }),
     };
     result.push(card);
@@ -783,6 +798,8 @@ function toStudioSession(session: SessionSummary | SessionDetail): StudioSession
     messages:
       'messages' in session ? toChatMessages(session.id, session.messages, statusByToolCallId) : [],
     turns,
+    detailKnown: 'messages' in session,
+    ...('taskOrigin' in session ? { taskOrigin: session.taskOrigin } : {}),
   };
 }
 
@@ -940,6 +957,9 @@ function StudioApp(): ReactElement {
   const activeQueue = queueController.states[activeSessionId];
   const sessionHasWork = isSessionStreaming(activeSessionId);
   const activeSessionIdRef = useRef('');
+  const navigationTicket = useRef(0);
+  const lastVerifiedTaskRoot = useRef<{ projectId: string; root: string } | undefined>(undefined);
+  const [taskTranscriptTarget, setTaskTranscriptTarget] = useState<TaskTranscriptTarget>();
   useEffect(() => {
     for (const [key, handle] of runHandles.current) {
       if (!handle.observing || handle.sessionId === activeSessionId) continue;
@@ -954,6 +974,31 @@ function StudioApp(): ReactElement {
   const activeProject = projects.find((project) => project.id === activeProjectId);
   const sessions = activeProject?.sessions ?? [];
   const activeSession = sessions.find((session) => session.id === activeSessionId);
+  const isChildSession = activeSession?.taskOrigin !== undefined;
+  const canCompose =
+    activeSessionId === '' || (activeSession?.detailKnown === true && !isChildSession);
+  const activeTaskRoot =
+    activeSession?.detailKnown === true
+      ? (activeSession.taskOrigin?.rootSessionId ?? activeSessionId)
+      : '';
+  if (activeTaskRoot !== '') {
+    lastVerifiedTaskRoot.current = { projectId: activeProjectId, root: activeTaskRoot };
+  } else if (
+    activeSession === undefined ||
+    lastVerifiedTaskRoot.current?.projectId !== activeProjectId
+  ) {
+    lastVerifiedTaskRoot.current = undefined;
+  }
+  const taskState = useAgentTasks(
+    activeView === 'studio' ? (lastVerifiedTaskRoot.current?.root ?? '') : '',
+  );
+  const activeChildTask = isChildSession
+    ? taskState.tasks.find(
+        (task) =>
+          task.taskId === activeSession.taskOrigin?.taskId &&
+          task.childSessionId === activeSessionId,
+      )
+    : undefined;
   const composerDraft = useComposerDraft({
     sessionId: activeSessionId,
     projectId: activeProjectId,
@@ -987,7 +1032,7 @@ function StudioApp(): ReactElement {
     setText: setMessageInput,
     projectId: activeProjectId,
     rootKey: activeProject?.folderPath ?? '',
-    disabled: commandPicker.open || sessionSkills.open,
+    disabled: !canCompose || commandPicker.open || sessionSkills.open,
     onSelect: (path, owner) => {
       const result = composerDraft.addFile(owner, path);
       if (result === 'full') setNotice('最多添加 8 个文件，请先移除文件。');
@@ -1003,6 +1048,14 @@ function StudioApp(): ReactElement {
   const messages = activeSession?.messages ?? [];
   const conversationScroll = useAutoScroll<HTMLDivElement>(messages, activeSessionId);
   const approvals = useApprovals(!isLoadingWorkspace);
+  function taskForApproval(approval: ApprovalRequest): AgentTaskView | undefined {
+    return taskState.tasks.find(
+      (task) =>
+        approval.sessionId === task.childSessionId &&
+        approval.executionId === task.childExecutionId &&
+        approval.turnId === task.childTurnId,
+    );
+  }
   const turns = activeSession?.turns ?? emptyTurns;
   const currentContext = latestContext(turns);
   const turnById = new Map(turns.map((turn) => [turn.turnId, turn]));
@@ -1068,17 +1121,18 @@ function StudioApp(): ReactElement {
     }
   }
 
-  function inspectToolCall(toolCallId: string): void {
+  function inspectToolCall(toolCallId: string, turnId?: string): boolean {
     for (let index = messages.length - 1; index >= 0; index--) {
       const message = messages[index]!;
+      if (turnId !== undefined && message.turnId !== turnId) continue;
       if (!message.tools.some((tool) => tool.toolCallId === toolCallId)) continue;
       const article = document.getElementById(`message-${message.id}`);
-      if (article === null || !conversationScroll.ref.current?.contains(article)) return;
+      if (article === null || !conversationScroll.ref.current?.contains(article)) return false;
       const step = Array.from(
         article.querySelectorAll<HTMLDetailsElement>('[data-tool-call-id]'),
       ).find((element) => element.dataset.toolCallId === toolCallId);
       const parameters = step?.querySelector<HTMLElement>('[data-tool-parameters]');
-      if (step === undefined || parameters === null || parameters === undefined) return;
+      if (step === undefined || parameters === null || parameters === undefined) return false;
 
       const process = step.closest<HTMLDetailsElement>('details.message-process');
       if (process !== null) process.open = true;
@@ -1088,9 +1142,25 @@ function StudioApp(): ReactElement {
       step.open = true;
       parameters.focus({ preventScroll: true });
       parameters.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+      return true;
+    }
+    return false;
+  }
+
+  useEffect(() => {
+    if (taskTranscriptTarget?.sessionId !== activeSessionId) return;
+    if ('result' in taskTranscriptTarget) {
+      const { messageId, turnId } = taskTranscriptTarget.result;
+      const message = messages.find(
+        (entry) => entry.turnId === turnId && entry.durableMessageIds?.includes(messageId),
+      );
+      if (message === undefined) return;
+      jumpToMessage(message.id);
+    } else if (!inspectToolCall(taskTranscriptTarget.toolCallId, taskTranscriptTarget.turnId)) {
       return;
     }
-  }
+    setTaskTranscriptTarget(undefined);
+  }, [activeSessionId, messages, taskTranscriptTarget]);
   const normalizedSearchQuery = searchQuery.trim().toLocaleLowerCase();
   const visibleProjects = projects
     .map((project) => ({
@@ -1141,7 +1211,20 @@ function StudioApp(): ReactElement {
         }
 
         const loadedProjects = response.projects.map(toStudioProject);
-        setProjects(loadedProjects);
+        setProjects((current) =>
+          loadedProjects.map((project) => {
+            const previous = current.find((entry) => entry.id === project.id);
+            return {
+              ...project,
+              sessions: project.sessions.map((session) => {
+                const known = previous?.sessions.find((entry) => entry.id === session.id);
+                return known === undefined
+                  ? session
+                  : { ...known, title: session.title, archivedAt: session.archivedAt };
+              }),
+            };
+          }),
+        );
         setExpandedProjectIds(loadedProjects.map((project) => project.id));
 
         const firstProject = loadedProjects[0];
@@ -1160,6 +1243,7 @@ function StudioApp(): ReactElement {
         if (disposed) {
           return;
         }
+        if (detail.id !== firstSession.id) throw new Error('会话不匹配');
         applySessionDetail(firstProject.id, detail);
         await recoverSessionExecution(
           firstProject.id,
@@ -1324,7 +1408,11 @@ function StudioApp(): ReactElement {
     });
   }
 
-  function applySessionDetail(projectId: string, detail: SessionDetail): boolean {
+  function applySessionDetail(
+    projectId: string,
+    detail: SessionDetail,
+    addMissing = false,
+  ): boolean {
     if (detail.lastSequence < (appliedDurableSequences.current.get(detail.id) ?? 0)) return false;
     appliedDurableSequences.current.set(detail.id, detail.lastSequence);
     setProjects((current) =>
@@ -1333,9 +1421,12 @@ function StudioApp(): ReactElement {
           ? project
           : {
               ...project,
-              sessions: project.sessions.map((session) =>
-                session.id === detail.id ? toStudioSession(detail) : session,
-              ),
+              sessions:
+                addMissing && !project.sessions.some((session) => session.id === detail.id)
+                  ? [toStudioSession(detail), ...project.sessions]
+                  : project.sessions.map((session) =>
+                      session.id === detail.id ? toStudioSession(detail) : session,
+                    ),
             },
       ),
     );
@@ -1352,6 +1443,7 @@ function StudioApp(): ReactElement {
     const activityVersion = sessionActivityVersions.current.get(sessionId) ?? 0;
     try {
       const detail = await workspaceApi.getSession(sessionId);
+      if (detail.id !== sessionId) return;
       if ((sessionActivityVersions.current.get(sessionId) ?? 0) !== activityVersion) return;
       // A run may have started while the snapshot was in flight; don't clobber it.
       if (hasSessionHandles(sessionId)) {
@@ -2000,14 +2092,85 @@ function StudioApp(): ReactElement {
     readonly migrationTicket?: DraftMigrationTicket | null;
   };
 
-  function activateSession(projectId: string, session: StudioSession): void {
+  function activateSession(projectId: string, session: StudioSession, expandProject = true): void {
+    navigationTicket.current += 1;
+    setTaskTranscriptTarget(undefined);
     setActiveProjectId(projectId);
     activeSessionIdRef.current = session.id;
     setActiveSessionId(session.id);
     setActiveView('studio');
-    setExpandedProjectIds((current) =>
-      current.includes(projectId) ? current : [...current, projectId],
-    );
+    if (expandProject)
+      setExpandedProjectIds((current) =>
+        current.includes(projectId) ? current : [...current, projectId],
+      );
+  }
+
+  function prepareTaskDraft(prompt: string, access: AgentTaskView['access']): void {
+    if (!canCompose || activeTaskRoot === '') return;
+    const permission = access === 'read-only' ? '只读（read-only）' : '共享工作区（workspace）';
+    const instruction = `请将以下工作委派给子任务，访问权限为${permission}。\n${prompt}`;
+    setMessageInput((current) => (current === '' ? instruction : `${current}\n\n${instruction}`));
+    composerDraft.markLiteral();
+    messageInputRef.current?.focus();
+  }
+
+  async function openAgentTask(task: AgentTaskView, target?: TaskTranscriptTarget): Promise<void> {
+    if (task.rootSessionId !== activeTaskRoot || activeProject === undefined) return;
+    const ticket = ++navigationTicket.current;
+    const source = activeSessionId;
+    const project = activeProject;
+    const stillCurrent = () =>
+      mounted.current &&
+      navigationTicket.current === ticket &&
+      activeSessionIdRef.current === source;
+    try {
+      const detail = await workspaceApi.getSession(task.childSessionId);
+      if (!stillCurrent()) return;
+      const origin = detail.taskOrigin;
+      if (
+        detail.id !== task.childSessionId ||
+        origin?.taskId !== task.taskId ||
+        origin.rootSessionId !== task.rootSessionId ||
+        origin.parentSessionId !== task.parentSessionId
+      )
+        throw new Error('子会话归属不匹配');
+      if (
+        target !== undefined &&
+        'result' in target &&
+        !detail.messages.some(
+          (message) =>
+            message.role === 'assistant' &&
+            message.messageId === target.result.messageId &&
+            message.turnId === target.result.turnId,
+        )
+      )
+        throw new Error('子任务答复暂不可用');
+      if (
+        !hasSessionHandles(detail.id) ||
+        !project.sessions.some((session) => session.id === detail.id && session.detailKnown)
+      )
+        applySessionDetail(project.id, detail, true);
+      activateSession(project.id, toStudioSession(detail));
+      resetTransientState();
+      setTaskTranscriptTarget(target);
+      void recoverSessionExecution(project.id, detail.id, detail.lastSequence);
+    } catch {
+      if (stillCurrent()) setNotice('无法打开子会话，请稍后重试');
+    }
+  }
+
+  function inspectApproval(approval: ApprovalRequest): void {
+    const { toolCallId } = approval;
+    const task = taskForApproval(approval);
+    if (task !== undefined && task.childSessionId !== activeSessionId) {
+      void openAgentTask(task, {
+        sessionId: task.childSessionId,
+        toolCallId,
+        turnId: task.childTurnId,
+      });
+      return;
+    }
+    inspectToolCall(toolCallId, approval.turnId);
   }
 
   async function createSessionForProject(
@@ -2103,6 +2266,7 @@ function StudioApp(): ReactElement {
    * (the previous Turn stays in history) without touching the draft input.
    */
   async function submitMessage(retry?: AgentSubmissionSnapshot): Promise<void> {
+    if (!canCompose) return;
     const submittedDraft = composerDraft.capture();
     const typed = messageInput.trim();
     // A draft that invokes a slash command is sent as the command's prompt, so
@@ -2501,18 +2665,11 @@ function StudioApp(): ReactElement {
       return;
     }
 
-    const project = projects.find((candidate) => candidate.id === projectId);
-    if (project === undefined || !project.sessions.some((session) => session.id === sessionId)) {
-      return;
-    }
-
-    setExpandedProjectIds((current) =>
-      current.includes(projectId) ? current : [...current, projectId],
-    );
-    setActiveProjectId(projectId);
-    activeSessionIdRef.current = sessionId;
-    setActiveSessionId(sessionId);
-    setActiveView('studio');
+    const session = projects
+      .find((project) => project.id === projectId)
+      ?.sessions.find((entry) => entry.id === sessionId);
+    if (session === undefined) return;
+    activateSession(projectId, session);
     resetTransientState();
     void loadSessionDetail(projectId, sessionId);
   }
@@ -2680,10 +2837,7 @@ function StudioApp(): ReactElement {
       return;
     }
 
-    activeSessionIdRef.current = session.id;
-    setActiveProjectId(project.id);
-    setActiveSessionId(session.id);
-    setActiveView('studio');
+    activateSession(project.id, session, false);
     setOpenMenu(null);
     setSearchQuery('');
     resetTransientState();
@@ -2885,6 +3039,8 @@ function StudioApp(): ReactElement {
 
   /** Switches the visible Studio product area without changing session state. */
   function selectProductView(view: ProductView): void {
+    navigationTicket.current += 1;
+    setTaskTranscriptTarget(undefined);
     setActiveView(view);
     setOpenMenu(null);
     setNotice(null);
@@ -3129,6 +3285,7 @@ function StudioApp(): ReactElement {
   }
 
   function fillSuggestion(text: string): void {
+    if (!canCompose) return;
     setMessageInput(text);
     requestAnimationFrame(() => messageInputRef.current?.focus());
   }
@@ -3219,10 +3376,12 @@ function StudioApp(): ReactElement {
 
   function handleSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
+    if (!canCompose) return;
     void submitMessage();
   }
 
   function handleMessageKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>): void {
+    if (!canCompose) return;
     if (filePicker.handleKeyDown(event)) return;
     if (commandPicker.handleKeyDown(event)) {
       return;
@@ -3676,9 +3835,38 @@ function StudioApp(): ReactElement {
             <span className="breadcrumb-divider" aria-hidden="true">
               /
             </span>
+            {activeSession?.taskOrigin !== undefined ? (
+              <>
+                <button
+                  className="task-parent-link"
+                  type="button"
+                  onClick={() => selectProjectSession(activeProjectId, activeTaskRoot)}
+                >
+                  返回父会话
+                </button>
+                <span className="breadcrumb-divider" aria-hidden="true">
+                  /
+                </span>
+              </>
+            ) : null}
             <strong>{activeSession?.title ?? '未命名会话'}</strong>
           </div>
           <div className="header-actions">
+            {activeChildTask !== undefined && !isSettledTask(activeChildTask) ? (
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="停止子任务"
+                title="停止子任务"
+                disabled={
+                  taskState.pending.has(activeChildTask.taskId) ||
+                  activeChildTask.status === 'cancelling'
+                }
+                onClick={() => void taskState.stop(activeChildTask.taskId)}
+              >
+                <Square aria-hidden="true" />
+              </button>
+            ) : null}
             <div className={`menu-anchor${openMenu === 'more' ? ' menu-anchor-open' : ''}`}>
               <button
                 className="icon-button"
@@ -3732,6 +3920,34 @@ function StudioApp(): ReactElement {
           </div>
         </header>
 
+        {!isChildSession && activeTaskRoot !== '' ? (
+          <details className="task-disclosure" key={activeTaskRoot}>
+            <summary>
+              并行子任务
+              {taskState.snapshot === undefined ? '' : `（${taskState.snapshot.totalCount}）`}
+              {taskState.tasks.some((task) => task.pendingApprovalCount > 0) ? ' · 有待审批' : ''}
+              {taskState.reconnecting && taskState.snapshot !== undefined ? ' · 正在重连…' : ''}
+            </summary>
+            <AgentTaskPanel
+              tasks={taskState.tasks}
+              pending={taskState.pending}
+              totalCount={taskState.snapshot?.totalCount}
+              loadingPage={taskState.loadingPage}
+              hasMore={taskState.nextCursor !== undefined}
+              onLoadMore={() => void taskState.loadMore()}
+              onStop={(taskId) => void taskState.stop(taskId)}
+              onOpen={(task, result) =>
+                void openAgentTask(
+                  task,
+                  result === undefined ? undefined : { sessionId: task.childSessionId, result },
+                )
+              }
+              error={taskState.error}
+              onPrepare={prepareTaskDraft}
+            />
+          </details>
+        ) : null}
+
         <div className="conversation-viewport">
           <div
             className="message-list conversation-scroll"
@@ -3740,7 +3956,9 @@ function StudioApp(): ReactElement {
             ref={conversationScroll.ref}
             onScroll={conversationScroll.onScroll}
           >
-            {messages.length === 0 ? (
+            {messages.length === 0 && isChildSession ? (
+              <p className="task-child-empty">子任务会话暂无消息。</p>
+            ) : messages.length === 0 ? (
               <div className="empty-chat">
                 <div className="empty-orbit" aria-hidden="true">
                   <Sparkles aria-hidden="true" />
@@ -3911,6 +4129,7 @@ function StudioApp(): ReactElement {
                             text={message.text}
                             canRetry={message.turnId === lastTurnId}
                             disabled={sessionHasWork}
+                            readOnly={!canCompose}
                             retryUnavailableReason={
                               submissionForTurn(message.turnId) === undefined
                                 ? '旧会话未记录原始请求设置，无法精确重试'
@@ -3925,7 +4144,7 @@ function StudioApp(): ReactElement {
                               projectId={activeProjectId}
                               sessionId={activeSessionId}
                               turnId={message.turnId}
-                              disabled={sessionHasWork}
+                              disabled={sessionHasWork || !canCompose}
                             />
                           ) : null}
                         </>
@@ -3950,7 +4169,7 @@ function StudioApp(): ReactElement {
         </div>
 
         <form className="composer" onSubmit={handleSubmit}>
-          {activeQueue !== undefined ? (
+          {canCompose && activeQueue !== undefined ? (
             <ExecutionQueueList
               state={activeQueue}
               pending={queueController.pending[activeSessionId] ?? false}
@@ -3962,452 +4181,471 @@ function StudioApp(): ReactElement {
           <ApprovalPanel
             pending={approvals.pending.filter(
               (approval) =>
-                approval.sessionId === undefined || approval.sessionId === activeSessionId,
+                approval.sessionId === activeSessionId ||
+                (canCompose && approval.sessionId === undefined) ||
+                (activeTaskRoot === activeSessionId && taskForApproval(approval) !== undefined),
             )}
             onDecide={approvals.decide}
-            onInspectToolCall={inspectToolCall}
+            onInspectApproval={inspectApproval}
+            taskTitleForApproval={(approval) => taskForApproval(approval)?.title}
           />
-          <div className="composer-box">
-            {sessionSkills.open && !commandPicker.open && activeSessionId !== '' ? (
-              <SkillPicker
-                key={`${activeSessionId}:${activeProject?.folderPath ?? ''}`}
-                sessionId={activeSessionId}
-                catalog={sessionSkills.catalogState.catalog}
-                loading={sessionSkills.catalogState.loading}
-                error={sessionSkills.catalogState.error}
-                selected={sessionSkills.draft.selected}
-                onToggle={sessionSkills.toggle}
-                onRefresh={() => void sessionSkills.refresh()}
-                onClose={sessionSkills.close}
-              />
-            ) : null}
-            <FilePicker picker={filePicker} />
-            {commandPicker.open ? (
-              <CommandPickerList
-                commands={commandPicker.items}
-                activeIndex={commandPicker.activeIndex}
-                onSelect={commandPicker.select}
-                onHover={commandPicker.setActiveIndex}
-              />
-            ) : null}
-            <label className="sr-only" htmlFor="message-input">
-              发送消息
-            </label>
-            <textarea
-              id="message-input"
-              name="message"
-              rows={2}
-              ref={messageInputRef}
-              value={messageInput}
-              onChange={(event) => {
-                setMessageInput(event.target.value);
-                if (!composerIsComposing.current && !(event.nativeEvent as InputEvent).isComposing)
+          {!canCompose ? (
+            <p className="composer-readonly-note" role="status">
+              {isChildSession ? '子会话只读。返回父会话继续发送。' : '正在读取会话详情…'}
+              {isChildSession && taskState.error !== undefined ? ` ${taskState.error}` : ''}
+            </p>
+          ) : (
+            <div className="composer-box">
+              {sessionSkills.open && !commandPicker.open && activeSessionId !== '' ? (
+                <SkillPicker
+                  key={`${activeSessionId}:${activeProject?.folderPath ?? ''}`}
+                  sessionId={activeSessionId}
+                  catalog={sessionSkills.catalogState.catalog}
+                  loading={sessionSkills.catalogState.loading}
+                  error={sessionSkills.catalogState.error}
+                  selected={sessionSkills.draft.selected}
+                  onToggle={sessionSkills.toggle}
+                  onRefresh={() => void sessionSkills.refresh()}
+                  onClose={sessionSkills.close}
+                />
+              ) : null}
+              <FilePicker picker={filePicker} />
+              {commandPicker.open ? (
+                <CommandPickerList
+                  commands={commandPicker.items}
+                  activeIndex={commandPicker.activeIndex}
+                  onSelect={commandPicker.select}
+                  onHover={commandPicker.setActiveIndex}
+                />
+              ) : null}
+              <label className="sr-only" htmlFor="message-input">
+                发送消息
+              </label>
+              <textarea
+                id="message-input"
+                name="message"
+                rows={2}
+                ref={messageInputRef}
+                value={messageInput}
+                onChange={(event) => {
+                  setMessageInput(event.target.value);
+                  if (
+                    !composerIsComposing.current &&
+                    !(event.nativeEvent as InputEvent).isComposing
+                  )
+                    filePicker.updateSelection(
+                      event.target.value,
+                      event.target.selectionStart,
+                      event.target.selectionEnd,
+                    );
+                }}
+                onSelect={(event) =>
+                  !composerIsComposing.current &&
                   filePicker.updateSelection(
-                    event.target.value,
-                    event.target.selectionStart,
-                    event.target.selectionEnd,
+                    event.currentTarget.value,
+                    event.currentTarget.selectionStart,
+                    event.currentTarget.selectionEnd,
+                  )
+                }
+                onCompositionStart={() => {
+                  composerIsComposing.current = true;
+                  filePicker.close();
+                }}
+                onCompositionEnd={(event) => {
+                  composerIsComposing.current = false;
+                  filePicker.updateSelection(
+                    event.currentTarget.value,
+                    event.currentTarget.selectionStart,
+                    event.currentTarget.selectionEnd,
                   );
-              }}
-              onSelect={(event) =>
-                !composerIsComposing.current &&
-                filePicker.updateSelection(
-                  event.currentTarget.value,
-                  event.currentTarget.selectionStart,
-                  event.currentTarget.selectionEnd,
-                )
-              }
-              onCompositionStart={() => {
-                composerIsComposing.current = true;
-                filePicker.close();
-              }}
-              onCompositionEnd={(event) => {
-                composerIsComposing.current = false;
-                filePicker.updateSelection(
-                  event.currentTarget.value,
-                  event.currentTarget.selectionStart,
-                  event.currentTarget.selectionEnd,
-                );
-              }}
-              onKeyDown={handleMessageKeyDown}
-              onPaste={handleComposerPaste}
-              placeholder="给 Agent 分配一个任务…"
-              {...(filePicker.open && !filePicker.buttonMode
-                ? {
-                    'aria-controls': filePicker.listId,
-                    ...(filePicker.items.length === 0
-                      ? {}
-                      : { 'aria-activedescendant': filePicker.optionId(filePicker.activeIndex) }),
-                  }
-                : {})}
-              {...(commandPicker.open
-                ? {
-                    'aria-controls': commandPickerListId,
-                    'aria-activedescendant': commandOptionId(
-                      commandPicker.items[commandPicker.activeIndex]?.name ?? '',
-                    ),
-                  }
-                : {})}
-            />
-            {composerDraft.draft.literalSend ? (
-              <p className="composer-prepared-status" role="status">
-                已准备文本，请检查并点击发送
-              </p>
-            ) : null}
-            <DraftFileAttachments
-              files={composerDraft.draft.files}
-              onRemove={composerDraft.removeFile}
-            />
-            {pendingImages.length > 0 ? (
-              <div className="composer-attachments" aria-label="待发送图片">
-                {pendingImages.map((image) => (
-                  <span className="composer-attachment" key={image.id}>
-                    <img
-                      className="composer-attachment-thumb"
-                      src={`data:${image.mediaType};base64,${image.data}`}
-                      alt={image.name}
-                    />
-                    <button
-                      type="button"
-                      aria-label={`移除图片 ${image.name}`}
-                      onClick={() => removePendingImage(image.id)}
-                    >
-                      <X aria-hidden="true" />
-                    </button>
-                  </span>
-                ))}
-              </div>
-            ) : null}
-            {sessionSkills.draft.selected.length > 0 ? (
-              <div className="skill-chips" aria-label="待发送技能">
-                {sessionSkills.draft.selected.map((skill) => {
-                  const latest = sessionSkills.catalogState.catalog?.entries.find(
-                    (entry) => entry.id === skill.id,
-                  );
-                  const stale =
-                    latest !== undefined
-                      ? !sameSkill(latest, skill)
-                      : sessionSkills.catalogState.catalog?.complete === true;
-                  return (
-                    <span
-                      className={`skill-chip${stale ? ' skill-warning' : ''}`}
-                      key={skill.id}
-                      title={`${skill.source.label} · ${skill.id}`}
-                    >
-                      <span>
-                        {skill.name}
-                        {stale ? ' · 内容已变化，请重新选择' : ''}
-                      </span>
+                }}
+                onKeyDown={handleMessageKeyDown}
+                onPaste={handleComposerPaste}
+                placeholder="给 Agent 分配一个任务…"
+                {...(filePicker.open && !filePicker.buttonMode
+                  ? {
+                      'aria-controls': filePicker.listId,
+                      ...(filePicker.items.length === 0
+                        ? {}
+                        : { 'aria-activedescendant': filePicker.optionId(filePicker.activeIndex) }),
+                    }
+                  : {})}
+                {...(commandPicker.open
+                  ? {
+                      'aria-controls': commandPickerListId,
+                      'aria-activedescendant': commandOptionId(
+                        commandPicker.items[commandPicker.activeIndex]?.name ?? '',
+                      ),
+                    }
+                  : {})}
+              />
+              {composerDraft.draft.literalSend ? (
+                <p className="composer-prepared-status" role="status">
+                  已准备文本，请检查并点击发送
+                </p>
+              ) : null}
+              <DraftFileAttachments
+                files={composerDraft.draft.files}
+                onRemove={composerDraft.removeFile}
+              />
+              {pendingImages.length > 0 ? (
+                <div className="composer-attachments" aria-label="待发送图片">
+                  {pendingImages.map((image) => (
+                    <span className="composer-attachment" key={image.id}>
+                      <img
+                        className="composer-attachment-thumb"
+                        src={`data:${image.mediaType};base64,${image.data}`}
+                        alt={image.name}
+                      />
                       <button
                         type="button"
-                        aria-label={`移除技能 ${skill.name}`}
-                        onClick={() => sessionSkills.remove(skill.id)}
+                        aria-label={`移除图片 ${image.name}`}
+                        onClick={() => removePendingImage(image.id)}
                       >
-                        ×
+                        <X aria-hidden="true" />
                       </button>
                     </span>
-                  );
-                })}
-              </div>
-            ) : null}
-            <div className="composer-toolbar">
-              <div className="composer-tools">
-                <button
-                  className="composer-tool-button"
-                  type="button"
-                  aria-label="选择技能"
-                  title={activeSessionId === '' ? '请先新建会话以选择技能' : '为本轮选择技能'}
-                  disabled={activeSessionId === ''}
-                  aria-expanded={sessionSkills.open}
-                  onClick={() => {
-                    filePicker.close();
-                    commandPicker.close();
-                    if (sessionSkills.open) sessionSkills.close();
-                    else sessionSkills.show();
-                  }}
-                >
-                  <Sparkles aria-hidden="true" />
-                </button>
-                <div className={`menu-anchor${openMenu === 'context' ? ' menu-anchor-open' : ''}`}>
+                  ))}
+                </div>
+              ) : null}
+              {sessionSkills.draft.selected.length > 0 ? (
+                <div className="skill-chips" aria-label="待发送技能">
+                  {sessionSkills.draft.selected.map((skill) => {
+                    const latest = sessionSkills.catalogState.catalog?.entries.find(
+                      (entry) => entry.id === skill.id,
+                    );
+                    const stale =
+                      latest !== undefined
+                        ? !sameSkill(latest, skill)
+                        : sessionSkills.catalogState.catalog?.complete === true;
+                    return (
+                      <span
+                        className={`skill-chip${stale ? ' skill-warning' : ''}`}
+                        key={skill.id}
+                        title={`${skill.source.label} · ${skill.id}`}
+                      >
+                        <span>
+                          {skill.name}
+                          {stale ? ' · 内容已变化，请重新选择' : ''}
+                        </span>
+                        <button
+                          type="button"
+                          aria-label={`移除技能 ${skill.name}`}
+                          onClick={() => sessionSkills.remove(skill.id)}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    );
+                  })}
+                </div>
+              ) : null}
+              <div className="composer-toolbar">
+                <div className="composer-tools">
                   <button
                     className="composer-tool-button"
                     type="button"
-                    aria-label="添加上下文"
-                    aria-expanded={openMenu === 'context'}
-                    onClick={() => toggleMenu('context')}
+                    aria-label="选择技能"
+                    title={activeSessionId === '' ? '请先新建会话以选择技能' : '为本轮选择技能'}
+                    disabled={activeSessionId === ''}
+                    aria-expanded={sessionSkills.open}
+                    onClick={() => {
+                      filePicker.close();
+                      commandPicker.close();
+                      if (sessionSkills.open) sessionSkills.close();
+                      else sessionSkills.show();
+                    }}
                   >
-                    <Plus aria-hidden="true" />
+                    <Sparkles aria-hidden="true" />
                   </button>
-                  {openMenu === 'context' ? (
-                    <div
-                      className="popup-menu popup-menu-composer"
-                      role="menu"
+                  <div
+                    className={`menu-anchor${openMenu === 'context' ? ' menu-anchor-open' : ''}`}
+                  >
+                    <button
+                      className="composer-tool-button"
+                      type="button"
                       aria-label="添加上下文"
+                      aria-expanded={openMenu === 'context'}
+                      onClick={() => toggleMenu('context')}
                     >
-                      {contextOptions.map(([label, Icon]) => (
-                        <button
-                          type="button"
-                          role="menuitem"
-                          key={label}
-                          onClick={() => chooseContext(label)}
-                        >
-                          <span className="menu-icon">
-                            <Icon aria-hidden="true" />
-                          </span>
-                          {label}
-                          {selectedContexts.includes(label) ? (
-                            <Check className="menu-check" aria-hidden="true" />
-                          ) : null}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-                <div
-                  className={`menu-anchor${openMenu === 'permission' ? ' menu-anchor-open' : ''}`}
-                >
-                  <button
-                    className="permission-button"
-                    type="button"
-                    aria-expanded={openMenu === 'permission'}
-                    onClick={() => toggleMenu('permission')}
+                      <Plus aria-hidden="true" />
+                    </button>
+                    {openMenu === 'context' ? (
+                      <div
+                        className="popup-menu popup-menu-composer"
+                        role="menu"
+                        aria-label="添加上下文"
+                      >
+                        {contextOptions.map(([label, Icon]) => (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            key={label}
+                            onClick={() => chooseContext(label)}
+                          >
+                            <span className="menu-icon">
+                              <Icon aria-hidden="true" />
+                            </span>
+                            {label}
+                            {selectedContexts.includes(label) ? (
+                              <Check className="menu-check" aria-hidden="true" />
+                            ) : null}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div
+                    className={`menu-anchor${openMenu === 'permission' ? ' menu-anchor-open' : ''}`}
                   >
-                    {permissionOptions.find((option) => option.value === permissionMode)?.label ??
-                      '常规'}
-                    <ChevronDown aria-hidden="true" />
-                  </button>
-                  {openMenu === 'permission' ? (
-                    <div
-                      className="popup-menu popup-menu-composer"
-                      role="menu"
-                      aria-label="权限模式"
+                    <button
+                      className="permission-button"
+                      type="button"
+                      aria-expanded={openMenu === 'permission'}
+                      onClick={() => toggleMenu('permission')}
                     >
-                      {permissionOptions.map((option) => (
-                        <button
-                          type="button"
-                          role="menuitem"
-                          key={option.value}
-                          className={
-                            option.danger === true ? 'permission-option-danger' : undefined
-                          }
-                          onClick={() => {
-                            setPermissionMode(option.value);
-                            setOpenMenu(null);
-                          }}
-                        >
-                          <span className="menu-icon">
-                            <option.icon aria-hidden="true" />
-                          </span>
-                          <span className="provider-menu-copy">
-                            <strong>{option.label}</strong>
-                            <small>{option.description}</small>
-                          </span>
-                          {permissionMode === option.value ? (
-                            <Check className="menu-check" aria-hidden="true" />
-                          ) : null}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
+                      {permissionOptions.find((option) => option.value === permissionMode)?.label ??
+                        '常规'}
+                      <ChevronDown aria-hidden="true" />
+                    </button>
+                    {openMenu === 'permission' ? (
+                      <div
+                        className="popup-menu popup-menu-composer"
+                        role="menu"
+                        aria-label="权限模式"
+                      >
+                        {permissionOptions.map((option) => (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            key={option.value}
+                            className={
+                              option.danger === true ? 'permission-option-danger' : undefined
+                            }
+                            onClick={() => {
+                              setPermissionMode(option.value);
+                              setOpenMenu(null);
+                            }}
+                          >
+                            <span className="menu-icon">
+                              <option.icon aria-hidden="true" />
+                            </span>
+                            <span className="provider-menu-copy">
+                              <strong>{option.label}</strong>
+                              <small>{option.description}</small>
+                            </span>
+                            {permissionMode === option.value ? (
+                              <Check className="menu-check" aria-hidden="true" />
+                            ) : null}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                  <button
+                    className="composer-tool-button"
+                    type="button"
+                    aria-label="添加项目文件"
+                    onClick={() => {
+                      commandPicker.close();
+                      sessionSkills.close();
+                      filePicker.openFromButton();
+                    }}
+                  >
+                    <Files aria-hidden="true" />
+                  </button>
+                  <button
+                    className="composer-tool-button"
+                    type="button"
+                    aria-label="添加图片"
+                    onClick={() => imageInputRef.current?.click()}
+                  >
+                    <ImagePlus aria-hidden="true" />
+                  </button>
+                  <input
+                    className="sr-only"
+                    ref={imageInputRef}
+                    type="file"
+                    accept="image/*"
+                    aria-label="选择图片文件"
+                    multiple
+                    onChange={(event) => {
+                      void addImageFiles(event.target.files);
+                      event.target.value = '';
+                    }}
+                  />
+                  {selectedContexts.map((context) => (
+                    <span className="context-chip" key={context}>
+                      {context}
+                      <button
+                        type="button"
+                        aria-label={`移除${context}`}
+                        onClick={() =>
+                          setSelectedContexts((current) =>
+                            current.filter((item) => item !== context),
+                          )
+                        }
+                      >
+                        <X aria-hidden="true" />
+                      </button>
+                    </span>
+                  ))}
                 </div>
-                <button
-                  className="composer-tool-button"
-                  type="button"
-                  aria-label="添加项目文件"
-                  onClick={() => {
-                    commandPicker.close();
-                    sessionSkills.close();
-                    filePicker.openFromButton();
-                  }}
-                >
-                  <Files aria-hidden="true" />
-                </button>
-                <button
-                  className="composer-tool-button"
-                  type="button"
-                  aria-label="添加图片"
-                  onClick={() => imageInputRef.current?.click()}
-                >
-                  <ImagePlus aria-hidden="true" />
-                </button>
-                <input
-                  className="sr-only"
-                  ref={imageInputRef}
-                  type="file"
-                  accept="image/*"
-                  aria-label="选择图片文件"
-                  multiple
-                  onChange={(event) => {
-                    void addImageFiles(event.target.files);
-                    event.target.value = '';
-                  }}
-                />
-                {selectedContexts.map((context) => (
-                  <span className="context-chip" key={context}>
-                    {context}
+                <div className="composer-controls">
+                  {currentContext !== undefined ? (
                     <button
                       type="button"
-                      aria-label={`移除${context}`}
-                      onClick={() =>
-                        setSelectedContexts((current) => current.filter((item) => item !== context))
-                      }
+                      className={`composer-context${
+                        currentContext.ratio >= contextWarnThreshold ? ' composer-context-warn' : ''
+                      }`}
+                      aria-label={`上下文窗口占用 ${Math.round(
+                        currentContext.ratio * 100,
+                      )}%，点击查看详情`}
+                      title={`上下文窗口 ${Math.round(currentContext.ratio * 100)}% · ${formatTokens(
+                        currentContext.sentTokens,
+                      )} / ${formatTokens(currentContext.windowTokens)} tokens${
+                        currentContext.trimmed ? ' · 已压缩' : ''
+                      }`}
+                      onClick={() => setIsActivityPanelOpen(true)}
                     >
-                      <X aria-hidden="true" />
-                    </button>
-                  </span>
-                ))}
-              </div>
-              <div className="composer-controls">
-                {currentContext !== undefined ? (
-                  <button
-                    type="button"
-                    className={`composer-context${
-                      currentContext.ratio >= contextWarnThreshold ? ' composer-context-warn' : ''
-                    }`}
-                    aria-label={`上下文窗口占用 ${Math.round(
-                      currentContext.ratio * 100,
-                    )}%，点击查看详情`}
-                    title={`上下文窗口 ${Math.round(currentContext.ratio * 100)}% · ${formatTokens(
-                      currentContext.sentTokens,
-                    )} / ${formatTokens(currentContext.windowTokens)} tokens${
-                      currentContext.trimmed ? ' · 已压缩' : ''
-                    }`}
-                    onClick={() => setIsActivityPanelOpen(true)}
-                  >
-                    <span className="composer-context-track" aria-hidden="true">
-                      <span
-                        className="composer-context-fill"
-                        style={{ width: `${Math.round(currentContext.ratio * 100)}%` }}
-                      />
-                    </span>
-                    <span className="composer-context-value">
-                      {Math.round(currentContext.ratio * 100)}%
-                    </span>
-                  </button>
-                ) : null}
-                <div className={`menu-anchor${openMenu === 'model' ? ' menu-anchor-open' : ''}`}>
-                  <button
-                    className="model-button"
-                    type="button"
-                    aria-expanded={openMenu === 'model'}
-                    aria-label="模型与强度"
-                    onClick={() => toggleMenu('model')}
-                  >
-                    <span className="model-button-label">
-                      {selectedProvider?.label ?? selectedModel}
-                    </span>
-                    <span className="model-button-strength">
-                      ·{' '}
-                      {reasoningEffortOptions.find((option) => option.value === reasoningEffort)
-                        ?.label ?? '默认'}
-                    </span>
-                    <ChevronDown aria-hidden="true" />
-                  </button>
-                  {openMenu === 'model' ? (
-                    <div
-                      className="popup-menu popup-menu-composer popup-menu-right"
-                      role="menu"
-                      aria-label="选择模型"
-                    >
-                      {providerSettings.providers.map((provider) => (
-                        <button
-                          type="button"
-                          role="menuitem"
-                          aria-label={provider.label}
-                          key={provider.id}
-                          onClick={() => chooseProvider(provider)}
-                        >
-                          <span className="menu-icon">
-                            <Bot aria-hidden="true" />
-                          </span>
-                          <span className="provider-menu-copy">
-                            <strong>{provider.label}</strong>
-                            {provider.defaultModel !== undefined ? (
-                              <small>{provider.defaultModel}</small>
-                            ) : null}
-                          </span>
-                          {selectedProviderId === provider.id ? (
-                            <Check className="menu-check" aria-hidden="true" />
-                          ) : null}
-                        </button>
-                      ))}
-                      <div className="menu-divider" />
-                      <div className="model-strength" role="group" aria-label="模型强度">
-                        <div className="model-strength-head">
-                          <span>强度</span>
-                          <small>
-                            {reasoningEffortOptions.find(
-                              (option) => option.value === reasoningEffort,
-                            )?.label ?? '默认'}
-                          </small>
-                        </div>
-                        <input
-                          type="range"
-                          className="model-strength-slider"
-                          min={0}
-                          max={reasoningEffortOptions.length - 1}
-                          step={1}
-                          value={Math.max(
-                            0,
-                            reasoningEffortOptions.findIndex(
-                              (option) => option.value === reasoningEffort,
-                            ),
-                          )}
-                          aria-label="模型强度"
-                          onChange={(event) =>
-                            setReasoningEffort(
-                              reasoningEffortOptions[Number(event.target.value)]?.value ?? 'medium',
-                            )
-                          }
+                      <span className="composer-context-track" aria-hidden="true">
+                        <span
+                          className="composer-context-fill"
+                          style={{ width: `${Math.round(currentContext.ratio * 100)}%` }}
                         />
-                        <div className="model-strength-scale" aria-hidden="true">
-                          <span>更快</span>
-                          <span>更聪明</span>
+                      </span>
+                      <span className="composer-context-value">
+                        {Math.round(currentContext.ratio * 100)}%
+                      </span>
+                    </button>
+                  ) : null}
+                  <div className={`menu-anchor${openMenu === 'model' ? ' menu-anchor-open' : ''}`}>
+                    <button
+                      className="model-button"
+                      type="button"
+                      aria-expanded={openMenu === 'model'}
+                      aria-label="模型与强度"
+                      onClick={() => toggleMenu('model')}
+                    >
+                      <span className="model-button-label">
+                        {selectedProvider?.label ?? selectedModel}
+                      </span>
+                      <span className="model-button-strength">
+                        ·{' '}
+                        {reasoningEffortOptions.find((option) => option.value === reasoningEffort)
+                          ?.label ?? '默认'}
+                      </span>
+                      <ChevronDown aria-hidden="true" />
+                    </button>
+                    {openMenu === 'model' ? (
+                      <div
+                        className="popup-menu popup-menu-composer popup-menu-right"
+                        role="menu"
+                        aria-label="选择模型"
+                      >
+                        {providerSettings.providers.map((provider) => (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            aria-label={provider.label}
+                            key={provider.id}
+                            onClick={() => chooseProvider(provider)}
+                          >
+                            <span className="menu-icon">
+                              <Bot aria-hidden="true" />
+                            </span>
+                            <span className="provider-menu-copy">
+                              <strong>{provider.label}</strong>
+                              {provider.defaultModel !== undefined ? (
+                                <small>{provider.defaultModel}</small>
+                              ) : null}
+                            </span>
+                            {selectedProviderId === provider.id ? (
+                              <Check className="menu-check" aria-hidden="true" />
+                            ) : null}
+                          </button>
+                        ))}
+                        <div className="menu-divider" />
+                        <div className="model-strength" role="group" aria-label="模型强度">
+                          <div className="model-strength-head">
+                            <span>强度</span>
+                            <small>
+                              {reasoningEffortOptions.find(
+                                (option) => option.value === reasoningEffort,
+                              )?.label ?? '默认'}
+                            </small>
+                          </div>
+                          <input
+                            type="range"
+                            className="model-strength-slider"
+                            min={0}
+                            max={reasoningEffortOptions.length - 1}
+                            step={1}
+                            value={Math.max(
+                              0,
+                              reasoningEffortOptions.findIndex(
+                                (option) => option.value === reasoningEffort,
+                              ),
+                            )}
+                            aria-label="模型强度"
+                            onChange={(event) =>
+                              setReasoningEffort(
+                                reasoningEffortOptions[Number(event.target.value)]?.value ??
+                                  'medium',
+                              )
+                            }
+                          />
+                          <div className="model-strength-scale" aria-hidden="true">
+                            <span>更快</span>
+                            <span>更聪明</span>
+                          </div>
                         </div>
                       </div>
-                    </div>
+                    ) : null}
+                  </div>
+                  {status === 'streaming' ? (
+                    <span className="execution-connection-status" role="status">
+                      {activeRunState.stopping
+                        ? '正在停止…'
+                        : activeRunState.connection === 'reconnecting'
+                          ? '连接已断开，正在重连…'
+                          : activeRunState.connection === 'connecting'
+                            ? '正在连接…'
+                            : '运行中'}
+                    </span>
                   ) : null}
-                </div>
-                {status === 'streaming' ? (
-                  <span className="execution-connection-status" role="status">
-                    {activeRunState.stopping
-                      ? '正在停止…'
-                      : activeRunState.connection === 'reconnecting'
-                        ? '连接已断开，正在重连…'
-                        : activeRunState.connection === 'connecting'
-                          ? '正在连接…'
-                          : '运行中'}
-                  </span>
-                ) : null}
-                {status === 'streaming' ? (
+                  {status === 'streaming' ? (
+                    <button
+                      className="send-button send-button-cancel"
+                      type="button"
+                      onClick={cancelRun}
+                      aria-label="停止本轮及派生任务"
+                      title="停止本轮及派生任务"
+                    >
+                      <Square aria-hidden="true" />
+                    </button>
+                  ) : null}
                   <button
-                    className="send-button send-button-cancel"
-                    type="button"
-                    onClick={cancelRun}
-                    aria-label="停止运行"
+                    className="send-button"
+                    type="submit"
+                    disabled={
+                      admitting[activeSessionId] ||
+                      (messageInput.trim() === '' &&
+                        pendingImages.length === 0 &&
+                        composerDraft.draft.files.length === 0)
+                    }
+                    aria-label={
+                      status === 'streaming' || (activeQueue?.queued.length ?? 0) > 0
+                        ? '加入队列'
+                        : '发送'
+                    }
                   >
-                    <Square aria-hidden="true" />
+                    <SendHorizontal aria-hidden="true" />
                   </button>
-                ) : null}
-                <button
-                  className="send-button"
-                  type="submit"
-                  disabled={
-                    admitting[activeSessionId] ||
-                    (messageInput.trim() === '' &&
-                      pendingImages.length === 0 &&
-                      composerDraft.draft.files.length === 0)
-                  }
-                  aria-label={
-                    status === 'streaming' || (activeQueue?.queued.length ?? 0) > 0
-                      ? '加入队列'
-                      : '发送'
-                  }
-                >
-                  <SendHorizontal aria-hidden="true" />
-                </button>
+                </div>
               </div>
             </div>
-          </div>
+          )}
         </form>
       </section>
       {activeView === 'marketplace' ? (
@@ -4733,7 +4971,7 @@ function StudioApp(): ReactElement {
 
       <PanelContainer
         pluginPanels={pluginPanels}
-        composerDraft={composerDraft}
+        {...(canCompose ? { composerDraft } : {})}
         routeHidden={activeView !== 'studio'}
         collapsed={!isActivityPanelOpen}
         width={panelWidth}
@@ -4744,10 +4982,14 @@ function StudioApp(): ReactElement {
         context={{
           fileOwnerKey: JSON.stringify(composerDraft.owner),
           selectedFiles: composerDraft.draft.files.map(({ path }) => path),
-          onAddFile: ((owner) => (path: string) => {
-            const result = composerDraft.addFile(owner, path);
-            if (result === 'full') setNotice('最多添加 8 个文件，请先移除文件。');
-          })(composerDraft.owner),
+          ...(canCompose
+            ? {
+                onAddFile: ((owner) => (path: string) => {
+                  const result = composerDraft.addFile(owner, path);
+                  if (result === 'full') setNotice('最多添加 8 个文件，请先移除文件。');
+                })(composerDraft.owner),
+              }
+            : {}),
           statusKey: status,
           projectId: activeProjectId,
           statusLabel: activeRunState.stopping
@@ -4777,7 +5019,7 @@ function StudioApp(): ReactElement {
           onJumpToMessage: jumpToMessage,
         }}
       />
-      {copyRequest !== null ? (
+      {canCompose && copyRequest !== null ? (
         <div className="modal-backdrop">
           <section
             className="queue-copy-dialog"

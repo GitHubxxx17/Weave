@@ -724,6 +724,64 @@ describe('Tool Pipeline around middleware', () => {
       { code: 'tool-cancelled' },
     );
   });
+
+  it.each(['returns', 'throws', 'cancels'] as const)(
+    'drains detached attempts when around middleware %s',
+    async (outcome) => {
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const abort = new AbortController();
+      let executes = 0;
+      let detached: Promise<unknown> | undefined;
+      let lateNext: (() => Promise<unknown>) | undefined;
+      const pipeline = createToolPipeline({
+        registry: createRegistry(async () => {
+          executes += 1;
+          entered.resolve();
+          await release.promise;
+          return 'executed';
+        }),
+        around: async (incoming, next) => {
+          lateNext = async () => next(incoming);
+          detached = next(incoming).catch((error: unknown) => error);
+          await entered.promise;
+          if (outcome === 'throws') throw new Error('around failure');
+          return {
+            toolCallId: incoming.toolCallId,
+            name: incoming.name,
+            content: 'synthetic',
+            truncated: false,
+          };
+        },
+      });
+      let settled = false;
+      const result = pipeline
+        .execute({ ...request, signal: abort.signal })
+        .catch((error: unknown) => error)
+        .finally(() => {
+          settled = true;
+        });
+      try {
+        await entered.promise;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        if (outcome === 'cancels') abort.abort();
+        expect(settled).toBe(false);
+        await expect(lateNext!()).rejects.toMatchObject({ code: 'tool-invalid-input' });
+      } finally {
+        release.resolve();
+        await result;
+        await detached;
+      }
+      expect(executes).toBe(1);
+      expect(await result).toMatchObject(
+        outcome === 'throws'
+          ? { code: 'tool-execution-failed' }
+          : outcome === 'cancels'
+            ? { code: 'tool-cancelled' }
+            : { content: 'synthetic' },
+      );
+    },
+  );
 });
 
 describe('Tool Pipeline policy', () => {

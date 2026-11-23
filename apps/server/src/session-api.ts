@@ -1,8 +1,9 @@
-import { AgentExecutionError } from '@weave/runtime';
+import { AgentExecutionError, AgentTaskError } from '@weave/runtime';
 import type { Context, Hono } from 'hono';
 import { z } from 'zod';
 import { SessionServiceError, type SessionService } from './session-service.js';
 import { WorkspaceStoreError } from '@weave/workspace';
+import { agentTaskErrorResponse } from './agent-task-api.js';
 
 const renameSessionRequestSchema = z
   .object({
@@ -50,6 +51,7 @@ function jsonError(context: Context, code: string, message: string): Response {
 }
 
 function mapError(context: Context, error: unknown): Response {
+  if (error instanceof AgentTaskError) return agentTaskErrorResponse(context, error);
   if (
     error instanceof AgentExecutionError ||
     error instanceof WorkspaceStoreError ||

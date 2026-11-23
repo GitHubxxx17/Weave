@@ -6,10 +6,16 @@ import {
   toolsExtensionPoint,
   type KernelPlugin,
 } from '@weave/plugin';
-import { ExplicitLocalAuthorityError } from '@weave/plugin-host';
+import {
+  ExplicitLocalAuthorityError,
+  type RetainedGenerationLease,
+  type RunningGenerationScope,
+} from '@weave/plugin-host';
+import type { AgentRunRequest, AgentRuntimeEvent } from '@weave/runtime';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createApp } from '../src/app.js';
+import { ManagedGenerationOwnershipError } from '../src/extension-authority-errors.js';
 import {
   createExtensionCoordinator,
   type ExtensionMutationContext,
@@ -315,6 +321,286 @@ function toolContent(content: string) {
 }
 
 describe('Server extension coordination', () => {
+  it.each([false, true])(
+    'blocks all affected generations before a lease callback reenters admission (immediate=%s)',
+    async (immediate) => {
+      const local = new FixtureSource('local-esm');
+      const mcp = new FixtureSource('mcp');
+      const finish = deferred();
+      const entered = deferred();
+      let enteredCount = 0;
+      local.onTool = () => {
+        if (++enteredCount === 2) entered.resolve();
+        return finish.promise;
+      };
+      const f = await fixture(local, mcp);
+      const scopes = new Map<string, RunningGenerationScope<AgentRunRequest, AgentRuntimeEvent>>();
+      f.assemble.mockImplementation(async (kernelPlugins) => {
+        const generation = await assembleServerGeneration(f.runtime, { kernelPlugins });
+        return {
+          ...generation,
+          runner: {
+            run(request, scope) {
+              if (scope) scopes.set(request.sessionId, scope);
+              return generation.runner.run(request, scope);
+            },
+          },
+        };
+      });
+      const leases: RetainedGenerationLease<AgentRunRequest, AgentRuntimeEvent>[] = [];
+      const turns: Array<ReturnType<typeof f.turn>> = [];
+      try {
+        await f.coordinator.reload();
+        turns.push(f.turn(local.id, 'old-turn'));
+        leases.push(scopes.get('old-turn')!.retain());
+        await f.coordinator.reload({ force: true });
+        turns.push(f.turn(local.id, 'new-turn'));
+        leases.push(scopes.get('new-turn')!.retain());
+        await entered.promise;
+        const [first, second] = leases;
+        const admission = vi.fn(() => second!.assertCanStartSync());
+        const acceptingRuns: boolean[] = [];
+        first!.revocationSignal.addEventListener('abort', () => {
+          acceptingRuns.push(f.coordinator.generationSnapshot().acceptingRuns);
+          try {
+            admission();
+          } catch {
+            // The test inspects the error outside the synchronous callback.
+          }
+        });
+        f.coordinator.observeAuthorityBatchSync(
+          new Map([
+            [local.id, local.stageDecision(undefined, immediate)],
+            [mcp.id, mcp.stageDecision(undefined, immediate)],
+          ]),
+        );
+        expect(acceptingRuns).toEqual([false]);
+        expect(admission.mock.results).toMatchObject([
+          { type: 'throw', value: { code: 'plugin-generation-blocked' } },
+        ]);
+        expect(second!.revocationSignal.aborted).toBe(true);
+      } finally {
+        for (const lease of leases) lease.release();
+        finish.resolve();
+        await Promise.allSettled(turns);
+        await f.close();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    'fences managed starts and aborts children before publishing ownership loss (retired=%s)',
+    async (retired) => {
+      const local = new FixtureSource('local-esm');
+      local.origin = 'managed';
+      const childEntered = deferred();
+      const finish = deferred();
+      const toolSignals: AbortSignal[] = [];
+      local.onTool = (signal) => {
+        toolSignals.push(signal);
+        if (toolSignals.length === 2) childEntered.resolve();
+        return finish.promise;
+      };
+      const f = await fixture(local);
+      let scope: RunningGenerationScope<AgentRunRequest, AgentRuntimeEvent> | undefined;
+      f.assemble.mockImplementationOnce(async (kernelPlugins) => {
+        const generation = await assembleServerGeneration(f.runtime, { kernelPlugins });
+        return {
+          ...generation,
+          runner: {
+            run(request, runningScope) {
+              if (request.sessionId === 'old-turn') scope = runningScope;
+              // This fixture starts the retained child without a production authority token.
+              runningScope?.admitRetainedStart?.();
+              return generation.runner.run(request, runningScope);
+            },
+          },
+        };
+      });
+      const leases: RetainedGenerationLease<AgentRunRequest, AgentRuntimeEvent>[] = [];
+      const turns: Promise<unknown>[] = [];
+      try {
+        await f.coordinator.reload();
+        turns.push(f.turn(local.id, 'old-turn'));
+        const preparing = scope!.retain();
+        const running = scope!.retain();
+        leases.push(preparing, running);
+        const child = running.run({
+          sessionId: 'new-turn',
+          provider: 'mock',
+          model: 'test',
+          userMessage: { role: 'user', content: [{ type: 'text', text: '/tool local_esm {}' }] },
+        });
+        turns.push(Array.fromAsync(child));
+        await childEntered.promise;
+        if (retired) {
+          // Let a producing child keep its pin while publishing a baseline generation.
+          await local.decide(undefined);
+          expect((await f.coordinator.reload()).members).toEqual([]);
+        }
+        const firstReason: unknown = preparing.revocationSignal.reason;
+        expect(running.revocationSignal.aborted).toBe(false);
+        const observation = vi.fn(() => ({
+          acceptingRuns: f.coordinator.generationSnapshot().acceptingRuns,
+          childReason: running.revocationSignal.reason as unknown,
+          toolReason: toolSignals[1]?.reason as unknown,
+          parentAborted: toolSignals[0]?.aborted,
+        }));
+        const unsubscribe = f.coordinator.subscribeUiInvalidationSync(observation);
+        try {
+          f.coordinator.blockManagedOwnershipLossSync();
+        } finally {
+          unsubscribe();
+        }
+        expect(observation.mock.results).toMatchObject([
+          {
+            type: 'return',
+            value: {
+              acceptingRuns: retired,
+              childReason: { code: 'plugin-generation-blocked' },
+              parentAborted: false,
+            },
+          },
+        ]);
+        const reason: unknown = running.revocationSignal.reason;
+        expect(reason).toBeInstanceOf(ManagedGenerationOwnershipError);
+        expect(observation.mock.results[0]?.value?.toolReason).toBe(reason);
+        expect(preparing.revocationSignal.reason).toBe(retired ? firstReason : reason);
+        finish.resolve();
+        await expect(turns[0]).resolves.toContainEqual(toolContent('first'));
+        await Promise.all(turns);
+        if (retired) await expect(f.turn(local.id)).resolves.toEqual(expect.any(Array));
+        else await expect(f.turn(local.id)).rejects.toBe(reason);
+      } finally {
+        for (const lease of leases) lease.release();
+        finish.resolve();
+        await Promise.allSettled(turns);
+        await f.close();
+      }
+    },
+  );
+
+  it('permanently fences retained starts in every withdrawn generation while existing turns finish', async () => {
+    const a = new FixtureSource('source-a');
+    const entered = deferred();
+    const release = deferred();
+    let parentSignal: AbortSignal | undefined;
+    a.onTool = async (signal) => {
+      parentSignal = signal;
+      entered.resolve();
+      await release.promise;
+    };
+    const f = await fixture(a);
+    let scope: RunningGenerationScope<AgentRunRequest, AgentRuntimeEvent> | undefined;
+    f.assemble.mockImplementationOnce(async (kernelPlugins) => {
+      const generation = await assembleServerGeneration(f.runtime, { kernelPlugins });
+      return {
+        ...generation,
+        runner: {
+          run(request, runningScope) {
+            scope = runningScope;
+            return generation.runner.run(request, runningScope);
+          },
+        },
+      };
+    });
+    let lease: ReturnType<NonNullable<typeof scope>['retain']> | undefined;
+    try {
+      await f.coordinator.reload();
+      const parent = f.turn(a.id, 'old-turn');
+      await entered.promise;
+      lease = scope!.retain();
+      await f.coordinator.reload({ force: true });
+      const childRequest = {
+        sessionId: 'child',
+        provider: 'mock',
+        model: 'test',
+        userMessage: { role: 'user' as const, content: [{ type: 'text' as const, text: 'child' }] },
+      };
+      const reentrantStart = vi.fn(() => lease!.run(childRequest));
+      const unsubscribe = f.coordinator.subscribeUiInvalidationSync(reentrantStart);
+      await a.decide(undefined, false);
+      unsubscribe();
+      expect(reentrantStart.mock.results[0]).toMatchObject({
+        type: 'throw',
+        value: { code: 'plugin-generation-blocked' },
+      });
+      await f.coordinator.reload();
+      expect(parentSignal?.aborted).toBe(false);
+      expect(() => lease!.run(childRequest)).toThrow();
+      expect(() => scope!.retain()).toThrow();
+      await a.decide('first');
+      await f.coordinator.reload();
+      expect(() => lease!.run(childRequest)).toThrow();
+      expect(() => scope!.retain()).toThrow();
+      lease.release();
+      release.resolve();
+      await parent;
+    } finally {
+      lease?.release();
+      release.resolve();
+      await f.close();
+    }
+  });
+
+  it('records a published generation before synchronous publication callbacks can withdraw it', async () => {
+    const a = new FixtureSource('source-a');
+    const entered = deferred();
+    const release = deferred();
+    a.onTool = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    const f = await fixture(a);
+    let scope: RunningGenerationScope<AgentRunRequest, AgentRuntimeEvent> | undefined;
+    f.assemble.mockImplementationOnce(async (kernelPlugins) => {
+      const generation = await assembleServerGeneration(f.runtime, { kernelPlugins });
+      return {
+        ...generation,
+        runner: {
+          run(request, runningScope) {
+            scope = runningScope;
+            return generation.runner.run(request, runningScope);
+          },
+        },
+      };
+    });
+    let lease: ReturnType<NonNullable<typeof scope>['retain']> | undefined;
+    let parent: ReturnType<typeof f.turn> | undefined;
+    const withdrawOnPublication = vi.fn(() => {
+      parent = f.turn(a.id, 'old-turn');
+      lease = scope!.retain();
+      a.publish(a.stageDecision(undefined));
+    });
+    const unsubscribe = f.runtime.serverHost.subscribePublicationSync(withdrawOnPublication);
+    try {
+      const withdrawn = await f.coordinator.reload();
+      unsubscribe();
+      expect(withdrawOnPublication).toHaveReturnedTimes(1);
+      await entered.promise;
+      expect(withdrawn.generation.acceptingRuns).toBe(false);
+      await expect(f.turn(a.id)).rejects.toMatchObject({ code: 'plugin-generation-blocked' });
+      await f.coordinator.reload();
+      await a.decide('first');
+      await f.coordinator.reload();
+      expect(() =>
+        lease!.run({
+          sessionId: 'new-turn',
+          provider: 'mock',
+          model: 'test',
+          userMessage: { role: 'user', content: [{ type: 'text', text: 'child' }] },
+        }),
+      ).toThrow(expect.objectContaining({ code: 'plugin-generation-blocked' }));
+      release.resolve();
+      await parent;
+    } finally {
+      unsubscribe();
+      release.resolve();
+      lease?.release();
+      await f.close();
+    }
+  });
+
   it.each(['skip-rebuild', 'committed-no-rebuild'] as const)(
     'captures the %s ticket without refresh or assembly before a competing replacement',
     async (disposition) => {
@@ -1724,6 +2010,7 @@ describe('Server extension coordination', () => {
     try {
       await f.coordinator.reload();
       const current = f.runtime.serverHost.controller()!.current();
+      const retained = f.coordinator.retainedGenerations();
       const commit = vi.spyOn(f.runtime.serverHost, 'commit').mockImplementationOnce(() => {
         throw new PluginError('plugin-registration-conflict', 'commit rejected');
       });
@@ -1735,6 +2022,7 @@ describe('Server extension coordination', () => {
         acceptingRuns: false,
       });
       expect(f.runtime.serverHost.controller()!.current()).toBe(current);
+      expect(f.coordinator.retainedGenerations()).toEqual(retained);
       expect(a.disposers[0]).not.toHaveBeenCalled();
       expect(a.disposers[1]).toHaveBeenCalledOnce();
     } finally {

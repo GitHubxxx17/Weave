@@ -219,7 +219,11 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
 
   return {
     toolRegistry: {
-      register: (tool) => currentTools().register(tool),
+      register(tool) {
+        const current = controller?.current().resources;
+        if (current === undefined) toolRegistry.register(tool);
+        else current.registerHostTool(tool);
+      },
       get: (name) => currentTools().get(name),
       list: () => currentTools().list(),
     },

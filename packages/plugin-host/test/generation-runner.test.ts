@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest';
 import {
   createGenerationRunner,
   type GenerationRequest,
+  type GenerationRunner,
+  type RetainedGenerationLease,
   type RunnerGeneration,
+  type RunningGenerationScope,
 } from '../src/generation-runner.js';
 
 type Request = GenerationRequest & { readonly value: string };
@@ -11,7 +14,7 @@ type Event = string;
 
 function generation(
   id: number,
-  run: (request: Request) => AsyncIterable<Event>,
+  run: GenerationRunner<Request, Event>['run'],
   dispose: () => unknown = () => undefined,
 ): RunnerGeneration<Request, Event, { readonly id: number }> {
   return {
@@ -730,6 +733,846 @@ function cancellableSource(
     },
   };
 }
+
+describe('retained generations', () => {
+  it('fences every selected generation before notifying the first retained lease', async () => {
+    const finish = gate();
+    const scopes = new Map<string, RunningGenerationScope<Request, Event>>();
+    const run: GenerationRunner<Request, Event>['run'] = (request, scope) => {
+      if (scope) scopes.set(request.sessionId, scope);
+      return source([request.value], { wait: finish.promise });
+    };
+    const first = generation(1, run);
+    const second = generation(2, run);
+    const controller = createGenerationRunner(first);
+    const firstParent = collect(controller.runner.run({ sessionId: 'first', value: 'parent' }));
+    await controller.replace(second);
+    const secondParent = collect(controller.runner.run({ sessionId: 'second', value: 'parent' }));
+    const firstLease = scopes.get('first')!.retain();
+    const secondLease = scopes.get('second')!.retain();
+    const reason = new Error('authority withdrawn');
+    const laterReason = new Error('second withdrawal');
+    const attempts: unknown[] = [];
+    firstLease.revocationSignal.addEventListener('abort', () => {
+      try {
+        attempts.push(secondLease.run({ sessionId: 'child', value: 'child' }));
+      } catch (error) {
+        attempts.push(error);
+      }
+      controller.closeRetainedStarts(second, laterReason);
+    });
+    try {
+      controller.closeRetainedStartsBatch([first, second], reason);
+      expect(attempts).toEqual([reason]);
+      expect(secondLease.revocationSignal.reason).toBe(reason);
+    } finally {
+      firstLease.release();
+      secondLease.release();
+      finish.resolve();
+      await Promise.all([firstParent, secondParent]);
+      await controller.dispose();
+    }
+  });
+
+  it('notifies preparing revocation after every lease is fenced while a running child continues', async () => {
+    const finishParent = gate();
+    const finishChild = gate();
+    let scope: RunningGenerationScope<Request, Event> | undefined;
+    const original = generation(1, async function* (request, runningScope) {
+      if (request.value === 'parent') {
+        scope = runningScope;
+        yield 'parent';
+        await finishParent.promise;
+      } else {
+        yield 'child';
+        await finishChild.promise;
+      }
+    });
+    const controller = createGenerationRunner(original);
+    const parentOutput = controller.runner.run({ sessionId: 'parent', value: 'parent' });
+    const parent = parentOutput[Symbol.asyncIterator]();
+    await parent.next();
+    const first = scope!.retain();
+    const second = scope!.retain();
+    const running = scope!.retain();
+    const child = running.run({ sessionId: 'child', value: 'child' })[Symbol.asyncIterator]();
+    await child.next();
+    try {
+      let notified = false;
+      const reason = new Error('withdrawn');
+      first.revocationSignal.addEventListener('abort', () => {
+        notified = true;
+        expect(() => second.assertCanStartSync()).toThrow(reason);
+      });
+      controller.closeRetainedStarts(original, reason);
+      expect(notified).toBe(true);
+      expect(first.revocationSignal.reason).toBe(reason);
+      expect(running.revocationSignal.aborted).toBe(false);
+      controller.abortActiveRuns(reason);
+      expect(running.revocationSignal.reason).toBe(reason);
+    } finally {
+      finishParent.resolve();
+      finishChild.resolve();
+      await parent.next();
+      await child.next();
+      first.release();
+      second.release();
+      running.release();
+      await controller.dispose();
+    }
+  });
+
+  it('checks retained preparation admission without consuming the one child run', async () => {
+    const finish = gate();
+    let scope: RunningGenerationScope<Request, Event> | undefined;
+    let rejectGuard = false;
+    const denial = new Error('authority unavailable');
+    const original = {
+      ...generation(1, async function* (request, runningScope) {
+        if (request.value === 'parent') {
+          scope = runningScope;
+          yield 'parent';
+          await finish.promise;
+        } else yield 'child';
+      }),
+      assertCanStartSync() {
+        if (rejectGuard) throw denial;
+        return undefined;
+      },
+    };
+    const controller = createGenerationRunner(original);
+    const parent = controller.runner.run({ sessionId: 'parent', value: 'parent' });
+    const iterator = parent[Symbol.asyncIterator]();
+    await iterator.next();
+    const lease = scope!.retain();
+    try {
+      expect(() => lease.assertCanStartSync()).not.toThrow();
+      rejectGuard = true;
+      expect(() => lease.assertCanStartSync()).toThrow(denial);
+      rejectGuard = false;
+      await controller.replace(
+        generation(2, async function* () {
+          yield 'new';
+        }),
+      );
+      expect(() => lease.assertCanStartSync()).not.toThrow();
+      expect(await collect(lease.run({ sessionId: 'child', value: 'child' }))).toEqual(['child']);
+      controller.closeRetainedStarts(original, denial);
+      expect(() => lease.assertCanStartSync()).toThrow(denial);
+    } finally {
+      finish.resolve();
+      await iterator.next();
+      lease.release();
+      await controller.dispose();
+    }
+  });
+
+  it('keeps a retiring generation pinned while its child waits behind ordinary Session work', async () => {
+    const finishParent = gate();
+    const oldDisposed = gate();
+    const starts: string[] = [];
+    let scope: RunningGenerationScope<Request, Event> | undefined;
+    const old = generation(
+      1,
+      async function* (request, runningScope) {
+        starts.push(`old:${request.value}`);
+        if (request.value === 'parent') {
+          scope = runningScope;
+          yield 'parent';
+          await finishParent.promise;
+        } else yield `old:${request.value}`;
+      },
+      () => oldDisposed.resolve(),
+    );
+    const controller = createGenerationRunner(old);
+    const parent = controller.runner.run({ sessionId: 'shared', value: 'parent' });
+    const parentIterator = parent[Symbol.asyncIterator]();
+    expect(await parentIterator.next()).toMatchObject({ value: 'parent' });
+    expect(scope).toBeDefined();
+    const lease = scope!.retain();
+    try {
+      let disposed = false;
+      void oldDisposed.promise.then(() => {
+        disposed = true;
+      });
+      await controller.replace(
+        generation(2, async function* (request) {
+          starts.push(`new:${request.value}`);
+          yield `new:${request.value}`;
+        }),
+      );
+      const ordinary = collect(controller.runner.run({ sessionId: 'shared', value: 'ordinary' }));
+      const child = lease.run({ sessionId: 'shared', value: 'child' });
+      expect(() => lease.run({ sessionId: 'elsewhere', value: 'duplicate' })).toThrow();
+      const output = collect(child);
+      expect(starts).toEqual(['old:parent']);
+      expect(disposed).toBe(false);
+
+      finishParent.resolve();
+      expect(await parentIterator.next()).toMatchObject({ done: true });
+      expect(() => scope!.retain()).toThrow();
+      expect(await ordinary).toEqual(['new:ordinary']);
+      expect(await output).toEqual(['old:child']);
+      expect(starts).toEqual(['old:parent', 'new:ordinary', 'old:child']);
+      expect(disposed).toBe(false);
+      lease.release();
+      lease.release();
+      await oldDisposed.promise;
+    } finally {
+      finishParent.resolve();
+      lease.release();
+      await controller.dispose();
+    }
+  });
+
+  it('lets an already retained child outlive cancellation of the parent request', async () => {
+    const parentAbort = new AbortController();
+    const leaseReady = gate<RetainedGenerationLease<Request, Event>>();
+    const entered = gate();
+    const controller = createGenerationRunner(
+      generation(1, (request, scope) => {
+        if (request.value === 'parent') {
+          expect(scope).toBeDefined();
+          leaseReady.resolve(scope!.retain());
+          return cancellableSource(request, entered);
+        }
+        return source([request.signal?.aborted ? 'unexpected cancellation' : 'child']);
+      }),
+    );
+    const parent = collect(
+      controller.runner.run({ sessionId: 'parent', value: 'parent', signal: parentAbort.signal }),
+    );
+    const lease = await Promise.race([leaseReady.promise, parent.then(() => undefined)]);
+    expect(lease).toBeDefined();
+    parentAbort.abort(new Error('parent stopped'));
+    expect(await parent).toEqual(['cancelled']);
+    expect(await collect(lease!.run({ sessionId: 'child', value: 'child' }))).toEqual(['child']);
+    lease!.release();
+    await controller.dispose();
+  });
+
+  it('denies retain from an earlier listener on the parent request abort signal', async () => {
+    const parentAbort = new AbortController();
+    const stopped = gate();
+    let scope: RunningGenerationScope<Request, Event> | undefined;
+    let denied = false;
+    let lateLease: RetainedGenerationLease<Request, Event> | undefined;
+    parentAbort.signal.addEventListener(
+      'abort',
+      () => {
+        try {
+          lateLease = scope!.retain();
+        } catch {
+          denied = true;
+        }
+      },
+      { once: true },
+    );
+    const controller = createGenerationRunner(
+      generation(1, (request, runningScope) => {
+        scope = runningScope;
+        return cancellableSource(request, stopped);
+      }),
+    );
+    const parent = collect(
+      controller.runner.run({ sessionId: 'parent', value: 'parent', signal: parentAbort.signal }),
+    );
+    try {
+      expect(scope).toBeDefined();
+      parentAbort.abort();
+      expect(await parent).toEqual(['cancelled']);
+      expect(denied).toBe(true);
+    } finally {
+      lateLease?.release();
+      await controller.dispose();
+    }
+  });
+
+  it('checks the original guard for both retain and the child Session head', async () => {
+    const finishHead = gate();
+    const guardFailure = new Error('original ownership guard denies');
+    const started: string[] = [];
+    let scope: RunningGenerationScope<Request, Event> | undefined;
+    let deny = false;
+    const original = {
+      ...generation(1, (request, runningScope) => {
+        started.push(request.value);
+        scope = runningScope;
+        return source(
+          ['parent'],
+          request.value === 'parent' ? { wait: finishHead.promise } : undefined,
+        );
+      }),
+      assertCanStartSync(): undefined {
+        if (deny) throw guardFailure;
+        return undefined;
+      },
+    };
+    const controller = createGenerationRunner(original);
+    const parent = collect(controller.runner.run({ sessionId: 'shared', value: 'parent' }));
+    expect(scope).toBeDefined();
+    deny = true;
+    expect(() => scope!.retain()).toThrow(guardFailure);
+    deny = false;
+    const lease = scope!.retain();
+    const child = collect(lease.run({ sessionId: 'shared', value: 'child' }));
+    const rejected = expect(child).rejects.toBe(guardFailure);
+    await controller.replace(generation(2, () => source(['new'])));
+    deny = true;
+    finishHead.resolve();
+    await rejected;
+    expect(await parent).toEqual(['parent']);
+    expect(started).toEqual(['parent']);
+    lease.release();
+    await controller.dispose();
+  });
+
+  it('rechecks a permanent fence installed synchronously by the retained child guard', async () => {
+    const finishParent = gate();
+    const revoked = new Error('closed during guard');
+    let scope: RunningGenerationScope<Request, Event> | undefined;
+    let revokeOnCheck = false;
+    const starts: string[] = [];
+    const old = {
+      ...generation(1, (request, runningScope) => {
+        starts.push(request.value);
+        scope = runningScope;
+        return source([], { wait: finishParent.promise });
+      }),
+      assertCanStartSync(): undefined {
+        if (revokeOnCheck) controller.closeRetainedStarts(old, revoked);
+        return undefined;
+      },
+    };
+    const controller = createGenerationRunner(old);
+    const parent = collect(controller.runner.run({ sessionId: 'shared', value: 'parent' }));
+    expect(scope).toBeDefined();
+    const lease = scope!.retain();
+    const child = lease.run({ sessionId: 'shared', value: 'child' });
+    const rejected = expect(collect(child)).rejects.toBe(revoked);
+    revokeOnCheck = true;
+    finishParent.resolve();
+    await rejected;
+    await parent;
+    expect(starts).toEqual(['parent']);
+    lease.release();
+    await controller.dispose();
+  });
+
+  it('permanently fences exactly the selected generation through ordinary publication', async () => {
+    const finishParent = gate();
+    const childReply = gate();
+    const denial = new Error('original generation authority withdrawn');
+    const starts: string[] = [];
+    let scope: RunningGenerationScope<Request, Event> | undefined;
+    const old = generation(1, (request, runningScope) => {
+      starts.push(request.value);
+      if (request.value === 'parent') scope = runningScope;
+      return source([request.value], {
+        wait: request.value === 'parent' ? finishParent.promise : childReply.promise,
+      });
+    });
+    const controller = createGenerationRunner(old);
+    const parent = collect(controller.runner.run({ sessionId: 'shared', value: 'parent' }));
+    expect(scope).toBeDefined();
+    controller.closeRetainedStarts({ ...old }, new Error('wrong object'));
+    const preparing = scope!.retain();
+    const queued = scope!.retain();
+    const running = scope!.retain();
+    const child = collect(running.run({ sessionId: 'other', value: 'running' }));
+    const enqueued = expect(
+      collect(queued.run({ sessionId: 'shared', value: 'queued' })),
+    ).rejects.toBe(denial);
+
+    await controller.replace(generation(2, () => source(['new'])));
+    controller.closeRetainedStarts(old, denial);
+    controller.closeRetainedStarts(old, new Error('second reason'));
+    expect(() => scope!.retain()).toThrow(denial);
+    expect(() => preparing.run({ sessionId: 'other', value: 'preparing' })).toThrow(denial);
+    expect(starts).toEqual(['parent', 'running']);
+    finishParent.resolve();
+    childReply.resolve();
+    await enqueued;
+    expect(await parent).toEqual(['parent']);
+    expect(await child).toEqual(['running']);
+    expect(starts).toEqual(['parent', 'running']);
+    preparing.release();
+    queued.release();
+    running.release();
+    await controller.dispose();
+  });
+
+  it('rejects explicit child admission if the Generation guard aborts the request', async () => {
+    const abort = new AbortController();
+    const enterAdmission = gate();
+    let parentScope: RunningGenerationScope<Request, Event> | undefined;
+    let admission: { readonly accepted: boolean } | undefined;
+    const old = {
+      ...generation(1, async function* (request, scope) {
+        if (request.value === 'parent') {
+          parentScope = scope;
+          yield 'parent';
+          return;
+        }
+        await enterAdmission.promise;
+        try {
+          scope!.admitRetainedStart!();
+          admission = { accepted: true };
+        } catch {
+          admission = { accepted: false };
+        }
+      }),
+      explicitRetainedStart: true as const,
+      assertCanStartSync(): undefined {
+        if (admissionPending) abort.abort();
+        return undefined;
+      },
+    };
+    let admissionPending = false;
+    const controller = createGenerationRunner(old);
+    const parent = controller.runner.run({ sessionId: 'parent', value: 'parent' });
+    const parentIterator = parent[Symbol.asyncIterator]();
+    await parentIterator.next();
+    const lease = parentScope!.retain();
+    try {
+      const child = collect(
+        lease.run({ sessionId: 'child', value: 'child', signal: abort.signal }),
+      );
+      admissionPending = true;
+      enterAdmission.resolve();
+      await child;
+      expect(abort.signal.aborted).toBe(true);
+      expect(admission).toEqual({ accepted: false });
+    } finally {
+      enterAdmission.resolve();
+      await parentIterator.return?.();
+      lease.release();
+      await controller.dispose();
+    }
+  });
+
+  it('blocks retained admission during a host block and honors prior permanent fences after commit', async () => {
+    const finishParent = gate();
+    const blocked = new Error('waiting for compliant generation');
+    const revoked = new Error('old authority lost');
+    let scope: RunningGenerationScope<Request, Event> | undefined;
+    const old = generation(1, (request, runningScope) => {
+      if (request.value === 'parent') scope = runningScope;
+      return source([request.value], { wait: finishParent.promise });
+    });
+    const controller = createGenerationRunner(old);
+    const parent = collect(controller.runner.run({ sessionId: 'shared', value: 'parent' }));
+    expect(scope).toBeDefined();
+    const open = scope!.retain();
+    const bound = scope!.retain();
+    const withdrawn = scope!.retain();
+    const child = bound.run({ sessionId: 'child', value: 'child' });
+    controller.blockNewRuns(blocked);
+    expect(() => scope!.retain()).toThrow(blocked);
+    expect(() => open.run({ sessionId: 'child', value: 'child' })).toThrow(blocked);
+    await expect(collect(child)).rejects.toBe(blocked);
+    withdrawn.closeStarts(revoked);
+
+    await controller.replace(generation(2, () => source(['new'])));
+    expect(() => withdrawn.run({ sessionId: 'child', value: 'child' })).toThrow(revoked);
+    const result = collect(open.run({ sessionId: 'child', value: 'old child' }));
+    finishParent.resolve();
+    expect(await result).toEqual(['old child']);
+    await parent;
+    open.release();
+    bound.release();
+    withdrawn.release();
+    await controller.dispose();
+  });
+
+  it('cancels a queued retained child without cancelling the parent or the next ordinary run', async () => {
+    const finishParent = gate();
+    const starts: string[] = [];
+    let scope: RunningGenerationScope<Request, Event> | undefined;
+    const controller = createGenerationRunner(
+      generation(1, (request, runningScope) => {
+        starts.push(request.value);
+        if (request.value === 'parent') scope = runningScope;
+        return source(
+          [request.value],
+          request.value === 'parent' ? { wait: finishParent.promise } : undefined,
+        );
+      }),
+    );
+    const parent = collect(controller.runner.run({ sessionId: 'shared', value: 'parent' }));
+    expect(scope).toBeDefined();
+    const lease = scope!.retain();
+    const child = collect(lease.run({ sessionId: 'shared', value: 'queued' }));
+    const ordinary = collect(controller.runner.run({ sessionId: 'shared', value: 'ordinary' }));
+    const reason = new Error('queued child cancelled');
+    lease.abort(reason);
+    expect(await child).toEqual([]);
+    expect(() => lease.run({ sessionId: 'other', value: 'retry' })).toThrow(reason);
+    expect(starts).toEqual(['parent']);
+    lease.release();
+    finishParent.resolve();
+    expect(await parent).toEqual(['parent']);
+    expect(await ordinary).toEqual(['ordinary']);
+    expect(starts).toEqual(['parent', 'ordinary']);
+    await controller.dispose();
+  });
+
+  it.each([false, true])(
+    'keeps the retirement pin through slow return with cleanup failure %s',
+    async (failCleanup) => {
+      const pending = gate<IteratorResult<string>>();
+      const cleanup = gate();
+      const enteredCleanup = gate();
+      const disposed = gate();
+      const failed = new Error('child return failed');
+      const cancelled = new Error('child cancelled');
+      let scope: RunningGenerationScope<Request, Event> | undefined;
+      let childSignal: AbortSignal | undefined;
+      let returnCalls = 0;
+      const controller = createGenerationRunner(
+        generation(
+          1,
+          (request, runningScope) => {
+            if (request.value === 'parent') {
+              scope = runningScope;
+              return source(['parent']);
+            }
+            childSignal = request.signal;
+            return {
+              [Symbol.asyncIterator]() {
+                return {
+                  next: () => pending.promise,
+                  async return() {
+                    returnCalls += 1;
+                    enteredCleanup.resolve();
+                    pending.resolve({ done: true, value: undefined });
+                    await cleanup.promise;
+                    if (failCleanup) throw failed;
+                    return { done: true, value: undefined };
+                  },
+                };
+              },
+            };
+          },
+          () => disposed.resolve(),
+        ),
+      );
+      const parent = collect(controller.runner.run({ sessionId: 'parent', value: 'parent' }));
+      expect(scope).toBeDefined();
+      const lease = scope!.retain();
+      expect(await parent).toEqual(['parent']);
+      const child = lease.run({ sessionId: 'child', value: 'child' })[Symbol.asyncIterator]();
+      const next = child.next();
+      await controller.replace(generation(2, () => source(['new'])));
+      let didDispose = false;
+      void disposed.promise.then(() => {
+        didDispose = true;
+      });
+      lease.closeStarts(new Error('starts closed'));
+      lease.release();
+      lease.release();
+      expect(childSignal?.aborted).toBe(false);
+      lease.abort(cancelled);
+      lease.abort(new Error('second cancellation'));
+      await enteredCleanup.promise;
+      expect(childSignal?.reason).toBe(cancelled);
+      expect(didDispose).toBe(false);
+      const returning = child.return!();
+      const verifiedReturn = failCleanup
+        ? expect(returning).rejects.toBe(failed)
+        : expect(returning).resolves.toMatchObject({ done: true });
+      expect(await next).toMatchObject({ done: true });
+      cleanup.resolve();
+      await verifiedReturn;
+      await disposed.promise;
+      expect(returnCalls).toBe(1);
+      if (failCleanup)
+        await expect(controller.dispose()).rejects.toMatchObject({ errors: [failed] });
+      else await controller.dispose();
+    },
+  );
+
+  it.each(['immediate replacement', 'active abort', 'shutdown'] as const)(
+    '%s fences retained starts, aborts children and preserves the first cancellation',
+    async (operation) => {
+      const stopped = gate();
+      const cancel = new Error('host abort');
+      const starts: string[] = [];
+      let scope: RunningGenerationScope<Request, Event> | undefined;
+      let childSignal: AbortSignal | undefined;
+      let disposed = 0;
+      const controller = createGenerationRunner(
+        generation(
+          1,
+          (request, runningScope) => {
+            starts.push(request.value);
+            if (request.value === 'parent') scope = runningScope;
+            if (request.value === 'running') childSignal = request.signal;
+            if (request.value === 'ordinary') return source(['ordinary']);
+            return cancellableSource(request, stopped);
+          },
+          () => {
+            disposed += 1;
+          },
+        ),
+      );
+      const parent = collect(controller.runner.run({ sessionId: 'shared', value: 'parent' }));
+      expect(scope).toBeDefined();
+      const idle = scope!.retain();
+      const queued = scope!.retain();
+      const running = scope!.retain();
+      const pendingChild = collect(queued.run({ sessionId: 'shared', value: 'queued' }));
+      const child = collect(running.run({ sessionId: 'child', value: 'running' }));
+      const ordinary = collect(controller.runner.run({ sessionId: 'shared', value: 'ordinary' }));
+      const next = generation(2, () => source(['ordinary']));
+
+      if (operation === 'immediate replacement')
+        await controller.replace(next, { immediate: true });
+      if (operation === 'active abort') controller.abortActiveRuns(cancel);
+      const closing = operation === 'shutdown' ? controller.dispose() : undefined;
+      expect(() => scope!.retain()).toThrow();
+      expect(() => idle.run({ sessionId: 'child', value: 'idle' })).toThrow();
+      expect(await parent).toEqual(['cancelled']);
+      expect(await child).toEqual(['cancelled']);
+      expect(await pendingChild).toEqual([]);
+      expect(await ordinary).toEqual(operation === 'shutdown' ? [] : ['ordinary']);
+      expect(starts).toEqual(
+        operation === 'active abort' ? ['parent', 'running', 'ordinary'] : ['parent', 'running'],
+      );
+      expect(childSignal?.aborted).toBe(true);
+      if (operation === 'active abort') expect(childSignal?.reason).toBe(cancel);
+      if (closing) await closing;
+      else {
+        idle.release();
+        queued.release();
+        running.release();
+        await controller.dispose();
+      }
+      expect(disposed).toBe(1);
+    },
+  );
+
+  it('drains a retained child when runner creation and its abort listener both call dispose', async () => {
+    const next = gate<IteratorResult<string>>();
+    const inReturn = gate();
+    const finishReturn = gate();
+    const disposals: string[] = [];
+    let scope: RunningGenerationScope<Request, Event> | undefined;
+    let closing: Promise<void> | undefined;
+    let reentered: Promise<void> | undefined;
+    const controller = createGenerationRunner(
+      generation(
+        1,
+        (request, runningScope) => {
+          if (request.value === 'parent') {
+            scope = runningScope;
+            return source(['parent']);
+          }
+          request.signal?.addEventListener(
+            'abort',
+            () => {
+              reentered = controller.dispose();
+            },
+            { once: true },
+          );
+          closing = controller.dispose();
+          return {
+            [Symbol.asyncIterator]() {
+              return {
+                next: () => next.promise,
+                async return() {
+                  inReturn.resolve();
+                  next.resolve({ done: true, value: undefined });
+                  await finishReturn.promise;
+                  return { done: true, value: undefined };
+                },
+              };
+            },
+          };
+        },
+        () => {
+          disposals.push('old');
+        },
+      ),
+    );
+    const parent = collect(controller.runner.run({ sessionId: 'parent', value: 'parent' }));
+    expect(scope).toBeDefined();
+    const lease = scope!.retain();
+    expect(await parent).toEqual(['parent']);
+    const child = collect(lease.run({ sessionId: 'child', value: 'child' }));
+    await inReturn.promise;
+    expect(closing).toBeDefined();
+    expect(reentered).toBe(closing);
+    let closed = false;
+    void closing!.then(() => {
+      closed = true;
+    });
+    await tick();
+    expect(closed).toBe(false);
+    expect(disposals).toEqual([]);
+    finishReturn.resolve();
+    expect(await child).toEqual([]);
+    await closing;
+    expect(disposals).toEqual(['old']);
+  });
+
+  it('aggregates a throwing iterator return accessor without stranding shutdown', async () => {
+    const cleanupFailure = new Error('iterator return lookup failed');
+    const pending = gate<IteratorResult<Event>>();
+    let scope: RunningGenerationScope<Request, Event> | undefined;
+    let disposals = 0;
+    let cleanupReads = 0;
+    const controller = createGenerationRunner(
+      generation(
+        1,
+        (request, runningScope) => {
+          if (request.value === 'parent') {
+            scope = runningScope;
+            return source(['parent']);
+          }
+          request.signal?.addEventListener(
+            'abort',
+            () => pending.resolve({ done: true, value: undefined }),
+            { once: true },
+          );
+          return {
+            [Symbol.asyncIterator]() {
+              return {
+                next: () => pending.promise,
+                get return(): never {
+                  cleanupReads += 1;
+                  throw cleanupFailure;
+                },
+              };
+            },
+          };
+        },
+        () => {
+          disposals += 1;
+        },
+      ),
+    );
+    const parent = collect(controller.runner.run({ sessionId: 'parent', value: 'parent' }));
+    expect(scope).toBeDefined();
+    const lease = scope!.retain();
+    expect(await parent).toEqual(['parent']);
+    const outcome = collect(lease.run({ sessionId: 'child', value: 'child' })).then(
+      (events) => ({ events }),
+      (failure: unknown) => ({ failure }),
+    );
+
+    const closing = controller.dispose();
+    expect(controller.dispose()).toBe(closing);
+    await expect(closing).rejects.toMatchObject({ errors: [cleanupFailure] });
+    expect(await outcome).toEqual({ failure: cleanupFailure });
+    expect(cleanupReads).toBe(1);
+    expect(disposals).toBe(1);
+  });
+
+  it('keeps the first host abort reason when a child listener aborts the controller again', async () => {
+    const first = new Error('first host abort');
+    const nested = new Error('nested host abort');
+    const stopped = gate();
+    const signals: AbortSignal[] = [];
+    let scope: RunningGenerationScope<Request, Event> | undefined;
+    const controller = createGenerationRunner(
+      generation(1, (request, runningScope) => {
+        if (request.value === 'parent') scope = runningScope;
+        if (request.value === 'child') {
+          request.signal?.addEventListener('abort', () => controller.abortActiveRuns(nested), {
+            once: true,
+          });
+        }
+        if (request.signal) signals.push(request.signal);
+        return cancellableSource(request, stopped);
+      }),
+    );
+    const parent = collect(controller.runner.run({ sessionId: 'parent', value: 'parent' }));
+    expect(scope).toBeDefined();
+    const lease = scope!.retain();
+    const child = collect(lease.run({ sessionId: 'child', value: 'child' }));
+    const ordinary = collect(controller.runner.run({ sessionId: 'ordinary', value: 'ordinary' }));
+    controller.abortActiveRuns(first);
+
+    try {
+      expect(await Promise.all([parent, child, ordinary])).toEqual([
+        ['cancelled'],
+        ['cancelled'],
+        ['cancelled'],
+      ]);
+      expect(signals.map((signal) => signal.reason)).toEqual([first, first, first]);
+    } finally {
+      lease.release();
+      await controller.dispose();
+    }
+  });
+
+  it('rejects retain once the failed producer enters iterator cleanup', async () => {
+    const producerFailure = new Error('producer failed');
+    const denied = gate<boolean>();
+    let leaked: RetainedGenerationLease<Request, Event> | undefined;
+    const controller = createGenerationRunner(
+      generation(1, (_request, scope) => ({
+        [Symbol.asyncIterator]() {
+          return {
+            async next() {
+              throw producerFailure;
+            },
+            async return() {
+              try {
+                leaked = scope!.retain();
+                denied.resolve(false);
+              } catch {
+                denied.resolve(true);
+              }
+              return { done: true, value: undefined };
+            },
+          };
+        },
+      })),
+    );
+    try {
+      await expect(
+        collect(controller.runner.run({ sessionId: 'failed', value: 'failed' })),
+      ).rejects.toBe(producerFailure);
+      expect(await denied.promise).toBe(true);
+    } finally {
+      leaked?.release();
+      await controller.dispose();
+    }
+  });
+
+  it('drains an ordinary turn when its synchronous runner creation calls dispose', async () => {
+    const cleanup = gate();
+    const stopped = gate();
+    const disposals: string[] = [];
+    let closing: Promise<void> | undefined;
+    const controller = createGenerationRunner(
+      generation(
+        1,
+        (request) => {
+          closing = controller.dispose();
+          return cancellableSource(request, stopped, cleanup.promise);
+        },
+        () => {
+          disposals.push('old');
+        },
+      ),
+    );
+    const output = collect(controller.runner.run({ sessionId: 'session', value: 'ordinary' }));
+    expect(closing).toBeDefined();
+    let closed = false;
+    void closing!.then(() => {
+      closed = true;
+    });
+    for (let i = 0; i < 5; i += 1) await tick();
+    expect(closed).toBe(false);
+    cleanup.resolve();
+    expect(await output).toEqual(['cancelled']);
+    await closing;
+    expect(disposals).toEqual(['old']);
+  });
+});
 
 describe('generation cancellation and lifetime', () => {
   it('aborts active runs in current and retired generations with the first exact reason only', async () => {

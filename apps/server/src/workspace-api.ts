@@ -3,6 +3,7 @@ import { stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { z } from 'zod';
 import type { ProjectStore } from '@weave/workspace';
+import type { ProjectFolderAuthority } from './project-folder-authority.js';
 import {
   SessionServiceError,
   type ProjectListWarning,
@@ -55,6 +56,7 @@ async function isExistingDirectory(folderPath: string): Promise<boolean> {
 export interface WorkspaceAppOptions {
   readonly projectStore?: ProjectStore | undefined;
   readonly sessionService?: SessionService | undefined;
+  readonly projectFolderAuthority?: ProjectFolderAuthority | undefined;
 }
 
 function errorStatus(code: string): 400 | 404 | 409 | 422 | 500 | 503 {
@@ -211,11 +213,19 @@ export function registerWorkspaceRoutes(app: Hono, options: WorkspaceAppOptions)
     try {
       const projectId = context.req.param('projectId');
       const store = dependencies.projectStore;
+      const authority = options.projectFolderAuthority;
+      if (folderPath !== undefined && authority === undefined) {
+        return jsonError(
+          context,
+          'session-service-unavailable',
+          'Workspace service is not available',
+        );
+      }
       const renamed = name === undefined ? undefined : await store.renameProject(projectId, name);
       const project =
         folderPath === undefined
           ? renamed
-          : await store.updateProjectFolder(projectId, folderPath ?? undefined);
+          : await authority!.updateFolder(projectId, folderPath ?? undefined);
       if (project === undefined) {
         return jsonError(context, 'workspace-store-invalid-input', 'Project input is invalid');
       }

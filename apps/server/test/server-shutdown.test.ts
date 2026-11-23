@@ -19,6 +19,68 @@ function cleanupOptions(resources: () => ServerShutdownResources) {
 }
 
 describe('Server shutdown', () => {
+  it.each(['stop', 'failStartup'] as const)(
+    'preserves stores and permits retry when execution durability drain fails during %s',
+    async (method) => {
+      const incomplete = new Error('terminal append uncertain');
+      const drain = vi.fn(async () => {}).mockRejectedValueOnce(incomplete);
+      const options = cleanupOptions(() => ({
+        agentExecutionService: { closeSync() {}, drain },
+      }));
+      const shutdown = createServerShutdown(options);
+      const startup = new Error('startup failed');
+      const first = await (
+        method === 'stop' ? shutdown.stop() : shutdown.failStartup(startup)
+      ).catch((error: unknown) => error);
+      if (method === 'stop') expect(first).toBe(incomplete);
+      else expect(first).toMatchObject({ errors: [startup, incomplete] });
+      expect(options.disposeHost).not.toHaveBeenCalled();
+      expect(options.stopRuntime).not.toHaveBeenCalled();
+      expect(options.closeProjectStore).not.toHaveBeenCalled();
+      if (method === 'stop') await shutdown.stop();
+      else await retryFailedServerStartupCleanup(first);
+      expect(drain).toHaveBeenCalledTimes(2);
+      expect(options.disposeHost).toHaveBeenCalledOnce();
+      expect(options.stopRuntime).toHaveBeenCalledOnce();
+      expect(options.closeProjectStore).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('closes task admission first and preserves all stores on incomplete task settlement', async () => {
+    const calls: string[] = [];
+    const incomplete = new Error('materializer effect still uncertain');
+    const taskDrain = vi
+      .fn(async () => {
+        calls.push('task-drained');
+      })
+      .mockRejectedValueOnce(incomplete);
+    const executionDrain = vi.fn(async () => {
+      calls.push('execution-drained');
+    });
+    const options = cleanupOptions(() => ({
+      agentTaskService: {
+        closeSync() {
+          calls.push('task-close');
+        },
+        drain: taskDrain,
+      },
+      agentExecutionService: {
+        closeSync() {
+          calls.push('execution-close');
+        },
+        drain: executionDrain,
+      },
+    }));
+    const shutdown = createServerShutdown(options);
+    await expect(shutdown.stop()).rejects.toBe(incomplete);
+    expect(calls).toEqual(['task-close', 'execution-close']);
+    expect(options.stopRuntime).not.toHaveBeenCalled();
+    expect(options.closeProjectStore).not.toHaveBeenCalled();
+    await shutdown.stop();
+    expect(calls.slice(-2)).toEqual(['task-drained', 'execution-drained']);
+    expect(options.stopRuntime).toHaveBeenCalledOnce();
+  });
+
   it('starts coordinator cancellation synchronously before awaiting marketplace settings drain', async () => {
     const release = Promise.withResolvers<void>();
     const drained = Promise.withResolvers<void>();

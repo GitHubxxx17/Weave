@@ -242,6 +242,33 @@ headless Agent Loop, the shared Tool Pipeline, and the Project/Session
 persistence boundary. It is a learning and maintenance guide, not a
 replacement for the package APIs or tests.
 
+## Native Agent task contract
+
+The [Agent task design](../superpowers/specs/2026-11-23-agent-tasks-design.md) and
+[ADR 0011](../adr/0011-one-shot-agent-tasks.md) define the next slice before code.
+Runtime owns bounded one-shot child Session admission, exact materialization,
+cross-log reconciliation and observation through the existing Execution Service.
+Parent facts and immutable child origin remain durable; deltas, approval state,
+retained leases and live cancellation authority remain transient.
+Root Stop All facts preserve the exact target list, including empty lists, for
+operation retries across Server restart. Per-task cancellation retains the first
+cause.
+
+Generic plugin-host retained leases pin the actual parent Generation and pass
+through its existing Session queue. Server binds private run authority and the
+Project's monotonic folderRevision; Runner and Pipeline enforce the same exact
+tool subset, including after LLM middleware and after approval. Children default
+to read-only access; explicit workspace access shares the Project folder and its
+existing approval policy. Access is distinct from ask/trust/yolo approval mode.
+No automatic worktree or OS isolation is implied. Studio observes tasks and
+approvals over HTTP/SSE; it cannot create Runtime authority.
+
+Cross-Session writes have no joint transaction: preallocated IDs, exact readback
+and conservative uncertain-state fences prevent duplicate launches. Restart
+interrupts unfinished work and shutdown keeps stores open while cleanup or
+durable settlement remains incomplete. These are implementation contracts;
+completion and measured evidence are recorded in the plan as work proceeds.
+
 ## Background execution and recovery contract
 
 Background turns use Runtime `AgentExecutionService`, around the stable
@@ -534,10 +561,12 @@ appends `turn.completed` with `status: completed` and `reason:
 agent-step-limit`, and yields `completed` with the same `reason`, so completed
 tool results stay in the Session and the user can ask the Agent to continue.
 
-`AgentRunRequest.permissionMode` is `workspace` (default) or `read-only`. In
-read-only runs the Runner sends only tools declared `readOnly: true` and passes
-the mode to the Tool Pipeline, which rejects any other tool with the
-recoverable `tool-not-permitted` before an Approval is created.
+`AgentRunRequest.permissionMode` selects the existing `ask` (default), `trust`
+or `yolo` approval policy. It does not grant additional tools. Agent task access
+is a separate authority subset: `read-only` permits only definitions whose
+`readOnly` value is exactly true, while explicit `workspace` access may inherit
+the parent's allowed tools. Both child modes exclude task orchestration tools;
+Runner model visibility and Pipeline execution enforce the captured subset.
 
 After a valid text terminal `finish`, the Runner appends the complete assistant
 message (when non-empty), the completed Step, and the completed Turn in one
