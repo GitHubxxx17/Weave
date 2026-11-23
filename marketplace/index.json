@@ -40,6 +40,46 @@
         "技能",
         "开发指南"
       ]
+    },
+    {
+      "description": "搜索公开网页与读取有来源的有限文本；搜索使用单独配置的 Tavily。",
+      "id": "weave-web",
+      "name": "Weave 联网",
+      "publisher": "Weave",
+      "releases": [
+        {
+          "manifest": {
+            "apiVersion": "1.0.0",
+            "capabilities": [
+              "tool"
+            ],
+            "contributes": {
+              "tools": [
+                "web_search",
+                "web_fetch"
+              ]
+            },
+            "description": "经共享审批搜索公开网页并读取有来源的有限文本。",
+            "host": "in-process",
+            "id": "weave-web",
+            "name": "Weave 联网",
+            "permissions": [
+              "network:request"
+            ],
+            "version": "0.1.0"
+          },
+          "source": {
+            "commit": "ecfe2e889b9897ee6ea249b2ed7469585114ab2a",
+            "repository": "https://github.com/githubxxx17/weave",
+            "subdirectory": "plugins/official/weave-web"
+          }
+        }
+      ],
+      "tags": [
+        "Weave",
+        "联网",
+        "搜索"
+      ]
     }
   ]
 }

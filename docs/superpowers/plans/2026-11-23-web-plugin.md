@@ -213,18 +213,19 @@ pnpm plugin:pack --artifact /tmp/weave-web-build-unique/payload --out /tmp/weave
 - [x] 修复实际review问题，重跑受影响tests，然后完整check只在有新改动/失败需要时重复。
 - [x] 真实Studio验证安装review/activation、unconfigured搜索提示、Approvalpending/deny/cancel、默认页抓取publicHTTPS来源、刷新恢复、停用新回合。可以真实读取一个已明确指定公开官方文档，不需要APIkey。若当前环境公网不可达，记录真实error，与deterministictests区分；不放宽TLS/IP/重定向来使验收通过。
 - [x] 无显式配置的Tavilykey则不调用liveprovider、不要求用户在chat贴key；test报告明确“官方wirecontract+确定性adapter，未验证当前key/plan/liveavailability”。已有配置且用户已授权provider外发时，仅用无敏感公共query做一次live验收，不打印header/key。
-- [ ] commit中文`feat: 增加独立联网搜索与网页读取插件`，push功能分支，PR描述问题/最终行为/边界/测试，等待CI绿，独立review后squash删分支。不要把fakefutureSHA或发行index提前塞入。
+- [x] commit中文`feat: 增加独立联网搜索与网页读取插件`，push功能分支，PR描述问题/最终行为/边界/测试，等待CI绿，独立review后squash删分支。不要把fakefutureSHA或发行index提前塞入。
 
 ## Task 7: 真实SHA官方发行索引，独立PR
 
 **Files:** `apps/server/src/official-marketplace-releases.ts`（append realtuple）、`marketplace/submissions/weave-web.json`、`marketplace/index.json`、`apps/server/test/official-web-release.test.ts`、使用文档发行记录。
 
-- [ ] 内容PR已squash后fetch最新origin/main，记录实际full40hexmergeSHA与合并descriptor，在新`chore/web-plugin-release`分支核对它；不能用localHEAD/branch/tag冒充实际合并内容。
-- [ ] 将确切manifest、canonicalrepo、实际SHA、`plugins/official/weave-web`作为正式0.1.0tuple加入空family，不改旧官方发行。
-- [ ] 从现有`marketplace:entry --help`读取实际CLI参数，真实远程获取该commit的payload并生成submission，核对Gitblob/manifest/directorydigest；联网失败如实重试或报告未发行，不用localreceipt替代。
-- [ ] `pnpm marketplace:generate` / `pnpm marketplace:check`；现有exactpolicy测试加新family真实case，官方GitHub卡片仍needsinstall不是builtin，镜像保留官方维护+独立indexsource、错误SHA/manifest拒绝。
-- [ ] 完整`pnpm check`、市场检查、真实生成验收，commit `chore: 发布联网插件固定版本索引`、push/PR、CI绿review/squash删branch。
-- [ ] 如公网使真实acquirer持续失败，内容插件已交付，本阶段留明示未发行而不能伪称完成。父任务可继续不依赖市场索引的下一独立功能，但保留待发行事项；不重开用户确认gate。
+- [x] 内容PR已squash后fetch最新origin/main，记录实际full40hexmergeSHA与合并descriptor，在新`chore/web-plugin-release`分支核对它；不能用localHEAD/branch/tag冒充实际合并内容。
+- [x] 将确切manifest、canonicalrepo、实际SHA、`plugins/official/weave-web`作为正式0.1.0tuple加入空family，不改旧官方发行。
+- [x] 从现有`marketplace:entry --help`读取实际CLI参数，真实远程获取该commit的payload并生成submission，校验Gitblob/manifest；Host检查包含目录摘要计算，本地已审阅产物另行核对摘要。额外独立远程摘要比对三次超时/连接失败，已在使用文档准确保留，未用localreceipt替代真实获取。
+- [x] `pnpm marketplace:generate` / `pnpm marketplace:check`；现有exactpolicy测试加新family真实case，官方GitHub卡片仍needsinstall不是builtin，镜像保留官方维护+独立indexsource、错误SHA/manifest拒绝。
+- [x] 完整`pnpm check`、市场检查、真实产物验收通过；修复默认目录测试只预期官方Skills的断言后，独立review的87个针对性测试及本轮完整检查均通过。
+- [x] 如实区分首次真实acquirer成功与后续额外远程摘要复核失败，不宣称公网获取持续稳定、远程浏览器安装或live Tavily已验收；发行PR合并前不宣称市场发布完成。
+- [ ] commit `chore: 发布联网插件固定版本索引`、push/PR、CI绿review/squash删branch。
 
 ## 自审清单
 
@@ -246,4 +247,6 @@ pnpm plugin:pack --artifact /tmp/weave-web-build-unique/payload --out /tmp/weave
 
 ## 当前执行记录
 
-Task 1–6 的实现、独立审查、源码 CLI 校验、产物逐字节重建、真实 Studio 与公开 HTTPS 验收已完成。最后一轮审查补充原始主机名凭据检查的两条 RED→GREEN 回归，已重新构建产物；修复后 `pnpm check` 已通过（262 文件、4,780 测试），产物 verifier 已通过（12 模型请求、12 工具结果）；内容 PR CI 和 squash 后再勾选合并项。浏览器与 adapter 验证的范围记录在 `docs/learning/2026-11-23-web-plugin.md`。Task 7 等待实际内容 merge SHA。
+Task 1–6 的实现、独立审查、源码 CLI 校验、产物逐字节重建、真实 Studio 与公开 HTTPS 验收已完成。最后一轮审查补充原始主机名凭据检查的两条 RED→GREEN 回归，已重新构建产物；修复后 `pnpm check` 已通过（262 文件、4,780 测试），产物 verifier 已通过（12 模型请求、12 工具结果）；内容 PR #106 两组精确 head CI 均通过并已 squash（`ecfe2e889b9897ee6ea249b2ed7469585114ab2a`）。浏览器与 adapter 验证的范围记录在 `docs/learning/2026-11-23-web-plugin.md`。
+
+Task 7 已从该实际 merge SHA 创建独立 `chore/web-plugin-release`，真实 GitHub 获取已生成 submission，默认目录包含官方 Skills 与联网两个需安装包。旧完整检查唯一失败为默认目录测试只预期官方 Skills；已明确加入联网条目，独立审查的 6 个测试文件、87 个用例通过。2026-11-23 本轮重新执行 `pnpm check` 退出 0，13 个包汇总 263 个文件、4,794 个用例通过（未改动包复用 Turborepo 缓存，Server 本轮实际执行 95 个文件、1,756 个用例）；`pnpm marketplace:check` 返回 2 plugins, up to date；`pnpm web-plugin:verify` 退出 0，实际 CLI 重建字节一致与安装生命周期验收通过，12 次模型请求、12 个工具结果，`liveProviderValidation:false`。三次额外远程目录摘要复核未完成，未将本地摘要冒充额外远程成功。实现和验证已完成，提交、发行 PR、精确 head CI 与合并流程仍待执行。

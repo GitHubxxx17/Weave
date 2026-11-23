@@ -124,8 +124,26 @@ const officialMarketplacePolicy = createOfficialMarketplacePolicy([
     description: '搜索公开网页与读取有来源的有限文本；搜索使用单独配置的 Tavily。',
     publisher: 'Weave',
     tags: ['Weave', '联网', '搜索'],
-    // Content must merge before a real immutable GitHub release can be registered.
-    releases: [],
+    releases: [
+      {
+        manifest: {
+          id: 'weave-web',
+          name: 'Weave 联网',
+          version: '0.1.0',
+          apiVersion: '1.0.0',
+          description: '经共享审批搜索公开网页并读取有来源的有限文本。',
+          host: 'in-process',
+          capabilities: ['tool'],
+          contributes: { tools: ['web_search', 'web_fetch'] },
+          permissions: ['network:request'],
+        },
+        source: {
+          repository: 'https://github.com/githubxxx17/weave',
+          commit: 'ecfe2e889b9897ee6ea249b2ed7469585114ab2a',
+          subdirectory: 'plugins/official/weave-web',
+        },
+      },
+    ],
   },
   {
     id: 'weave-official-skills',
