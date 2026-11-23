@@ -1,3 +1,10 @@
+import {
+  createServerMemoryComposition,
+  resolveMemoryBudgets,
+  type ServerMemoryComposition,
+  type ServerMemoryCompositionOptions,
+  type ServerMemoryResource,
+} from './memory-composition.js';
 import { freezeExecutionInput } from './agent-execution-input.js';
 import { createFileContextCapture } from './agent-file-context.js';
 import {
@@ -109,6 +116,8 @@ export function parseAgentMaxSteps(value: string | undefined): number | undefine
 }
 
 export interface StartServerOptions {
+  readonly memory?: ServerMemoryCompositionOptions['budgets'];
+  readonly memoryStoreFactory?: ServerMemoryCompositionOptions['storeFactory'];
   readonly databaseFile?: string;
   readonly dataDirectory?: string;
   readonly skillsDirectory?: string | false;
@@ -187,6 +196,8 @@ export async function startServer(
   let agentExecutionService: AgentExecutionService | undefined;
   let agentTaskService: AgentTaskService | undefined;
   let agentTaskObserver: AgentTaskObserver | undefined;
+  let memory: ServerMemoryComposition | undefined;
+  let memoryResource: ServerMemoryResource | undefined;
   const shutdown = createServerShutdown({
     resources: () => ({
       server,
@@ -198,6 +209,7 @@ export async function startServer(
       pluginMarketplaceManager,
       agentExecutionService,
       agentTaskService,
+      memory: memoryResource,
     }),
     disposeHost: () => {
       agentTaskObserver?.close();
@@ -261,9 +273,23 @@ export async function startServer(
     await runtime.start();
     await registerServerPlugins(runtime, options.plugins);
     const sessionStore = getServerSessionStore(runtime);
+    const memoryBudgets = resolveMemoryBudgets(options.memory);
+    memory = await createServerMemoryComposition({
+      registerResource(resource) {
+        memoryResource = resource;
+      },
+      databaseFile,
+      projectStore: projects,
+      sessionStore,
+      budgets: memoryBudgets,
+      ...(options.memoryStoreFactory === undefined
+        ? {}
+        : { storeFactory: options.memoryStoreFactory }),
+    });
     const sessionService = createSessionService({
       projectStore: projects,
       sessionStore,
+      withMemoryMembershipMutation: memory.scopes.withMemoryMembershipMutation,
       withSessionIdle: (sessionId, operation) =>
         agentTaskService === undefined
           ? agentExecutionService === undefined
@@ -288,6 +314,9 @@ export async function startServer(
       hostVersion: serverHostVersion,
       skillsDirectory: resolveSkillsDirectory({ ...options, databaseFile }),
       agentTaskWorkspace,
+      memory,
+      toolResultMaxBytes: memoryBudgets.maxBytes,
+      context: { maxToolResultTokens: memoryBudgets.maxToolResultTokens },
       ...(maxSteps === undefined ? {} : { maxSteps }),
     }) satisfies ServerAgentRunnerOptions;
     await createServerAgentRunner(runtime, runnerOptions);
@@ -405,6 +434,7 @@ export async function startServer(
         projectStore: projects,
         projectFolders: projectFolderAuthority,
         workspace: agentTaskWorkspace,
+        withMemoryMembershipMutation: memory.scopes.withMemoryMembershipMutation,
       }),
     });
     agentTaskObserver = createAgentTaskObserver({
@@ -438,6 +468,7 @@ export async function startServer(
           projectStore: projects,
           projectFolderAuthority,
           sessionService,
+          memoryService: memory.service,
           skillCatalogService: createSkillCatalogService({
             current: () => runtime.serverHost.controller()?.current(),
           }),
@@ -479,7 +510,15 @@ export async function startServer(
     process.on('SIGINT', onSignal);
     process.on('SIGTERM', onSignal);
 
-    return { port: address.port, runtime, pluginHost, mcpManager, server: createdServer, stop };
+    return {
+      port: address.port,
+      runtime,
+      pluginHost,
+      mcpManager,
+      memory,
+      server: createdServer,
+      stop,
+    };
   } catch (error) {
     return shutdown.failStartup(ownershipReceiverFailure ?? ownershipLoss ?? error);
   }

@@ -102,3 +102,32 @@ describe('resolveDatabaseFile', () => {
     ).toBe('C:\\Users\\tester\\Weave\\weave.sqlite');
   });
 });
+
+describe('resolveMemoryDatabaseFile', () => {
+  it('derives one sidecar from canonical Session file identity through parent aliases', async () => {
+    const { mkdtemp, mkdir, symlink, rm, writeFile, realpath } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { resolveMemoryDatabaseFile } = await import('../src/persistence-path.js');
+    const directory = await realpath(await mkdtemp(join(tmpdir(), 'weave-memory-path-')));
+    try {
+      await mkdir(join(directory, 'actual'));
+      await symlink(join(directory, 'actual'), join(directory, 'alias'));
+      const filename = join(directory, 'actual', 'state.sqlite');
+      await writeFile(filename, '');
+      await symlink(filename, join(directory, 'session-alias.sqlite'));
+      const expected = `${filename}.memory.sqlite`;
+      expect(await resolveMemoryDatabaseFile(join(directory, 'alias', 'state.sqlite'))).toBe(
+        expected,
+      );
+      expect(await resolveMemoryDatabaseFile(join(directory, 'session-alias.sqlite'))).toBe(
+        expected,
+      );
+      expect(await resolveMemoryDatabaseFile(join(directory, 'alias', 'new.sqlite'))).toBe(
+        `${join(directory, 'actual', 'new.sqlite')}.memory.sqlite`,
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});

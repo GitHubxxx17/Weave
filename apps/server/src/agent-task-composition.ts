@@ -1,4 +1,5 @@
 import type { AgentTaskAccepted, SessionEventStore } from '@weave/session';
+import type { WithMemoryMembershipMutation } from './memory-scope.js';
 import { agentTaskFactDigest, projectSession } from '@weave/session';
 import type { ProjectStore } from '@weave/workspace';
 import {
@@ -24,11 +25,14 @@ export interface AgentTaskHostOptions {
   readonly projectStore: ProjectStore;
   readonly projectFolders: ProjectFolderAuthority;
   readonly workspace: AgentTaskWorkspaceBindings;
+  readonly withMemoryMembershipMutation?: WithMemoryMembershipMutation;
 }
 
 /** Adapts host capabilities; task behavior and cross-log reconciliation stay in Runtime. */
 export function createAgentTaskHost(options: AgentTaskHostOptions): AgentTaskHost {
   const { sessionStore, projectStore, projectFolders, workspace } = options;
+  const withMemoryMembershipMutation: WithMemoryMembershipMutation =
+    options.withMemoryMembershipMutation ?? ((_sessionId, operation) => operation());
   async function memberships(sessionId: string): Promise<readonly string[]> {
     const projects = await projectStore.listProjects();
     const related = await Promise.all(
@@ -153,17 +157,21 @@ export function createAgentTaskHost(options: AgentTaskHostOptions): AgentTaskHos
               return;
             }
             assertCanStartSync();
-            await sessionStore.append(child.sessionId, [
-              { type: 'session.created', payload: { title: accepted.title } },
-              { type: 'agent.task.origin', payload: origin },
-            ]);
+            await withMemoryMembershipMutation(child.sessionId, () =>
+              sessionStore.append(child.sessionId, [
+                { type: 'session.created', payload: { title: accepted.title } },
+                { type: 'agent.task.origin', payload: origin },
+              ]),
+            );
           },
           async attachExact(accepted) {
             const relation = await projectRelation(accepted);
             if (relation === 'attached') return;
             if (relation !== 'unattached') throw new AgentTaskHostError('preparation-failed');
             assertCanStartSync();
-            await projectStore.attachSession(accepted.project.projectId, child.sessionId);
+            await withMemoryMembershipMutation(child.sessionId, () =>
+              projectStore.attachSession(accepted.project.projectId, child.sessionId),
+            );
           },
           withLaunchAuthority: (operation) =>
             projectFolders.withAuthority(captured, child.sessionId, async () => {

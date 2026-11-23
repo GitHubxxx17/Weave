@@ -194,6 +194,29 @@ browser mode Provider configuration is local Server configuration read from
 mode ever returns a stored key to Studio. The page is an HTTP/SSE surface for
 the existing Runtime, not a replacement for the Runtime.
 
+### Explicit long-term memory
+
+Open **记忆** in Studio to manage records for the selected Project or the local
+personal scope. Agent use starts disabled for each scope. You can still create,
+edit, inspect revisions, review an exact Agent-authored version, and delete
+records while use is disabled. Personal use requires its own explicit opt-in.
+
+Agents use `search_memory` and `read_memory` on demand. Root Turns can also call
+`save_memory` and `delete_memory` through the shared Tool Pipeline and current
+permission mode. Child tasks can only read their verified Project memory.
+Agent saves remain **Agent 编写** after approval; an explicit user edit or review
+creates an **已审阅** revision. A later Agent edit changes the current state back
+to Agent-authored. Conflicting edits retain your draft and require reloading the
+current version before another save.
+
+Memory is stored in a separately versioned local SQLite sidecar. Deletion removes
+the current record from list/search and retains revision history and existing
+Session tool results. The selected deleted record's history remains inspectable;
+this release has no separate deleted-record catalog. Memory does not learn
+automatically, create embeddings, or inject records into system instructions.
+See [the implementation walkthrough](docs/learning/2026-11-23-long-term-memory.md)
+for the authority model, recovery behavior and measured limits.
+
 ### LLM Provider routing
 
 The Server always registers a deterministic `mock` Provider. Additional

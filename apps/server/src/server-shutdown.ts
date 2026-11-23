@@ -8,6 +8,13 @@ import type { PluginAuthorityDatabase } from './plugin-authority-types.js';
 import type { PluginMarketplaceManager } from './plugin-marketplace-manager.js';
 
 export interface ServerShutdownResources {
+  readonly memory?:
+    | {
+        readonly closeSync: () => void;
+        readonly drain: () => Promise<void>;
+        readonly close: () => Promise<void>;
+      }
+    | undefined;
   readonly agentTaskService?:
     { readonly closeSync: () => void; readonly drain: () => Promise<void> } | undefined;
   readonly agentExecutionService?: Pick<AgentExecutionService, 'closeSync' | 'drain'> | undefined;
@@ -91,6 +98,8 @@ export function createServerShutdown(options: ServerShutdownOptions): ServerShut
   let httpClose: Promise<CleanupOutcome> | undefined;
   let quiesced = false;
   let agentWritersDrained = false;
+  let memoryDrained = false;
+  let memoryClosed = false;
   let consumersDrained = false;
   let settledCleanup = false;
   let wrapperReleased = false;
@@ -106,6 +115,7 @@ export function createServerShutdown(options: ServerShutdownOptions): ServerShut
 
   function hasUnfinishedResources(): boolean {
     return (
+      (resources?.memory !== undefined && !memoryClosed) ||
       (!agentWritersDrained &&
         (resources?.agentExecutionService !== undefined ||
           resources?.agentTaskService !== undefined)) ||
@@ -126,7 +136,10 @@ export function createServerShutdown(options: ServerShutdownOptions): ServerShut
       panelService,
       agentTaskService,
       agentExecutionService,
+      memory,
     } = resources;
+    // Fence every Memory entrance before cancellation callbacks can reenter.
+    memory?.closeSync();
     agentTaskService?.closeSync();
     agentExecutionService?.closeSync();
     panelService?.closeSync();
@@ -148,6 +161,17 @@ export function createServerShutdown(options: ServerShutdownOptions): ServerShut
       });
       if (!drained.ok) return [drained.cause];
       agentWritersDrained = true;
+    }
+    if (memory !== undefined && !memoryDrained) {
+      const drained = await settle(() => memory.drain());
+      if (!drained.ok) return [drained.cause];
+      memoryDrained = true;
+    }
+    if (memory !== undefined && !memoryClosed) {
+      // A failed data/owner close retains every consumer and backing Store for retry.
+      const closed = await settle(() => memory.close());
+      if (!closed.ok) return [closed.cause];
+      memoryClosed = true;
     }
     if (owned !== undefined && !consumersDrained) {
       const quiesce = async () => {

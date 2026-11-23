@@ -5,6 +5,9 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
+      '/memory': {
+        target: 'http://127.0.0.1:4317',
+      },
       '/agent': {
         target: 'http://127.0.0.1:4317',
       },

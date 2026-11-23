@@ -21,6 +21,7 @@ import {
   Archive,
   ArrowDown,
   Bot,
+  BookOpen,
   Check,
   ChevronDown,
   ChevronRight,
@@ -95,6 +96,7 @@ import {
   usePluginCatalogStore,
 } from '../features/plugins/plugin-catalog-context.js';
 import { PluginMarketplacePage } from '../features/plugins/plugin-marketplace-page.js';
+import { MemoryPage } from '../features/memory/MemoryPage.js';
 import { useSidePanelWidth } from '../features/panel/panel-resizer.js';
 import { contextWarnThreshold, latestContext } from '../features/panel/panel-data.js';
 import { formatTokens, sumUsage } from '../features/conversation/turn-stats.js';
@@ -155,7 +157,8 @@ type SessionRunHandle = {
 
 const idleRunState: SessionRunState = { status: 'idle', errorMessage: null };
 
-type ProductView = 'studio' | 'projects' | 'history' | 'archived' | 'settings' | 'marketplace';
+type ProductView =
+  'studio' | 'projects' | 'history' | 'archived' | 'settings' | 'marketplace' | 'memory';
 type OpenMenu = 'project' | 'more' | 'context' | 'permission' | 'model' | null;
 
 type AgentSubmissionSnapshot = Readonly<
@@ -448,7 +451,7 @@ const statusLabels: Record<RunStatus, string> = {
 };
 
 const viewLabels: Record<
-  Exclude<ProductView, 'studio' | 'marketplace'>,
+  Exclude<ProductView, 'studio' | 'marketplace' | 'memory'>,
   { title: string; description: string }
 > = {
   projects: {
@@ -3492,7 +3495,7 @@ function StudioApp(): ReactElement {
   return (
     <main
       ref={shellRef}
-      className={`studio-shell studio-shell-fixed${activeView === 'studio' && !isActivityPanelOpen ? ' studio-shell-panel-collapsed' : ''}${activeView !== 'studio' && activeView !== 'settings' ? ' studio-shell-context-collapsed' : ''}${activeView === 'settings' ? ' studio-shell-settings' : ''}${activeView === 'marketplace' ? ' studio-shell-marketplace' : ''}`}
+      className={`studio-shell studio-shell-fixed${activeView === 'studio' && !isActivityPanelOpen ? ' studio-shell-panel-collapsed' : ''}${activeView !== 'studio' && activeView !== 'settings' ? ' studio-shell-context-collapsed' : ''}${activeView === 'settings' ? ' studio-shell-settings' : ''}${activeView === 'marketplace' || activeView === 'memory' ? ' studio-shell-marketplace' : ''}`}
       style={{ '--panel-width': `${panelWidth}px` } as CSSProperties}
     >
       {openMenu !== null ? (
@@ -3537,6 +3540,15 @@ function StudioApp(): ReactElement {
             <Puzzle aria-hidden="true" />
             <small>插件市场</small>
             <PluginPendingBadge />
+          </button>
+          <button
+            className={`workspace-nav-button${activeView === 'memory' ? ' workspace-nav-button-active' : ''}`}
+            type="button"
+            aria-current={activeView === 'memory' ? 'page' : undefined}
+            onClick={() => selectProductView('memory')}
+          >
+            <BookOpen aria-hidden="true" />
+            <small>记忆</small>
           </button>
           <button
             className={`workspace-nav-button${activeView === 'history' ? ' workspace-nav-button-active' : ''}`}
@@ -3611,8 +3623,8 @@ function StudioApp(): ReactElement {
         <aside
           className="session-rail"
           aria-label="会话列表"
-          hidden={activeView === 'marketplace'}
-          inert={activeView === 'marketplace'}
+          hidden={activeView === 'marketplace' || activeView === 'memory'}
+          inert={activeView === 'marketplace' || activeView === 'memory'}
         >
           <div className={`menu-anchor${openMenu === 'project' ? ' menu-anchor-open' : ''}`}>
             <button
@@ -4648,7 +4660,26 @@ function StudioApp(): ReactElement {
           )}
         </form>
       </section>
-      {activeView === 'marketplace' ? (
+      {activeView === 'memory' ? (
+        <MemoryPage
+          selectedProjectId={activeProjectId}
+          verifiedSessionIds={projects.flatMap((project) =>
+            project.sessions
+              .filter((session) => session.archivedAt === null)
+              .map((session) => session.id),
+          )}
+          onNavigateSession={(sessionId) => {
+            const project = projects.find((candidate) =>
+              candidate.sessions.some(
+                (session) => session.id === sessionId && session.archivedAt === null,
+              ),
+            );
+            if (project === undefined) return;
+            selectProjectSession(project.id, sessionId);
+            setActiveView('studio');
+          }}
+        />
+      ) : activeView === 'marketplace' ? (
         <PluginMarketplacePage
           hasRunningSessions={Object.values(runStateBySession).some(
             (run) => run.status === 'streaming',

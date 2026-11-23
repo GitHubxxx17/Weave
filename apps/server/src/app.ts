@@ -10,6 +10,7 @@ import {
   type PanelAppOptions,
 } from './plugin-panel-api.js';
 import { Hono } from 'hono';
+import { registerMemoryRoutes, type MemoryAppOptions } from './memory-api.js';
 import { cors } from 'hono/cors';
 import { z } from 'zod';
 import { registerProviderRoutes, type ProviderAppOptions } from './provider-api.js';
@@ -59,7 +60,8 @@ export interface AppOptions
     PluginMarketplaceAppOptions,
     ProviderAppOptions,
     SkillAppOptions,
-    PanelAppOptions {
+    PanelAppOptions,
+    MemoryAppOptions {
   /**
    * Exact browser origin allowed to call the local control plane.
    *
@@ -87,6 +89,7 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
     await next();
   });
 
+  registerAgentExecutionGuards(app, studioOrigin, ['/memory', '/memory/*']);
   registerPanelGuards(app, options ?? {});
   registerAgentExecutionGuards(app, studioOrigin);
   registerAgentExecutionGuards(app, studioOrigin, [
@@ -116,6 +119,7 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
     return context.json(body, running ? 200 : 503);
   });
 
+  registerMemoryRoutes(app, options ?? {});
   registerApprovalRoutes(app, runtime, options ?? {});
   registerWorkspaceRoutes(app, workspaceOptions);
   registerFileUndoRoutes(app, runtime, workspaceOptions);

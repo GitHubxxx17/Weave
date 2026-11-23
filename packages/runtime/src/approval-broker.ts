@@ -178,6 +178,9 @@ export function createApprovalBroker(): ApprovalBroker {
           }
         };
         parsedInput.signal.addEventListener('abort', abortHandler, { once: true });
+        // approval.created listeners may synchronously close an owning host
+        // resource before this listener was installed.
+        if (parsedInput.signal.aborted) abortHandler();
       }
 
       if (parsedInput.timeoutMs === 0) {

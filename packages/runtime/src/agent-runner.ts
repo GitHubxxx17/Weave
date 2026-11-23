@@ -44,6 +44,7 @@ import {
 } from './context/build-context.js';
 import { estimateMessageTokens, estimateToolsTokens } from './context/token-estimate.js';
 import { parsePlanFromToolCall } from './update-plan-tool.js';
+import { memoryErrorMessages } from './memory-errors.js';
 import {
   ToolExecutionError,
   type ToolExecutionResult,
@@ -443,7 +444,10 @@ const recoverableToolErrorCodes: ReadonlySet<string> = new Set([
 ]);
 
 function isRecoverableToolError(error: unknown): error is ToolExecutionError {
-  return error instanceof ToolExecutionError && recoverableToolErrorCodes.has(error.code);
+  return (
+    error instanceof ToolExecutionError &&
+    (recoverableToolErrorCodes.has(error.code) || Object.hasOwn(memoryErrorMessages, error.code))
+  );
 }
 
 function readErrorCode(value: unknown): string | undefined {

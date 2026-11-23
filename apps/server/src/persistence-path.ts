@@ -1,4 +1,5 @@
-import { posix, win32 } from 'node:path';
+import { realpath } from 'node:fs/promises';
+import { basename, dirname, join, posix, resolve, win32 } from 'node:path';
 import { z } from 'zod';
 
 const nonEmptyStringSchema = z.string().min(1);
@@ -110,4 +111,17 @@ export function resolveDatabaseFile(options: ResolveDatabaseFileOptions = {}): s
     resolveDefaultDataDirectory(environment, options.platform, options.homeDirectory),
     'weave.sqlite',
   );
+}
+
+/** Resolves Session aliases before deriving the independently versioned Memory sidecar. */
+export async function resolveMemoryDatabaseFile(databaseFile: string): Promise<string> {
+  const absolute = resolve(parseNonEmptyString(databaseFile, 'database file'));
+  let canonical: string;
+  try {
+    canonical = await realpath(absolute);
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause;
+    canonical = join(await realpath(dirname(absolute)), basename(absolute));
+  }
+  return `${canonical}.memory.sqlite`;
 }
