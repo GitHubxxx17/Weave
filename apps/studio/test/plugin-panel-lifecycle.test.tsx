@@ -251,7 +251,10 @@ it.each(['ref', 'authority', 'root'])(
 it('prepares in StrictMode while the initial data read remains pending', async () => {
   const read = deferred<PanelData>();
   vi.mocked(fetchPanelData).mockReturnValue(read.promise);
-  vi.mocked(preparePanelCommand).mockResolvedValue({
+  // Request admission and the eventual draft commit are separate observable states.
+  const prepare = deferred<Awaited<ReturnType<typeof preparePanelCommand>>>();
+  vi.mocked(preparePanelCommand).mockReturnValue(prepare.promise);
+  const prepared = {
     ...authority,
     schemaVersion: 1,
     panelId: descriptor.panelId,
@@ -262,13 +265,24 @@ it('prepares in StrictMode while the initial data read remains pending', async (
     command: 'report',
     text: 'prepared',
     requiresUserSend: true,
-  });
+  } as const;
   render(
     <StrictMode>
       <Host />
     </StrictMode>,
   );
-  fireEvent.click(screen.getByRole('button', { name: 'Prepare one' }));
-  await waitFor(() => expect(preparePanelCommand).toHaveBeenCalledTimes(1));
-  expect((screen.getByLabelText('Draft') as HTMLTextAreaElement).value).toBe('prepared');
+  const submit = screen.getByRole('button', { name: 'Prepare one' });
+  const draft = screen.getByLabelText<HTMLTextAreaElement>('Draft');
+  fireEvent.click(submit);
+  expect(preparePanelCommand).toHaveBeenCalledTimes(1);
+  expect(vi.mocked(preparePanelCommand).mock.calls[0]?.[3].aborted).toBe(false);
+  expect(draft.value).toBe('');
+  expect(submit.closest('fieldset')?.disabled).toBe(true);
+
+  await act(async () => prepare.resolve(prepared));
+  await waitFor(() => expect(draft.value).toBe('prepared'));
+  expect(screen.getByRole('status').textContent).toBe('已准备文本，请检查并点击发送');
+  expect(submit.closest('fieldset')?.disabled).toBe(false);
+  expect(screen.queryByText('current')).toBeNull();
+  expect(preparePanelCommand).toHaveBeenCalledTimes(1);
 });
