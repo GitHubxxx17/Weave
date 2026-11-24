@@ -127,11 +127,20 @@ describe('marketplace index sources', () => {
     );
     expect(fetch.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
     expect(await screen.findByText(/尚未读取该索引/)).toBeDefined();
+    // The button is disabled while the new source's catalog loads; a click then is silently dropped.
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: '刷新市场' }) as HTMLButtonElement).disabled).toBe(
+        false,
+      ),
+    );
     fireEvent.click(screen.getByRole('button', { name: '刷新市场' }));
     await screen.findByRole('button', { name: '查看 新来源工具' });
-    expect(
-      fetch.mock.calls.filter(([, init]) => init.method === 'POST').map(([path]) => path),
-    ).toEqual(['/plugins/marketplace/sources/add', '/plugins/marketplace/refresh']);
+    // The entry can render before the refresh POST is observed, so wait for the request itself.
+    await waitFor(() =>
+      expect(
+        fetch.mock.calls.filter(([, init]) => init.method === 'POST').map(([path]) => path),
+      ).toEqual(['/plugins/marketplace/sources/add', '/plugins/marketplace/refresh']),
+    );
   });
 
   it('keeps official GitHub entries after a failed refresh and attributes their custom stale source', async () => {

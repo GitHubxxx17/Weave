@@ -334,7 +334,9 @@ test('retrieves fixed identifier, Chinese, Memory, and scope ground truth', asyn
   } finally {
     store.releaseReadLease(lease);
   }
-}, 20_000);
+  // Each of the 24 ground-truth queries starts a query worker (~100ms locally), so CI runners
+  // 8x slower exceed the default budget; the work cannot be shared without weakening coverage.
+}, 60_000);
 
 test('rolls back the pointer and terminal together when the final guard fails', () => {
   const { store } = open();
