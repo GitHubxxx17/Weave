@@ -357,7 +357,8 @@ describe('bounded disk Skill bundles', () => {
     expect(closed).toBe(true);
   });
 
-  it('bounds nesting, total resource bytes and file counts', async () => {
+  // The three limits are checked in separate tests so each gets its own timeout budget on slow CI disks.
+  it('bounds nesting depth', async () => {
     const root = await fixture();
     const deep = path.join(root.directory, 'review', ...Array.from({ length: 9 }, () => 'nested'));
     await mkdir(deep, { recursive: true });
@@ -365,7 +366,10 @@ describe('bounded disk Skill bundles', () => {
       code: 'limit-exceeded',
       name: 'review',
     });
-    await rm(path.join(root.directory, 'review', 'nested'), { recursive: true });
+  });
+
+  it('bounds total resource bytes', async () => {
+    const root = await fixture();
     await writeFile(
       path.join(root.directory, 'review', 'big.bin'),
       Buffer.alloc(20 * 1024 * 1024 + 1),
@@ -374,9 +378,15 @@ describe('bounded disk Skill bundles', () => {
       code: 'limit-exceeded',
       name: 'review',
     });
-    await rm(path.join(root.directory, 'review', 'big.bin'));
-    for (let index = 0; index < 1000; index++)
-      await writeFile(path.join(root.directory, 'review', `r${index}`), '');
+  });
+
+  it('bounds file counts', async () => {
+    const root = await fixture();
+    await Promise.all(
+      Array.from({ length: 1000 }, (_, index) =>
+        writeFile(path.join(root.directory, 'review', `r${index}`), ''),
+      ),
+    );
     expect((await discoverSkillBundles({ root })).issues).toContainEqual({
       code: 'limit-exceeded',
       name: 'review',
