@@ -378,7 +378,8 @@ describe('bounded disk Skill bundles', () => {
       code: 'limit-exceeded',
       name: 'review',
     });
-  });
+    // Writing and hashing a 20MB resource is I/O heavy on CI; keep the real size to cover the limit.
+  }, 30_000);
 
   it('bounds file counts', async () => {
     const root = await fixture();
@@ -391,7 +392,8 @@ describe('bounded disk Skill bundles', () => {
       code: 'limit-exceeded',
       name: 'review',
     });
-  });
+    // The scan opens and hashes up to 1000 files one by one; on slow CI disks that exceeds 5s.
+  }, 30_000);
 
   it('refuses FIFOs without blocking and rejects a linked resource parent after pinning', async () => {
     const root = await fixture();
