@@ -1413,7 +1413,6 @@ HTTP/SSE 与 Session read model 验证；窗口交互通过完整 `sessionId + t
 挂载行数、DOM、输入代理、长任务和锚点证据；未实测的性能目标不写成结果。正式
 设计、合同和停止扩大范围见 [Studio rendering design](../superpowers/specs/2026-11-24-studio-rendering-design.md)。
 
-
 ## Studio Explorer rendering
 
 Studio 的 Explorer 在接纳 Server listing 后构建浏览器本地索引，目录和筛选结果共享
@@ -1423,3 +1422,7 @@ Project/path 身份约束；原有 ComposerOwner key、附件权限和 Server �
 不新增协议、Runtime 或文件系统权威。跨包变更仅为合成性能 fixture 的现有 HTTP
 DTO，详细边界、争用与 viewer 诊断范围见
 [Explorer rendering design](../superpowers/specs/2026-11-24-studio-explorer-rendering-design.md)。
+生产构建的文件树、争用与大文件查看器证据见
+[Explorer rendering results](../learning/2026-11-24-studio-explorer-rendering-results.md)。
+查看器继续采用同步高亮与 diff；文件树窗口不对单个大文件的主线程成本或浏览器
+renderer 稳定性作保证，诊断中的未完成阶段和失败尝试必须保留。

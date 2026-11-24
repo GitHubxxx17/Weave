@@ -25,14 +25,22 @@ const errorSchema = z.object({
  * "改动" view. Reuses {@link FileTreeApiError} so the viewer can surface the
  * Server's error code. The browser never touches the filesystem or Git.
  */
-export async function fetchFileDiff(projectId: string, filePath: string): Promise<FileDiff> {
+export async function fetchFileDiff(
+  projectId: string,
+  filePath: string,
+  options?: { readonly signal?: AbortSignal },
+): Promise<FileDiff> {
   const url = runtimeApiUrl(
     `/projects/${encodeURIComponent(projectId)}/file-diff?path=${encodeURIComponent(filePath)}`,
   );
   let response: Response;
   try {
-    response = await fetch(url, { method: 'GET' });
-  } catch {
+    response = await fetch(url, {
+      method: 'GET',
+      ...(options?.signal === undefined ? {} : { signal: options.signal }),
+    });
+  } catch (cause) {
+    if (options?.signal?.aborted) throw cause;
     throw new FileTreeApiError('file-diff-network', '无法连接到本地服务', 0);
   }
   const payload: unknown = await response.json().catch(() => undefined);

@@ -1,0 +1,40 @@
+{
+  "note": "QA aborted after known host URL global failure; real HTTP requests were correct. No timing sample accepted.",
+  "phases": [
+    {
+      "name": "plain-content",
+      "status": "failed",
+      "startedAt": 187.20000004768372,
+      "endedAt": 120201.20000004768,
+      "elapsedMs": 120011,
+      "error": "page.waitForResponse: Timeout 120000ms exceeded while waiting for event \"response\""
+    }
+  ],
+  "failures": [
+    {
+      "phase": "plain-content",
+      "message": "page.waitForResponse: Timeout 120000ms exceeded while waiting for event \"response\""
+    }
+  ],
+  "errors": [],
+  "fixture": {
+    "plainPath": "file-00999.txt",
+    "highlightPath": "file-00000.ts",
+    "bytes": 102400,
+    "codeUnits": 69632,
+    "lineCount": 4097,
+    "longestLine": 16,
+    "contentHash": "0ccadbdfc04f0d61beb176a30ca8c98be0c98f6d8847b5066b6a764723d8ff2a",
+    "oldContentHash": "bb48cab438f68d5669476dfd4e4cfd16dec9ca816d14ffa05ea5e0760f1475a8",
+    "newContentHash": "0ccadbdfc04f0d61beb176a30ca8c98be0c98f6d8847b5066b6a764723d8ff2a",
+    "oldFirstLine": "let   范围 = \"中文\";",
+    "newFirstLine": "const 范围 = \"中文\";",
+    "expectedHighlight": true,
+    "highlightGateUnits": "UTF-16 code units",
+    "highlightGate": 400000,
+    "contentTruncated": false,
+    "diffTruncationFieldAvailable": false
+  },
+  "longTasks": [],
+  "domElements": 547
+}

@@ -1,0 +1,3 @@
+The browser 'weave-contention-84448' is not open, please run open first
+
+  playwright-cli -s=weave-contention-84448 open [params]

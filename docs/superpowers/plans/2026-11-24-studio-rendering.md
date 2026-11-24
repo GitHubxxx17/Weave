@@ -272,3 +272,34 @@ PR1 的 18 个标准 after、6 个工具 stream 和 3 个 mixed/500 工具样本
 before/after 按阶段顺序采样，没有实现原计划的随机交错；结果文档明确该限制。
 正式 timing dist 与最后 pending reveal 一帧重试的源码不同，最终构建 smoke 单独记录。
 PR2 草稿仅在 /tmp 准备，须在 PR1 squash 后的新分支集成。
+
+
+## PR2 集成记录
+
+PR1 #111 已在两套 CI（check、marketplace、web-plugin）通过后 squash 为 bf7ab25，
+远程分支已删除。PR2 从最新 origin/main 创建 feat/studio-explorer-rendering，
+eb5f33a 先提交 Explorer contract。新设计见
+`docs/superpowers/specs/2026-11-24-studio-explorer-rendering-design.md`。
+合成树 before 18 样本已在未优化的固定 dist 上顺序完成，暂存稿集成后保留其
+原始 fingerprint；50k 的 broad mounted 为 50,000，全页 DOM 250,527。
+PR2 的独立报告记录 tree after、同页争用、viewer 分阶段诊断和明确限制。
+
+集成时独立审查发现同一路径再次点击不触发 content effect，以及新路径首次提交可
+携带旧正文/高亮/错误。已通过每次打开递增 selection revision、立即清空呈现状态并
+使旧 epoch 失效修复；同路径失败重试和三种首次提交回归均先红后绿。
+模型/窗口、请求归属和性能探针分别经过独立审查；探针增加真实 UTF-8/hash、实际
+diff 行、独立清理、渲染与验证时间区间，以及编辑前后执行仍在运行的证据。
+
+最终 `pnpm check` 通过，Studio 943 tests / 82 files、Server 1911 tests / 114 files。
+冻结的生产 dist、源码和 entry 大小见 learning artifact 的 after-build-manifest。
+此前两次检查分别遇到未修改的 Memory review/delete 焦点断言和 official Skills
+5s I/O 超时；前者隔离 17/17、与窗口用例串行 46/46、目标重复 12/12 通过，后者
+隔离目标 1042ms 通过。未提高 timeout 或把无关修复放入本 PR，保留失败说明。
+正式样本只在所有检查与浏览器 QA 结束后顺序运行。
+
+正式 tree after 18/18、contention 3/3 通过。Viewer 完整矩阵保留 36 个样本：
+33 passed / 3 failed，108 阶段中 102 passed / 6 failed；失败为近 2MB 多字节单长行。
+同一 CLI 连续阶段的独立补验也失败，进一步诊断记录 `Target crashed` 和 crash 事件；
+具体是正文呈现、校验还是 host 交互触发尚未建立因果，不能仅称 CLI 丢页，也不能把
+定位元素的超时算为产品渲染耗时。本轮按批准设计完成 viewer 诊断，不扩为 worker、
+行窗口或浏览器崩溃修复；正式失败和补验失败均单列保留，不替换为成功或混算中位数。

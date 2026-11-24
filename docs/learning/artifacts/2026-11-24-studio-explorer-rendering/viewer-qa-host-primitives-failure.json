@@ -1,0 +1,90 @@
+{
+  "note": "QA stopped after host lacked TextEncoder and diff raw selector included operator prefix. Fixed by browser-context hash and .diff-line-content-raw.",
+  "plain": {
+    "phases": [
+      {
+        "name": "plain-content",
+        "status": "failed",
+        "startedAt": 190.20000004768372,
+        "endedAt": 299.7000000476837,
+        "elapsedMs": 109,
+        "error": "globalThis.TextEncoder is not a constructor"
+      }
+    ],
+    "failures": [
+      {
+        "phase": "plain-content",
+        "message": "globalThis.TextEncoder is not a constructor"
+      }
+    ],
+    "errors": [],
+    "fixture": {
+      "plainPath": "file-00999.txt",
+      "highlightPath": "file-00000.ts",
+      "bytes": 102400,
+      "codeUnits": 69632,
+      "lineCount": 4097,
+      "longestLine": 16,
+      "contentHash": "0ccadbdfc04f0d61beb176a30ca8c98be0c98f6d8847b5066b6a764723d8ff2a",
+      "oldContentHash": "bb48cab438f68d5669476dfd4e4cfd16dec9ca816d14ffa05ea5e0760f1475a8",
+      "newContentHash": "0ccadbdfc04f0d61beb176a30ca8c98be0c98f6d8847b5066b6a764723d8ff2a",
+      "oldFirstLine": "let   范围 = \"中文\";",
+      "newFirstLine": "const 范围 = \"中文\";",
+      "expectedHighlight": true,
+      "highlightGateUnits": "UTF-16 code units",
+      "highlightGate": 400000,
+      "contentTruncated": false,
+      "diffTruncationFieldAvailable": false
+    },
+    "longTasks": [],
+    "domElements": 547
+  },
+  "content": {
+    "phases": [
+      {
+        "name": "typescript-content",
+        "status": "failed",
+        "startedAt": 1021.7000000476837,
+        "endedAt": 1436.6000000238419,
+        "elapsedMs": 415,
+        "error": "globalThis.TextEncoder is not a constructor"
+      }
+    ],
+    "failures": [
+      {
+        "phase": "typescript-content",
+        "message": "globalThis.TextEncoder is not a constructor"
+      }
+    ],
+    "errors": [],
+    "fixture": {
+      "plainPath": "file-00999.txt",
+      "highlightPath": "file-00000.ts",
+      "bytes": 102400,
+      "codeUnits": 69632,
+      "lineCount": 4097,
+      "longestLine": 16,
+      "contentHash": "0ccadbdfc04f0d61beb176a30ca8c98be0c98f6d8847b5066b6a764723d8ff2a",
+      "oldContentHash": "bb48cab438f68d5669476dfd4e4cfd16dec9ca816d14ffa05ea5e0760f1475a8",
+      "newContentHash": "0ccadbdfc04f0d61beb176a30ca8c98be0c98f6d8847b5066b6a764723d8ff2a",
+      "oldFirstLine": "let   范围 = \"中文\";",
+      "newFirstLine": "const 范围 = \"中文\";",
+      "expectedHighlight": true,
+      "highlightGateUnits": "UTF-16 code units",
+      "highlightGate": 400000,
+      "contentTruncated": false,
+      "diffTruncationFieldAvailable": false
+    },
+    "longTasks": [
+      {
+        "startTime": 1087.6000000238419,
+        "duration": 144
+      },
+      {
+        "startTime": 1242.5,
+        "duration": 112
+      }
+    ],
+    "domElements": 25128
+  }
+}

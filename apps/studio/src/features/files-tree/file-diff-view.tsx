@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { DiffModeEnum, DiffView } from '@git-diff-view/react';
 import { generateDiffFile } from '@git-diff-view/file';
 import { getDiffViewHighlighter } from '@git-diff-view/shiki';
@@ -33,8 +33,9 @@ export interface FileDiffViewProps {
 }
 
 /** Builds a highlighted `DiffFile` from the two contents, ready for `DiffView`. */
-async function prepareDiff(diff: FileDiff): Promise<Prepared> {
+async function prepareDiff(diff: FileDiff, signal?: AbortSignal): Promise<Prepared> {
   const highlighter = await getDiffViewHighlighter();
+  signal?.throwIfAborted();
   const lang = languageForPath(diff.path) ?? 'txt';
   const diffFile = generateDiffFile(
     diff.path,
@@ -53,42 +54,53 @@ async function prepareDiff(diff: FileDiff): Promise<Prepared> {
 }
 
 export function FileDiffView({ projectId, path }: FileDiffViewProps): ReactElement {
+  const requestEpoch = useRef(0);
+  const ownerRef = useRef({ projectId, path, epoch: 0 });
+  if (ownerRef.current.projectId !== projectId || ownerRef.current.path !== path)
+    ownerRef.current = { projectId, path, epoch: ownerRef.current.epoch + 1 };
   const [status, setStatus] = useState<Status>('loading');
   const [prepared, setPrepared] = useState<Prepared | null>(null);
   const [tracked, setTracked] = useState(true);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    let active = true;
+    const controller = new AbortController();
+    const epoch = ++requestEpoch.current;
+    const owner = ownerRef.current;
+    const valid = () =>
+      !controller.signal.aborted && epoch === requestEpoch.current && ownerRef.current === owner;
     setStatus('loading');
     setPrepared(null);
     setError('');
     void (async () => {
       try {
-        const diff = await fetchFileDiff(projectId, path);
-        if (!active) {
+        const diff = await fetchFileDiff(projectId, path, {
+          signal: controller.signal,
+        });
+        if (!valid()) {
           return;
         }
+        if (diff.path !== path) throw new Error('返回的文件路径不匹配');
         setTracked(diff.tracked);
         if (!diff.changed) {
           setStatus('unchanged');
           return;
         }
-        const next = await prepareDiff(diff);
-        if (!active) {
+        const next = await prepareDiff(diff, controller.signal);
+        if (!valid()) {
           return;
         }
         setPrepared(next);
         setStatus('ready');
       } catch (caught) {
-        if (active) {
+        if (valid()) {
           setError(caught instanceof Error ? caught.message : '加载失败');
           setStatus('error');
         }
       }
     })();
     return () => {
-      active = false;
+      controller.abort();
     };
   }, [projectId, path]);
 

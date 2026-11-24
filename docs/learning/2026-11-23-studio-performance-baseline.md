@@ -2,6 +2,9 @@
 
 本轮先记录生产构建在长会话中的表现，为后续分页、虚拟列表和流式更新优化保留可复现的对照。测试只使用本机合成 HTTP/SSE 数据，不调用模型，不打开真实项目或用户数据库。
 
+后续实现与独立重采结果见 [长会话与工具流渲染](2026-11-24-studio-rendering-results.md)
+和 [Explorer 渲染](2026-11-24-studio-explorer-rendering-results.md)。下文保留原始基线口径与数值。
+
 ## 复现
 
 使用仓库要求的 Node.js 和 pnpm，安装依赖，并准备可直接执行的 `playwright-cli` 与 Chrome。脚本不会自动安装全局工具或下载浏览器。运行：

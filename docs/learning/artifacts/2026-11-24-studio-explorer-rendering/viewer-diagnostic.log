@@ -1,0 +1,39 @@
+(node:95614) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+Measuring viewer 102400/ascii/single, repeat 1/3
+Measuring viewer 102400/ascii/single, repeat 2/3
+Measuring viewer 102400/ascii/single, repeat 3/3
+Measuring viewer 102400/ascii/multi, repeat 1/3
+Measuring viewer 102400/ascii/multi, repeat 2/3
+Measuring viewer 102400/ascii/multi, repeat 3/3
+Measuring viewer 102400/multibyte/single, repeat 1/3
+Measuring viewer 102400/multibyte/single, repeat 2/3
+Measuring viewer 102400/multibyte/single, repeat 3/3
+Measuring viewer 102400/multibyte/multi, repeat 1/3
+Measuring viewer 102400/multibyte/multi, repeat 2/3
+Measuring viewer 102400/multibyte/multi, repeat 3/3
+Measuring viewer 409600/ascii/single, repeat 1/3
+Measuring viewer 409600/ascii/single, repeat 2/3
+Measuring viewer 409600/ascii/single, repeat 3/3
+Measuring viewer 409600/ascii/multi, repeat 1/3
+Measuring viewer 409600/ascii/multi, repeat 2/3
+Measuring viewer 409600/ascii/multi, repeat 3/3
+Measuring viewer 409600/multibyte/single, repeat 1/3
+Measuring viewer 409600/multibyte/single, repeat 2/3
+Measuring viewer 409600/multibyte/single, repeat 3/3
+Measuring viewer 409600/multibyte/multi, repeat 1/3
+Measuring viewer 409600/multibyte/multi, repeat 2/3
+Measuring viewer 409600/multibyte/multi, repeat 3/3
+Measuring viewer 1992294/ascii/single, repeat 1/3
+Measuring viewer 1992294/ascii/single, repeat 2/3
+Measuring viewer 1992294/ascii/single, repeat 3/3
+Measuring viewer 1992294/ascii/multi, repeat 1/3
+Measuring viewer 1992294/ascii/multi, repeat 2/3
+Measuring viewer 1992294/ascii/multi, repeat 3/3
+Measuring viewer 1992294/multibyte/single, repeat 1/3
+Measuring viewer 1992294/multibyte/single, repeat 2/3
+Measuring viewer 1992294/multibyte/single, repeat 3/3
+Measuring viewer 1992294/multibyte/multi, repeat 1/3
+Measuring viewer 1992294/multibyte/multi, repeat 2/3
+Measuring viewer 1992294/multibyte/multi, repeat 3/3
+Viewer raw observations saved to dist/performance/viewer-diagnostic.json
