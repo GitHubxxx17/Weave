@@ -134,3 +134,44 @@
 5. 统一的 SSE 读取是否要求所有调用方校验 `Content-Type`。
 6. 重连策略是否也应统一（方案 I）。
 7. 拆分过程中是否同步引入状态容器，还是继续沿用现有的 store 与自定义 hook 模式。
+
+## 9. U2 契约测试的实施（方案 G）
+
+### 9.1 机制
+
+- 夹具由 Server 测试生成：`apps/server/test/http-contract-capture.ts` 启动真实 `startServer`（HTTP、SQLite、Runtime、审批代理、Agent 任务全部是生产组合，只有 Provider 的 `fetch` 被脚本化），驱动一个固定场景并记录各接口的真实响应。每次运行都会变化的值（随机 ID、时间戳、带签名的任务游标、临时目录、受系统提示词长度影响的上下文词元数）在 `neutralizeContract` 中替换为稳定值，替换后保持原有语法与相互引用（同一个 ID 在整份夹具里映射为同一个值），因此 Studio 的校验（如游标中段等于会话 ID）仍然成立。
+- 夹具位置：仓库根 `test/fixtures/http-contract/{workspace,execution,queue,approvals,tasks}.json`。放在 `apps/server/test/` 下时，Studio 的相对导入会被 `weave/package-boundaries` 规则判为跨包访问源码（lint 实测报错），因此改放在不属于任何工作区单元的仓库根目录，两侧都只通过相对路径读取 JSON 数据。SSE 帧以 `{ id?, event, data }` 保存，`data` 是解析后的 JSON。
+- 一致性测试：`apps/server/test/http-contract-fixtures.test.ts` 重新捕获并与已提交的夹具比较，不一致时失败并提示重新生成的命令：`WEAVE_UPDATE_HTTP_CONTRACT=1 pnpm --filter @weave/server exec vitest run --root ../.. --config vitest.config.ts apps/server/test/http-contract-fixtures.test.ts`。
+- Studio 测试：`apps/studio/test/http-contract.test.ts` 以相对路径导入这些 JSON（只读数据，不导入任何 TS 或 `@weave/*` 代码，边界规则不变），把它们作为桩 `fetch` 的响应，调用 Studio 真实的客户端（`createWorkspaceApi`、`listAgentExecutions`、`getAgentExecution`、`observeAgentExecution`、`getExecutionQueue`、`observeExecutionQueue`、`subscribeApprovals`、`getAgentTaskTree`、`getAgentTask`），因此同时校验手写 schema 与帧分发逻辑。另有四个漂移用例（多出字段、缺少字段、字段改名）确认解析会失败。
+- 场景：父会话委派一个 workspace 任务，子任务的 `write_file` 停在待审批状态（得到审批列表、审批 SSE 快照和任务视图）；另一个会话中一个执行停在 Provider，另有两个排队项（得到队列快照、队列 SSE 帧），释放后读取该执行的事件帧与状态帧和完成态快照。
+
+### 9.2 Studio 手写 schema 盘点
+
+| Studio 文件 | 镜像的 Server 响应 | 本轮覆盖 |
+| --- | --- | --- |
+| `features/agent/agent-execution-types.ts` | 执行快照、摘要、事件帧、状态帧、队列快照 | 是 |
+| `features/agent/agent-types.ts` | `agentRuntimeEventSchema`（执行事件载荷） | 部分（`context`、`text-delta`、`completed` 三类事件；其余类型未覆盖） |
+| `features/approvals/approval-api.ts` | 审批列表项、`approval.snapshot` 帧 | 是（`approval.created`/`approval.resolved` 帧未覆盖） |
+| `features/workspace/workspace-types.ts` | 项目与会话列表、会话详情 | 是 |
+| `features/tasks/task-types.ts`、`task-api.ts` | 任务树快照、任务视图 | 是（任务 SSE 帧与停止回执未覆盖） |
+| `features/panel/plugin-panel-types.ts` | 插件面板目录、数据、准备命令 | 已有 `plugin-panel-contract.json` |
+| `features/memory/types.ts`、`client.ts` | 记忆列表与写入响应 | 后续 |
+| `features/retrieval/types.ts` | 检索回执 | 后续 |
+| `features/plugins/plugin-types.ts`、`plugin-api.ts` | 插件目录与信任操作 | 后续 |
+| `features/plugins/managed-plugin-types.ts`、`managed-plugin-api.ts` | 托管插件目录、安装预览与回执 | 后续 |
+| `features/plugins/plugin-marketplace-api.ts` | 插件市场源与索引 | 后续 |
+| `features/mcp/mcp-types.ts`、`mcp-api.ts` | MCP 服务器状态与授权 | 后续 |
+| `features/providers/provider-api.ts` | Provider 列表与设置 | 后续 |
+| `features/skills/skill-types.ts`、`skill-api.ts` | Skill 列表 | 后续 |
+| `features/commands/command-types.ts` | 斜杠命令列表 | 后续 |
+| `features/file-context/file-context-types.ts` | 文件引用与附件摘要（嵌在执行输入内） | 部分（仅出现在执行输入中，夹具里未带文件引用） |
+| `features/files-tree/file-tree-api.ts`、`file-diff-api.ts` | 文件树与文件差异 | 后续 |
+| `features/file-undo/file-undo-api.ts` | 文件撤销状态与结果 | 后续 |
+
+`features/panel/panel-layout.ts` 是 Studio 本地的布局存储格式，不镜像 Server 响应，不在范围内。
+
+### 9.3 后续
+
+- 补齐上表标为"后续"的接口：每增加一个接口，在 `captureHttpContract` 里增加对应请求和一个夹具文件，并在 Studio 测试里用真实客户端解析。
+- 覆盖更多执行事件类型（工具调用、工具结果、推理增量、错误）和任务、审批的 SSE 增量帧。
+- 方案 E 的小范围试点仍不在本轮。
