@@ -90,6 +90,12 @@ export interface ToolDefinition<TInput = unknown, TOutput = unknown> {
   readonly readOnly?: boolean | undefined;
   /** Optional approval gate evaluated before `execute` is called. */
   readonly approval?: ToolApprovalRequirement<TInput> | undefined;
+  /**
+   * Reserved for a future structured marker: description and results come from a
+   * third party. Not read by the protocol or LLM layers yet; today MCP tools mark
+   * untrusted content with text only.
+   */
+  readonly trust?: 'untrusted' | undefined;
   /** Tool implementation invoked only by the Tool Pipeline. */
   readonly execute: (input: TInput, context: ToolExecutionContext) => Promise<TOutput> | TOutput;
 }

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import {
   freezeMcpValue,
   mcpConfigDigest,
+  mcpConfigDigestV2,
   mcpConfigDigestSchema,
   mcpServerConfigSchema,
   mcpServerIdSchema,
@@ -13,7 +14,14 @@ import { McpAuthorityError } from './mcp-errors.js';
 export { McpAuthorityError, type McpAuthorityErrorCode } from './mcp-errors.js';
 
 export type McpAuthorityEvent =
-  | { readonly kind: 'configured'; readonly config: McpServerConfig; readonly configDigest: string }
+  | {
+      readonly kind: 'configured';
+      readonly config: McpServerConfig;
+      readonly configDigest: string;
+      /** Present on policy 2 events; absent events are policy 1 (launch configuration only). */
+      readonly policyVersion?: 2 | undefined;
+      readonly contentDigest?: string | undefined;
+    }
   | {
       readonly kind: 'trusted' | 'enabled';
       readonly serverId: string;
@@ -27,7 +35,12 @@ export type RecordedMcpAuthorityEvent = McpAuthorityEvent & {
   readonly scope: 'user';
 };
 export type McpAuthorityCommand =
-  | { readonly kind: 'create' | 'update'; readonly config: McpServerConfig }
+  | {
+      readonly kind: 'create' | 'update';
+      readonly config: McpServerConfig;
+      /** Omitted only by legacy callers; such a configuration is recorded as policy 1. */
+      readonly contentDigest?: string | undefined;
+    }
   | { readonly kind: 'trust' | 'enable'; readonly serverId: string; readonly configDigest: string }
   | { readonly kind: 'disable' | 'revoke' | 'remove'; readonly serverId: string };
 export interface McpReviewedConfig {
@@ -38,6 +51,8 @@ export interface McpReviewedConfig {
 export interface McpAuthorityRecord {
   readonly config: McpServerConfig;
   readonly configDigest: string;
+  readonly policyVersion: 1 | 2;
+  readonly contentDigest: string | null;
   readonly trustedDigest: string | null;
   readonly trustState: 'untrusted' | 'changed' | 'trusted';
   readonly enabled: boolean;
@@ -84,6 +99,8 @@ const configuredShape = {
   kind: z.literal('configured'),
   config: mcpServerConfigSchema,
   configDigest: mcpConfigDigestSchema,
+  policyVersion: z.literal(2).optional(),
+  contentDigest: mcpConfigDigestSchema.optional(),
 };
 const trustedShape = {
   kind: z.literal('trusted'),
@@ -100,7 +117,11 @@ const revokedShape = { kind: z.literal('revoked'), serverId: mcpServerIdSchema }
 const removedShape = { kind: z.literal('removed'), serverId: mcpServerIdSchema };
 export const recordedMcpAuthorityEventSchema: z.ZodType<RecordedMcpAuthorityEvent> =
   z.discriminatedUnion('kind', [
-    z.strictObject({ ...configuredShape, ...metadata }),
+    z
+      .strictObject({ ...configuredShape, ...metadata })
+      .refine(
+        (event) => (event.policyVersion === undefined) === (event.contentDigest === undefined),
+      ),
     z.strictObject({ ...trustedShape, ...metadata }),
     z.strictObject({ ...enabledShape, ...metadata }),
     z.strictObject({ ...disabledShape, ...metadata }),
@@ -111,6 +132,8 @@ const eventsSchema = z.array(recordedMcpAuthorityEventSchema);
 const recordSchema = z.strictObject({
   config: mcpServerConfigSchema,
   configDigest: mcpConfigDigestSchema,
+  policyVersion: z.union([z.literal(1), z.literal(2)]),
+  contentDigest: mcpConfigDigestSchema.nullable(),
   trustedDigest: mcpConfigDigestSchema.nullable(),
   trustState: z.enum(['untrusted', 'changed', 'trusted']),
   enabled: z.boolean(),
@@ -130,8 +153,16 @@ const logSchema = z.strictObject({
   appended: recordedMcpAuthorityEventSchema.nullable().optional(),
 });
 const commandSchema: z.ZodType<McpAuthorityCommand> = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('create'), config: mcpServerConfigSchema }),
-  z.strictObject({ kind: z.literal('update'), config: mcpServerConfigSchema }),
+  z.strictObject({
+    kind: z.literal('create'),
+    config: mcpServerConfigSchema,
+    contentDigest: mcpConfigDigestSchema.optional(),
+  }),
+  z.strictObject({
+    kind: z.literal('update'),
+    config: mcpServerConfigSchema,
+    contentDigest: mcpConfigDigestSchema.optional(),
+  }),
   z.strictObject({
     kind: z.literal('trust'),
     serverId: mcpServerIdSchema,
@@ -179,13 +210,20 @@ function foldEvents(events: readonly RecordedMcpAuthorityEvent[]): readonly McpA
   for (const [index, event] of events.entries()) {
     if (event.sequence !== index + 1) protocol();
     if (event.kind === 'configured') {
-      if (mcpConfigDigest(event.config) !== event.configDigest) protocol();
+      // Policy 1 events replay as before; they cannot carry content paths.
+      if (event.contentDigest === undefined) {
+        if (event.config.contentPaths !== undefined) protocol();
+        if (mcpConfigDigest(event.config) !== event.configDigest) protocol();
+      } else if (mcpConfigDigestV2(event.config, event.contentDigest) !== event.configDigest)
+        protocol();
       const before = records.get(event.config.id);
       const sameLifecycle = before !== undefined && !before.removed;
       const sameDigest = sameLifecycle && before.configDigest === event.configDigest;
       records.set(event.config.id, {
         config: event.config,
         configDigest: event.configDigest,
+        policyVersion: event.contentDigest === undefined ? 1 : 2,
+        contentDigest: event.contentDigest ?? null,
         removed: false,
         trustedDigest: sameDigest ? before.trustedDigest : null,
         trustState: sameDigest
@@ -331,11 +369,24 @@ function nextEvent(command: McpAuthorityCommand, log: McpAuthorityLog): McpAutho
     } else if (before === undefined || before.removed) {
       throw new McpAuthorityError('mcp-not-found');
     }
-    if (command.kind === 'update' && isDeepStrictEqual(before?.config, command.config)) return null;
+    if (
+      command.kind === 'update' &&
+      isDeepStrictEqual(before?.config, command.config) &&
+      before?.contentDigest === (command.contentDigest ?? null)
+    )
+      return null;
+    if (command.contentDigest === undefined)
+      return {
+        kind: 'configured',
+        config: command.config,
+        configDigest: mcpConfigDigest(command.config),
+      };
     return {
       kind: 'configured',
       config: command.config,
-      configDigest: mcpConfigDigest(command.config),
+      configDigest: mcpConfigDigestV2(command.config, command.contentDigest),
+      policyVersion: 2,
+      contentDigest: command.contentDigest,
     };
   }
   const before = log.records.find((record) => record.config.id === command.serverId);

@@ -92,11 +92,17 @@ export interface PluginEnvDeps {
    * them against the manifest's `permissions` once `setup` has finished.
    */
   readonly usage?: ServiceUsage | undefined;
+  /**
+   * Lets an undeclared subscription to this hook register instead of failing.
+   * The kernel then holds it until the user confirms it.
+   */
+  readonly holdsUndeclaredHook?: ((hookId: string) => boolean) | undefined;
 }
 
 /** Builds the `env` passed to one plugin's `setup`, tracking its registrations. */
 export function createPluginEnv(deps: PluginEnvDeps): PluginEnv {
-  const { manifest, signal, container, extensions, hooks, track, usage } = deps;
+  const { manifest, signal, container, extensions, hooks, track, usage, holdsUndeclaredHook } =
+    deps;
   const pluginId = manifest.id;
 
   const tracked = (disposer: Disposer): Disposer => {
@@ -152,7 +158,9 @@ export function createPluginEnv(deps: PluginEnvDeps): PluginEnv {
     },
     defineEvent,
     onHook(hook, handler) {
-      assertNameDeclared(pluginId, manifest.contributes, 'hooks', hook.id);
+      if (holdsUndeclaredHook?.(hook.id) !== true) {
+        assertNameDeclared(pluginId, manifest.contributes, 'hooks', hook.id);
+      }
       usage?.hooks.add(hook.id);
       return tracked(hooks.on(hook, handler, pluginId));
     },

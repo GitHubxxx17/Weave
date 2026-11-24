@@ -5,7 +5,11 @@ import {
   type PluginMarketplaceCatalog,
 } from './plugin-marketplace.js';
 import { fetchMarketplaceCatalog, MarketplaceFetchError } from './plugin-marketplace-fetch.js';
-import { openMarketplaceSettings } from './plugin-marketplace-settings.js';
+import {
+  MarketplaceSettingsError,
+  openMarketplaceSettings,
+  type StoredMarketplaceSource,
+} from './plugin-marketplace-settings.js';
 import {
   canonicalMarketplaceUrl,
   MarketplaceSourceError,
@@ -25,6 +29,8 @@ interface SourceRecord {
 }
 export interface MarketplaceManagerOptions {
   readonly settingsFile: string;
+  /** Retired append-only log; replayed once into `settingsFile` when that file does not exist. */
+  readonly legacySettingsFile?: string;
   readonly builtinCatalogFile?: string | false;
   readonly operatorCatalogFile?: string | false | undefined;
   readonly reservedIds?: readonly string[];
@@ -39,7 +45,7 @@ export async function createPluginMarketplaceManager(
   const builtinFile =
     options.builtinCatalogFile ??
     fileURLToPath(new URL('../../../marketplace/index.json', import.meta.url));
-  const settings = await openMarketplaceSettings(options.settingsFile);
+  const settings = await openMarketplaceSettings(options.settingsFile, options.legacySettingsFile);
   const records = new Map<string, SourceRecord>();
   const builtin =
     builtinFile === false
@@ -74,7 +80,19 @@ export async function createPluginMarketplaceManager(
       file: options.operatorCatalogFile,
     });
   }
-  for (const source of settings.initial) records.set(source.id, { source, catalog: empty });
+  for (const { id, name, url } of settings.initial)
+    records.set(id, {
+      source: {
+        id,
+        name,
+        url,
+        kind: 'remote',
+        status: 'unfetched',
+        stale: false,
+        removable: true,
+      },
+      catalog: empty,
+    });
   let closed = false;
   let active: AbortController | undefined;
   let queue: Promise<unknown> = Promise.resolve();
@@ -100,7 +118,11 @@ export async function createPluginMarketplaceManager(
     const sources = [...records.values()].map(({ source }) => ({ ...source }));
     if (!settings.available && sources[0] !== undefined)
       sources[0].errorCode = 'settings-unavailable';
-    return marketplaceSourcesSchema.parse({ schemaVersion: 1, sources });
+    return marketplaceSourcesSchema.parse({
+      schemaVersion: 1,
+      revision: settings.revision,
+      sources,
+    });
   }
   function enqueue<T>(operation: () => Promise<T>): Promise<T> {
     try {
@@ -115,10 +137,24 @@ export async function createPluginMarketplaceManager(
     queue = result.catch(() => undefined);
     return result;
   }
-  async function persist(operation: Parameters<typeof settings.append>[0]): Promise<void> {
+  function storedSources(): StoredMarketplaceSource[] {
+    return [...records.values()]
+      .filter(({ source }) => source.kind === 'remote')
+      .map(({ source }) => ({ id: source.id, name: source.name, url: source.url! }));
+  }
+  async function persist(
+    expectedRevision: number,
+    sources: readonly StoredMarketplaceSource[],
+  ): Promise<void> {
     try {
-      await settings.append(operation);
-    } catch {
+      await settings.replace(expectedRevision, sources);
+    } catch (error) {
+      if (error instanceof MarketplaceSettingsError && error.reason === 'conflict')
+        throw new MarketplaceSourceError(
+          409,
+          'plugin-marketplace-revision-conflict',
+          'Marketplace sources changed; reload them and try again',
+        );
       throw new MarketplaceSourceError(
         503,
         'plugin-marketplace-settings-unavailable',
@@ -135,7 +171,7 @@ export async function createPluginMarketplaceManager(
         indexSource: { id: record.source.id, name: record.source.name, url: record.source.url },
       };
     },
-    add(input) {
+    add(input, expectedRevision) {
       return enqueue(async () => {
         const parsed = z
           .strictObject({ name: marketplaceSourceNameSchema, url: z.string() })
@@ -160,7 +196,7 @@ export async function createPluginMarketplaceManager(
             'plugin-marketplace-source-limit',
             'At most ten remote sources can be configured',
           );
-        await persist({ operation: 'add', id, name: parsed.data.name, url });
+        await persist(expectedRevision, [...storedSources(), { id, name: parsed.data.name, url }]);
         records.set(id, {
           source: {
             id,
@@ -176,7 +212,7 @@ export async function createPluginMarketplaceManager(
         return listSources();
       });
     },
-    remove(id) {
+    remove(id, expectedRevision) {
       return enqueue(async () => {
         const record = get(id);
         if (!record.source.removable)
@@ -185,8 +221,34 @@ export async function createPluginMarketplaceManager(
             'plugin-marketplace-source-immutable',
             'This marketplace source cannot be removed',
           );
-        await persist({ operation: 'remove', id });
+        await persist(
+          expectedRevision,
+          storedSources().filter((source) => source.id !== id),
+        );
         records.delete(id);
+        return listSources();
+      });
+    },
+    reorder(ids, expectedRevision) {
+      return enqueue(async () => {
+        const remote = [...records.values()].filter(({ source }) => source.kind === 'remote');
+        if (
+          ids.length !== remote.length ||
+          new Set(ids).size !== ids.length ||
+          !ids.every((id) => records.get(id)?.source.kind === 'remote')
+        )
+          throw new MarketplaceSourceError(
+            400,
+            'plugin-marketplace-invalid-request',
+            'Invalid marketplace source order',
+          );
+        const ordered = ids.map((id) => records.get(id)!);
+        await persist(
+          expectedRevision,
+          ordered.map(({ source }) => ({ id: source.id, name: source.name, url: source.url! })),
+        );
+        for (const { source } of remote) records.delete(source.id);
+        for (const record of ordered) records.set(record.source.id, record);
         return listSources();
       });
     },

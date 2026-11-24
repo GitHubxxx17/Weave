@@ -73,6 +73,7 @@ export const marketplaceSourceSchema = z.strictObject({
 });
 export const marketplaceSourcesSchema = z.strictObject({
   schemaVersion: z.literal(1),
+  revision: z.number().int().min(0),
   sources: z.array(marketplaceSourceSchema).max(12),
 });
 export type MarketplaceSources = z.infer<typeof marketplaceSourcesSchema>;
@@ -87,8 +88,13 @@ export interface PluginMarketplaceManager {
       readonly url: string | null;
     };
   };
-  add(input: { readonly name: string; readonly url: string }): Promise<MarketplaceSources>;
-  remove(id: string): Promise<MarketplaceSources>;
+  add(
+    input: { readonly name: string; readonly url: string },
+    expectedRevision: number,
+  ): Promise<MarketplaceSources>;
+  remove(id: string, expectedRevision: number): Promise<MarketplaceSources>;
+  /** `ids` must list every remote source exactly once, in the new order. */
+  reorder(ids: readonly string[], expectedRevision: number): Promise<MarketplaceSources>;
   refresh(sourceId: string): Promise<MarketplaceSources>;
   closeSync(): void;
   drain(): Promise<void>;

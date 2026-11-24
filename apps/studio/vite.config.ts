@@ -8,9 +8,6 @@ export default defineConfig({
       '/memory': {
         target: 'http://127.0.0.1:4317',
       },
-      '/agent': {
-        target: 'http://127.0.0.1:4317',
-      },
       '/approvals': {
         target: 'http://127.0.0.1:4317',
       },

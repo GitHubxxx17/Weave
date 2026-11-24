@@ -49,6 +49,7 @@ const marketplaceSourceSchema = marketplaceIndexSourceSchema
 export const pluginMarketplaceSourcesSchema = z
   .strictObject({
     schemaVersion: z.literal(1),
+    revision: z.number().int().min(0),
     sources: z.array(marketplaceSourceSchema).max(12).readonly(),
   })
   .superRefine(({ sources }, ctx) => {

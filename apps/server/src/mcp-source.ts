@@ -12,6 +12,8 @@ import {
   type McpAuthorityStore,
 } from './mcp-authority-store.js';
 import {
+  computeMcpContentDigest,
+  mcpConfigDigestV2,
   normalizeMcpServerConfig,
   recheckMcpLaunchPaths,
   resolveMcpEnvironment,
@@ -44,6 +46,14 @@ const emptyLog: McpAuthorityLog = {
 const unavailable = {
   code: 'mcp-connect-failed',
   message: 'The MCP service could not be initialized.',
+};
+const contentChangedIssue = {
+  code: 'mcp-content-changed',
+  message: '内容已变更，需要重新信任。',
+};
+const outdatedPolicyIssue = {
+  code: 'mcp-policy-outdated',
+  message: '该信任记录使用旧版摘要（未绑定程序内容），需要重新保存配置并重新信任。',
 };
 const cleanupIssue = {
   code: 'mcp-close-failed',
@@ -147,7 +157,17 @@ function redactJson(
   return copyJson(value) as Readonly<Record<string, unknown>>;
 }
 
+/** Launch is allowed only while the files on disk still hash to the trusted digest. */
+async function assertContentUnchanged(record: McpAuthorityRecord): Promise<void> {
+  if (record.policyVersion !== 2) throw new McpAuthorityError('mcp-content-changed');
+  const contentDigest = await computeMcpContentDigest(record.config);
+  if (mcpConfigDigestV2(record.config, contentDigest) !== record.configDigest)
+    throw new McpAuthorityError('mcp-content-changed');
+}
+
 function safeIssue(error: unknown): Issue {
+  if (error instanceof McpAuthorityError && error.code === 'mcp-content-changed')
+    return contentChangedIssue;
   if (error instanceof McpClientError)
     return { code: error.code, message: new McpClientError(error.code).message };
   return unavailable;
@@ -190,6 +210,7 @@ export function createMcpExtensionSource(options: McpExtensionSourceOptions): {
     return (
       !record.removed &&
       record.enabled &&
+      record.policyVersion === 2 &&
       record.trustedDigest === record.configDigest &&
       !deniedIds.has(pluginId(record.config.id))
     );
@@ -369,6 +390,7 @@ export function createMcpExtensionSource(options: McpExtensionSourceOptions): {
               ensureOpen();
               if (abort.signal.aborted) throw new McpClientError('mcp-cancelled');
               await recheckMcpLaunchPaths(record.config);
+              await assertContentUnchanged(record);
               ensureOpen();
               const resolved = resolveMcpEnvironment(record.config, {
                 ...(options.readHostVariable === undefined
@@ -453,10 +475,13 @@ export function createMcpExtensionSource(options: McpExtensionSourceOptions): {
                 if (entry.closed || entry.closing) continue; // final sync readiness attributes EOF
                 try {
                   await recheckMcpLaunchPaths(entry.record.config);
-                } catch {
+                  await assertContentUnchanged(entry.record);
+                } catch (error) {
+                  const issue = safeIssue(error);
+                  const reported = issue === contentChangedIssue ? issue : unavailable;
                   entry.closed = true;
-                  entry.issue = unavailable;
-                  failed.set(identity(entry.record), unavailable);
+                  entry.issue = reported;
+                  failed.set(identity(entry.record), reported);
                 }
               }
               return !recheckSignal.aborted;
@@ -521,9 +546,11 @@ export function createMcpExtensionSource(options: McpExtensionSourceOptions): {
               : failed.get(identity(record));
           let status: McpServerRecord['state'];
           if (record.removed) status = 'removed';
+          else if (record.policyVersion !== 2 && record.trustedDigest !== null) status = 'changed';
           else if (record.trustState === 'changed') status = 'changed';
           else if (record.trustedDigest !== record.configDigest) status = 'untrusted';
           else if (!record.enabled) status = 'disabled';
+          else if (issue?.code === contentChangedIssue.code && !preparing) status = 'changed';
           else if (preparing) status = 'connecting';
           else if (currentMatches && active && !active.allocation.closed) status = 'loaded';
           else status = 'failed';
@@ -562,11 +589,15 @@ export function createMcpExtensionSource(options: McpExtensionSourceOptions): {
                 toolName: mappedName(record.config.id, tool.name),
               })),
               ...(record.reviewed === null ? {} : { reviewedConfig: record.reviewed.config }),
-              ...((status === 'failed' || status === 'connecting') && issue !== undefined
-                ? { issue }
-                : status === 'failed'
-                  ? { issue: unavailable }
-                  : {}),
+              ...(record.policyVersion !== 2 && record.trustedDigest !== null
+                ? { issue: outdatedPolicyIssue }
+                : status === 'changed' && issue?.code === contentChangedIssue.code
+                  ? { issue }
+                  : (status === 'failed' || status === 'connecting') && issue !== undefined
+                    ? { issue }
+                    : status === 'failed'
+                      ? { issue: unavailable }
+                      : {}),
             },
           ];
         });
@@ -669,7 +700,8 @@ export function createMcpExtensionSource(options: McpExtensionSourceOptions): {
             ((await options.reservedPluginIds?.()) ?? []).includes(pluginId(config.id))
           )
             throw conflict();
-          return { kind: id === undefined ? 'create' : 'update', config };
+          const contentDigest = await computeMcpContentDigest(config);
+          return { kind: id === undefined ? 'create' : 'update', config, contentDigest };
         });
       }
       const decide = (
@@ -684,7 +716,11 @@ export function createMcpExtensionSource(options: McpExtensionSourceOptions): {
         update: (id, expected, config) => configuration(expected, config, id),
         trust: (id, expected, configDigest) =>
           mutation(expected, async () => {
-            await recheckMcpLaunchPaths(recordOf(id).config);
+            const record = recordOf(id);
+            await recheckMcpLaunchPaths(record.config);
+            // Trust binds to the content the user reviewed; changed files need a fresh review.
+            if (record.policyVersion !== 2) throw conflict();
+            await assertContentUnchanged(record);
             return { kind: 'trust', serverId: id, configDigest };
           }),
         enable: (id, expected, configDigest) =>

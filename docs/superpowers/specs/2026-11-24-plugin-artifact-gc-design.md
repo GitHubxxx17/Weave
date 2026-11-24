@@ -20,7 +20,17 @@
 
 对应观察编号：G1、G2。
 
-实现补充见[第 9 节](#9-实现补充g1-一键更新与制品回收r2-11)。
+G1 的实现补充见[第 9 节](#9-实现补充g1-一键更新与制品回收r2-11)。
+
+## G2 实现说明（市场来源列表存储）
+
+本节记录评审结论 G2 的落地方式，优先于第 4 节的方案比较。
+
+- **存储**：`<数据库>.plugin-marketplace-sources.json`，内容 `{ version: 1, revision, sources: [{ id, name, url }] }`，只含远程来源，用 Zod 严格校验（id 与规范化 URL 一致、无重复、最多 10 个）。写入走同目录临时文件、`fsync`、原子 `rename`，再尽力 `fsync` 目录；崩溃遗留的 `*.tmp` 不会被读取。1024 条事件上限与"用满后不可修改"逻辑已删除。
+- **revision**：新文件首次写入前为 0，每次成功写入加 1。`GET /plugins/marketplace/sources` 的响应新增 `revision`。`POST /plugins/marketplace/sources/add`、`/remove` 与新增的 `/reorder`（`{ ids, revision }`，`ids` 须完整列出全部远程来源）都必须带 `revision`；与当前值（写入前再读磁盘核对，覆盖其他写入者）不一致时返回 409 `plugin-marketplace-revision-conflict`，不修改文件。Studio 收到后重新读取列表并提示"已被其他窗口修改"。`refresh` 不改配置，不带 revision。
+- **迁移**：启动时新文件不存在而旧日志 `<数据库>.plugin-marketplace-sources.jsonl` 存在，则回放旧日志（仍按 1024 条、1 MiB 校验，所以用满但有效的日志可迁移）并写成 revision 1 的新文件；旧日志原样保留，不删除、不改写。新文件存在时以新文件为准，不再读旧日志。迁移可重复执行：写新文件失败时下次启动重新迁移。
+- **失败语义**：新文件或旧日志损坏、是符号链接、超限时，来源设置标记为不可用（第一个来源带 `settings-unavailable`），拒绝写入（503），不清空、不覆盖磁盘内容。
+- **API 变化**：`MarketplaceSources` 增加 `revision`；`PluginMarketplaceManager.add/remove` 增加 `expectedRevision` 参数，新增 `reorder`。Studio 暂无排序界面，`reorder` 只提供接口。
 
 ## 1. 背景
 

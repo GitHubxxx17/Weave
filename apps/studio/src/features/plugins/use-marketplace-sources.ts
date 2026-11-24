@@ -16,6 +16,7 @@ const mutationErrors: Record<string, string> = {
   'plugin-marketplace-settings-unavailable': '无法保存索引源设置，请检查服务状态后重试。',
   'plugin-marketplace-source-not-found': '该索引源已不存在，请重新读取设置。',
   'plugin-marketplace-source-immutable': '预置索引源不能移除。',
+  'plugin-marketplace-revision-conflict': '索引源列表已被其他窗口修改，已重新读取，请确认后重试。',
   'plugin-marketplace-closed': '服务正在关闭，请重新连接后重试。',
 };
 
@@ -126,6 +127,13 @@ export function useMarketplaceSources() {
       complete(value);
       return true;
     } catch (reason) {
+      if (
+        !controller.signal.aborted &&
+        mounted.current &&
+        reason instanceof PluginApiError &&
+        reason.code === 'plugin-marketplace-revision-conflict'
+      )
+        setSourcesRevision((value) => value + 1);
       if (!controller.signal.aborted && mounted.current)
         setActionError(
           (reason instanceof PluginApiError ? mutationErrors[reason.code] : undefined) ??
@@ -141,7 +149,7 @@ export function useMarketplaceSources() {
   function addSource(source: { readonly name: string; readonly url: string }): Promise<boolean> {
     const previous = new Set(sources?.sources.map(({ id }) => id));
     return run(
-      (signal) => addPluginMarketplaceSource(source, signal),
+      (signal) => addPluginMarketplaceSource(source, sources?.revision ?? 0, signal),
       (value) => {
         const added = value.sources.find(({ id }) => !previous.has(id));
         if (added !== undefined) {
@@ -155,7 +163,7 @@ export function useMarketplaceSources() {
 
   function removeSource(id: string): Promise<boolean> {
     return run(
-      (signal) => removePluginMarketplaceSource(id, signal),
+      (signal) => removePluginMarketplaceSource(id, sources?.revision ?? 0, signal),
       (value) => {
         if (effectiveSourceId === id) {
           setSelectedSourceId(value.sources[0]?.id);

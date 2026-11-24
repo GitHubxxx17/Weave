@@ -56,6 +56,7 @@ import {
 } from './local-plugin-host.js';
 import type { ExtensionCoordinator } from './extension-coordinator.js';
 import { assertManualPluginIdSync } from './local-extension-source.js';
+import { createSqlitePluginHookConfirmationStore } from './plugin-hook-confirmation-store.js';
 import type { ManagedPluginInstaller } from './managed-plugin-installer.js';
 import { createManagedPluginUpdater } from './managed-plugin-updater.js';
 import {
@@ -347,7 +348,8 @@ export async function startServer(
     await createServerAgentRunner(runtime, runnerOptions);
     const baseline = runtime.serverHost.controller()!.current();
     pluginMarketplaceManager = await createPluginMarketplaceManager({
-      settingsFile: `${databaseFile}.plugin-marketplace-sources.jsonl`,
+      settingsFile: `${databaseFile}.plugin-marketplace-sources.json`,
+      legacySettingsFile: `${databaseFile}.plugin-marketplace-sources.jsonl`,
       operatorCatalogFile:
         options.pluginMarketplaceCatalogFile ??
         (options.environment ?? process.env).WEAVE_PLUGIN_MARKETPLACE_CATALOG,
@@ -379,8 +381,10 @@ export async function startServer(
       },
     });
     const { localTrust } = startup;
+    const hookConfirmations = createSqlitePluginHookConfirmationStore({ filename: databaseFile });
     const extensions = createServerExtensionCoordinator(runtime, {
       runnerOptions,
+      hookConfirmations,
       ...(startup.owned === undefined ? {} : { installerStore: startup.owned }),
       managed: {
         initialAuthority: startup.snapshot,
@@ -488,7 +492,6 @@ export async function startServer(
         fetch: createApp(runtime, {
           approvalBrokerService,
           panelService,
-          agentRunner: coordinator.runner,
           agentExecutionService,
           agentTaskService,
           agentTaskObserver,
@@ -507,6 +510,7 @@ export async function startServer(
           canManageProviders: providerSettingsManager !== undefined,
           pluginCatalog: () => listServerPlugins(runtime),
           pluginMarketplaceManager,
+          hookConfirmations,
           generationSnapshot: coordinator.generationSnapshot,
           commandCatalog: () => listServerCommands(runtime),
           ...(pluginHost === undefined ? {} : { pluginManager: pluginHost }),

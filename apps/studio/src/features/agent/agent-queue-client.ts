@@ -1,6 +1,6 @@
 import { readSseStream } from '../../lib/sse.js';
 import { runtimeApiUrl } from '../runtime/runtime-bridge.js';
-import { AgentStreamError } from './agent-legacy-stream.js';
+import { AgentStreamError } from './agent-stream-error.js';
 import { requestExecutionJson, waitForExecutionRetry } from './agent-execution-client.js';
 import {
   agentExecutionQueueSnapshotSchema,

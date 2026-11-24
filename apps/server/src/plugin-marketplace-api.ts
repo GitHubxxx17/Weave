@@ -15,6 +15,7 @@ export interface PluginMarketplaceAppOptions {
   readonly pluginCatalog?: (() => readonly PluginListItem[]) | undefined;
 }
 const maxRequestBytes = 8192;
+const revisionSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const sourceRequestIdSchema = z
   .string()
   .min(1)
@@ -117,7 +118,11 @@ export function registerPluginMarketplaceRoutes(
   app.get('/plugins/marketplace/sources', (context) => {
     context.header('Cache-Control', 'no-store');
     return context.json(
-      options.pluginMarketplaceManager?.listSources() ?? { schemaVersion: 1, sources: [] },
+      options.pluginMarketplaceManager?.listSources() ?? {
+        schemaVersion: 1,
+        revision: 0,
+        sources: [],
+      },
     );
   });
   if (options.pluginMarketplaceManager === undefined) return;
@@ -131,19 +136,38 @@ export function registerPluginMarketplaceRoutes(
     }
   };
   app.post('/plugins/marketplace/sources/add', (context) =>
-    mutate(context, async () =>
-      manager.add(
-        await readBody(
-          context,
-          z.strictObject({ name: marketplaceSourceNameSchema, url: z.string().max(2048) }),
-        ),
-      ),
-    ),
+    mutate(context, async () => {
+      const { revision, ...source } = await readBody(
+        context,
+        z.strictObject({
+          name: marketplaceSourceNameSchema,
+          url: z.string().max(2048),
+          revision: revisionSchema,
+        }),
+      );
+      return manager.add(source, revision);
+    }),
   );
   app.post('/plugins/marketplace/sources/remove', (context) =>
-    mutate(context, async () =>
-      manager.remove((await readBody(context, z.strictObject({ id: sourceRequestIdSchema }))).id),
-    ),
+    mutate(context, async () => {
+      const body = await readBody(
+        context,
+        z.strictObject({ id: sourceRequestIdSchema, revision: revisionSchema }),
+      );
+      return manager.remove(body.id, body.revision);
+    }),
+  );
+  app.post('/plugins/marketplace/sources/reorder', (context) =>
+    mutate(context, async () => {
+      const body = await readBody(
+        context,
+        z.strictObject({
+          ids: z.array(sourceRequestIdSchema).max(10),
+          revision: revisionSchema,
+        }),
+      );
+      return manager.reorder(body.ids, body.revision);
+    }),
   );
   app.post('/plugins/marketplace/refresh', (context) =>
     mutate(context, async () =>
