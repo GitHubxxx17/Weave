@@ -36,7 +36,7 @@ async function get(p) {
 }
 async function post(p, b) {
   const r = await fetch(base + p, { method: 'POST', headers, body: JSON.stringify(b) });
-  assert.ok([200, 201].includes(r.status), await r.clone().text());
+  assert.ok([200, 201, 202].includes(r.status), await r.clone().text());
   return r.json();
 }
 async function launch(initial = false) {
@@ -184,22 +184,35 @@ try {
       },
     });
   }
-  async function run() {
-    const r = await fetch(base + '/agent/runs/stream', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        sessionId,
-        provider: 'scripted',
-        model: 'fixture',
-        userMessage: { role: 'user', content: [{ type: 'text', text: 'Call installed CLI tool' }] },
+  // Runs one turn through the execution control API and returns its runtime events.
+  async function execute(provider, model, text) {
+    const receipt = await post('/sessions/' + sessionId + '/executions', {
+      requestId: 'run-' + ++seq,
+      input: {
+        userMessage: { role: 'user', content: [{ type: 'text', text }] },
+        provider,
+        model,
         permissionMode: 'ask',
-      }),
+      },
     });
-    assert.equal(r.status, 200);
-    const events = await r.text();
-    assert.match(events, /event: completed/);
-    assert.match(events, /Built tool through Pipeline/);
+    const path = '/sessions/' + sessionId + '/executions/' + receipt.executionId;
+    const stream = await fetch(base + path + '/events');
+    assert.equal(stream.status, 200, await stream.clone().text());
+    const events = [];
+    for (const raw of (await stream.text()).split(/\r?\n\r?\n/)) {
+      const line = raw.split(/\r?\n/).find((value) => value.startsWith('data: '));
+      if (!line) continue;
+      const frame = JSON.parse(line.slice(6));
+      if (frame.type === 'snapshot') events.push(...frame.snapshot.events);
+      else if (frame.type === 'event') events.push(frame.event);
+    }
+    assert.equal((await get(path)).status, 'completed');
+    return events;
+  }
+  async function run() {
+    const events = await execute('scripted', 'fixture', 'Call installed CLI tool');
+    assert.equal(events.filter((event) => event.type === 'completed').length, 1);
+    assert.match(JSON.stringify(events), /Built tool through Pipeline/);
   }
   register();
   await run();
@@ -217,37 +230,14 @@ try {
   );
   const sha256 = (text) => createHash('sha256').update(text, 'utf8').digest('hex');
   async function readSkills() {
-    const dataResponse = await fetch(base + '/agent/runs/stream', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        sessionId,
-        provider: 'mock',
-        model: 'fixture',
-        userMessage: {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text:
-                '/tool read_skill ' +
-                JSON.stringify({ skill: ref }) +
-                '\n/tool read_skill_resource ' +
-                JSON.stringify({ skill: ref, path: 'references/checklist.md' }),
-            },
-          ],
-        },
-      }),
-    });
-    assert.equal(dataResponse.status, 200);
-    const events = (await dataResponse.text())
-      .split(/\r?\n\r?\n/)
-      .filter((frame) => frame.startsWith('event: '))
-      .map((frame) => {
-        const line = frame.split(/\r?\n/).find((value) => value.startsWith('data: '));
-        assert.ok(line, 'Every SSE event carries JSON data');
-        return JSON.parse(line.slice(6));
-      });
+    const events = await execute(
+      'mock',
+      'fixture',
+      '/tool read_skill ' +
+        JSON.stringify({ skill: ref }) +
+        '\n/tool read_skill_resource ' +
+        JSON.stringify({ skill: ref, path: 'references/checklist.md' }),
+    );
     assert.equal(events.filter((event) => event.type === 'completed').length, 1);
     assert.equal(events.filter((event) => event.type === 'failed').length, 0);
     const results = events.filter((event) => event.type === 'tool-result');
@@ -340,7 +330,7 @@ try {
     JSON.stringify({
       passed: true,
       cli: 'actual Tool/Command/Skills bin',
-      transport: 'real HTTP/SSE',
+      transport: 'real HTTP/SSE execution control API',
       persistence: 'SQLite restart after deleting author/build/release',
       assertions: [
         'top-level author marker absent before activation',

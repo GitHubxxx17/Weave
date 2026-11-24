@@ -19,7 +19,6 @@ const reads = [
 ] as const;
 
 const writes = [
-  ['POST', '/agent/runs/stream'],
   ['POST', '/projects'],
   ['PATCH', '/projects/p1'],
   ['POST', '/projects/p1/sessions'],

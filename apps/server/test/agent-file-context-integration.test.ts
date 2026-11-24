@@ -155,10 +155,10 @@ it('freezes queued project files through actual Server/SQLite and exposes only m
         (await post(path, { requestId: randomUUID(), input: { ...plain, ...forged } })).status,
       ).toBe(400);
     }
-    // Production disables the entire compatibility endpoint before parsing its input.
+    // The legacy compatibility endpoint is removed.
     expect(
       (await post('/agent/runs/stream', { sessionId: session.id, ...launch.input })).status,
-    ).toBe(409);
+    ).toBe(404);
     expect(
       (await getServerSessionStore(server.runtime).read(session.id)).filter(
         (event) => event.type === 'execution.accepted',

@@ -152,6 +152,7 @@ describe('background execution HTTP adapter', () => {
     for (const body of [
       '{',
       JSON.stringify({ requestId: 'r', input, signal: {} }),
+      JSON.stringify({ requestId: 'r', input: { ...input, permissionMode: 'everything' } }),
       JSON.stringify({
         requestId: 'r',
         input: { ...input, executionIdentity: { turnId: 'forged' } },
@@ -219,15 +220,14 @@ describe('background execution HTTP adapter', () => {
   });
 });
 
-it('requires the owned execution API when a production execution service is configured', async () => {
+it('no longer serves the removed legacy stream route', async () => {
   const { app } = await fixture();
   const response = await app.request('/agent/runs/stream', {
     method: 'POST',
     headers,
     body: JSON.stringify({ sessionId: 's1', ...input }),
   });
-  expect(response.status).toBe(409);
-  expect(await response.json()).toMatchObject({ error: { code: 'execution-use-control-api' } });
+  expect(response.status).toBe(404);
 });
 
 it('rejects conflicting and malformed cursors before subscribing', async () => {
