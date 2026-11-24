@@ -299,6 +299,7 @@ describe('workspace retrieval capture', () => {
     await expect(capture.verify(handle, signal)).resolves.toBeUndefined();
   });
 
+  // Creating 4,002 real files and safely capturing 2,000 needs extra filesystem time on shared CI.
   it('collects all file and omission counts when source and detail limits apply', async () => {
     const root = await fixture({});
     for (let index = 0; index < 4_002; index += 48) {
@@ -326,7 +327,7 @@ describe('workspace retrieval capture', () => {
       skippedDetailsTruncated: true,
       skipCounts: [{ reason: 'source-limit', count: 2_002 }],
     });
-  });
+  }, 15_000);
 
   it('cancels while queued without changing the error to stale source or exposing the abort reason', async () => {
     const root = await fixture({ 'a.ts': 'text' });
