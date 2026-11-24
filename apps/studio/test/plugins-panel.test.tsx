@@ -386,6 +386,35 @@ describe('local plugin management panel', () => {
     expect(JSON.parse(String(request?.body))).toEqual({ digest });
   });
 
+  it('shows undeclared high-risk hooks and confirms them for the current digest', async () => {
+    const pending = {
+      ...localPlugin('loaded'),
+      pendingHooks: ['weave.llm.request', 'weave.tools.around'],
+    };
+    const fetchMock = stubCatalog(catalog([pending]), {
+      ...catalog([localPlugin('loaded')]),
+      result: { generation: 2, unchanged: false, failed: [] },
+    });
+    renderPluginPanel();
+    fireEvent.click(await screen.findByText('local-echo', { selector: '.plugin-name' }));
+    expect(screen.getByText(/订阅了未声明的高风险钩子/)).toBeTruthy();
+    expect(screen.getByText(/能看到并改写发给模型的全部内容/)).toBeTruthy();
+    expect(screen.getByText(/能改写工具调用的参数和结果/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '允许' }));
+    const confirmed = () =>
+      fetchMock.mock.calls.find(([url]) =>
+        String(url).endsWith('/plugins/local-echo/hook-confirmations'),
+      );
+    await waitFor(() => expect(confirmed()).toBeDefined());
+    const call = confirmed();
+    expect(call?.[1]?.method).toBe('POST');
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({
+      digest,
+      hooks: ['weave.llm.request', 'weave.tools.around'],
+    });
+    await waitFor(() => expect(screen.queryByText(/订阅了未声明的高风险钩子/)).toBeNull());
+  });
+
   it('keeps cached rows visible and blocks all writes during a shared reload', async () => {
     const store = createPluginCatalogStore();
     const fetchMock = stubCatalog(catalog([localPlugin(), localPlugin('loaded', 'ready')]));

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { readSseStream, type SseFrame } from '../../lib/sse.js';
 import { runtimeApiUrl } from '../runtime/runtime-bridge.js';
-import { AgentStreamError } from './agent-legacy-stream.js';
+import { AgentStreamError } from './agent-stream-error.js';
 import {
   agentRunRequestSchema,
   agentStreamErrorPayloadSchema,

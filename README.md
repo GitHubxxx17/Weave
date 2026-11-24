@@ -325,7 +325,7 @@ a Project that has a folder and send one `/tool <name> <json arguments>` line
 per call; several lines start several calls in the same step:
 
 ```text
-/tool run_command {"command":"echo hello"}
+/tool run_command {"command":"echo hello","risk":"low","riskReason":"prints one line"}
 /tool write_file {"path":"mock-test.md","content":"mock 测试\n"}
 ```
 
@@ -525,51 +525,10 @@ for await (const event of runner.run({
 
 Without a paired Registry and Pipeline, Tool Calls return
 `agent-tool-call-unsupported`; malformed Tool Call streams return
-`agent-tool-call-invalid`. The Server exposes the Runner through the following
-thin HTTP adapter:
-
-```text
-POST /agent/runs/stream
-Content-Type: application/json
-Accept: text/event-stream
-```
-
-The request contains the same Agent fields as the Runtime contract, except the
-HTTP caller cannot provide an `AbortSignal`:
-
-```json
-{
-  "sessionId": "session-1",
-  "userMessage": {
-    "role": "user",
-    "content": [{ "type": "text", "text": "Say hello" }]
-  },
-  "provider": "mock",
-  "model": "test-model"
-}
-```
-
-The response uses one SSE event for each `AgentRuntimeEvent`:
-
-```text
-event: text-delta
-data: {"type":"text-delta","text":"Hello"}
-
-event: completed
-data: {"type":"completed","turnId":"..."}
-```
-
-Before the stream is created, invalid JSON or invalid fields return `400`, and
-an App without an injected Runner returns `503`. After the SSE response has
-started, Runtime failures become one `error` event and then close the stream.
-When the browser cancels the response or disconnects, the adapter calls the
-current Agent iterator's `return()` so the Runtime can persist its existing
-cancellation outcome.
-
-This phase intentionally uses `fetch()` rather than `EventSource`: the client
-must send a JSON body, while `EventSource` only supports GET and cannot set
-this request contract. It also does not add a `runId`, replay, or reconnection
-registry. Those belong to a later background-run design.
+`agent-tool-call-invalid`. The Server does not expose the Runner directly over
+HTTP. Studio starts a turn with `POST /sessions/:id/executions` and observes it
+through `GET /sessions/:id/executions/:executionId/events`; the Runtime
+execution service owns the Runner call, cancellation and replay.
 
 Run the focused Agent Runner tests with:
 

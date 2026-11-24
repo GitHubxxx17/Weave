@@ -1,4 +1,4 @@
-import { mkdtemp, rm, realpath } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -719,5 +719,103 @@ describe('MCP source authority and generation ownership', () => {
     f.failAssembly(false);
     expect((await f.manager.reload(3)).generation.acceptingRuns).toBe(true);
     expect(f.launches).toHaveLength(1);
+  });
+  describe('content digest binding', () => {
+    async function script(directory: string, body = 'exit 0') {
+      const file = join(await realpath(directory), 'server.sh');
+      await writeFile(file, `#!/bin/sh\n${body}\n`);
+      await chmod(file, 0o755);
+      return file;
+    }
+
+    it('refuses to launch after the command file changes and recovers after re-saving and re-trusting', async () => {
+      const f = await fixture();
+      const config = { ...f.config, command: await script(f.directory) };
+      const configured = await f.manager.configure(0, config);
+      const trusted = await f.manager.trust('fixture', 1, configured.servers[0]!.configDigest);
+      expect(trusted.servers[0]?.state).toBe('loaded');
+      expect(f.launches).toHaveLength(1);
+
+      await script(f.directory, 'exit 1');
+      const reloaded = await f.manager.reload(2);
+      expect(f.launches).toHaveLength(1);
+      expect(reloaded.servers[0]?.state).toBe('changed');
+      expect(reloaded.servers[0]?.issue).toMatchObject({ code: 'mcp-content-changed' });
+      expect(reloaded.servers[0]?.issue?.message).toContain('内容已变更，需要重新信任');
+      await expect(
+        f.manager.trust('fixture', 2, reloaded.servers[0]!.configDigest),
+      ).rejects.toMatchObject({ code: 'mcp-content-changed' });
+
+      const updated = await f.manager.update('fixture', 2, config);
+      expect(updated.servers[0]?.state).toBe('changed');
+      expect(updated.servers[0]?.configDigest).not.toBe(configured.servers[0]!.configDigest);
+      const retrusted = await f.manager.trust(
+        'fixture',
+        updated.authoritySequence,
+        updated.servers[0]!.configDigest,
+      );
+      expect(retrusted.servers[0]?.state).toBe('loaded');
+      expect(f.launches).toHaveLength(2);
+    });
+
+    it('binds contentPaths directories and rejects directories over the limits', async () => {
+      const f = await fixture();
+      const bound = join(await realpath(f.directory), 'bound');
+      await mkdir(bound);
+      await writeFile(join(bound, 'server.js'), 'one');
+      const config = { ...f.config, contentPaths: [bound] };
+      const configured = await f.manager.configure(0, config);
+      expect(configured.servers[0]?.config.contentPaths).toEqual([bound]);
+      await f.manager.trust('fixture', 1, configured.servers[0]!.configDigest);
+      expect(f.launches).toHaveLength(1);
+
+      await writeFile(join(bound, 'server.js'), 'two');
+      const reloaded = await f.manager.reload(2);
+      expect(f.launches).toHaveLength(1);
+      expect(reloaded.servers[0]?.state).toBe('changed');
+
+      const huge = join(await realpath(f.directory), 'huge');
+      await mkdir(huge);
+      await Promise.all(
+        Array.from({ length: 1001 }, (_, index) => writeFile(join(huge, `${index}.txt`), 'x')),
+      );
+      await expect(
+        f.manager.update('fixture', 2, { ...f.config, contentPaths: [huge] }),
+      ).rejects.toMatchObject({ code: 'mcp-content-too-large' });
+    });
+
+    it('treats a policy 1 trust record as changed and requires one fresh trust', async () => {
+      const f = await fixture();
+      const config = await normalizeMcpServerConfig(f.config);
+      const read = () => f.store.read();
+      let log = await read();
+      log = await f.store.mutate(
+        { kind: 'create', config },
+        { expectedSequence: log.sequence, knownPrefix: log.events },
+      );
+      const digest = log.records[0]!.configDigest;
+      expect(log.records[0]?.policyVersion).toBe(1);
+      await f.store.mutate(
+        { kind: 'trust', serverId: 'fixture', configDigest: digest },
+        { expectedSequence: log.sequence, knownPrefix: log.events },
+      );
+      const reloaded = await f.manager.reload(2);
+      expect(f.launches).toHaveLength(0);
+      expect(reloaded.servers[0]?.state).toBe('changed');
+      expect(reloaded.servers[0]?.issue).toMatchObject({ code: 'mcp-policy-outdated' });
+      await expect(
+        f.manager.trust('fixture', reloaded.authoritySequence, digest),
+      ).rejects.toMatchObject({ code: 'mcp-conflict' });
+
+      const updated = await f.manager.update('fixture', reloaded.authoritySequence, f.config);
+      expect(updated.servers[0]?.state).toBe('changed');
+      const trusted = await f.manager.trust(
+        'fixture',
+        updated.authoritySequence,
+        updated.servers[0]!.configDigest,
+      );
+      expect(trusted.servers[0]?.state).toBe('loaded');
+      expect(f.launches).toHaveLength(1);
+    });
   });
 });

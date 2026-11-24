@@ -226,6 +226,13 @@ records used by the later Server composition. See
 [artifact-store usage](../learning/2026-11-21-plugin-artifact-store.md). This is a
 filesystem API, not an end-to-end installer or installation UI.
 
+Hook confirmation: a manual local plugin that subscribes to `weave.llm.request`
+or `weave.tools.around` without listing it in `contributes.hooks` keeps the
+subscription but receives no dispatch until the user confirms it in Studio. The
+confirmation is bound to the plugin id and content digest, stored as plugin
+state beside the authority tables, and takes effect from the next Generation. See
+the [hook capability design](../superpowers/specs/2026-11-24-plugin-hook-capabilities-design.md).
+
 Stage 5.4 extends Studio's existing App-owned plugin catalog store with the MCP
 HTTP catalog and a shared ESM/MCP write gate. The two catalogs are published
 together only after their complete generation/admission projections agree;
@@ -346,29 +353,31 @@ Agent execution follows a separate adapter path:
 
 ```mermaid
 flowchart LR
-    A[HTTP POST /agent/runs/stream] --> B[Zod body validation]
-    B --> C[Injected AgentRunner]
-    C --> D[Runtime LlmClient]
-    C --> E[Runtime ToolPipeline]
-    C --> F[SessionEventStore]
-    C --> G[AgentRuntimeEvent]
-    G --> H[SSE event/data frame]
-    H --> I[Browser fetch ReadableStream]
+    A[HTTP POST /sessions/:id/executions] --> B[Zod body validation]
+    B --> C[Runtime AgentExecutionService]
+    C --> D[Injected AgentRunner]
+    D --> E[Runtime LlmClient]
+    D --> F[Runtime ToolPipeline]
+    D --> G[SessionEventStore]
+    D --> H[AgentRuntimeEvent]
+    H --> I[GET /sessions/:id/executions/:executionId/events SSE frame]
+    I --> J[Browser fetch ReadableStream]
 ```
 
 The first Studio surface makes the browser boundary explicit:
 
 ```mermaid
 flowchart LR
-    A[Studio React App] -->|POST JSON| B[Vite /agent proxy]
-    B --> C[Server Agent HTTP adapter]
-    C -->|AsyncIterable events| D[Runtime AgentRunner]
-    D --> E[LlmClient]
-    D --> F[ToolPipeline]
-    D --> G[SessionEventStore]
-    C -->|SSE transient events| A
-    A -->|AbortController / disconnect| C
-    C -->|iterator.return()| D
+    A[Studio React App] -->|POST JSON| B[Vite /sessions proxy]
+    B --> C[Server execution HTTP adapter]
+    C --> D[Runtime AgentExecutionService]
+    D -->|AsyncIterable events| E[Runtime AgentRunner]
+    E --> F[LlmClient]
+    E --> G[ToolPipeline]
+    E --> H[SessionEventStore]
+    C -->|SSE execution frames| A
+    A -->|disconnect only detaches| C
+    A -->|explicit POST cancel| C
 ```
 
 Project and Session management uses a separate request path:
@@ -400,11 +409,10 @@ the whole owned Turn from a bounded snapshot/replay cursor. Terminal history is
 used only after its durable sequence watermark is readable. Process restart
 interrupts unresolved accepted executions and never replays their side effects.
 
-The original `POST /agent/runs/stream` adapter remains available only to
-legacy-only compositions: there browser cancellation returns the Agent iterator,
-and there is no replay or reconnect guarantee. Production compositions with an
-execution service reject this legacy start endpoint, preserving one admission
-boundary for lifecycle, idempotency and busy checks.
+The former `POST /agent/runs/stream` adapter has been removed. Every start goes
+through the execution service, preserving one admission boundary for lifecycle,
+idempotency and busy checks. Tests that need an Agent turn without an execution
+service call `AgentRunner.run` directly.
 
 The Server does not create a model client per request or invoke a tool
 definition directly. `main.ts` starts the Runtime and injects one stable
@@ -845,11 +853,10 @@ The SSE adapter removes its listener when the request aborts, the stream is
 cancelled, or writing fails. The snapshot is a connection initialization view,
 not a durable event; disconnected clients cannot replay missed events through
 this interface. Agent execution uses the same transient-event principle
-through `POST /agent/runs/stream`: the adapter maps each
-`AgentRuntimeEvent.type` to the SSE `event` field and serializes the complete
-event as JSON in `data`. A cancelled stream invokes the current AsyncIterator's
-`return()` and removes the request listener; it does not create a second
-cancellation state machine.
+through `GET /sessions/:id/executions/:executionId/events`: the adapter wraps each
+`AgentRuntimeEvent` in an `event` frame (with snapshot and status frames) and
+serializes the complete frame as JSON in `data`. A disconnected stream only detaches the
+observer; it does not create a second cancellation state machine.
 
 ## Layer Boundaries
 
@@ -955,7 +962,12 @@ available, while Server administration uses the sole coordinator.
 
 Local stdio processes run with normal OS user privileges. Launch configuration
 trust is separate from ESM directory-content trust, and neither a filtered
-environment nor tool approval provides an OS sandbox. All MCP tools use the
+environment nor tool approval provides an OS sandbox. Since policy 2 the MCP
+trust digest also binds the content of the `command` file and optional
+`contentPaths` (checked again before every launch), and MCP tool descriptions
+and results are labelled as third-party text; see the
+[MCP trust digest design](../superpowers/specs/2026-11-24-mcp-trust-digest-design.md).
+All MCP tools use the
 shared Pipeline with explicit high-risk approval metadata. Stages 5.1a–5.3 are
 merged; the verified Studio implementation is delivered through
 [PR #82](https://github.com/GitHubxxx17/Weave/pull/82), which records its CI and
@@ -1108,7 +1120,7 @@ that do not need a Registry; Server uses Registry mode.
 Studio calls `GET /settings/providers` and validates the response with its own
 Zod schema. It uses the selected descriptor's default model when the user
 changes Provider, then sends `provider` and `model` in
-`POST /agent/runs/stream`. Browser mode only reads `.env` configuration.
+`POST /sessions/:id/executions`. Browser mode only reads `.env` configuration.
 Desktop mode can submit a new API Key through the loopback settings API; the
 Server immediately encrypts it with the injected Electron `safeStorage` Codec
 before writing SQLite. The Settings view never receives an existing secret and
@@ -1254,14 +1266,14 @@ additionally accept the configured `<address>:<port>` as `Host` and the same
 origin as `Origin`. Loopback listeners get neither a token nor any relaxed
 check. See the [distribution design](../superpowers/specs/2026-11-24-desktop-studio-distribution-design.md).
 
-### Legacy Agent HTTP adapter
+### Removed legacy Agent HTTP adapter
 
 The original `POST /agent/runs/stream` used fetch POST with a JSON body and an
-SSE response. It remains tested as a legacy-only adapter with connection-owned
-cancellation. Current production uses durable POST acceptance plus independent
-GET observation and explicit POST cancellation, as described in the background
-execution contract. The Runtime execution service owns reconnect state without
-changing the Agent Loop or making HTTP a lower-layer dependency.
+SSE response with connection-owned cancellation. It was removed after production
+moved to durable POST acceptance plus independent GET observation and explicit
+POST cancellation, as described in the background execution contract. The
+Runtime execution service owns reconnect state without changing the Agent Loop or
+making HTTP a lower-layer dependency.
 
 ## AI Editing Checklist
 
@@ -1400,6 +1412,9 @@ ExtensionCoordinator。配置与信任保存于独立 append-only MCP authority 
 连接/stale/EOF 是瞬态状态，不进入 durable facts。同步发布前复验资源存活，
 旧代资源随最后回合释放，关闭失败保留 allocation 配额和归属。HTTP仅调用管理
 窄接口，Studio可从 /mcp 与 /plugins 的同一 generation 判断配置和实际运行状态。
+policyVersion 2 的授权事件另记 contentDigest（command 文件与 contentPaths 的内容摘要）；
+每次连接前重算，不一致则不启动并显示"内容已变更，需要重新信任"。旧 policyVersion 1
+记录仍可重放，但视为已变更，需重新保存配置并信任一次。
 
 ## Long-term memory
 

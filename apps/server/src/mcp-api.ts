@@ -38,6 +38,15 @@ const issues = {
   },
   'mcp-authority-storage': { status: 500, message: 'MCP authority persistence is unavailable.' },
   'mcp-closed': { status: 500, message: 'MCP management is closed.' },
+  'mcp-content-changed': { status: 409, message: '内容已变更，需要重新信任。' },
+  'mcp-content-too-large': {
+    status: 400,
+    message: 'MCP 绑定内容超出上限（最多 1000 个文件、20 MB），请缩小 contentPaths 范围。',
+  },
+  'mcp-content-unreadable': {
+    status: 400,
+    message: 'MCP 绑定内容无法读取（含符号链接或特殊文件），请检查 command 与 contentPaths。',
+  },
 } as const;
 
 function respondError(context: Context, error: unknown): Response {

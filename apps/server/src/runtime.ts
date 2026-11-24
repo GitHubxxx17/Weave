@@ -6,6 +6,7 @@ import {
   turnEndHook,
   turnStartHook,
   type KernelPlugin,
+  type PluginKernelOptions,
   type PluginSnapshot,
   type WeavePlugin,
 } from '@weave/plugin';
@@ -100,6 +101,11 @@ export interface ServerAgentRunnerOptions {
    * tools to `weave.tools` and observe results through `weave.tools.result`.
    */
   readonly kernelPlugins?: readonly KernelPlugin[];
+  /**
+   * Decides which undeclared high-risk hooks the user confirmed; see
+   * `PluginKernelOptions.hookConfirmation`.
+   */
+  readonly hookConfirmation?: PluginKernelOptions['hookConfirmation'];
 }
 
 /**
@@ -252,6 +258,7 @@ export async function assembleServerGeneration(
     commandEnvironment: options.commandEnvironment,
     registeredPlugins: host.registeredPlugins(),
     kernelPlugins: options.kernelPlugins,
+    hookConfirmation: options.hookConfirmation,
   });
   try {
     options.memory?.install(assembled.registerHostTool);

@@ -125,7 +125,10 @@ export interface ExtensionCoordinator extends CurrentUiAuthority {
 interface ExtensionCoordinatorOptions {
   readonly host: ServerHost;
   readonly sources: readonly ExtensionSourceFactory[];
-  readonly assemble: (plugins: readonly KernelPlugin[]) => Promise<ServerGeneration>;
+  readonly assemble: (
+    plugins: readonly KernelPlugin[],
+    identities: readonly ExtensionIdentity[],
+  ) => Promise<ServerGeneration>;
   readonly mcpFirstAuthority?: boolean;
   readonly managedAuthority?: ManagedGenerationAuthority;
 }
@@ -834,7 +837,14 @@ export function createExtensionCoordinator(
               preparation.items.map((item) => ({ sourceId: source.id, item })),
             );
             try {
-              candidate = await options.assemble(items.map(({ item }) => item.plugin));
+              candidate = await options.assemble(
+                items.map(({ item }) => item.plugin),
+                items.map(({ item }) => ({
+                  pluginId: item.pluginId,
+                  identity: item.identity,
+                  ...originOf(item),
+                })),
+              );
             } catch (original: unknown) {
               if (authorityMarker(original) !== undefined) throw original;
               checkIteration();

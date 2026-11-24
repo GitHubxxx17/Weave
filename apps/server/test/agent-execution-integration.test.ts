@@ -66,7 +66,7 @@ it('runs through the real composition without observers and replays a lost accep
     expect(detail.messages.filter((message) => message.role === 'assistant')).toHaveLength(1);
     expect(detail.lastSequence).toBeGreaterThanOrEqual(terminal.durableThroughSequence!);
     expect((await post('/agent/runs/stream', { sessionId: session.id, ...input })).status).toBe(
-      409,
+      404,
     );
   } finally {
     await server.stop();

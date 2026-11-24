@@ -20,7 +20,7 @@ import {
 } from '@weave/plugin';
 import type { ToolExecutionRequest, ToolExecutionResult, LlmCall } from '@weave/runtime';
 import { createInMemoryProjectStore } from '@weave/workspace';
-import { createApp } from '../src/app.js';
+import { runAgentTurn } from './agent-run-helper.js';
 import { createSessionService } from '../src/session-service.js';
 import {
   approvalBrokerService,
@@ -149,26 +149,18 @@ describe('Server Plugin integration', () => {
 
     try {
       await registerServerPlugins(runtime, [echoPlugin]);
-      const sessionService = await createSessionServiceForRuntime(runtime);
-      const response = await createApp(runtime, {
-        agentRunner: await createServerAgentRunner(runtime),
-        sessionService,
-      }).request('/agent/runs/stream', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          sessionId,
-          userMessage: {
-            role: 'user',
-            content: [{ type: 'text', text: '调用 echo' }],
-          },
-          provider: 'mock',
-          model: 'test-model',
-        }),
+      await createSessionServiceForRuntime(runtime);
+      const response = runAgentTurn(await createServerAgentRunner(runtime), {
+        sessionId,
+        userMessage: {
+          role: 'user',
+          content: [{ type: 'text', text: '调用 echo' }],
+        },
+        provider: 'mock',
+        model: 'test-model',
       });
 
-      const body = await response.text();
-      expect(response.status).toBe(200);
+      const body = await response;
       expect(body).toContain(
         'event: tool-result\ndata: {"type":"tool-result","result":{"toolCallId":"call-1","name":"echo","content":"来自插件","truncated":false}}',
       );
@@ -249,23 +241,18 @@ describe('Server Plugin integration', () => {
     });
 
     try {
-      const sessionService = await createSessionServiceForRuntime(runtime);
-      const response = await createApp(runtime, {
-        agentRunner: await createServerAgentRunner(runtime, { kernelPlugins: [pingPlugin] }),
-        sessionService,
-      }).request('/agent/runs/stream', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+      await createSessionServiceForRuntime(runtime);
+      const response = runAgentTurn(
+        await createServerAgentRunner(runtime, { kernelPlugins: [pingPlugin] }),
+        {
           sessionId,
           userMessage: { role: 'user', content: [{ type: 'text', text: '调用 ping' }] },
           provider: 'mock',
           model: 'test-model',
-        }),
-      });
+        },
+      );
 
-      const body = await response.text();
-      expect(response.status).toBe(200);
+      const body = await response;
       expect(body).toContain('"name":"ping","content":"pong"');
       expect(observed).toEqual(['ping']);
     } finally {
@@ -310,23 +297,18 @@ describe('Server Plugin integration', () => {
     });
 
     try {
-      const sessionService = await createSessionServiceForRuntime(runtime);
-      const response = await createApp(runtime, {
-        agentRunner: await createServerAgentRunner(runtime, { kernelPlugins: [promptPlugin] }),
-        sessionService,
-      }).request('/agent/runs/stream', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+      await createSessionServiceForRuntime(runtime);
+      const response = runAgentTurn(
+        await createServerAgentRunner(runtime, { kernelPlugins: [promptPlugin] }),
+        {
           sessionId,
           userMessage: { role: 'user', content: [{ type: 'text', text: '你好' }] },
           provider: 'mock',
           model: 'test-model',
-        }),
-      });
+        },
+      );
 
-      const body = await response.text();
-      expect(response.status).toBe(200);
+      const body = await response;
       expect(body).toContain('完成');
       expect(systemText).toContain('[[SECTION_EARLIER]]');
       expect(systemText).toContain('[[SECTION_LATER]]');
@@ -436,23 +418,18 @@ describe('Server Plugin integration', () => {
     });
 
     try {
-      const sessionService = await createSessionServiceForRuntime(runtime);
-      const response = await createApp(runtime, {
-        agentRunner: await createServerAgentRunner(runtime, { kernelPlugins: [shoutPlugin] }),
-        sessionService,
-      }).request('/agent/runs/stream', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+      await createSessionServiceForRuntime(runtime);
+      const response = runAgentTurn(
+        await createServerAgentRunner(runtime, { kernelPlugins: [shoutPlugin] }),
+        {
           sessionId,
           userMessage: { role: 'user', content: [{ type: 'text', text: '调用 ping' }] },
           provider: 'mock',
           model: 'test-model',
-        }),
-      });
+        },
+      );
 
-      const body = await response.text();
-      expect(response.status).toBe(200);
+      const body = await response;
       expect(body).toContain('"name":"ping","content":"PONG"');
       expect(wrapped).toEqual(['ping']);
       // Observers see what the model sees: the wrapped result.
@@ -492,21 +469,17 @@ describe('Server Plugin integration', () => {
       });
       await runtime.start();
       try {
-        const sessionService = await createSessionServiceForRuntime(runtime);
-        const response = await createApp(runtime, {
-          agentRunner: await createServerAgentRunner(runtime, { kernelPlugins: [plugin] }),
-          sessionService,
-        }).request('/agent/runs/stream', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
+        await createSessionServiceForRuntime(runtime);
+        const response = runAgentTurn(
+          await createServerAgentRunner(runtime, { kernelPlugins: [plugin] }),
+          {
             sessionId,
             userMessage: { role: 'user', content: [{ type: 'text', text: '你好' }] },
             provider: 'mock',
             model: 'test-model',
-          }),
-        });
-        return await response.text();
+          },
+        );
+        return await response;
       } finally {
         await runtime.stop();
       }
@@ -576,21 +549,17 @@ describe('Server Plugin integration', () => {
       });
       await runtime.start();
       try {
-        const sessionService = await createSessionServiceForRuntime(runtime);
-        const response = await createApp(runtime, {
-          agentRunner: await createServerAgentRunner(runtime, { kernelPlugins: [plugin] }),
-          sessionService,
-        }).request('/agent/runs/stream', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
+        await createSessionServiceForRuntime(runtime);
+        const response = runAgentTurn(
+          await createServerAgentRunner(runtime, { kernelPlugins: [plugin] }),
+          {
             sessionId,
             userMessage: { role: 'user', content: [{ type: 'text', text: '我的密码是 hunter2' }] },
             provider: 'mock',
             model: 'test-model',
-          }),
-        });
-        return await response.text();
+          },
+        );
+        return await response;
       } finally {
         await runtime.stop();
       }
@@ -743,21 +712,17 @@ describe('Server Plugin integration', () => {
       });
       await runtime.start();
       try {
-        const sessionService = await createSessionServiceForRuntime(runtime);
-        const response = await createApp(runtime, {
-          agentRunner: await createServerAgentRunner(runtime, { kernelPlugins: [policyPlugin] }),
-          sessionService,
-        }).request('/agent/runs/stream', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
+        await createSessionServiceForRuntime(runtime);
+        const response = runAgentTurn(
+          await createServerAgentRunner(runtime, { kernelPlugins: [policyPlugin] }),
+          {
             sessionId,
             userMessage: { role: 'user', content: [{ type: 'text', text: '调用 ping' }] },
             provider: 'mock',
             model: 'test-model',
-          }),
-        });
-        const bodyPromise = response.text();
+          },
+        );
+        const bodyPromise = response;
         const broker = runtime.get(approvalBrokerService);
         const pending = () => broker.list().filter((approval) => approval.status === 'pending');
         const asked: { operation: string; toolName: string }[] = [];

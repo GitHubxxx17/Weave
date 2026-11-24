@@ -8,6 +8,7 @@ import { createRuntime } from '@weave/runtime';
 import { createInMemorySessionEventStore } from '@weave/session';
 import { createInMemoryProjectStore, type ProjectStore } from '@weave/workspace';
 import { createApp } from '../src/app.js';
+import { runAgentTurn } from './agent-run-helper.js';
 import { createSessionService } from '../src/session-service.js';
 import {
   approvalBrokerService,
@@ -90,29 +91,23 @@ async function createAgentApp(
   const sessionService = createSessionService({ projectStore, sessionStore });
   const session = await sessionService.create(project.id);
 
+  const runner = await createServerAgentRunner(runtime, {
+    resolveWorkspaceRoot: createWorkspaceRootResolver(projectStore),
+    ...runnerOptions,
+  });
   const app = createApp(runtime, {
-    agentRunner: await createServerAgentRunner(runtime, {
-      resolveWorkspaceRoot: createWorkspaceRootResolver(projectStore),
-      ...runnerOptions,
-    }),
     sessionService,
     projectStore,
   });
   const broker = runtime.get(approvalBrokerService);
 
   async function run(text: string): Promise<string> {
-    const response = await app.request('/agent/runs/stream', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        sessionId: session.id,
-        userMessage: { role: 'user', content: [{ type: 'text', text }] },
-        provider: 'mock',
-        model: 'test-model',
-      }),
+    return runAgentTurn(runner, {
+      sessionId: session.id,
+      userMessage: { role: 'user', content: [{ type: 'text', text }] },
+      provider: 'mock',
+      model: 'test-model',
     });
-    expect(response.status).toBe(200);
-    return response.text();
   }
 
   return { run, broker, app, project, session, sessionStore };
@@ -333,11 +328,8 @@ describe('Built-in mock /tool commands', () => {
       sessionStore: getServerSessionStore(runtime),
     });
     const session = await sessionService.create(project.id);
-    const app = createApp(runtime, {
-      agentRunner: await createServerAgentRunner(runtime, {
-        resolveWorkspaceRoot: createWorkspaceRootResolver(projectStore),
-      }),
-      sessionService,
+    const runner = await createServerAgentRunner(runtime, {
+      resolveWorkspaceRoot: createWorkspaceRootResolver(projectStore),
     });
     const broker = runtime.get(approvalBrokerService);
     const approved: string[] = [];
@@ -349,30 +341,24 @@ describe('Built-in mock /tool commands', () => {
     });
     cleanups.push(async () => unsubscribe());
 
-    const response = await app.request('/agent/runs/stream', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        sessionId: session.id,
-        userMessage: {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: [
-                '/tool read_file {"path":"README.md"}',
-                '/tool write_file {"path":"notes/mock.md","content":"mock 测试"}',
-              ].join('\n'),
-            },
-          ],
-        },
-        provider: 'mock',
-        model: 'weave-local-demo',
-      }),
+    const body = await runAgentTurn(runner, {
+      sessionId: session.id,
+      userMessage: {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: [
+              '/tool read_file {"path":"README.md"}',
+              '/tool write_file {"path":"notes/mock.md","content":"mock 测试"}',
+            ].join('\n'),
+          },
+        ],
+      },
+      provider: 'mock',
+      model: 'weave-local-demo',
     });
-    const body = await response.text();
 
-    expect(response.status).toBe(200);
     expect(body).toContain('"name":"read_file","content":"项目说明"');
     expect(approved).toEqual(['write_file']);
     expect(body).toContain(
@@ -583,24 +569,16 @@ describe('Default Agent instructions', () => {
       sessionStore: getServerSessionStore(runtime),
     });
     const session = await sessionService.create(project.id);
-    const app = createApp(runtime, {
-      agentRunner: await createServerAgentRunner(runtime, {
-        resolveWorkspaceRoot: createWorkspaceRootResolver(projectStore),
-      }),
-      sessionService,
+    const runner = await createServerAgentRunner(runtime, {
+      resolveWorkspaceRoot: createWorkspaceRootResolver(projectStore),
     });
 
-    const response = await app.request('/agent/runs/stream', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        sessionId: session.id,
-        userMessage: { role: 'user', content: [{ type: 'text', text: '能读文件吗' }] },
-        provider: 'mock',
-        model: 'test-model',
-      }),
+    await runAgentTurn(runner, {
+      sessionId: session.id,
+      userMessage: { role: 'user', content: [{ type: 'text', text: '能读文件吗' }] },
+      provider: 'mock',
+      model: 'test-model',
     });
-    await response.text();
 
     expect(requests[0]?.messages[0]?.role).toBe('system');
     expect(JSON.stringify(requests[0]?.messages[0])).toContain(`当前项目文件夹：${folder}`);
@@ -654,37 +632,22 @@ describe('Default Agent instructions', () => {
       sessionStore: getServerSessionStore(runtime),
     });
     const session = await sessionService.create(project.id);
-    const app = createApp(runtime, {
-      agentRunner: await createServerAgentRunner(runtime, {
-        resolveWorkspaceRoot: createWorkspaceRootResolver(projectStore),
-      }),
-      sessionService,
+    const runner = await createServerAgentRunner(runtime, {
+      resolveWorkspaceRoot: createWorkspaceRootResolver(projectStore),
     });
-    const body = {
+
+    await runAgentTurn(runner, {
       sessionId: session.id,
       userMessage: { role: 'user', content: [{ type: 'text', text: '看看项目' }] },
       provider: 'mock',
       model: 'test-model',
-    };
-
-    const response = await app.request('/agent/runs/stream', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ...body, permissionMode: 'trust' }),
+      permissionMode: 'trust',
     });
-    await response.text();
     const toolNames = requests[0]?.tools?.map((tool) => tool.name) ?? [];
     expect(toolNames).toContain('read_file');
     expect(toolNames).toContain('edit_file');
     expect(toolNames).toContain('run_command');
     expect(JSON.stringify(requests[0]?.messages[0])).toContain('信任');
-
-    const invalid = await app.request('/agent/runs/stream', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ...body, permissionMode: 'everything' }),
-    });
-    expect(invalid.status).toBe(400);
   });
 });
 

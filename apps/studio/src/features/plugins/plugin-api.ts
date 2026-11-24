@@ -114,6 +114,20 @@ export function trustPlugin(
   return writePlugin(`/plugins/${encodeURIComponent(id)}/trust`, 'POST', { digest }, signal);
 }
 
+export function confirmPluginHooks(
+  id: string,
+  digest: string,
+  hooks: readonly string[],
+  signal?: AbortSignal,
+): Promise<PluginMutationResponse> {
+  return writePlugin(
+    `/plugins/${encodeURIComponent(id)}/hook-confirmations`,
+    'POST',
+    { digest, hooks },
+    signal,
+  );
+}
+
 export function setPluginEnabled(
   id: string,
   enabled: boolean,

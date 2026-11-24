@@ -26,6 +26,7 @@ import {
   type KernelPlugin,
   type PluginCommand,
   type PluginKernel,
+  type PluginKernelOptions,
   type PromptSection,
 } from '@weave/plugin';
 import {
@@ -81,6 +82,8 @@ export interface AgentKernelAssembly {
   readonly registeredPlugins: readonly KernelPlugin[];
   /** Kernel plugins that join after the server's own tools. */
   readonly kernelPlugins?: readonly KernelPlugin[] | undefined;
+  /** Held-hook policy for the kernel; see `PluginKernelOptions.hookConfirmation`. */
+  readonly hookConfirmation?: PluginKernelOptions['hookConfirmation'];
 }
 
 /** What one sealed per-runner kernel contributes to the Agent Runner. */
@@ -142,7 +145,10 @@ export async function assembleAgentKernel(
 ): Promise<AssembledAgentKernel> {
   const { toolRegistry, providerRegistry, approvalBroker, sessionStore } = assembly;
   const { timeoutMs, resolveWorkspaceRoot } = assembly;
-  const kernel = createPluginKernel({ hostVersion: assembly.hostVersion ?? serverHostVersion });
+  const kernel = createPluginKernel({
+    hostVersion: assembly.hostVersion ?? serverHostVersion,
+    hookConfirmation: assembly.hookConfirmation,
+  });
   const toolOwners = new WeakMap(toolRegistry.list().map((tool) => [tool, 'server-tool-host']));
   const toolOwner = (definition: RegisteredToolDefinition) => toolOwners.get(definition);
 

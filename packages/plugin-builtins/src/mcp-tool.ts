@@ -5,7 +5,7 @@ import { PluginError } from '@weave/plugin';
 import type { ToolDefinition, ToolExecutionContext } from '@weave/runtime';
 import { z } from 'zod';
 import type { McpPluginOptions } from './mcp-plugin.js';
-import { formatMcpResult, redactMcpText } from './mcp-result.js';
+import { formatMcpResult, mcpDescriptionPrefix, redactMcpText } from './mcp-result.js';
 
 const serverIdSchema = z
   .string()
@@ -223,7 +223,8 @@ export function createMcpTool(
   });
   return Object.freeze({
     name,
-    description: redact(tool.description),
+    description: redact(`${mcpDescriptionPrefix}${tool.description}`),
+    trust: 'untrusted' as const,
     parameters: tool.inputSchema,
     inputSchema,
     readOnly: false,

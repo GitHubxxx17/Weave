@@ -94,6 +94,8 @@ export const pluginListItemSchema = z
     engines: z.object({ weave: z.string() }).readonly().optional(),
     contributes: pluginDeclarationsSchema.optional(),
     permissions: nameListSchema.optional(),
+    /** High-risk hooks subscribed without declaration; inactive until the user confirms. */
+    pendingHooks: nameListSchema.optional(),
     error: pluginIssueSchema.optional(),
     local: localPluginMetadataSchema.optional(),
     /** Actual contributions, independent of the desired and retained manifests. */

@@ -60,7 +60,16 @@ Weave 必须显式使用 pipe、持续排空并丢弃原文，仅记录字节计
 MCP 配置与信任共同写入独立的 append-only SQLite authority 事件流，且不复用 Stage 4
 ESM 插件信任事件。MCP 配置包含命令、argv、cwd 和显式环境引用；固定的高风险工具策略
 以 policyVersion 参与摘要，映射由宿主确定。配置哈希用于发现配置变化和审计，
-但**不复用 ESM 插件目录 SHA-256 的信任语义**。配置哈希不能证明命令实际执行的代码未变，
+但**不复用 ESM 插件目录 SHA-256 的信任语义**。
+
+> 修订（2026-11-24，policyVersion 2）：摘要现在还绑定 `command` 指向文件的 sha256，
+> 以及可选 `contentPaths`（文件为 sha256，目录用与 ESM 插件相同的目录摘要格式，
+> 上限 1000 个文件、20 MB）。启动前重新计算，不一致则不启动。仍然**不能**证明未绑定的
+> 脚本、依赖、解释器加载的其他文件，或 `npx`/`uvx`/`pnpm dlx` 启动后下载的代码未变，
+> 也不能替代用户对命令、路径和环境的确认。授权记录保持只追加。
+> 详见 [MCP 信任摘要设计](../superpowers/specs/2026-11-24-mcp-trust-digest-design.md)。
+
+原始表述（policyVersion 1）：配置哈希不能证明命令实际执行的代码未变，
 也不能替代用户对命令、路径和环境的确认。
 
 任何 `spawn` 或 MCP `initialize`/handshake 之前，Server 必须折叠配置/信任事件并确认

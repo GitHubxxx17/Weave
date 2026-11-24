@@ -56,6 +56,7 @@ import {
 } from './local-plugin-host.js';
 import type { ExtensionCoordinator } from './extension-coordinator.js';
 import { assertManualPluginIdSync } from './local-extension-source.js';
+import { createSqlitePluginHookConfirmationStore } from './plugin-hook-confirmation-store.js';
 import type { ManagedPluginInstaller } from './managed-plugin-installer.js';
 import {
   acquireManagedPluginStartup,
@@ -397,8 +398,10 @@ export async function startServer(
       },
     });
     const { localTrust } = startup;
+    const hookConfirmations = createSqlitePluginHookConfirmationStore({ filename: databaseFile });
     const extensions = createServerExtensionCoordinator(runtime, {
       runnerOptions,
+      hookConfirmations,
       ...(startup.owned === undefined ? {} : { installerStore: startup.owned }),
       managed: {
         initialAuthority: startup.snapshot,
@@ -502,7 +505,6 @@ export async function startServer(
     const appOptions = {
       approvalBrokerService,
       panelService,
-      agentRunner: coordinator.runner,
       agentExecutionService,
       agentTaskService,
       agentTaskObserver,
@@ -521,6 +523,7 @@ export async function startServer(
       canManageProviders: providerSettingsManager !== undefined,
       pluginCatalog: () => listServerPlugins(runtime),
       pluginMarketplaceManager,
+      hookConfirmations,
       generationSnapshot: coordinator.generationSnapshot,
       commandCatalog: () => listServerCommands(runtime),
       ...(pluginHost === undefined ? {} : { pluginManager: pluginHost }),
