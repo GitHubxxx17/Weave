@@ -347,7 +347,8 @@ export async function startServer(
     await createServerAgentRunner(runtime, runnerOptions);
     const baseline = runtime.serverHost.controller()!.current();
     pluginMarketplaceManager = await createPluginMarketplaceManager({
-      settingsFile: `${databaseFile}.plugin-marketplace-sources.jsonl`,
+      settingsFile: `${databaseFile}.plugin-marketplace-sources.json`,
+      legacySettingsFile: `${databaseFile}.plugin-marketplace-sources.jsonl`,
       operatorCatalogFile:
         options.pluginMarketplaceCatalogFile ??
         (options.environment ?? process.env).WEAVE_PLUGIN_MARKETPLACE_CATALOG,

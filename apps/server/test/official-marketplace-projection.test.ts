@@ -34,12 +34,15 @@ describe('fixture official policy at real marketplace boundaries', () => {
       .mockResolvedValueOnce(Response.json({ schemaVersion: 1, plugins: [entry] }))
       .mockResolvedValueOnce(Response.json({ schemaVersion: 1, plugins: [mixed] }));
     const manager = await createPluginMarketplaceManager({
-      settingsFile: join(directory, 'settings.jsonl'),
+      settingsFile: join(directory, 'settings.json'),
       builtinCatalogFile: false,
       fetch,
     });
     try {
-      await manager.add({ name: 'Independent mirror', url: 'https://catalog.example/index.json' });
+      await manager.add(
+        { name: 'Independent mirror', url: 'https://catalog.example/index.json' },
+        manager.listSources().revision,
+      );
       const id = manager.listSources().sources[1]!.id;
       await manager.refresh(id);
       expect(manager.catalog(id).catalog.plugins).toEqual([entry]);
@@ -150,7 +153,7 @@ describe('fixture official policy at real marketplace boundaries', () => {
     const index = { schemaVersion: 1, plugins: [officialEntry()] };
     await writeFile(file, JSON.stringify(index));
     const manager = await createPluginMarketplaceManager({
-      settingsFile: join(directory, 'settings.jsonl'),
+      settingsFile: join(directory, 'settings.json'),
       builtinCatalogFile: false,
       operatorCatalogFile: file,
     });

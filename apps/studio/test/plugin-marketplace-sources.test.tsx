@@ -25,7 +25,11 @@ const team = {
   stale: false,
   removable: true,
 };
-const sourceEnvelope = (sources = [builtin, team]) => ({ schemaVersion: 1, sources });
+const sourceEnvelope = (sources = [builtin, team], revision = 3) => ({
+  schemaVersion: 1,
+  revision,
+  sources,
+});
 const catalog = (id: string, title?: string) => ({
   schemaVersion: 1,
   hostVersion: '0.0.0',
@@ -228,7 +232,36 @@ describe('marketplace index sources', () => {
     expect(
       fetch.mock.calls.filter(([, init]) => init.method !== 'GET').map(([path]) => path),
     ).toEqual(['/plugins/marketplace/sources/remove']);
+    expect(
+      JSON.parse(
+        String(
+          fetch.mock.calls.find(([path]) => path === '/plugins/marketplace/sources/remove')![1]
+            .body,
+        ),
+      ),
+    ).toEqual({ id: 'team', revision: 3 });
     expect(screen.getByRole('tab', { name: '已安装' })).toBeDefined();
+  });
+
+  it('re-reads the source list and reports a revision conflict', async () => {
+    let reads = 0;
+    setup((path, init) => {
+      if (path === '/plugins/marketplace/sources' && init.method === 'GET') {
+        reads += 1;
+        return Response.json(sourceEnvelope([builtin, team], reads === 1 ? 3 : 4));
+      }
+      if (path === '/plugins/marketplace/sources/remove')
+        return Response.json(
+          { error: { code: 'plugin-marketplace-revision-conflict', message: 'conflict' } },
+          { status: 409 },
+        );
+      return undefined;
+    });
+    await screen.findByRole('combobox', { name: '插件索引源' });
+    fireEvent.click(screen.getByRole('button', { name: '管理索引源' }));
+    fireEvent.click(screen.getByRole('button', { name: '移除 团队目录' }));
+    expect(await screen.findByText(/已被其他窗口修改/)).toBeDefined();
+    await waitFor(() => expect(reads).toBe(2));
   });
 
   it('does not let an older settings read restore a removed source', async () => {

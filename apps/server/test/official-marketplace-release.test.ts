@@ -94,7 +94,7 @@ describe('published Weave official Skills release', () => {
     const directory = await mkdtemp(join(tmpdir(), 'weave-official-release-'));
     cleanups.push(() => rm(directory, { recursive: true, force: true }));
     const manager = await createPluginMarketplaceManager({
-      settingsFile: join(directory, 'sources.jsonl'),
+      settingsFile: join(directory, 'sources.json'),
     });
     cleanups.push(async () => {
       manager.closeSync();
@@ -221,17 +221,20 @@ describe('published Weave official Skills release', () => {
       { schemaVersion: 1, plugins: [future] },
     ];
     const manager = await createPluginMarketplaceManager({
-      settingsFile: join(directory, 'sources.jsonl'),
+      settingsFile: join(directory, 'sources.json'),
       fetch: async () => Response.json(replies.shift()),
     });
     cleanups.push(async () => {
       manager.closeSync();
       await manager.drain();
     });
-    const added = await manager.add({
-      name: 'Independent release mirror',
-      url: 'https://catalog.example/official.json',
-    });
+    const added = await manager.add(
+      {
+        name: 'Independent release mirror',
+        url: 'https://catalog.example/official.json',
+      },
+      manager.listSources().revision,
+    );
     const remote = added.sources.find(({ kind }) => kind === 'remote')!;
     await manager.refresh(remote.id);
     const app = createApp(createServerRuntime(), { pluginMarketplaceManager: manager });
@@ -240,11 +243,14 @@ describe('published Weave official Skills release', () => {
         await (await app.request(`/plugins/marketplace?sourceId=${id}`)).json(),
       );
     const first = await read(remote.id);
-    expect(first.indexSource).toEqual({
-      id: remote.id,
-      name: 'Independent release mirror',
-      url: 'https://catalog.example/official.json',
-    });
+    expect(first.indexSource).toEqual(
+      {
+        id: remote.id,
+        name: 'Independent release mirror',
+        url: 'https://catalog.example/official.json',
+      },
+      manager.listSources().revision,
+    );
     expect(first.entries).toMatchObject([
       {
         id: 'weave-official-skills',
@@ -262,10 +268,13 @@ describe('published Weave official Skills release', () => {
       errorCode: 'invalid-index',
     });
     expect(await read(remote.id)).toEqual(first);
-    const withFuture = await manager.add({
-      name: 'Future release mirror',
-      url: 'https://catalog.example/future.json',
-    });
+    const withFuture = await manager.add(
+      {
+        name: 'Future release mirror',
+        url: 'https://catalog.example/future.json',
+      },
+      manager.listSources().revision,
+    );
     const futureId = withFuture.sources.find(({ name }) => name === 'Future release mirror')!.id;
     await manager.refresh(futureId);
     expect(manager.listSources().sources.find(({ id }) => id === futureId)).toMatchObject({

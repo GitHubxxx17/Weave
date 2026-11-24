@@ -78,17 +78,20 @@ function mutateSource(
   );
 }
 
+/** Source list writes carry the revision they were based on; a stale one is answered with 409. */
 export function addPluginMarketplaceSource(
   source: { readonly name: string; readonly url: string },
+  revision: number,
   signal?: AbortSignal,
 ): Promise<PluginMarketplaceSources> {
-  return mutateSource('sources/add', source, signal);
+  return mutateSource('sources/add', { ...source, revision }, signal);
 }
 export function removePluginMarketplaceSource(
   id: string,
+  revision: number,
   signal?: AbortSignal,
 ): Promise<PluginMarketplaceSources> {
-  return mutateSource('sources/remove', { id }, signal);
+  return mutateSource('sources/remove', { id, revision }, signal);
 }
 export function refreshPluginMarketplaceSource(
   sourceId: string,

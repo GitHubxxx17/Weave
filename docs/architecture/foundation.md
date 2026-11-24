@@ -99,7 +99,8 @@ references and official-content choices are recorded in the
 
 Stage 6.5 index extension adopts multiple cached marketplace sources and a
 repository-maintained directory with deterministic submission tooling. Server
-owns HTTPS discovery and append-only source settings; Studio uses guarded HTTP.
+owns HTTPS discovery and the current source list (one atomically replaced JSON
+file with a revision check); Studio uses guarded HTTP.
 Discovery never grants trust or executes code. Fixed GitHub releases continue
 through the existing preview, immutable import and separate activation flow.
 The approved cross-package contract and pinned Harness reference are in the
