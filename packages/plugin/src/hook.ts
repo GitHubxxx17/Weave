@@ -38,6 +38,8 @@ export type DecideHandler<I> = (input: I) => PolicyVote | Promise<PolicyVote>;
 interface HandlerEntry {
   readonly handler: unknown;
   readonly pluginId: string;
+  /** A held handler stays registered but receives no dispatch. */
+  held: boolean;
 }
 
 /** Stores hook handlers and runs them with the mode's dispatch rules. */
@@ -50,7 +52,7 @@ export class HookRegistry {
     handler: ObserveHandler<I> | WrapHandler<I, O> | DecideHandler<I>,
     pluginId: string,
   ): Disposer {
-    const entry: HandlerEntry = { handler, pluginId };
+    const entry: HandlerEntry = { handler, pluginId, held: false };
     const list = this.#handlers.get(hook.id);
     if (list === undefined) {
       this.#handlers.set(hook.id, [entry]);
@@ -75,7 +77,17 @@ export class HookRegistry {
   }
 
   #entries(hookId: string): readonly HandlerEntry[] {
-    return this.#handlers.get(hookId) ?? [];
+    return (this.#handlers.get(hookId) ?? []).filter((entry) => !entry.held);
+  }
+
+  /**
+   * Stops dispatching to the plugin's handlers for one hook while keeping them
+   * registered. Held handlers are not counted by {@link count}.
+   */
+  hold(hookId: string, pluginId: string): void {
+    for (const entry of this.#handlers.get(hookId) ?? []) {
+      if (entry.pluginId === pluginId) entry.held = true;
+    }
   }
 
   /** Runs observe listeners in parallel; isolates and swallows their errors. */
@@ -134,6 +146,6 @@ export class HookRegistry {
 
   /** Number of handlers registered for a hook (test/introspection aid). */
   count(hook: Hook<unknown, unknown>): number {
-    return this.#handlers.get(hook.id)?.length ?? 0;
+    return this.#entries(hook.id).length;
   }
 }

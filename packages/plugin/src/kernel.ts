@@ -8,6 +8,7 @@ import {
 } from './declaration.js';
 import { ExtensionRegistry } from './extension-point.js';
 import { HookRegistry } from './hook.js';
+import { requiresHookConfirmation } from './hook-risk.js';
 import { pluginManifestSchema, type PluginManifest } from './manifest.js';
 import { attributePluginError, PluginError } from './plugin-errors.js';
 import { createPluginEnv, type PluginEnv } from './plugin-env.js';
@@ -60,6 +61,11 @@ export interface PluginInfo {
    * the host has resolved the owner services.
    */
   readonly contributed: PluginContributed;
+  /**
+   * High-risk hooks the plugin subscribed to without declaring them. They stay
+   * inactive until the user confirms them; see {@link PluginKernelOptions}.
+   */
+  readonly pendingHooks: readonly string[];
 }
 
 /** An immutable view of the active plugin set, resolving root-scoped services. */
@@ -90,6 +96,7 @@ interface LoadedPlugin {
   readonly plugin: KernelPlugin;
   readonly manifest: PluginManifest;
   readonly usage: ServiceUsage;
+  pendingHooks: readonly string[];
   readonly disposers: (() => void)[];
   readonly abort: AbortController;
 }
@@ -101,6 +108,19 @@ export interface PluginKernelOptions {
    * `engines.weave` are rejected when it is missing or not in their range.
    */
   readonly hostVersion?: string | undefined;
+  /**
+   * Decides whether the user confirmed a hook a plugin subscribed to without
+   * declaring it in `contributes.hooks`. Only hooks that
+   * {@link requiresHookConfirmation} names are asked about; the rest keep
+   * their behaviour. Without this option nothing is held, so embedded kernels
+   * that trust all their plugins are unchanged. Unconfirmed handlers stay
+   * registered but receive no dispatch.
+   */
+  readonly hookConfirmation?:
+    | {
+        isConfirmed(pluginId: string, hookId: string): boolean;
+      }
+    | undefined;
 }
 
 /** Manifest parsing detached every container; freeze only that host-owned copy. */
@@ -160,7 +180,7 @@ export function createPluginKernel(options: PluginKernelOptions = {}): PluginKer
     const abort = new AbortController();
     const disposers: (() => void)[] = [];
     const usage = createServiceUsage();
-    const entry: LoadedPlugin = { plugin, manifest, usage, disposers, abort };
+    const entry: LoadedPlugin = { plugin, manifest, usage, disposers, abort, pendingHooks: [] };
     const env = createPluginEnv({
       manifest,
       signal: abort.signal,
@@ -175,6 +195,18 @@ export function createPluginKernel(options: PluginKernelOptions = {}): PluginKer
       await plugin.setup(env);
       assertServicePermissions(manifest, usage);
       usage.closed = true;
+      const confirmation = options.hookConfirmation;
+      if (confirmation !== undefined) {
+        const declaredHooks = manifest.contributes?.hooks ?? [];
+        const pending = [...usage.hooks].filter(
+          (hookId) =>
+            requiresHookConfirmation(hookId) &&
+            !declaredHooks.includes(hookId) &&
+            !confirmation.isConfirmed(manifest.id, hookId),
+        );
+        for (const hookId of pending) hooks.hold(hookId, manifest.id);
+        entry.pendingHooks = Object.freeze(pending);
+      }
     } catch (error: unknown) {
       for (let index = disposers.length - 1; index >= 0; index -= 1) {
         disposers[index]?.();
@@ -215,6 +247,7 @@ export function createPluginKernel(options: PluginKernelOptions = {}): PluginKer
             hooks: Object.freeze([...entry.usage.hooks]),
             services: Object.freeze([...entry.usage.provided]),
           }),
+          pendingHooks: entry.pendingHooks,
         });
       }),
     );

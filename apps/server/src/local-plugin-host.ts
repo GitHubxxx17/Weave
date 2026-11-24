@@ -12,7 +12,7 @@ import { assertManualPluginIdSync, createLocalExtensionSource } from './local-ex
 import { createMcpExtensionSource } from './mcp-source.js';
 import type { McpAuthorityStore } from './mcp-authority-store.js';
 import type { connectMcp } from '@weave/mcp-client';
-import type { ExtensionSourceFactory } from './extension-types.js';
+import type { ExtensionIdentity, ExtensionSourceFactory } from './extension-types.js';
 import {
   createManagedAuthorityObserverBuffer,
   createManagedPluginComposition,
@@ -21,6 +21,10 @@ import {
 import { createManagedSelectionManager } from './managed-selection-manager.js';
 import { createManagedPluginInstaller } from './managed-plugin-installer.js';
 import type { OwnedPluginArtifactStore } from './owned-plugin-artifact-store.js';
+import {
+  hookConfirmationKey,
+  type PluginHookConfirmationStore,
+} from './plugin-hook-confirmation-store.js';
 
 /** Trust persistence remains open until administration and generation draining finish. */
 export interface ClosablePluginTrustStore extends PluginTrustStore {
@@ -51,6 +55,8 @@ interface ServerExtensionOptions {
   readonly runnerOptions: Omit<ServerAgentRunnerOptions, 'kernelPlugins'> & {
     readonly hostVersion: string;
   };
+  /** Confirmations for undeclared high-risk hooks of local plugins; absent means no gating. */
+  readonly hookConfirmations?: PluginHookConfirmationStore;
   /** Allocate independent plugin resources for each candidate assembly, in baseline order. */
   readonly kernelPluginFactories?: readonly (() => KernelPlugin)[];
 }
@@ -85,8 +91,30 @@ export function createServerExtensionCoordinator(
   void discardedInstances;
   const baseOptions = Object.freeze(runnerOptions);
 
-  async function assemble(localPlugins: readonly KernelPlugin[]) {
+  async function assemble(
+    localPlugins: readonly KernelPlugin[],
+    identities: readonly ExtensionIdentity[] = [],
+  ) {
     const configured: KernelPlugin[] = [];
+    // Only manual local plugins are gated: the host configured the others, and
+    // managed plugins always declare their hooks in `contributes`.
+    const hookConfirmation = options.hookConfirmations && hookGate(options.hookConfirmations);
+    function hookGate(store: PluginHookConfirmationStore) {
+      const confirmed = store.confirmed();
+      const digests = new Map(
+        identities.flatMap(({ pluginId, identity, origin }) => {
+          if (origin !== 'manual') return [];
+          const digest: unknown = (JSON.parse(identity) as unknown[])[1];
+          return typeof digest === 'string' ? [[pluginId, digest] as const] : [];
+        }),
+      );
+      return {
+        isConfirmed(pluginId: string, hookId: string) {
+          const digest = digests.get(pluginId);
+          return digest === undefined || confirmed.has(hookConfirmationKey(pluginId, digest, hookId));
+        },
+      };
+    }
     try {
       for (const [index, factory] of factories.entries()) {
         const instance = factory();
@@ -106,6 +134,7 @@ export function createServerExtensionCoordinator(
       }
       return await assembleServerGeneration(runtime, {
         ...baseOptions,
+        ...(hookConfirmation === undefined ? {} : { hookConfirmation }),
         kernelPlugins: [...configured, ...localPlugins],
       });
     } catch (error: unknown) {

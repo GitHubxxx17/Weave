@@ -55,6 +55,8 @@ export const pluginListItemSchema = z.object({
     })
     .optional(),
   permissions: z.array(z.string()).optional(),
+  /** High-risk hooks the plugin subscribed to without declaring them; inactive until confirmed. */
+  pendingHooks: z.array(z.string()).optional(),
   provides: z.object({
     tools: nameListSchema,
     providers: nameListSchema,
@@ -128,6 +130,7 @@ export function describePlugin(info: PluginInfo, origin: PluginOrigin): PluginLi
     ...(manifest.engines === undefined ? {} : { engines: { weave: manifest.engines.weave } }),
     ...(manifest.contributes === undefined ? {} : { contributes: declared(manifest.contributes) }),
     ...(manifest.permissions === undefined ? {} : { permissions: [...manifest.permissions] }),
+    ...(info.pendingHooks.length === 0 ? {} : { pendingHooks: [...info.pendingHooks] }),
     provides: {
       tools: [...contributed.tools],
       providers: [...contributed.providers],
@@ -172,6 +175,8 @@ export function projectPluginCatalog(
       record.active.generation === snapshot.generation.id
         ? actual.get(record.id)?.provides
         : undefined;
+    const pendingHooks =
+      provides === undefined ? undefined : actual.get(record.id)?.pendingHooks;
     return pluginListItemSchema.parse({
       id: record.id,
       name: manifest?.name ?? record.id,
@@ -186,6 +191,7 @@ export function projectPluginCatalog(
         ? {}
         : { contributes: declared(manifest.contributes) }),
       ...(manifest?.permissions === undefined ? {} : { permissions: [...manifest.permissions] }),
+      ...(pendingHooks === undefined ? {} : { pendingHooks: [...pendingHooks] }),
       ...(error === undefined ? {} : { error }),
       provides: provides ?? {
         tools: [],

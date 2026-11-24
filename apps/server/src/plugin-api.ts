@@ -20,6 +20,8 @@ import { PluginTrustStoreError } from './plugin-trust-store.js';
 import { ManagedReviewRequiredError } from './plugin-trust-sqlite.js';
 import type { ExtensionGenerationSnapshot } from './extension-types.js';
 import { registerManagedPluginRoutes } from './managed-plugin-api.js';
+import { hookImpacts } from '@weave/plugin';
+import type { PluginHookConfirmationStore } from './plugin-hook-confirmation-store.js';
 import type { ManagedPluginInstaller } from './managed-plugin-installer.js';
 
 /** Dependencies of the plugin catalog and local plugin control plane. */
@@ -31,15 +33,40 @@ export interface PluginAppOptions {
   readonly assertManualPluginIdSync?: ((id: string) => void) | undefined;
   readonly studioOrigin?: string | undefined;
   readonly generationSnapshot?: (() => ExtensionGenerationSnapshot) | undefined;
+  readonly hookConfirmations?: PluginHookConfirmationStore | undefined;
 }
 
 const idSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 const emptyBodySchema = z.object({}).strict();
 const trustBodySchema = z.object({ digest: pluginDigestSchema }).strict();
+const hookConfirmationBodySchema = z
+  .object({ digest: pluginDigestSchema, hooks: z.array(z.string().min(1).max(128)).min(1).max(16) })
+  .strict();
 const immediateSchema = z.enum(['true', 'false']).optional();
+
+/** `GET /plugins/hook-confirmations`: undeclared high-risk hooks waiting for the user. */
+export const hookConfirmationListResponseSchema = z.object({
+  plugins: z.array(
+    z.object({
+      pluginId: z.string(),
+      digest: pluginDigestSchema,
+      hooks: z.array(
+        z.object({
+          id: z.string(),
+          level: z.enum(['high', 'medium', 'low']),
+          description: z.string(),
+        }),
+      ),
+    }),
+  ),
+});
 
 class PluginRequestError extends Error {
   readonly code = 'plugin-invalid-request';
+}
+
+class HookConfirmationNotPendingError extends Error {
+  readonly code = 'plugin-hook-confirmation-not-pending';
 }
 
 function noImmediate(context: Context): void {
@@ -75,6 +102,12 @@ function respondError(context: Context, error: unknown): Response {
   if (error instanceof PluginRequestError) {
     status = 400;
     issue = { code: error.code, message: error.message };
+  } else if (error instanceof HookConfirmationNotPendingError) {
+    status = 409;
+    issue = {
+      code: error.code,
+      message: 'These hooks are not waiting for confirmation for the current plugin content.',
+    };
   } else if (error instanceof ManagedReviewRequiredError) {
     status = 409;
     issue = {
@@ -148,6 +181,34 @@ export function registerPluginRoutes(app: Hono, options: PluginAppOptions): void
     context.json(commandListResponseSchema.parse({ commands: options.commandCatalog?.() ?? [] })),
   );
 
+  const pendingHookConfirmations = () =>
+    listPlugins(options).plugins.flatMap((plugin) =>
+      plugin.origin === 'local' &&
+      plugin.state === 'loaded' &&
+      plugin.local?.digest !== undefined &&
+      (plugin.pendingHooks?.length ?? 0) > 0
+        ? [{ pluginId: plugin.id, digest: plugin.local.digest, hooks: plugin.pendingHooks ?? [] }]
+        : [],
+    );
+  app.get('/plugins/hook-confirmations', (context) => {
+    try {
+      return context.json(
+        hookConfirmationListResponseSchema.parse({
+          plugins: pendingHookConfirmations().map((entry) => ({
+            ...entry,
+            hooks: entry.hooks.map((id) => ({
+              id,
+              level: hookImpacts[id]?.level ?? 'high',
+              description: hookImpacts[id]?.description ?? '未登记的钩子',
+            })),
+          })),
+        }),
+      );
+    } catch (error: unknown) {
+      return respondError(context, error);
+    }
+  });
+
   const mutate = async (
     context: Context,
     operation: (manager: ServerPluginManager | undefined) => Promise<ReloadResult | undefined>,
@@ -192,6 +253,24 @@ export function registerPluginRoutes(app: Hono, options: PluginAppOptions): void
       const id = pluginId(context);
       const body = await readBody(context, trustBodySchema);
       return manualMutation(manager, id, (live) => live.trust(id, body.digest));
+    }),
+  );
+  app.post('/plugins/:id/hook-confirmations', (context) =>
+    mutate(context, async (manager) => {
+      noImmediate(context);
+      const id = pluginId(context);
+      const body = await readBody(context, hookConfirmationBodySchema);
+      const store = options.hookConfirmations;
+      if (manager === undefined || store === undefined) return undefined;
+      const pending = pendingHookConfirmations().find(
+        (entry) => entry.pluginId === id && entry.digest === body.digest,
+      );
+      if (pending === undefined || !body.hooks.every((hook) => pending.hooks.includes(hook))) {
+        throw new HookConfirmationNotPendingError();
+      }
+      store.confirm(id, body.digest, body.hooks);
+      // The confirmation applies to the next Generation; rebuild it now.
+      return manager.reload();
     }),
   );
   app.delete('/plugins/:id/trust', (context) =>
