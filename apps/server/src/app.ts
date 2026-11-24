@@ -19,7 +19,6 @@ import { z } from 'zod';
 import { registerProviderRoutes, type ProviderAppOptions } from './provider-api.js';
 import type { Runtime } from '@weave/runtime';
 import { registerApprovalRoutes, type ApprovalAppOptions } from './approval-api.js';
-import { registerAgentRoutes, type AgentAppOptions } from './agent-api.js';
 import { registerSessionRoutes, type SessionAppOptions } from './session-api.js';
 import { registerWorkspaceRoutes, type WorkspaceAppOptions } from './workspace-api.js';
 import { createProjectFolderAuthority } from './project-folder-authority.js';
@@ -52,7 +51,6 @@ const healthResponseSchema = z.object({
 export interface AppOptions
   extends
     ApprovalAppOptions,
-    AgentAppOptions,
     AgentExecutionAppOptions,
     AgentTaskAppOptions,
     SessionAppOptions,
@@ -138,7 +136,6 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
   registerFileUndoRoutes(app, runtime, workspaceOptions);
   registerFileRoutes(app, options ?? {});
   registerSessionRoutes(app, options ?? {});
-  registerAgentRoutes(app, runtime, options ?? {});
   registerAgentExecutionRoutes(app, options ?? {});
   registerAgentTaskRoutes(app, options ?? {});
   registerSkillRoutes(app, options ?? {});
@@ -152,7 +149,6 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
 }
 
 export type { ApprovalAppOptions } from './approval-api.js';
-export type { AgentAppOptions } from './agent-api.js';
 export type { PluginAppOptions } from './plugin-api.js';
 export type { McpAppOptions } from './mcp-api.js';
 export type { ProviderAppOptions } from './provider-api.js';

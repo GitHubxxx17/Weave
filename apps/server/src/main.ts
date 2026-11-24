@@ -485,7 +485,6 @@ export async function startServer(
         fetch: createApp(runtime, {
           approvalBrokerService,
           panelService,
-          agentRunner: coordinator.runner,
           agentExecutionService,
           agentTaskService,
           agentTaskObserver,

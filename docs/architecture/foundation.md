@@ -346,29 +346,31 @@ Agent execution follows a separate adapter path:
 
 ```mermaid
 flowchart LR
-    A[HTTP POST /agent/runs/stream] --> B[Zod body validation]
-    B --> C[Injected AgentRunner]
-    C --> D[Runtime LlmClient]
-    C --> E[Runtime ToolPipeline]
-    C --> F[SessionEventStore]
-    C --> G[AgentRuntimeEvent]
-    G --> H[SSE event/data frame]
-    H --> I[Browser fetch ReadableStream]
+    A[HTTP POST /sessions/:id/executions] --> B[Zod body validation]
+    B --> C[Runtime AgentExecutionService]
+    C --> D[Injected AgentRunner]
+    D --> E[Runtime LlmClient]
+    D --> F[Runtime ToolPipeline]
+    D --> G[SessionEventStore]
+    D --> H[AgentRuntimeEvent]
+    H --> I[GET /sessions/:id/executions/:executionId/events SSE frame]
+    I --> J[Browser fetch ReadableStream]
 ```
 
 The first Studio surface makes the browser boundary explicit:
 
 ```mermaid
 flowchart LR
-    A[Studio React App] -->|POST JSON| B[Vite /agent proxy]
-    B --> C[Server Agent HTTP adapter]
-    C -->|AsyncIterable events| D[Runtime AgentRunner]
-    D --> E[LlmClient]
-    D --> F[ToolPipeline]
-    D --> G[SessionEventStore]
-    C -->|SSE transient events| A
-    A -->|AbortController / disconnect| C
-    C -->|iterator.return()| D
+    A[Studio React App] -->|POST JSON| B[Vite /sessions proxy]
+    B --> C[Server execution HTTP adapter]
+    C --> D[Runtime AgentExecutionService]
+    D -->|AsyncIterable events| E[Runtime AgentRunner]
+    E --> F[LlmClient]
+    E --> G[ToolPipeline]
+    E --> H[SessionEventStore]
+    C -->|SSE execution frames| A
+    A -->|disconnect only detaches| C
+    A -->|explicit POST cancel| C
 ```
 
 Project and Session management uses a separate request path:
@@ -400,11 +402,10 @@ the whole owned Turn from a bounded snapshot/replay cursor. Terminal history is
 used only after its durable sequence watermark is readable. Process restart
 interrupts unresolved accepted executions and never replays their side effects.
 
-The original `POST /agent/runs/stream` adapter remains available only to
-legacy-only compositions: there browser cancellation returns the Agent iterator,
-and there is no replay or reconnect guarantee. Production compositions with an
-execution service reject this legacy start endpoint, preserving one admission
-boundary for lifecycle, idempotency and busy checks.
+The former `POST /agent/runs/stream` adapter has been removed. Every start goes
+through the execution service, preserving one admission boundary for lifecycle,
+idempotency and busy checks. Tests that need an Agent turn without an execution
+service call `AgentRunner.run` directly.
 
 The Server does not create a model client per request or invoke a tool
 definition directly. `main.ts` starts the Runtime and injects one stable
@@ -838,11 +839,10 @@ The SSE adapter removes its listener when the request aborts, the stream is
 cancelled, or writing fails. The snapshot is a connection initialization view,
 not a durable event; disconnected clients cannot replay missed events through
 this interface. Agent execution uses the same transient-event principle
-through `POST /agent/runs/stream`: the adapter maps each
-`AgentRuntimeEvent.type` to the SSE `event` field and serializes the complete
-event as JSON in `data`. A cancelled stream invokes the current AsyncIterator's
-`return()` and removes the request listener; it does not create a second
-cancellation state machine.
+through `GET /sessions/:id/executions/:executionId/events`: the adapter wraps each
+`AgentRuntimeEvent` in an `event` frame (with snapshot and status frames) and
+serializes the complete frame as JSON in `data`. A disconnected stream only detaches the
+observer; it does not create a second cancellation state machine.
 
 ## Layer Boundaries
 
@@ -1101,7 +1101,7 @@ that do not need a Registry; Server uses Registry mode.
 Studio calls `GET /settings/providers` and validates the response with its own
 Zod schema. It uses the selected descriptor's default model when the user
 changes Provider, then sends `provider` and `model` in
-`POST /agent/runs/stream`. Browser mode only reads `.env` configuration.
+`POST /sessions/:id/executions`. Browser mode only reads `.env` configuration.
 Desktop mode can submit a new API Key through the loopback settings API; the
 Server immediately encrypts it with the injected Electron `safeStorage` Codec
 before writing SQLite. The Settings view never receives an existing secret and
@@ -1237,14 +1237,14 @@ undo) keep their specific error codes and run first; plugin and MCP management
 writes keep `managementWriteGuard` and its codes, while their reads fall under
 the global guard.
 
-### Legacy Agent HTTP adapter
+### Removed legacy Agent HTTP adapter
 
 The original `POST /agent/runs/stream` used fetch POST with a JSON body and an
-SSE response. It remains tested as a legacy-only adapter with connection-owned
-cancellation. Current production uses durable POST acceptance plus independent
-GET observation and explicit POST cancellation, as described in the background
-execution contract. The Runtime execution service owns reconnect state without
-changing the Agent Loop or making HTTP a lower-layer dependency.
+SSE response with connection-owned cancellation. It was removed after production
+moved to durable POST acceptance plus independent GET observation and explicit
+POST cancellation, as described in the background execution contract. The
+Runtime execution service owns reconnect state without changing the Agent Loop or
+making HTTP a lower-layer dependency.
 
 ## AI Editing Checklist
 
