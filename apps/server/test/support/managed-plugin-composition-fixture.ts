@@ -25,7 +25,7 @@ import {
 } from '../../src/mcp-authority-store.js';
 import type { createMcpExtensionSource } from '../../src/mcp-source.js';
 import { createServerExtensionCoordinator } from '../../src/local-plugin-host.js';
-import { normalizeMcpServerConfig } from '../../src/mcp-environment.js';
+import { computeMcpContentDigest, normalizeMcpServerConfig } from '../../src/mcp-environment.js';
 import { openOwnedPluginArtifactStore } from '../../src/owned-plugin-artifact-store.js';
 import { createSqlitePluginAuthorityDatabase } from '../../src/plugin-authority-store.js';
 import type { ValidatedArtifactIdentity } from '../../src/plugin-authority-types.js';
@@ -302,7 +302,11 @@ export async function createRealManagedCompositionFixture(
     createMcpConfig: (id: string) => createFixtureMcpConfig(id, root, launchLog),
     async seedMcp(id: string, trusted = true) {
       const config = await createFixtureMcpConfig(id, root, launchLog);
-      const created = await mutateMcp({ kind: 'create', config });
+      const created = await mutateMcp({
+        kind: 'create',
+        config,
+        contentDigest: await computeMcpContentDigest(config),
+      });
       if (trusted) {
         await mutateMcp({
           kind: 'trust',

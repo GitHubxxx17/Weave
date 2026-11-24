@@ -948,7 +948,12 @@ available, while Server administration uses the sole coordinator.
 
 Local stdio processes run with normal OS user privileges. Launch configuration
 trust is separate from ESM directory-content trust, and neither a filtered
-environment nor tool approval provides an OS sandbox. All MCP tools use the
+environment nor tool approval provides an OS sandbox. Since policy 2 the MCP
+trust digest also binds the content of the `command` file and optional
+`contentPaths` (checked again before every launch), and MCP tool descriptions
+and results are labelled as third-party text; see the
+[MCP trust digest design](../superpowers/specs/2026-11-24-mcp-trust-digest-design.md).
+All MCP tools use the
 shared Pipeline with explicit high-risk approval metadata. Stages 5.1a–5.3 are
 merged; the verified Studio implementation is delivered through
 [PR #82](https://github.com/GitHubxxx17/Weave/pull/82), which records its CI and
@@ -1383,6 +1388,9 @@ ExtensionCoordinator。配置与信任保存于独立 append-only MCP authority 
 连接/stale/EOF 是瞬态状态，不进入 durable facts。同步发布前复验资源存活，
 旧代资源随最后回合释放，关闭失败保留 allocation 配额和归属。HTTP仅调用管理
 窄接口，Studio可从 /mcp 与 /plugins 的同一 generation 判断配置和实际运行状态。
+policyVersion 2 的授权事件另记 contentDigest（command 文件与 contentPaths 的内容摘要）；
+每次连接前重算，不一致则不启动并显示"内容已变更，需要重新信任"。旧 policyVersion 1
+记录仍可重放，但视为已变更，需重新保存配置并信任一次。
 
 ## Long-term memory
 

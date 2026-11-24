@@ -2,7 +2,12 @@ import { useEffect, useId, useRef, useState, type ReactElement } from 'react';
 
 import { PluginDialog, pluginDialogError } from '../plugins/plugin-dialog.js';
 import { McpApiError } from './mcp-api.js';
-import { diffMcpConfig, type McpReview } from './mcp-review.js';
+import {
+  diffMcpConfig,
+  isPackageRunner,
+  unboundArgumentPaths,
+  type McpReview,
+} from './mcp-review.js';
 
 import './mcp-dialog.css';
 
@@ -21,6 +26,7 @@ const fieldNames = {
   args: '参数',
   cwd: '工作目录',
   env: '环境引用',
+  contentPaths: '绑定内容路径',
 } as const;
 const staleMessage = '配置或授权已变化，本次审阅已失效。请关闭后重新审阅。';
 
@@ -147,6 +153,34 @@ export function McpTrustDialog({
           </ol>
         )}
       </section>
+      <section aria-label="内容绑定">
+        <h3>内容绑定</h3>
+        <p>已绑定内容（启动前重新计算摘要，不一致则不启动）：</p>
+        <ul className="mcp-bound-list">
+          <li>
+            启动程序文件 <code>{review.config.command}</code>
+          </li>
+          {(review.config.contentPaths ?? []).map((value) => (
+            <li key={value}>
+              <code>{value}</code>
+            </li>
+          ))}
+        </ul>
+        <p>未绑定内容（变化后不会被发现）：</p>
+        <ul className="mcp-unbound-list">
+          {unboundArgumentPaths(review.config.args, review.config.contentPaths).map((value) => (
+            <li key={value}>
+              参数中的路径 <code>{value}</code>
+            </li>
+          ))}
+          <li>未列出的脚本、依赖库、解释器加载的其他文件，以及工作目录里的文件</li>
+        </ul>
+        {isPackageRunner(review.config) ? (
+          <p role="note" className="plugin-dialog-warning">
+            这是包运行器启动方式：每次启动的代码可能不同，无内容保证。已绑定的只有运行器程序本身。
+          </p>
+        ) : null}
+      </section>
       <section aria-label="显式环境引用">
         <h3>显式环境引用</h3>
         {Object.keys(review.config.env).length === 0 ? (
@@ -193,7 +227,7 @@ export function McpTrustDialog({
       <section className="mcp-launch-details" aria-label="启动权限说明">
         <h3>启动与工具调用权限</h3>
         <p>
-          信任覆盖规范程序路径、原样参数、工作目录和显式环境引用，不是代码签名，不能证明程序、脚本或依赖内容没有变化。
+          信任覆盖规范程序路径、原样参数、工作目录、显式环境引用，以及启动程序文件和已绑定路径的内容摘要。它不是代码签名，也不覆盖未绑定的脚本、依赖和启动后下载的代码。
         </p>
         <p>
           即使没有显式环境引用，SDK 仍继承系统环境允许列表。显式引用之外的秘密不会由 Studio 读取。

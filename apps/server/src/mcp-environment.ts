@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import { constants } from 'node:fs';
+import { constants, createReadStream } from 'node:fs';
 import { access, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { computeDirectoryDigest, PluginHostError } from '@weave/plugin-host';
 import { z } from 'zod';
 import { McpAuthorityError } from './mcp-errors.js';
 
@@ -14,7 +15,12 @@ export interface McpServerConfig {
   readonly args: readonly string[];
   readonly cwd: string;
   readonly env: Readonly<Record<string, { readonly fromHostEnv: string }>>;
+  /** Absolute files or directories whose content is bound into the trust digest (policy 2). */
+  readonly contentPaths?: readonly string[] | undefined;
 }
+
+/** Most paths a configuration may bind to its trust digest. */
+export const maxMcpContentPaths = 16;
 
 export interface ResolvedMcpEnvironment {
   readonly env: Readonly<Record<string, string>>;
@@ -124,6 +130,15 @@ export function createMcpServerConfigSchema(
         .min(1)
         .refine((value) => !value.includes('\0') && hostPath.isAbsolute(value)),
       env: environment,
+      contentPaths: z
+        .array(
+          z
+            .string()
+            .min(1)
+            .refine((value) => !value.includes('\0') && hostPath.isAbsolute(value)),
+        )
+        .max(maxMcpContentPaths)
+        .optional(),
     })
     .refine((value) => Buffer.byteLength(canonicalJson(value), 'utf8') <= 64 * 1024);
 }
@@ -138,15 +153,26 @@ function parseConfig(input: unknown): McpServerConfig {
   }
 }
 
-async function checkedPaths(
-  config: McpServerConfig,
-): Promise<{ readonly command: string; readonly cwd: string }> {
+async function checkedPaths(config: McpServerConfig): Promise<{
+  readonly command: string;
+  readonly cwd: string;
+  readonly contentPaths?: readonly string[];
+}> {
   const command = await realpath(config.command);
   const cwd = await realpath(config.cwd);
   const [commandInfo, cwdInfo] = await Promise.all([stat(command), stat(cwd)]);
   if (!commandInfo.isFile() || !cwdInfo.isDirectory()) throw new Error();
   await access(command, process.platform === 'win32' ? constants.F_OK : constants.X_OK);
-  return { command, cwd };
+  if (config.contentPaths === undefined) return { command, cwd };
+  const contentPaths = await Promise.all(
+    config.contentPaths.map(async (value) => {
+      const resolved = await realpath(value);
+      const info = await stat(resolved);
+      if (!info.isFile() && !info.isDirectory()) throw new Error();
+      return resolved;
+    }),
+  );
+  return { command, cwd, contentPaths };
 }
 
 export async function normalizeMcpServerConfig(input: unknown): Promise<McpServerConfig> {
@@ -159,6 +185,10 @@ export async function normalizeMcpServerConfig(input: unknown): Promise<McpServe
   }
 }
 
+/**
+ * Policy 1 digest: launch configuration only. It cannot show that the program
+ * behind `command` is unchanged. Kept so persisted policy 1 events replay.
+ */
 export function mcpConfigDigest(config: McpServerConfig): string {
   const parsed = parseConfig(config);
   const { schemaVersion, id, transport, command, args, cwd, env } = parsed;
@@ -170,14 +200,111 @@ export function mcpConfigDigest(config: McpServerConfig): string {
     .digest('hex');
 }
 
+/** Policy 2 digest: launch configuration plus the content digest of the program and bound paths. */
+export function mcpConfigDigestV2(config: McpServerConfig, contentDigest: string): string {
+  const parsed = parseConfig(config);
+  const { schemaVersion, id, transport, command, args, cwd, env } = parsed;
+  return createHash('sha256')
+    .update(
+      canonicalJson({
+        schemaVersion,
+        id,
+        transport,
+        command,
+        args,
+        cwd,
+        env,
+        contentPaths: parsed.contentPaths ?? [],
+        contentDigest: mcpConfigDigestSchema.parse(contentDigest),
+        policyVersion: 2,
+      }),
+      'utf8',
+    )
+    .digest('hex');
+}
+
+const fileHashCache = new Map<string, string>();
+
+/**
+ * Hashes file bytes. Results are cached in memory by path, inode, size, mtime and ctime
+ * (nanosecond precision). ctime cannot be set from user space, so a rewrite that keeps the
+ * same size and mtime still changes the key.
+ */
+async function hashFile(file: string): Promise<string> {
+  const before = await stat(file, { bigint: true });
+  const key = `${file}\0${before.ino}\0${before.size}\0${before.mtimeNs}\0${before.ctimeNs}`;
+  const cached = fileHashCache.get(key);
+  if (cached !== undefined) return cached;
+  const digest = await new Promise<string>((resolve, reject) => {
+    const hash = createHash('sha256');
+    const stream = createReadStream(file);
+    stream.on('error', reject);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+  });
+  const after = await stat(file, { bigint: true });
+  // A file written while it was being read is not cached.
+  if (
+    after.size === before.size &&
+    after.mtimeNs === before.mtimeNs &&
+    after.ctimeNs === before.ctimeNs
+  ) {
+    if (fileHashCache.size >= 64) fileHashCache.clear();
+    fileHashCache.set(key, digest);
+  }
+  return digest;
+}
+
+/**
+ * Hashes the program `command` points at and every bound content path.
+ *
+ * - `command` and file paths: sha256 of the bytes, no size cap.
+ * - directories: `computeDirectoryDigest` from `@weave/plugin-host` (same format as plugin
+ *   directories: at most 1000 files and 20 MB, symbolic links and special files refused).
+ *
+ * Paths are resolved with `realpath` first. A directory over the limits or an unreadable path
+ * raises `mcp-content-too-large` or `mcp-content-unreadable`.
+ */
+export async function computeMcpContentDigest(config: McpServerConfig): Promise<string> {
+  const parsed = parseConfig(config);
+  try {
+    const command = await hashFile(await realpath(parsed.command));
+    const bound = [];
+    for (const value of parsed.contentPaths ?? []) {
+      const resolved = await realpath(value);
+      const info = await stat(resolved);
+      if (info.isDirectory()) {
+        const { digest } = await computeDirectoryDigest(resolved);
+        bound.push({ path: resolved, kind: 'directory', digest });
+      } else if (info.isFile()) {
+        bound.push({ path: resolved, kind: 'file', digest: await hashFile(resolved) });
+      } else throw new Error();
+    }
+    return createHash('sha256')
+      .update(canonicalJson({ command, contentPaths: bound }), 'utf8')
+      .digest('hex');
+  } catch (error: unknown) {
+    if (error instanceof PluginHostError && error.code === 'plugin-too-large')
+      throw new McpAuthorityError('mcp-content-too-large');
+    throw new McpAuthorityError('mcp-content-unreadable');
+  }
+}
+
 export async function recheckMcpLaunchPaths(config: McpServerConfig): Promise<void> {
   const parsed = parseConfig(config);
   try {
     const paths = await checkedPaths(parsed);
     if (paths.command !== parsed.command || paths.cwd !== parsed.cwd) throw new Error();
+    if (!isSameList(paths.contentPaths, parsed.contentPaths)) throw new Error();
   } catch {
     throw new McpAuthorityError('mcp-invalid', invalidMessage);
   }
+}
+
+function isSameList(left: readonly string[] | undefined, right: readonly string[] | undefined) {
+  const a = left ?? [];
+  const b = right ?? [];
+  return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
 export function resolveMcpEnvironment(
