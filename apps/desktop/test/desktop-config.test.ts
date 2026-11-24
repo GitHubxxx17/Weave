@@ -18,14 +18,36 @@ describe('createDesktopConfig', () => {
     expect(config.studioOrigin).toBe('http://127.0.0.1:5173');
   });
 
-  it('uses the local Studio URL by default', () => {
+  it('leaves the Studio URL unset by default so the embedded Server hosts Studio', () => {
     const config = createDesktopConfig({
       userDataDirectory: '/tmp/weave-user-data',
+      studioDirectory: '/app/studio/dist',
       environment: {},
     });
 
-    expect(config.studioUrl).toBe('http://127.0.0.1:5173');
-    expect(config.studioOrigin).toBe('http://127.0.0.1:5173');
+    expect(config.studioUrl).toBeUndefined();
+    expect(config.studioOrigin).toBeUndefined();
+    expect(config.studioDirectory).toBe('/app/studio/dist');
+    expect(config.host).toBeUndefined();
+  });
+
+  it.each([
+    { argv: ['dist/main.js', '--host', '0.0.0.0'], environment: {}, host: '0.0.0.0' },
+    { argv: ['--host=10.0.0.5'], environment: { WEAVE_HOST: '0.0.0.0' }, host: '10.0.0.5' },
+    { argv: [], environment: { WEAVE_HOST: ' 192.168.1.20 ' }, host: '192.168.1.20' },
+    { argv: [], environment: { WEAVE_HOST: '' }, host: undefined },
+  ])('reads the listen host from $argv and $environment', ({ argv, environment, host }) => {
+    const config = createDesktopConfig({ userDataDirectory: '/tmp/d', argv, environment });
+    expect(config.host).toBe(host);
+  });
+
+  it('rejects a missing or malformed --host', () => {
+    expect(() => createDesktopConfig({ userDataDirectory: '/tmp/d', argv: ['--host'] })).toThrow(
+      '--host',
+    );
+    expect(() =>
+      createDesktopConfig({ userDataDirectory: '/tmp/d', argv: ['--host=a b'] }),
+    ).toThrow();
   });
 
   it('allows first binding under the Electron user data directory by default', () => {

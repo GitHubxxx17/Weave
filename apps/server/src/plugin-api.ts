@@ -32,6 +32,7 @@ export interface PluginAppOptions {
   readonly managedPluginInstaller?: ManagedPluginInstaller | undefined;
   readonly assertManualPluginIdSync?: ((id: string) => void) | undefined;
   readonly studioOrigin?: string | undefined;
+  readonly trustedHost?: string | undefined;
   readonly generationSnapshot?: (() => ExtensionGenerationSnapshot) | undefined;
   readonly hookConfirmations?: PluginHookConfirmationStore | undefined;
 }
@@ -168,7 +169,7 @@ function listPlugins(options: PluginAppOptions) {
 
 /** Registers cached catalog reads and guarded management writes without invoking tools. */
 export function registerPluginRoutes(app: Hono, options: PluginAppOptions): void {
-  app.use('/plugins/*', pluginWriteGuard(options.studioOrigin));
+  app.use('/plugins/*', pluginWriteGuard(options.studioOrigin, options.trustedHost));
   registerManagedPluginRoutes(app, options.managedPluginInstaller);
   app.get('/plugins', (context) => {
     try {

@@ -10,6 +10,7 @@ import { panelRequestGuard, readPanelRequest } from './plugin-panel-request-guar
 export interface PanelAppOptions {
   readonly panelService?: PanelService;
   readonly studioOrigin?: string;
+  readonly trustedHost?: string;
 }
 /** Register guards before global CORS, whose OPTIONS short circuit would bypass them. */
 export function registerPanelGuards(app: Hono, options: PanelAppOptions) {
@@ -19,7 +20,7 @@ export function registerPanelGuards(app: Hono, options: PanelAppOptions) {
     '/sessions/:sessionId/plugin-panels',
     '/sessions/:sessionId/plugin-panels/*',
   ])
-    app.use(path, panelRequestGuard(options.studioOrigin));
+    app.use(path, panelRequestGuard(options.studioOrigin, options.trustedHost));
 }
 export function registerPanelRoutes(app: Hono, options: PanelAppOptions) {
   const service = () => {

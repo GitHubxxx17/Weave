@@ -16,6 +16,33 @@
 
 对应观察编号：E1、E9。
 
+## 实现细节（Server 托管 Studio、`--host` 与访问令牌）
+
+以下是评审结论 1 到 4 的落地细节，对应实现 PR「Server 托管 Studio 并支持局域网访问」。
+
+### 静态托管
+
+- `startServer` 新增可选 `studioDirectory`（Studio `vite build` 产物目录，默认 `apps/studio/dist`；Vite `base` 为默认的 `/`，产物内资源均为绝对根路径 `/assets/...`，同源加载可直接使用）。CLI 入口可用环境变量 `WEAVE_STUDIO_DIRECTORY` 设置。
+- 路由顺序：所有 API 路由先注册，静态处理器最后注册，只处理 `GET`/`HEAD`。未被 API 命中的路径：存在对应文件则返回文件；没有扩展名的未知路径回退到 `index.html`（SPA 路由刷新）；带扩展名但不存在的路径返回 404，避免把脚本请求错误地回成 HTML。
+- 路径解析先 `resolve` 再校验位于目录内，并对 `realpath` 再校验一次，符号链接不能指向目录之外。非法转义返回 400。
+- 响应头：`Content-Security-Policy`（`default-src 'self'`，脚本允许 `'wasm-unsafe-eval'` 供语法高亮的 WebAssembly 使用，样式允许 `'unsafe-inline'` 供 React `style` 属性使用，`connect-src 'self'`，`object-src 'none'`，`frame-ancestors 'none'`）、`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`。`assets/` 下带哈希的文件使用长期缓存，其余使用 `no-cache`。
+- `runtime-bridge.ts` 在浏览器模式下使用相对地址，托管后页面与 API 同源，无需 CORS。
+
+### Desktop
+
+- Desktop 把 `apps/studio/dist` 传给 `startServer`，窗口加载 `http://127.0.0.1:<Server 端口>/`；信任 origin 是 Server 自己的 origin，不再向 Server 传 `studioOrigin`（页面同源，Server 按回环 Origin 规则放行）。
+- `WEAVE_STUDIO_URL` 保留：设置后窗口加载该地址（开发用 Vite），信任 origin 为该地址的 origin，行为与之前一致。`pnpm desktop:dev` 自行启动 Vite，并把 `WEAVE_STUDIO_URL` 传给 Electron。
+- 未设置 `WEAVE_STUDIO_URL` 且找不到 `index.html` 时，窗口显示启动错误页，说明缺少的路径和构建命令；不加载任何页面。
+- 预加载桥（终端与文件夹选择器）：`isTrustedSender` 要求同时满足：`senderFrame.origin` 与其 URL 的 origin 等于信任 origin；`senderFrame` 就是 `event.sender.mainFrame`（拒绝子 frame）；`event.sender.getURL()` 的 origin 也等于信任 origin。缺少 `sender` 时拒绝。
+
+### `--host` 与访问令牌
+
+- Server CLI 支持 `--host <地址>` / `--host=<地址>`，也读环境变量 `WEAVE_HOST`，默认 `127.0.0.1`。Desktop 从 `process.argv` 和 `WEAVE_HOST` 读取同名设置并传给 `startServer({ host })`；Desktop 窗口始终通过 `127.0.0.1` 访问自己的 Server。
+- 监听地址不是 `localhost`、`127.0.0.1`、`::1` 时启用访问令牌：启动时生成 32 字节随机令牌（base64url），或使用 `WEAVE_ACCESS_TOKEN`（16 到 256 个字符，限 `A-Za-z0-9._~-`，格式不符则启动失败且不回显值）。启动时通过 `announce`（默认 `console.info`）输出 `http://<地址>:<端口>/?token=<令牌>`；监听 `0.0.0.0` 或 `::` 时地址取第一个非内部 IPv4。令牌不写入日志以外的位置，也不进入会话事件。
+- 令牌校验中间件最先注册，放行 `/health`，其余请求都需要凭据：`weave_access_token` Cookie 或 `Authorization: Bearer <令牌>`；比较前先做 SHA-256 再用 `timingSafeEqual`。带 `?token=` 的 `GET`/`HEAD` 校验通过后写入 `HttpOnly; SameSite=Strict; Path=/` 的 Cookie，并 302 到去掉 `token` 的同一地址；令牌错误返回 401。没有有效令牌返回 `401 access-token-required`。
+- 全局本地准入守卫及各路径守卫（执行、记忆、检索、面板、撤销、插件与 MCP 写入）新增 `trustedHost`：非回环监听时，`Host` 允许回环或等于 `<监听地址>:<实际端口>`（监听通配地址时为"任意主机名加实际端口"，因为服务端无法得知客户端使用哪块网卡的地址；令牌仍然必需）。`Origin` 的主机部分按同一规则判断，即允许同源，不再要求等于固定的 `studioOrigin`。实际端口在监听完成后才确定，所以应用在监听回调里创建。`Sec-Fetch-Site`、JSON 校验等其余检查不变；回环监听时不传 `trustedHost`，行为与之前完全一致。
+- 安全含义：能访问该地址并持有令牌的人可以操作这台电脑上的 Weave（包括 Agent 执行与终端以外的全部 HTTP API）。令牌通过明文 HTTP 传输，仅适用于可信局域网。终端与文件夹选择器是 Electron 预加载桥，不经 HTTP，局域网浏览器无法使用。
+
 ## 1. 背景
 
 以下现状均已对照当前代码核实。

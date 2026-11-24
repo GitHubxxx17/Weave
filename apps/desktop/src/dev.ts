@@ -38,12 +38,15 @@ function startStudio(repositoryRoot: string, studioUrl: string): ChildProcess {
   );
 }
 
-function startElectron(repositoryRoot: string): ChildProcess {
+function startElectron(repositoryRoot: string, studioUrl: string): ChildProcess {
   const caFile = process.env.NODE_EXTRA_CA_CERTS ?? process.env.SSL_CERT_FILE;
-  const environment =
-    caFile !== undefined && existsSync(caFile)
-      ? { ...process.env, NODE_EXTRA_CA_CERTS: caFile }
-      : process.env;
+  // Development always points Electron at the Vite server started above; without
+  // this the window would load the built Studio hosted by the embedded Server.
+  const environment = {
+    ...process.env,
+    WEAVE_STUDIO_URL: studioUrl,
+    ...(caFile !== undefined && existsSync(caFile) ? { NODE_EXTRA_CA_CERTS: caFile } : {}),
+  };
 
   return spawn(pnpmCommand, ['exec', 'electron', 'dist/main.js'], {
     cwd: resolve(repositoryRoot, 'apps/desktop'),
@@ -122,7 +125,7 @@ async function run(): Promise<void> {
     if (studioExited(studio)) {
       throw new Error('Vite exited before Studio became ready.');
     }
-    electron = startElectron(repositoryRoot);
+    electron = startElectron(repositoryRoot, studioUrl);
     const electronChild = electron;
 
     await Promise.race([

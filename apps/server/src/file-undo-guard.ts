@@ -1,15 +1,11 @@
 import type { Hono, MiddlewareHandler } from 'hono';
 import { FileUndoError } from '@weave/runtime';
-const loopback = /^(localhost|127\.0\.0\.1|\[::1\])(?::([0-9]{1,5}))?$/;
-function local(value: string) {
-  const match = loopback.exec(value);
-  return match !== null && (match[2] === undefined || Number(match[2]) <= 65535);
-}
-function guard(studioOrigin?: string): MiddlewareHandler {
+import { isTrustedAuthority } from './local-authority.js';
+function guard(studioOrigin?: string, trustedHost?: string): MiddlewareHandler {
   return async (context, next) => {
     context.header('Cache-Control', 'no-store');
     let allowed =
-      local(context.req.header('Host') ?? '') &&
+      isTrustedAuthority(context.req.header('Host') ?? '', trustedHost) &&
       context.req.header('Sec-Fetch-Site')?.trim().toLowerCase() !== 'cross-site';
     const origin = context.req.header('Origin');
     if (origin !== undefined) {
@@ -18,7 +14,9 @@ function guard(studioOrigin?: string): MiddlewareHandler {
         allowed &&=
           (url.protocol === 'http:' || url.protocol === 'https:') &&
           url.origin === origin &&
-          (studioOrigin === undefined ? local(url.host) : origin === studioOrigin);
+          (studioOrigin === undefined
+            ? isTrustedAuthority(url.host, trustedHost)
+            : origin === studioOrigin);
       } catch {
         allowed = false;
       }
@@ -62,13 +60,16 @@ function guard(studioOrigin?: string): MiddlewareHandler {
 /** Must precede global CORS so OPTIONS cannot skip local admission. */
 export function registerFileUndoGuards(
   app: Hono,
-  options: { readonly studioOrigin?: string | undefined },
+  options: {
+    readonly studioOrigin?: string | undefined;
+    readonly trustedHost?: string | undefined;
+  },
 ) {
   for (const path of [
     '/projects/:projectId/sessions/:sessionId/undo',
     '/projects/:projectId/sessions/:sessionId/file-undo',
   ])
-    app.use(path, guard(options.studioOrigin));
+    app.use(path, guard(options.studioOrigin, options.trustedHost));
 }
 export async function readFileUndoRequest(request: Request): Promise<unknown> {
   const reader = request.body?.getReader();
