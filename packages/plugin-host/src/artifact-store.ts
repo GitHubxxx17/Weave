@@ -41,7 +41,9 @@ const maxPublishedArtifacts = 64;
 
 type StoreResult =
   | { readonly kind: 'artifact'; readonly value: PluginArtifact }
-  | { readonly kind: 'preview'; readonly value: PluginArtifactSourceIdentity };
+  | { readonly kind: 'preview'; readonly value: PluginArtifactSourceIdentity }
+  | { readonly kind: 'digests'; readonly value: readonly string[] }
+  | { readonly kind: 'removed'; readonly value: boolean };
 
 function parse<T>(schema: z.ZodType<T>, value: unknown, description: string): T {
   const checked = schema.safeParse(value);
@@ -582,7 +584,61 @@ export function createPluginArtifactStore(
     return result.value;
   }
 
+  async function listPublished(abort: AbortSignal | undefined): Promise<readonly string[]> {
+    const root = await normalizeStore(directory);
+    const artifacts = path.join(root, 'artifacts');
+    if (!(await directoryExists(artifacts))) return [];
+    const digests: string[] = [];
+    for await (const entry of await fs.opendir(artifacts)) {
+      abort?.throwIfAborted();
+      if (!entry.isDirectory() || !artifactDigestSchema.safeParse(entry.name).success) {
+        throw new PluginArtifactError(
+          'plugin-artifact-conflict',
+          'The artifact directory contains an unexpected entry',
+        );
+      }
+      digests.push(entry.name);
+    }
+    return digests.sort();
+  }
+
+  async function removePublished(digest: string, abort: AbortSignal | undefined): Promise<boolean> {
+    const root = await normalizeStore(directory);
+    const artifacts = path.join(root, 'artifacts');
+    const object = path.join(artifacts, digest);
+    if (!(await directoryExists(artifacts)) || !(await directoryExists(object))) return false;
+    const staging = path.join(root, 'staging');
+    await ensureDirectory(staging, false, false);
+    abort?.throwIfAborted();
+    // Rename first so a crash leaves an abandoned staging operation, which the next stage recovers.
+    const operation = path.join(staging, randomUUID());
+    await fs.rename(object, operation);
+    await removeStagingOperation(operation);
+    return true;
+  }
+
   return {
+    async list(options = {}) {
+      const { signal: abort } = parse(readOptionsSchema, options, 'plugin artifact list options');
+      abort?.throwIfAborted();
+      const result = await queue.enqueue(false, async () => ({
+        kind: 'digests' as const,
+        value: await withArtifactErrors(abort, () => listPublished(abort)),
+      }));
+      if (result.kind !== 'digests') throw new Error('Unexpected plugin artifact queue result');
+      return result.value;
+    },
+    async remove(input, options = {}) {
+      const digest = parse(artifactDigestSchema, input, 'plugin artifact digest');
+      const { signal: abort } = parse(readOptionsSchema, options, 'plugin artifact remove options');
+      abort?.throwIfAborted();
+      const result = await queue.enqueue(false, async () => ({
+        kind: 'removed' as const,
+        value: await withArtifactErrors(abort, () => removePublished(digest, abort)),
+      }));
+      if (result.kind !== 'removed') throw new Error('Unexpected plugin artifact queue result');
+      return result.value;
+    },
     async preview(input) {
       const { sourceDirectory, signal: abort } = parse(
         previewOptionsSchema,

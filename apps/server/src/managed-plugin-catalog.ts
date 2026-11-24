@@ -6,6 +6,7 @@ import type {
 } from './extension-coordinator.js';
 import type { ExtensionGenerationSnapshot } from './extension-types.js';
 import { localExtensionSourceId } from './local-extension-source.js';
+import { currentCandidates } from './managed-artifact-retention.js';
 import type { ManagedImportResult } from './managed-plugin-installer.js';
 import type { ManagedSelectionResult } from './managed-selection-manager.js';
 import { canonicalJson } from './plugin-authority-data.js';
@@ -41,6 +42,20 @@ export type ImportPreviewResponse = z.infer<typeof previewSchema>;
 export const importPreviewResponseSchema: z.ZodType<ImportPreviewResponse> = previewSchema;
 export const githubImportPreviewResponseSchema = previewSchema.extend({
   github: githubPluginSourceSchema,
+});
+
+const updateSchema = z.strictObject({
+  version: z.string().regex(/^\d+\.\d+\.\d+$/),
+  source: githubPluginSourceSchema,
+});
+export type ManagedUpdate = z.infer<typeof updateSchema>;
+
+export const updatePreviewResponseSchema = githubImportPreviewResponseSchema.extend({
+  pluginId: pluginIdSchema,
+  expectedTrustSequence: headSchema,
+  previousSelection: digestSchema,
+  current: z.strictObject({ digest: digestSchema, manifest: artifactManifestSchema }),
+  update: updateSchema,
 });
 
 const selectionSchema = z.strictObject({
@@ -87,6 +102,7 @@ const catalogSchema = z.strictObject({
       selection: selectionSchema.nullable(),
       trust: trustSchema.nullable(),
       active: publishedMemberSchema.nullable(),
+      update: updateSchema.optional(),
     }),
   ),
   generation: generationSchema,
@@ -212,6 +228,7 @@ function projectCatalog(
   authority: PluginAuthoritySnapshot,
   generation: z.infer<typeof generationSchema>,
   members: ReadonlyMap<string, PublishedMember>,
+  updates: ReadonlyMap<string, ManagedUpdate>,
 ) {
   const trust = foldTrust(authority.trustEvents);
   const imports = new Map(
@@ -226,7 +243,7 @@ function projectCatalog(
       .sort(byImportSequence)
       .map(({ pluginId, candidates, selection }) => ({
         pluginId,
-        candidates: [...candidates]
+        candidates: [...currentCandidates(authority, pluginId, candidates)]
           .sort(byImportSequence)
           .map(({ digest, manifest, files, bytes, firstImportSequence, provenance }) => {
             const recorded = imports.get(firstImportSequence);
@@ -259,6 +276,7 @@ function projectCatalog(
         selection: projectSelection(selection),
         trust: projectTrust(candidates, selection, trust.get(pluginId)),
         active: members.get(pluginId) ?? null,
+        ...(updates.has(pluginId) ? { update: updates.get(pluginId)! } : {}),
       })),
     generation,
   };
@@ -267,9 +285,15 @@ function projectCatalog(
 export function projectManagedCatalog(
   authority: PluginAuthoritySnapshot,
   observed: ManagedRuntimeObservation,
+  updates: ReadonlyMap<string, ManagedUpdate> = new Map(),
 ): ManagedCatalog {
   return catalogSchema.parse(
-    projectCatalog(authority, projectGeneration(observed.generation), publishedMembers(observed)),
+    projectCatalog(
+      authority,
+      projectGeneration(observed.generation),
+      publishedMembers(observed),
+      updates,
+    ),
   );
 }
 
@@ -316,12 +340,13 @@ function projectDecision(operation: RecordedManagedOperation, authority: PluginA
 
 export function projectManagedMutation(
   result: ManagedSelectionResult | ManagedImportResult,
+  updates: ReadonlyMap<string, ManagedUpdate> = new Map(),
 ): ManagedMutationResponse {
   const { kind, operation, observed } = result;
   const authority = kind === 'committed' ? result.savedAuthority : result.currentAuthority;
   const generation = projectGeneration(observed.generation);
   const members = publishedMembers(observed);
-  const current = projectCatalog(authority, generation, members);
+  const current = projectCatalog(authority, generation, members, updates);
   const decision = projectDecision(operation, authority);
   if (kind === 'replayed') {
     return mutationSchema.parse({ kind, decision, application: { status: 'unknown' }, current });

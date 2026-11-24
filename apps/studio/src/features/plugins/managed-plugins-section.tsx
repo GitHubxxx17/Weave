@@ -1,6 +1,7 @@
 import { useId, useLayoutEffect, useRef, useState, type ReactElement } from 'react';
 import { z } from 'zod';
 
+import { ManagedUpdateDialog } from './managed-update-dialog.js';
 import {
   managedAction,
   ManagedContributions,
@@ -23,6 +24,7 @@ import type {
   ManagedMutationResponse,
   ManagedPlugin,
   ManagedReview,
+  ManagedUpdatePreview,
 } from './managed-plugin-types.js';
 import { usePluginCatalogState, usePluginCatalogStore } from './plugin-catalog-context.js';
 import { pluginDialogError } from './plugin-dialog.js';
@@ -170,12 +172,14 @@ function ManagedRow({
   published,
   blocked,
   onReview,
+  onUpdate,
 }: {
   readonly row: ManagedPlugin;
   readonly heads: ManagedHeads;
   readonly published: PluginListItem | undefined;
   readonly blocked: boolean;
   readonly onReview: (draft: ManagedDraft) => void;
+  readonly onUpdate: (pluginId: string) => void;
 }): ReactElement {
   const selection = row.selection;
   const selectedDigest = selection?.digest ?? null;
@@ -203,7 +207,7 @@ function ManagedRow({
         ...(selected === undefined ? {} : { selectedManifest: selected.manifest }),
       });
   };
-  const activate = (candidate: ManagedCandidate, intent: 'activate' | 'rollback'): void => {
+  const activate = (candidate: ManagedCandidate): void => {
     onReview({
       ...(candidate.provenance === 'github' ? { github: candidate.github } : {}),
       review: {
@@ -212,7 +216,7 @@ function ManagedRow({
         digest: candidate.digest,
         manifest: candidate.manifest,
         previousSelection: selectedDigest,
-        intent,
+        intent: 'activate',
       },
     });
   };
@@ -223,6 +227,9 @@ function ManagedRow({
           <span className="plugin-name">{row.pluginId}</span>
           <span className="plugin-chip">{row.candidates.length} 个候选</span>
           <span className="plugin-chip">{row.active === null ? '未发布' : '有已发布版本'}</span>
+          {row.update === undefined ? null : (
+            <span className="plugin-chip managed-update-chip">有新版本 v{row.update.version}</span>
+          )}
         </summary>
         <div className="plugin-detail">
           <dl className="plugin-facts managed-identity">
@@ -266,6 +273,16 @@ function ManagedRow({
             </section>
           )}
           <div className="plugin-actions">
+            {row.update === undefined || selection === null ? null : (
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={blocked}
+                onClick={() => onUpdate(row.pluginId)}
+              >
+                更新到 v{row.update.version}
+              </button>
+            )}
             {row.trust?.enabled === false ? (
               <button
                 type="button"
@@ -301,8 +318,11 @@ function ManagedRow({
               卸载
             </button>
           </div>
-          <section className="plugin-contributions" aria-label="候选历史">
-            <h5>候选历史</h5>
+          <section className="plugin-contributions" aria-label="候选版本">
+            <h5>候选版本</h5>
+            <p className="plugin-note">
+              更新或卸载后，被替换的版本会被回收。需要旧版本时，请从来源重新安装。
+            </p>
             <ul className="plugin-list managed-candidates">
               {row.candidates.map((candidate) => (
                 <li
@@ -329,20 +349,10 @@ function ManagedRow({
                       type="button"
                       className="secondary-button"
                       disabled={blocked}
-                      onClick={() => activate(candidate, 'activate')}
+                      onClick={() => activate(candidate)}
                     >
                       激活
                     </button>
-                    {selectedDigest === null || candidate.digest === selectedDigest ? null : (
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        disabled={blocked}
-                        onClick={() => activate(candidate, 'rollback')}
-                      >
-                        回退
-                      </button>
-                    )}
                   </div>
                 </li>
               ))}
@@ -355,7 +365,9 @@ function ManagedRow({
 }
 
 type OpenDialog =
-  { readonly kind: 'review'; readonly draft: ManagedDraft } | { readonly kind: 'retry' | 'stop' };
+  | { readonly kind: 'review'; readonly draft: ManagedDraft }
+  | { readonly kind: 'update'; readonly preview: ManagedUpdatePreview }
+  | { readonly kind: 'retry' | 'stop' };
 
 export function ManagedPluginsSection({
   getFallbackFocus,
@@ -506,6 +518,31 @@ export function ManagedPluginsSection({
                 }
               : { review: { kind: 'import', preview: result }, sourceDirectory: path },
         });
+      }
+    } catch (reason) {
+      if (current === revision.current) setLocalError(pluginDialogError(reason));
+    } finally {
+      if (current === revision.current) {
+        previewAbort.current = null;
+        setPreviewing(false);
+      }
+    }
+  };
+  const startUpdate = async (pluginId: string): Promise<void> => {
+    if (sharedManagementBlocked || previewAbort.current !== null) return;
+    const current = invalidate();
+    setLocalError(undefined);
+    const controller = new AbortController();
+    previewAbort.current = controller;
+    setPreviewing(true);
+    try {
+      const result = await store.previewManagedUpdate(pluginId, controller.signal);
+      if (
+        current === revision.current &&
+        !store.getSnapshot().sharedManagementBlocked &&
+        document.querySelector('[data-plugin-dialog-portal]') === null
+      ) {
+        setDialog({ kind: 'update', preview: result });
       }
     } catch (reason) {
       if (current === revision.current) setLocalError(pluginDialogError(reason));
@@ -849,6 +886,7 @@ export function ManagedPluginsSection({
                   published={publishedById.get(row.pluginId)}
                   blocked={sharedManagementBlocked}
                   onReview={(draft) => openDialog({ kind: 'review', draft })}
+                  onUpdate={(id) => void startUpdate(id)}
                 />
               ))}
             </ul>
@@ -865,6 +903,15 @@ export function ManagedPluginsSection({
           onSubmit={submitReview}
           onCancel={closeDialog}
           onReviewAgain={dialog.draft.review.kind === 'import' ? focusPath : closeDialog}
+        />
+      ) : null}
+      {dialog?.kind === 'update' ? (
+        <ManagedUpdateDialog
+          preview={dialog.preview}
+          blocked={sharedManagementBlocked}
+          getFallbackFocus={getFallbackFocus}
+          onSubmit={store.submitManagedUpdate}
+          onCancel={closeDialog}
         />
       ) : null}
       {dialog?.kind === 'retry' || dialog?.kind === 'stop' ? (

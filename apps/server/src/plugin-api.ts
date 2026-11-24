@@ -21,6 +21,7 @@ import { ManagedReviewRequiredError } from './plugin-trust-sqlite.js';
 import type { ExtensionGenerationSnapshot } from './extension-types.js';
 import { registerManagedPluginRoutes } from './managed-plugin-api.js';
 import type { ManagedPluginInstaller } from './managed-plugin-installer.js';
+import type { ManagedPluginUpdater } from './managed-plugin-updater.js';
 
 /** Dependencies of the plugin catalog and local plugin control plane. */
 export interface PluginAppOptions {
@@ -28,6 +29,7 @@ export interface PluginAppOptions {
   readonly commandCatalog?: (() => readonly CommandListItem[]) | undefined;
   readonly pluginManager?: ServerPluginManager | undefined;
   readonly managedPluginInstaller?: ManagedPluginInstaller | undefined;
+  readonly managedPluginUpdater?: ManagedPluginUpdater | undefined;
   readonly assertManualPluginIdSync?: ((id: string) => void) | undefined;
   readonly studioOrigin?: string | undefined;
   readonly generationSnapshot?: (() => ExtensionGenerationSnapshot) | undefined;
@@ -136,7 +138,7 @@ function listPlugins(options: PluginAppOptions) {
 /** Registers cached catalog reads and guarded management writes without invoking tools. */
 export function registerPluginRoutes(app: Hono, options: PluginAppOptions): void {
   app.use('/plugins/*', pluginWriteGuard(options.studioOrigin));
-  registerManagedPluginRoutes(app, options.managedPluginInstaller);
+  registerManagedPluginRoutes(app, options.managedPluginInstaller, options.managedPluginUpdater);
   app.get('/plugins', (context) => {
     try {
       return context.json(listPlugins(options));

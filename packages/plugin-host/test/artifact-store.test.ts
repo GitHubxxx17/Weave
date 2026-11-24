@@ -1149,3 +1149,48 @@ test('late cancellation retains the published artifact at its fixed path', async
   await expect(store.read(digest)).resolves.toMatchObject({ digest });
   expect(await readdir(path.join(managedRoot, 'staging'))).toEqual([]);
 });
+
+test('lists published artifacts and removes one by digest without touching others', async () => {
+  const { root, managedRoot, sourceDirectory } = await fixture();
+  const store = host.createPluginArtifactStore({ directory: managedRoot });
+  await expect(store.list()).resolves.toEqual([]);
+  const first = await store.stage({ sourceDirectory });
+  const secondSource = await writePlugin(root, 'second', { entry: 'index.mjs' });
+  const second = await store.stage({ sourceDirectory: secondSource });
+  expect(first.digest).not.toBe(second.digest);
+  await expect(store.list()).resolves.toEqual([first.digest, second.digest].sort());
+
+  await expect(store.remove(first.digest)).resolves.toBe(true);
+  await expect(store.list()).resolves.toEqual([second.digest]);
+  await expect(store.read(first.digest)).rejects.toMatchObject({
+    code: 'plugin-artifact-not-found',
+  });
+  await expect(store.read(second.digest)).resolves.toMatchObject({ digest: second.digest });
+  expect(await readdir(path.join(managedRoot, 'staging'))).toEqual([]);
+});
+
+test('removing an absent artifact reports false and invalid digests are rejected', async () => {
+  const { managedRoot } = await fixture();
+  const store = host.createPluginArtifactStore({ directory: managedRoot });
+  await expect(store.remove('d'.repeat(64))).resolves.toBe(false);
+  await expect(store.remove('../escape')).rejects.toMatchObject({
+    code: 'plugin-artifact-invalid',
+  });
+});
+
+test('removal frees capacity so a new artifact can be staged at the limit', async () => {
+  const { managedRoot, sourceDirectory } = await fixture();
+  await seedOrphans(managedRoot, 63);
+  const store = host.createPluginArtifactStore({ directory: managedRoot });
+  const staged = await store.stage({ sourceDirectory });
+  await expect(store.list()).resolves.toHaveLength(64);
+  await expect(store.remove(staged.digest)).resolves.toBe(true);
+  await expect(store.list()).resolves.toHaveLength(63);
+});
+
+test('listing rejects an unexpected entry instead of ignoring it', async () => {
+  const { managedRoot } = await fixture();
+  await mkdir(path.join(managedRoot, 'artifacts', 'not-a-digest'), { recursive: true });
+  const store = host.createPluginArtifactStore({ directory: managedRoot });
+  await expect(store.list()).rejects.toMatchObject({ code: 'plugin-artifact-conflict' });
+});

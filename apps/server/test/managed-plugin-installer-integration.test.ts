@@ -536,6 +536,8 @@ describe('owned managed installer over HTTP', () => {
       await Promise.allSettled([oldTurn]);
     }
 
+    // The replaced version is reclaimed, so going back means importing it again from its source.
+    await f.import(importBody('notes-reimport-v1', await f.preview(v1Source.directory)));
     const rollback = await apply(activation('rollback-v1', f.snapshot(), v1, 'rollback'), {
       install: true,
       trust: true,
@@ -590,16 +592,18 @@ describe('owned managed installer over HTTP', () => {
     expect(removed.application.active).toBeNull();
     expect(removed.decision.selection).toBeNull();
     expect(removed.decision.trust).toBeNull();
-    expect(removed.current.plugins[0]?.candidates.map(({ digest }) => digest)).toEqual([
-      v1.candidate.digest,
-      v2.candidate.digest,
-    ]);
-    await expect(
-      fs.access(join(f.artifacts, v1.candidate.digest, 'payload', 'index.mjs')),
-    ).resolves.toBeUndefined();
-    await expect(
-      fs.access(join(f.artifacts, v2.candidate.digest, 'payload', 'payload.txt')),
-    ).resolves.toBeUndefined();
+    // Uninstall retires every candidate and reclaims the artifacts once no Generation uses them.
+    expect(removed.current.plugins[0]?.candidates).toEqual([]);
+    await within(
+      (async () => {
+        for (;;) {
+          const present = await fs.readdir(f.artifacts);
+          if (present.length === 0) return;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+      })(),
+      'uninstall artifact reclamation',
+    );
     expectIssue(
       await f.http('/plugins/notes/trust', { digest: v1.candidate.digest }, 409),
       'plugin-managed-review-required',
@@ -985,7 +989,7 @@ describe('owned managed installer over HTTP', () => {
     expect(commit).toHaveBeenCalledOnce();
   });
 
-  it('abandons a disconnected precommit import while the Server stays live and reuses the inert object', async () => {
+  it('abandons a disconnected precommit import while the Server stays live and sweeps the inert object on restart', async () => {
     const f = await fixture();
     const running = await f.startUnbound();
     const marker = join(f.root, 'private-inert-marker');
@@ -1018,9 +1022,25 @@ describe('owned managed installer over HTTP', () => {
       expect(f.authority().lookupSync(importRequest(request))).toEqual({ kind: 'absent' });
       expect((await f.catalog()).plugins).toEqual([]);
       await expect(fs.access(marker)).rejects.toMatchObject({ code: 'ENOENT' });
-      const identity = await fs.stat(artifact);
+      // The orphan stays until the next start, because it may belong to a live import.
+      await expect(fs.stat(artifact)).resolves.toBeTruthy();
       await f.stop();
       await f.start();
+      await within(
+        (async () => {
+          for (;;) {
+            if (
+              await fs.access(artifact).then(
+                () => false,
+                () => true,
+              )
+            )
+              return;
+            await new Promise((resolve) => setTimeout(resolve, 20));
+          }
+        })(),
+        'startup sweep of the unreferenced artifact',
+      );
 
       expectIssue(await f.http(importPath, request, 409), 'plugin-preview-stale');
       expect(f.authority().lookupSync(importRequest(request))).toEqual({ kind: 'absent' });
@@ -1035,8 +1055,8 @@ describe('owned managed installer over HTTP', () => {
         trust: null,
         active: null,
       });
-      expect((await fs.stat(artifact)).ino).toBe(identity.ino);
-      expect(rename.mock.calls.filter(([, to]) => to === artifact)).toHaveLength(1);
+      await expect(fs.readFile(payload, 'utf8')).resolves.toBe('inert bytes');
+      expect(rename.mock.calls.filter(([, to]) => to === artifact)).toHaveLength(2);
       await expect(fs.access(marker)).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       published.release();
@@ -1334,5 +1354,85 @@ describe('owned managed installer over HTTP', () => {
       read.mockRestore();
       directorySpy.mockRestore();
     }
+  });
+
+  async function waitForArtifacts(
+    f: Awaited<ReturnType<typeof fixture>>,
+    expected: readonly string[],
+    description: string,
+  ) {
+    await within(
+      (async () => {
+        for (;;) {
+          const present = (await fs.readdir(f.artifacts)).sort();
+          if (JSON.stringify(present) === JSON.stringify([...expected].sort())) return;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+      })(),
+      description,
+    );
+  }
+
+  it('reclaims the replaced version after an update and offers only the current candidate', async () => {
+    const f = await fixture();
+    await f.startUnbound();
+    const v1Source = await f.source('notes', 'v1 payload', { relativePayload: true });
+    const v2Source = await f.source('notes', 'v2 payload', {
+      relativePayload: true,
+      version: '2.0.0',
+    });
+    const v1 = await f.preview(v1Source.directory);
+    await f.import(importBody('reclaim-import-v1', v1));
+    expectCommitted(await f.select(activation('reclaim-activate-v1', f.snapshot(), v1)), 'applied');
+    const v2 = await f.preview(v2Source.directory);
+    await f.import(importBody('reclaim-import-v2', v2));
+    // A pending import is kept until it is activated or replaced.
+    await waitForArtifacts(f, [v1.candidate.digest, v2.candidate.digest], 'both versions kept');
+    const activeV2 = expectCommitted(
+      await f.select(activation('reclaim-activate-v2', f.snapshot(), v2)),
+      'applied',
+    );
+    expect(activeV2.current.plugins[0]?.candidates.map(({ digest }) => digest)).toEqual([
+      v2.candidate.digest,
+    ]);
+    await waitForArtifacts(f, [v2.candidate.digest], 'replaced version reclaimed');
+    expectToolValue(await f.run('notes', 'turn-after-update'), 'v2 payload');
+  });
+
+  it('keeps the replaced version while an older turn uses it and reclaims it after release', async () => {
+    const f = await fixture();
+    const turns = turnGate();
+    await f.startUnbound({ plugins: [turns.plugin] });
+    const v1Source = await f.source('notes', 'v1 relative payload', { relativePayload: true });
+    const v2Source = await f.source('notes', 'v2 relative payload', {
+      relativePayload: true,
+      version: '2.0.0',
+    });
+    const v1 = await f.preview(v1Source.directory);
+    await f.import(importBody('pinned-import-v1', v1));
+    const v2 = await f.preview(v2Source.directory);
+    await f.import(importBody('pinned-import-v2', v2));
+    expectCommitted(await f.select(activation('pinned-activate-v1', f.snapshot(), v1)), 'applied');
+    const pin = turns.arm();
+    const oldTurn = pending(f.run(['fixture_gate', 'notes'], 'turn-on-v1'));
+    try {
+      await within(pin.entered, 'turn pinned to v1');
+      expectCommitted(
+        await f.select(activation('pinned-activate-v2', f.snapshot(), v2)),
+        'applied',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      // The old turn still reads its pinned files, so the old artifact must remain.
+      await expect(fs.readdir(f.artifacts)).resolves.toHaveLength(2);
+    } finally {
+      pin.release();
+    }
+    expectToolValue(await oldTurn, 'v1 relative payload');
+    // Any later committed decision schedules another pass; the released version is removed.
+    expectCommitted(
+      await f.select(decisionInput('disable', 'pinned-disable', f.snapshot()).request),
+      'applied',
+    );
+    await waitForArtifacts(f, [v2.candidate.digest], 'released version reclaimed');
   });
 });

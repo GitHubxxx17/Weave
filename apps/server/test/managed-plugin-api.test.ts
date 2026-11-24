@@ -12,6 +12,7 @@ import type { ManagedRuntimeObservation } from '../src/extension-coordinator.js'
 import { ManagedCommitFailure } from '../src/managed-command-commit.js';
 import { ManagedInstallerError } from '../src/managed-plugin-installer-errors.js';
 import type { ManagedPluginInstaller } from '../src/managed-plugin-installer.js';
+import type { ManagedPluginUpdater } from '../src/managed-plugin-updater.js';
 import { createSqlitePluginAuthorityDatabase } from '../src/plugin-authority-store.js';
 import {
   PluginAuthorityError,
@@ -98,12 +99,26 @@ function fixture() {
     snapshot: vi
       .fn<ManagedPluginInstaller['snapshot']>()
       .mockReturnValue({ authority: emptyAuthority, observed }),
+    reclaimArtifacts: vi
+      .fn<ManagedPluginInstaller['reclaimArtifacts']>()
+      .mockResolvedValue({ removed: [], deferred: [], failed: [] }),
+    requestReclaim: () => {},
     closeSync: () => {},
     drain: async () => {},
   } satisfies ManagedPluginInstaller;
+  const updater = {
+    updates: vi.fn<ManagedPluginUpdater['updates']>().mockReturnValue(new Map()),
+    preview: vi.fn<ManagedPluginUpdater['preview']>(),
+    apply: vi.fn<ManagedPluginUpdater['apply']>(),
+  } satisfies ManagedPluginUpdater;
   return {
     installer,
-    app: createApp(runtime, { managedPluginInstaller: installer, studioOrigin }),
+    updater,
+    app: createApp(runtime, {
+      managedPluginInstaller: installer,
+      managedPluginUpdater: updater,
+      studioOrigin,
+    }),
   };
 }
 
@@ -701,8 +716,125 @@ function privateFree(value: unknown, fingerprint?: string) {
   }
 }
 
+const updateBody = {
+  requestId: 'update-1',
+  previewId: 'preview',
+  candidateDigest: digestB,
+  previousSelection: digestA,
+  expectedInstallSequence: 5,
+  expectedTrustSequence: 3,
+};
+
+describe('managed plugin update routes', () => {
+  it('adds the detected update to the managed catalog', async () => {
+    const { activated } = await history();
+    const { app, installer, updater } = fixture();
+    installer.snapshot.mockReturnValue({ authority: activated.afterSnapshot, observed });
+    const detected = {
+      version: '3.0.0',
+      source: {
+        repository: 'https://github.com/weave/notes',
+        commit: 'a'.repeat(40),
+        subdirectory: '',
+      },
+    } as const;
+    updater.updates.mockReturnValue(new Map([['notes', detected]]));
+    const catalog = (await (await app.request(managed)).json()) as {
+      plugins: { pluginId: string; update?: unknown }[];
+    };
+    expect(catalog.plugins.find(({ pluginId }) => pluginId === 'notes')?.update).toEqual(detected);
+    expect(catalog.plugins.find(({ pluginId }) => pluginId === 'alpha')?.update).toBeUndefined();
+  });
+
+  it('previews an update through the updater and projects only public fields', async () => {
+    const { app, updater } = fixture();
+    updater.preview.mockResolvedValue({
+      pluginId: 'notes',
+      previewId: 'preview',
+      expiresAt: stamp,
+      expectedInstallSequence: 5,
+      expectedTrustSequence: 3,
+      previousSelection: digestA,
+      current: { digest: digestA, manifest: identity.manifest },
+      candidate: { digest: digestB, manifest: second.manifest, files: 2, bytes: 128 },
+      update: {
+        version: '2.0.0',
+        source: {
+          repository: 'https://github.com/weave/notes',
+          commit: 'a'.repeat(40),
+          subdirectory: '',
+        },
+      },
+      github: {
+        repository: 'https://github.com/weave/notes',
+        commit: 'a'.repeat(40),
+        subdirectory: '',
+      },
+    });
+    const response = await app.request(`${managed}/notes/update/preview`, post({}));
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(updater.preview).toHaveBeenCalledWith('notes', expect.any(AbortSignal));
+    await expect(response.json()).resolves.toMatchObject({
+      pluginId: 'notes',
+      candidate: { digest: digestB },
+      current: { digest: digestA },
+      expectedTrustSequence: 3,
+    });
+    const extra = await app.request(`${managed}/notes/update/preview`, post({ force: true }));
+    expect(extra.status).toBe(400);
+  });
+
+  it('applies a confirmed update and validates the confirmation body', async () => {
+    const { activated } = await history();
+    const { app, updater } = fixture();
+    updater.apply.mockResolvedValue({
+      kind: 'replayed',
+      operation: activated.operation,
+      currentAuthority: activated.afterSnapshot,
+      observed,
+    });
+    const response = await app.request(`${managed}/notes/update`, post(updateBody));
+    expect(response.status).toBe(200);
+    expect(updater.apply).toHaveBeenCalledWith(
+      { pluginId: 'notes', ...updateBody },
+      expect.any(AbortSignal),
+    );
+    await expect(response.json()).resolves.toMatchObject({
+      kind: 'replayed',
+      decision: { pluginId: 'notes', target: { kind: 'activate' } },
+    });
+    updater.apply.mockClear();
+    for (const body of [
+      { ...updateBody, candidateDigest: 'short' },
+      { ...updateBody, previousSelection: null },
+      { ...updateBody, extra: true },
+      { requestId: 'update-1' },
+    ]) {
+      const rejected = await app.request(`${managed}/notes/update`, post(body));
+      expect(rejected.status).toBe(400);
+    }
+    expect(updater.apply).not.toHaveBeenCalled();
+  });
+
+  it('reports stale confirmations and a missing updater as typed errors', async () => {
+    const { app, updater } = fixture();
+    updater.apply.mockRejectedValue(new ManagedInstallerError('plugin-preview-stale'));
+    const stale = await app.request(`${managed}/notes/update`, post(updateBody));
+    expect(stale.status).toBe(409);
+    await expect(stale.json()).resolves.toMatchObject({ error: { code: 'plugin-preview-stale' } });
+    const { installer } = fixture();
+    const bare = createApp(runtime, { managedPluginInstaller: installer, studioOrigin });
+    const missing = await bare.request(`${managed}/notes/update/preview`, post({}));
+    expect(missing.status).toBe(404);
+    await expect(missing.json()).resolves.toMatchObject({
+      error: { code: 'plugin-installer-disabled' },
+    });
+  });
+});
+
 describe('managed plugin readback', () => {
-  it('orders candidate history and joins exact recorded import times, trust, and members', async () => {
+  it('omits retired candidates and joins exact recorded import times, trust, and members', async () => {
     const { activated, next } = await history();
     const { app, installer } = fixture();
     const authority = {
@@ -729,16 +861,8 @@ describe('managed plugin readback', () => {
       plugins: [
         {
           pluginId: 'notes',
+          // The replaced version A is retired history and is no longer offered.
           candidates: [
-            {
-              manifest: identity.manifest,
-              digest: digestA,
-              files: 2,
-              bytes: 128,
-              importSequence: 1,
-              importedAt: '2026-11-22T10:00:00.001Z',
-              provenance: 'local-directory',
-            },
             {
               manifest: second.manifest,
               digest: digestB,

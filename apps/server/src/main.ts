@@ -57,6 +57,7 @@ import {
 import type { ExtensionCoordinator } from './extension-coordinator.js';
 import { assertManualPluginIdSync } from './local-extension-source.js';
 import type { ManagedPluginInstaller } from './managed-plugin-installer.js';
+import { createManagedPluginUpdater } from './managed-plugin-updater.js';
 import {
   acquireManagedPluginStartup,
   resolvePluginStartupOptions,
@@ -422,6 +423,8 @@ export async function startServer(
     pluginHost = extensions.pluginHost;
     mcpManager = extensions.mcpManager;
     await coordinator.reload();
+    // Startup sweep: removes retired and orphaned managed artifacts left by earlier versions.
+    installer?.requestReclaim();
     panelService = createPanelService({
       host: runtime.serverHost,
       authority: coordinator,
@@ -507,7 +510,21 @@ export async function startServer(
           generationSnapshot: coordinator.generationSnapshot,
           commandCatalog: () => listServerCommands(runtime),
           ...(pluginHost === undefined ? {} : { pluginManager: pluginHost }),
-          ...(installer === undefined ? {} : { managedPluginInstaller: installer }),
+          ...(installer === undefined
+            ? {}
+            : {
+                managedPluginInstaller: installer,
+                managedPluginUpdater: createManagedPluginUpdater({
+                  installer,
+                  marketplace: pluginMarketplaceManager && {
+                    catalogs: () =>
+                      pluginMarketplaceManager!
+                        .listSources()
+                        .sources.filter(({ status }) => status === 'ready')
+                        .map(({ id }) => pluginMarketplaceManager!.catalog(id).catalog),
+                  },
+                }),
+              }),
           assertManualPluginIdSync: (id) =>
             assertManualPluginIdSync(startup.authority.snapshotSync, id),
           ...(mcpManager === undefined ? {} : { mcpManager }),

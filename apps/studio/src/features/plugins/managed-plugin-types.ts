@@ -165,6 +165,20 @@ export const githubManagedPreviewSchema = z
 export type GithubManagedPreview = z.infer<typeof githubManagedPreviewSchema>;
 export type ManagedPreview = z.infer<typeof managedPreviewSchema> | GithubManagedPreview;
 
+const updateSchema = z.strictObject({ version: versionSchema, source: githubPluginSourceSchema });
+const updateFields = {
+  pluginId: pluginIdSchema,
+  expectedTrustSequence: managedHeadSchema,
+  previousSelection: digestSchema,
+  current: z.strictObject({ digest: digestSchema, manifest: manifestSchema }).readonly(),
+  update: updateSchema.readonly(),
+};
+/** What the user reviews before one confirmation replaces the installed version. */
+export const managedUpdatePreviewSchema = z
+  .strictObject({ ...previewFields, github: githubPluginSourceSchema, ...updateFields })
+  .readonly();
+export type ManagedUpdatePreview = z.infer<typeof managedUpdatePreviewSchema>;
+
 const selectionSchema = z
   .strictObject({
     digest: digestSchema,
@@ -188,6 +202,7 @@ const pluginSchema = z
     selection: selectionSchema.nullable(),
     trust: trustSchema.nullable(),
     active: activeSchema.nullable(),
+    update: updateSchema.readonly().optional(),
   })
   .refine(({ pluginId, candidates }) =>
     candidates.every(({ manifest }) => manifest.id === pluginId),
@@ -348,7 +363,19 @@ export type ManagedReview =
       readonly immediate: boolean;
     });
 
+/** The reviewed update: one confirmation imports the candidate and replaces the selection. */
+export type ManagedUpdateReview = Readonly<{
+  pluginId: string;
+  previewId: string;
+  candidateDigest: string;
+  previousSelection: string;
+  expectedInstallSequence: number;
+  expectedTrustSequence: number;
+}>;
+
 export type PreparedManagedRequest = Readonly<{
+  /** Set for the one-click update so rejections recover by re-reviewing. */
+  flow?: 'update';
   url: string;
   body: string;
   requestId: string;

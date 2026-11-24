@@ -324,6 +324,25 @@ function guardArtifactStore(
       );
       return dispatch(signal, (effective) => store.read(digest, { signal: effective }));
     },
+    async list(options = {}) {
+      assertAccepting();
+      const { signal } = parseArtifactInput(
+        readOptionsSchema,
+        options,
+        'Invalid plugin artifact list options',
+      );
+      return dispatch(signal, (effective) => store.list({ signal: effective }));
+    },
+    async remove(input, options = {}) {
+      assertAccepting();
+      const digest = parseArtifactInput(digestSchema, input, 'Invalid plugin artifact digest');
+      const { signal } = parseArtifactInput(
+        readOptionsSchema,
+        options,
+        'Invalid plugin artifact remove options',
+      );
+      return dispatch(signal, (effective) => store.remove(digest, { signal: effective }));
+    },
     quiesce,
     close,
   };

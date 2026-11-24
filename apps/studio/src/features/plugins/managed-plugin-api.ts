@@ -9,6 +9,9 @@ import {
   managedIssueSchema,
   managedMutationResponseSchema,
   managedPreviewSchema,
+  managedUpdatePreviewSchema,
+  type ManagedUpdatePreview,
+  type ManagedUpdateReview,
   type ManagedCatalog,
   type GithubManagedPreview,
   type ManagedCatalogObservation,
@@ -174,6 +177,21 @@ export async function previewGithubManagedPlugin(
   return preview;
 }
 
+export async function previewManagedUpdate(
+  pluginId: string,
+  signal?: AbortSignal,
+): Promise<ManagedUpdatePreview> {
+  const response = await fetchResponse(
+    runtimeApiUrl(`${managedPath}/${encodeURIComponent(pluginId)}/update/preview`),
+    postJson('{}'),
+    signal,
+  );
+  const preview = await decodeResponse(response, managedUpdatePreviewSchema, signal);
+  if (preview.pluginId !== pluginId || preview.candidate.manifest.id !== pluginId)
+    throw invalidResponse();
+  return preview;
+}
+
 function expectedHead(value: number): number {
   const parsed = managedHeadSchema.safeParse(value);
   if (!parsed.success) {
@@ -262,6 +280,33 @@ export function prepareManagedRequest(
       );
     }
   }
+}
+
+/** The update confirmation is saved as an activation, so the receipt target is `activate`. */
+export function prepareManagedUpdateRequest(
+  review: ManagedUpdateReview,
+  requestId: string,
+): PreparedManagedRequest {
+  const { pluginId, previewId, candidateDigest, previousSelection } = review;
+  return Object.freeze({
+    flow: 'update' as const,
+    url: runtimeApiUrl(`${managedPath}/${encodeURIComponent(pluginId)}/update`),
+    body: JSON.stringify({
+      requestId,
+      previewId,
+      candidateDigest,
+      previousSelection,
+      expectedInstallSequence: expectedHead(review.expectedInstallSequence),
+      expectedTrustSequence: expectedHead(review.expectedTrustSequence),
+    }),
+    requestId,
+    pluginId,
+    target: Object.freeze({
+      kind: 'activate' as const,
+      digest: candidateDigest,
+      intent: 'activate' as const,
+    }),
+  });
 }
 
 function sameTarget(

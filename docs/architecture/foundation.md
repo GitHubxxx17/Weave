@@ -205,6 +205,18 @@ lease remains held during normal quiescence. See the
 [ownership design](../superpowers/specs/2026-11-21-plugin-store-ownership-design.md)
 and [protocol and limits](../learning/2026-11-21-plugin-store-ownership.md).
 
+Managed plugin updates and artifact reclamation (R2-11). An installed managed
+plugin with a newer compatible release in a ready marketplace source reports
+`update`. One confirmation, bound to the reviewed candidate digest, the replaced
+selection and both authority revisions, imports the candidate and activates it.
+The replaced artifact is then deleted once no retained Generation uses it;
+uninstall reclaims the same way, the Server start sweeps unreferenced objects,
+and Studio no longer offers local rollback. Plugin state is current-state data per
+the ADR 0005 amendment; the managed authority keeps its replay-verified operation
+log in this release, and the per-plugin current-state table with a non-destructive
+migration is deferred (see the
+[GC design, section 9](../superpowers/specs/2026-11-24-plugin-artifact-gc-design.md#9-实现补充g1-一键更新与制品回收r2-11)).
+
 Stage 6.2a adds Server-private plugin authority persistence on one SQLite
 connection. Installation, existing trust and managed operation logs are appended
 atomically; every successful fresh managed request, including no-op, has one
@@ -218,8 +230,9 @@ rejects writes for sticky managed IDs. See the
 Stage 6.1 provides a bounded filesystem artifact store in `@weave/plugin-host`.
 It copies already bundled directories without executing them, validates concrete
 payload bytes and publishes hidden content-addressed paths. It never overwrites
-or deletes published content, grants trust, changes selection or reloads a
-Generation. Stage 6.2a adds the durable selection and reviewed activation
+published content, grants trust, changes selection or reloads a Generation; its
+owner may delete one artifact by digest through `remove`. Stage 6.2a adds the
+durable selection and reviewed activation
 records used by the later Server composition. See
 [ADR 0005](../adr/0005-plugin-installation-and-distribution.md) and the
 [installation design](../superpowers/specs/2026-11-21-plugin-installation-design.md), plus

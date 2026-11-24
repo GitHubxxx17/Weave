@@ -10,12 +10,14 @@ import { z } from 'zod';
 import { ManagedCommitFailure } from './managed-command-commit.js';
 import {
   importPreviewResponseSchema,
+  updatePreviewResponseSchema,
   githubImportPreviewResponseSchema,
   projectManagedCatalog,
   projectManagedMutation,
 } from './managed-plugin-catalog.js';
 import { ManagedInstallerError } from './managed-plugin-installer-errors.js';
 import type { ManagedPluginInstaller } from './managed-plugin-installer.js';
+import type { ManagedPluginUpdater } from './managed-plugin-updater.js';
 import {
   artifactManifestSchema,
   digestSchema,
@@ -55,6 +57,14 @@ const destructiveBody = z.strictObject({
   ...selectionFields,
   selectedDigest: digestSchema.nullable(),
   immediate: z.boolean().optional(),
+});
+
+const updateBody = z.strictObject({
+  requestId: opaqueIdSchema,
+  previewId: opaqueIdSchema,
+  candidateDigest: digestSchema,
+  previousSelection: digestSchema,
+  ...{ expectedInstallSequence: headSchema, expectedTrustSequence: headSchema },
 });
 
 const issues = {
@@ -206,7 +216,9 @@ const managedPath = '/plugins/managed';
 export function registerManagedPluginRoutes(
   app: Hono,
   installer: ManagedPluginInstaller | undefined,
+  updater?: ManagedPluginUpdater,
 ): void {
+  const updates = () => updater?.updates() ?? new Map();
   function installed(): ManagedPluginInstaller {
     if (installer === undefined) throw new ManagedInstallerError('plugin-installer-disabled');
     return installer;
@@ -215,7 +227,7 @@ export function registerManagedPluginRoutes(
   app.get(managedPath, (context) => {
     try {
       const { authority, observed } = installed().snapshot();
-      return context.json(projectManagedCatalog(authority, observed));
+      return context.json(projectManagedCatalog(authority, observed, updates()));
     } catch (error: unknown) {
       return respondError(context, error);
     }
@@ -260,7 +272,7 @@ export function registerManagedPluginRoutes(
       { requestId, command: { kind: 'import', ...fields } },
       signal,
     );
-    return projectManagedMutation(result);
+    return projectManagedMutation(result, updates());
   });
 
   write('/github/preview', async (_context, body, signal) => {
@@ -289,7 +301,27 @@ export function registerManagedPluginRoutes(
       });
       if (command.kind === 'import') throw new Error('Expected a managed selection command');
       const result = await installed().applySelection({ requestId, command }, signal);
-      return projectManagedMutation(result);
+      return projectManagedMutation(result, updates());
     });
   }
+
+  function requireUpdater(): ManagedPluginUpdater {
+    installed();
+    if (updater === undefined) throw new ManagedInstallerError('plugin-installer-disabled');
+    return updater;
+  }
+
+  write('/:id/update/preview', async (context, body, signal) => {
+    const pluginId = readStatic(pluginIdSchema, context.req.param('id'));
+    readStatic(z.strictObject({}), body);
+    const preview = await requireUpdater().preview(pluginId, signal);
+    return updatePreviewResponseSchema.parse(preview);
+  });
+
+  write('/:id/update', async (context, body, signal) => {
+    const pluginId = readStatic(pluginIdSchema, context.req.param('id'));
+    const fields = readStatic(updateBody, body);
+    const result = await requireUpdater().apply({ pluginId, ...fields }, signal);
+    return projectManagedMutation(result, updates());
+  });
 }
