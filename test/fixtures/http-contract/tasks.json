@@ -1,0 +1,49 @@
+{
+  "tree": {
+    "tasks": [
+      {
+        "taskId": "00000000-0000-4000-8000-000000000008",
+        "rootSessionId": "00000000-0000-4000-8000-000000000002",
+        "parentSessionId": "00000000-0000-4000-8000-000000000002",
+        "parentTurnId": "00000000-0000-4000-8000-000000000006",
+        "childSessionId": "00000000-0000-4000-8000-000000000003",
+        "childExecutionId": "00000000-0000-4000-8000-000000000009",
+        "childTurnId": "00000000-0000-4000-8000-000000000010",
+        "title": "Workspace review",
+        "access": "workspace",
+        "acceptedAt": "2026-11-24T00:00:00.000Z",
+        "status": "running",
+        "resultKind": "none",
+        "preview": "",
+        "previewTruncated": false,
+        "pendingApprovalIds": ["00000000-0000-4000-8000-000000000028"],
+        "pendingApprovalCount": 1
+      }
+    ],
+    "cursor": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC.SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS",
+    "truncated": false,
+    "epoch": "00000000-0000-4000-8000-000000000029",
+    "rootSessionId": "00000000-0000-4000-8000-000000000002",
+    "revision": 2,
+    "changed": true,
+    "totalCount": 1
+  },
+  "task": {
+    "taskId": "00000000-0000-4000-8000-000000000008",
+    "rootSessionId": "00000000-0000-4000-8000-000000000002",
+    "parentSessionId": "00000000-0000-4000-8000-000000000002",
+    "parentTurnId": "00000000-0000-4000-8000-000000000006",
+    "childSessionId": "00000000-0000-4000-8000-000000000003",
+    "childExecutionId": "00000000-0000-4000-8000-000000000009",
+    "childTurnId": "00000000-0000-4000-8000-000000000010",
+    "title": "Workspace review",
+    "access": "workspace",
+    "acceptedAt": "2026-11-24T00:00:00.000Z",
+    "status": "running",
+    "resultKind": "none",
+    "preview": "",
+    "previewTruncated": false,
+    "pendingApprovalIds": ["00000000-0000-4000-8000-000000000028"],
+    "pendingApprovalCount": 1
+  }
+}

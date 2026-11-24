@@ -1,0 +1,216 @@
+{
+  "projects": {
+    "projects": [
+      {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "name": "Contract",
+        "folderName": "contract",
+        "folderPath": "/contract/workspace",
+        "folderRevision": 0,
+        "createdAt": "2026-11-24T00:00:00.000Z",
+        "updatedAt": "2026-11-24T00:00:00.000Z",
+        "sessions": [
+          {
+            "id": "00000000-0000-4000-8000-000000000002",
+            "title": "未命名会话",
+            "lastSequence": 21,
+            "lastMessage": {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Delegated."
+                }
+              ]
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000003",
+            "title": "Workspace review",
+            "lastSequence": 12,
+            "lastMessage": {
+              "role": "assistant",
+              "content": [],
+              "toolCalls": [
+                {
+                  "id": "call-contract",
+                  "name": "write_file",
+                  "arguments": "{\"path\":\"review.txt\",\"content\":\"review\"}"
+                }
+              ]
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "title": "未命名会话",
+            "lastSequence": 17,
+            "lastMessage": {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "block-two"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "warnings": []
+  },
+  "sessionDetail": {
+    "id": "00000000-0000-4000-8000-000000000002",
+    "title": "未命名会话",
+    "lastSequence": 21,
+    "lastMessage": {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Delegated."
+        }
+      ]
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Delegate one review."
+          }
+        ],
+        "messageId": "00000000-0000-4000-8000-000000000005",
+        "sequence": 4,
+        "occurredAt": "2026-11-24T00:00:00.000Z",
+        "turnId": "00000000-0000-4000-8000-000000000006"
+      },
+      {
+        "role": "assistant",
+        "content": [],
+        "toolCalls": [
+          {
+            "id": "call-contract",
+            "name": "agent_spawn",
+            "arguments": "{\"title\":\"Workspace review\",\"prompt\":\"Workspace child.\",\"access\":\"workspace\"}"
+          }
+        ],
+        "messageId": "00000000-0000-4000-8000-000000000007",
+        "sequence": 8,
+        "occurredAt": "2026-11-24T00:00:00.000Z",
+        "turnId": "00000000-0000-4000-8000-000000000006"
+      },
+      {
+        "role": "tool",
+        "toolCallId": "call-contract",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"tasks\":[{\"taskId\":\"00000000-0000-4000-8000-000000000008\",\"rootSessionId\":\"00000000-0000-4000-8000-000000000002\",\"parentSessionId\":\"00000000-0000-4000-8000-000000000002\",\"parentTurnId\":\"00000000-0000-4000-8000-000000000006\",\"childSessionId\":\"00000000-0000-4000-8000-000000000003\",\"childExecutionId\":\"00000000-0000-4000-8000-000000000009\",\"childTurnId\":\"00000000-0000-4000-8000-000000000010\",\"title\":\"Workspace review\",\"access\":\"workspace\",\"acceptedAt\":\"2026-11-24T00:00:00.000Z\",\"status\":\"preparing\",\"resultKind\":\"none\",\"preview\":\"\",\"previewTruncated\":false,\"pendingApprovalIds\":[],\"pendingApprovalCount\":0}],\"cursor\":\"CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC.SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS\",\"truncated\":false}"
+          }
+        ],
+        "messageId": "00000000-0000-4000-8000-000000000011",
+        "sequence": 14,
+        "occurredAt": "2026-11-24T00:00:00.000Z",
+        "turnId": "00000000-0000-4000-8000-000000000006"
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Delegated."
+          }
+        ],
+        "messageId": "00000000-0000-4000-8000-000000000012",
+        "sequence": 17,
+        "occurredAt": "2026-11-24T00:00:00.000Z",
+        "turnId": "00000000-0000-4000-8000-000000000006"
+      }
+    ],
+    "turns": [
+      {
+        "turnId": "00000000-0000-4000-8000-000000000006",
+        "userMessageId": "00000000-0000-4000-8000-000000000005",
+        "request": {
+          "provider": "contract",
+          "model": "contract",
+          "useProviderDefaults": false,
+          "permissionMode": "ask"
+        },
+        "status": "completed",
+        "startedAt": "2026-11-24T00:00:00.000Z",
+        "completedAt": "2026-11-24T00:00:00.000Z",
+        "provider": "contract",
+        "model": "contract",
+        "context": {
+          "windowTokens": 128000,
+          "sentTokens": 5977,
+          "ratio": 0.0466953125,
+          "trimmed": false,
+          "categories": {
+            "system": 900,
+            "tools": 4800,
+            "userMessages": 9,
+            "assistantText": 4,
+            "assistantReasoning": 0,
+            "toolCalls": 27,
+            "toolResults": 237,
+            "skeleton": 0
+          }
+        },
+        "modelSteps": [
+          {
+            "startedAt": "2026-11-24T00:00:00.000Z",
+            "completedAt": "2026-11-24T00:00:00.000Z",
+            "context": {
+              "windowTokens": 128000,
+              "sentTokens": 5709,
+              "ratio": 0.0446015625,
+              "trimmed": false,
+              "categories": {
+                "system": 900,
+                "tools": 4800,
+                "userMessages": 9,
+                "assistantText": 0,
+                "assistantReasoning": 0,
+                "toolCalls": 0,
+                "toolResults": 0,
+                "skeleton": 0
+              }
+            }
+          },
+          {
+            "startedAt": "2026-11-24T00:00:00.000Z",
+            "completedAt": "2026-11-24T00:00:00.000Z",
+            "context": {
+              "windowTokens": 128000,
+              "sentTokens": 5977,
+              "ratio": 0.0466953125,
+              "trimmed": false,
+              "categories": {
+                "system": 900,
+                "tools": 4800,
+                "userMessages": 9,
+                "assistantText": 4,
+                "assistantReasoning": 0,
+                "toolCalls": 27,
+                "toolResults": 237,
+                "skeleton": 0
+              }
+            }
+          }
+        ],
+        "toolResults": [
+          {
+            "toolCallId": "call-contract",
+            "status": "completed"
+          }
+        ],
+        "toolCalls": 1,
+        "failedToolCalls": 0
+      }
+    ]
+  }
+}

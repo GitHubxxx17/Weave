@@ -1,0 +1,166 @@
+{
+  "list": [
+    {
+      "executionId": "00000000-0000-4000-8000-000000000013",
+      "requestId": "00000000-0000-4000-8000-000000000014",
+      "sessionId": "00000000-0000-4000-8000-000000000002",
+      "turnId": "00000000-0000-4000-8000-000000000006",
+      "userMessageId": "00000000-0000-4000-8000-000000000005",
+      "createdAt": "2026-11-24T00:00:00.000Z",
+      "status": "completed",
+      "cursor": "00000000-0000-4000-8000-000000000015:00000000-0000-4000-8000-000000000013:0",
+      "durableThroughSequence": 20
+    }
+  ],
+  "snapshot": {
+    "executionId": "00000000-0000-4000-8000-000000000016",
+    "requestId": "00000000-0000-4000-8000-000000000017",
+    "sessionId": "00000000-0000-4000-8000-000000000004",
+    "turnId": "00000000-0000-4000-8000-000000000018",
+    "userMessageId": "00000000-0000-4000-8000-000000000019",
+    "input": {
+      "provider": "contract",
+      "model": "contract",
+      "permissionMode": "ask",
+      "userMessage": {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "block-one"
+          }
+        ]
+      }
+    },
+    "effectiveSettings": {
+      "useProviderDefaults": false
+    },
+    "createdAt": "2026-11-24T00:00:00.000Z",
+    "status": "completed",
+    "cursor": "00000000-0000-4000-8000-000000000015:00000000-0000-4000-8000-000000000016:0",
+    "events": [],
+    "durableThroughSequence": 13
+  },
+  "delegatedSnapshot": {
+    "executionId": "00000000-0000-4000-8000-000000000013",
+    "requestId": "00000000-0000-4000-8000-000000000014",
+    "sessionId": "00000000-0000-4000-8000-000000000002",
+    "turnId": "00000000-0000-4000-8000-000000000006",
+    "userMessageId": "00000000-0000-4000-8000-000000000005",
+    "input": {
+      "provider": "contract",
+      "model": "contract",
+      "permissionMode": "ask",
+      "userMessage": {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Delegate one review."
+          }
+        ]
+      }
+    },
+    "effectiveSettings": {
+      "useProviderDefaults": false
+    },
+    "createdAt": "2026-11-24T00:00:00.000Z",
+    "status": "completed",
+    "cursor": "00000000-0000-4000-8000-000000000015:00000000-0000-4000-8000-000000000013:0",
+    "events": [],
+    "durableThroughSequence": 20
+  },
+  "frames": [
+    {
+      "id": "00000000-0000-4000-8000-000000000015:00000000-0000-4000-8000-000000000016:2",
+      "event": "snapshot",
+      "data": {
+        "type": "snapshot",
+        "snapshot": {
+          "executionId": "00000000-0000-4000-8000-000000000016",
+          "requestId": "00000000-0000-4000-8000-000000000017",
+          "sessionId": "00000000-0000-4000-8000-000000000004",
+          "turnId": "00000000-0000-4000-8000-000000000018",
+          "userMessageId": "00000000-0000-4000-8000-000000000019",
+          "input": {
+            "provider": "contract",
+            "model": "contract",
+            "permissionMode": "ask",
+            "userMessage": {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "block-one"
+                }
+              ]
+            }
+          },
+          "effectiveSettings": {
+            "useProviderDefaults": false
+          },
+          "createdAt": "2026-11-24T00:00:00.000Z",
+          "status": "running",
+          "cursor": "00000000-0000-4000-8000-000000000015:00000000-0000-4000-8000-000000000016:2",
+          "events": [
+            {
+              "type": "context",
+              "breakdown": {
+                "windowTokens": 128000,
+                "sentTokens": 5707,
+                "ratio": 0.0445859375,
+                "trimmed": false,
+                "categories": {
+                  "system": 900,
+                  "tools": 4800,
+                  "userMessages": 7,
+                  "assistantText": 0,
+                  "assistantReasoning": 0,
+                  "toolCalls": 0,
+                  "toolResults": 0,
+                  "skeleton": 0
+                }
+              },
+              "provider": "contract",
+              "model": "contract"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000015:00000000-0000-4000-8000-000000000016:3",
+      "event": "event",
+      "data": {
+        "type": "event",
+        "cursor": "00000000-0000-4000-8000-000000000015:00000000-0000-4000-8000-000000000016:3",
+        "event": {
+          "type": "text-delta",
+          "text": "released"
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000015:00000000-0000-4000-8000-000000000016:4",
+      "event": "event",
+      "data": {
+        "type": "event",
+        "cursor": "00000000-0000-4000-8000-000000000015:00000000-0000-4000-8000-000000000016:4",
+        "event": {
+          "type": "completed",
+          "turnId": "00000000-0000-4000-8000-000000000018"
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000015:00000000-0000-4000-8000-000000000016:5",
+      "event": "status",
+      "data": {
+        "type": "status",
+        "cursor": "00000000-0000-4000-8000-000000000015:00000000-0000-4000-8000-000000000016:5",
+        "status": "completed",
+        "durableThroughSequence": 13
+      }
+    }
+  ]
+}
