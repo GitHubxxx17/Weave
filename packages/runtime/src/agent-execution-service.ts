@@ -11,9 +11,13 @@ import {
   type SessionExecution,
   type SessionTurn,
   capturedFileContextSchema,
+  capturedWorkspaceContextSchema,
   executionAcceptedPayloadSchema,
   fileAttachmentSummaries,
+  workspaceContextMatches,
+  workspaceContextSummaries,
   type CapturedFileContext,
+  type CapturedWorkspaceContext,
 } from '@weave/session';
 import { taskStopReasonSchema, type TaskStopReason } from '@weave/protocol';
 import {
@@ -348,6 +352,9 @@ export function createAgentExecutionService(
       ...(accepted.fileContext === undefined
         ? {}
         : { fileAttachments: fileAttachmentSummaries(accepted.fileContext) }),
+      ...(accepted.workspaceContext === undefined
+        ? {}
+        : { contextAttachments: workspaceContextSummaries(accepted.workspaceContext) }),
       ...(accepted.runInput === undefined
         ? {}
         : {
@@ -846,7 +853,8 @@ export function createAgentExecutionService(
         accepted.dispatch !== 'queued' ||
         accepted.runInput === undefined ||
         agentTaskFactDigest(accepted.runInput) !== inputDigest ||
-        accepted.fileContext !== undefined)
+        accepted.fileContext !== undefined ||
+        accepted.workspaceContext !== undefined)
     )
       throw taskBindingConflict('Child execution does not match the accepted task');
     if (accepted !== undefined && task.reservation === 'none')
@@ -1230,23 +1238,28 @@ export function createAgentExecutionService(
           userMessageId: randomUUID(),
         };
         let fileContext: CapturedFileContext | undefined;
+        let workspaceContext: CapturedWorkspaceContext | undefined;
         let captureSignal: AbortSignal | undefined;
+        // Files and contexts share one 5 second acceptance budget.
+        if (frozen.input.files !== undefined || frozen.input.contexts !== undefined) {
+          captureSignal = AbortSignal.any([captureController.signal, AbortSignal.timeout(5000)]);
+        }
         if (frozen.input.files !== undefined) {
           if (options.captureFiles === undefined)
             throw new AgentExecutionError(
               'execution-file-unavailable',
               'Project file capture is unavailable',
             );
-          captureSignal = AbortSignal.any([captureController.signal, AbortSignal.timeout(5000)]);
+          const signal = captureSignal!;
           try {
-            captureSignal.throwIfAborted();
+            signal.throwIfAborted();
             const captured = await options.captureFiles(sessionId, frozen.input.files, {
-              signal: captureSignal,
+              signal,
             });
-            captureSignal.throwIfAborted();
+            signal.throwIfAborted();
             fileContext = capturedFileContextSchema.parse(structuredClone(captured));
           } catch (error: unknown) {
-            if (captureSignal.aborted)
+            if (signal.aborted)
               throw new AgentExecutionError(
                 'execution-file-capture-timeout',
                 'Project file capture ended before acceptance',
@@ -1255,6 +1268,33 @@ export function createAgentExecutionService(
             throw new AgentExecutionError(
               'execution-file-capture-failed',
               'Project files could not be captured',
+            );
+          }
+        }
+        if (frozen.input.contexts !== undefined) {
+          if (options.captureContexts === undefined)
+            throw new AgentExecutionError(
+              'execution-context-unavailable',
+              'Workspace context capture is unavailable',
+            );
+          const signal = captureSignal!;
+          try {
+            signal.throwIfAborted();
+            const captured = await options.captureContexts(sessionId, frozen.input.contexts, {
+              signal,
+            });
+            signal.throwIfAborted();
+            workspaceContext = capturedWorkspaceContextSchema.parse(structuredClone(captured));
+          } catch (error: unknown) {
+            if (signal.aborted)
+              throw new AgentExecutionError(
+                'execution-file-capture-timeout',
+                'Workspace context capture ended before acceptance',
+              );
+            if (error instanceof AgentExecutionError) throw error;
+            throw new AgentExecutionError(
+              'execution-context-capture-failed',
+              'Workspace contexts could not be captured',
             );
           }
         }
@@ -1267,6 +1307,7 @@ export function createAgentExecutionService(
           dispatch: 'queued',
           runInput: structuredClone(effective.data),
           ...(fileContext === undefined ? {} : { fileContext }),
+          ...(workspaceContext === undefined ? {} : { workspaceContext }),
           sessionId,
           createdAt: new Date().toISOString(),
           status: immediate ? 'accepted' : 'queued',
@@ -1289,6 +1330,15 @@ export function createAgentExecutionService(
         void _sessionId;
         void _createdAt;
         void _status;
+        if (
+          workspaceContext !== undefined &&
+          frozen.input.contexts !== undefined &&
+          !workspaceContextMatches(frozen.input.contexts, workspaceContext)
+        )
+          throw new AgentExecutionError(
+            'execution-context-capture-failed',
+            'Captured contexts do not match the accepted input',
+          );
         if (!executionAcceptedPayloadSchema.safeParse(payload).success)
           throw new AgentExecutionError(
             'execution-file-capture-failed',

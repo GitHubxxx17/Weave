@@ -56,6 +56,14 @@ export {
 export type { FileReference, FileAttachmentSummary } from './file-context.js';
 
 export {
+  executionContextLimits,
+  executionContextSchema,
+  executionContextsSchema,
+  executionContextSummarySchema,
+} from './execution-context.js';
+export type { ExecutionContext, ExecutionContextSummary } from './execution-context.js';
+
+export {
   assistantMessageSchema,
   messageSchema,
   systemMessageSchema,

@@ -53,9 +53,12 @@ function errorResponse(context: Context, error: unknown): Response {
             : error.code === 'execution-output-limit' || error.code === 'execution-file-too-large'
               ? 413
               : error.code === 'execution-file-unavailable' ||
-                  error.code === 'execution-file-invalid-utf8'
+                  error.code === 'execution-file-invalid-utf8' ||
+                  error.code === 'execution-context-unavailable' ||
+                  error.code === 'execution-context-git-unavailable'
                 ? 422
-                : error.code === 'execution-file-capture-failed'
+                : error.code === 'execution-file-capture-failed' ||
+                    error.code === 'execution-context-capture-failed'
                   ? 500
                   : 503;
     return context.json({ error: { code: error.code, message: error.message } }, status);

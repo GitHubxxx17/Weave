@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { ProjectStore } from '@weave/workspace';
 import {
   WorkspaceFileError,
+  checkGitChangesAvailable,
   listWorkspaceFiles,
   readGitBaseContent,
   readWorkspaceFileContent,
@@ -136,6 +137,24 @@ export function registerFileRoutes(app: Hono, options: FileAppOptions): void {
         signal: context.req.raw.signal,
       });
       return context.json(file);
+    } catch (error) {
+      return mapFileError(context, error);
+    }
+  });
+
+  // Lets the composer disable "Git changes" before a send would fail with
+  // `execution-context-git-unavailable`; the project tree needs only a folder.
+  app.get('/projects/:projectId/context-availability', async (context) => {
+    const folder = await resolveProjectFolder(context, options);
+    if (folder instanceof Response) {
+      return folder;
+    }
+    try {
+      const git = await checkGitChangesAvailable(folder, { signal: context.req.raw.signal });
+      return context.json({
+        gitChanges: git ? { available: true } : { available: false, reason: 'git-unavailable' },
+        projectTree: { available: true },
+      });
     } catch (error) {
       return mapFileError(context, error);
     }

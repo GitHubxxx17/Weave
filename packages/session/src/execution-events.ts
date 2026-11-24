@@ -1,5 +1,6 @@
 import {
   contentPartSchema,
+  executionContextsSchema,
   fileReferencesSchema,
   skillRefsSchema,
   turnRequestMetadataSchema,
@@ -7,6 +8,7 @@ import {
 import { z } from 'zod';
 import type { SessionEvent } from './events.js';
 import { capturedFileContextSchema } from './file-context.js';
+import { capturedWorkspaceContextSchema, workspaceContextMatches } from './workspace-context.js';
 
 const identifierSchema = z.string().min(1).max(240);
 const strictContentSchema = z.discriminatedUnion('type', [
@@ -30,6 +32,7 @@ export const agentExecutionInputSchema = turnRequestMetadataSchema
       .strict(),
     skills: skillRefsSchema.optional(),
     files: fileReferencesSchema.optional(),
+    contexts: executionContextsSchema.optional(),
   })
   .strict()
   .refine(isJson, 'Execution input must contain only JSON values');
@@ -46,19 +49,31 @@ export const executionAcceptedPayloadSchema = z
     dispatch: z.literal('queued').optional(),
     runInput: agentExecutionInputSchema.optional(),
     fileContext: capturedFileContextSchema.optional(),
+    workspaceContext: capturedWorkspaceContextSchema.optional(),
   })
   .strict()
-  .refine(({ input, fileContext, dispatch, runInput }) => {
-    if (input.files === undefined)
-      return fileContext === undefined && runInput?.files === undefined;
-    return (
-      dispatch === 'queued' &&
-      runInput !== undefined &&
-      fileContext !== undefined &&
-      input.files.length === fileContext.files.length &&
-      input.files.every((file, index) => file.path === fileContext.files[index]?.path)
-    );
-  }, 'File references require a matching captured batch and queued effective input')
+  .refine(({ input, fileContext, workspaceContext, dispatch, runInput }) => {
+    if (input.files === undefined && input.contexts === undefined)
+      return (
+        fileContext === undefined &&
+        workspaceContext === undefined &&
+        runInput?.files === undefined &&
+        runInput?.contexts === undefined
+      );
+    if (dispatch !== 'queued' || runInput === undefined) return false;
+    const filesMatch =
+      input.files === undefined
+        ? fileContext === undefined
+        : fileContext !== undefined &&
+          input.files.length === fileContext.files.length &&
+          input.files.every((file, index) => file.path === fileContext.files[index]?.path);
+    const contextsMatch =
+      input.contexts === undefined
+        ? workspaceContext === undefined
+        : workspaceContext !== undefined &&
+          workspaceContextMatches(input.contexts, workspaceContext);
+    return filesMatch && contextsMatch;
+  }, 'File references and contexts require a matching captured batch and queued effective input')
   .refine(({ dispatch, input, runInput }) => {
     if (dispatch !== 'queued') return true;
     if (runInput === undefined || runInput.useProviderDefaults !== false) return false;
@@ -120,7 +135,7 @@ export type SessionExecution = z.infer<typeof executionAcceptedPayloadSchema> & 
 
 export type SessionExecutionMetadata = Omit<
   SessionExecution,
-  'input' | 'runInput' | 'fileContext'
+  'input' | 'runInput' | 'fileContext' | 'workspaceContext'
 > & {
   readonly preview: string;
   readonly provider: string;

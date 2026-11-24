@@ -104,6 +104,9 @@ describe('background execution HTTP adapter', () => {
     ['execution-file-changed', 409],
     ['execution-file-capture-timeout', 503],
     ['execution-file-capture-failed', 500],
+    ['execution-context-unavailable', 422],
+    ['execution-context-git-unavailable', 422],
+    ['execution-context-capture-failed', 500],
   ] as const)('maps definite capture error %s to HTTP %s', async (code, status) => {
     const { app, service } = await fixture();
     service.launch.mockRejectedValueOnce(new AgentExecutionError(code, 'Safe file capture error'));

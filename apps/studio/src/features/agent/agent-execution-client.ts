@@ -74,6 +74,7 @@ export async function requestExecutionJson<T>(
           'execution-persistence-error',
           'execution-file-capture-timeout',
           'execution-file-capture-failed',
+          'execution-context-capture-failed',
         ].includes(parsed.data.error.code)
       )
     )
