@@ -77,6 +77,8 @@ export type {
   AgentExecutionSubscription,
   AgentExecutionService,
   AgentExecutionServiceOptions,
+  CaptureContexts,
+  CaptureContextsOptions,
   CaptureFiles,
   CaptureFilesOptions,
   AgentExecutionErrorCode,
@@ -205,6 +207,12 @@ export type {
 } from './workspace-file-types.js';
 export { createWorkspaceFileTools } from './workspace-file-tools.js';
 export { captureWorkspaceFiles } from './workspace-file-capture.js';
+export {
+  captureWorkspaceContexts,
+  checkGitChangesAvailable,
+  gitChangesUnavailableMessage,
+} from './workspace-context-capture.js';
+export type { CaptureWorkspaceContextsOptions } from './workspace-context-capture.js';
 export { restoreFileSnapshot } from './file-undo.js';
 export type { RestorableFileSnapshot, RestoreFileOutcome } from './file-undo.js';
 export {

@@ -49,7 +49,8 @@ export function applyFileContextEvent(
   event: SessionEvent,
 ): FileContextMessageBinding | undefined {
   if (event.type === 'execution.accepted') {
-    const { executionId, turnId, userMessageId, fileContext, input } = event.payload;
+    const { executionId, turnId, userMessageId, fileContext, workspaceContext, input } =
+      event.payload;
     if (
       state.executionIds.has(executionId) ||
       state.turnIds.has(turnId) ||
@@ -60,7 +61,7 @@ export function applyFileContextEvent(
     state.executionIds.add(executionId);
     state.turnIds.add(turnId);
     state.userMessageIds.add(userMessageId);
-    if (fileContext !== undefined) {
+    if (fileContext !== undefined || workspaceContext !== undefined) {
       state.capturedExecutionIds.add(executionId);
       state.capturedTurnIds.add(turnId);
       state.capturedUserMessageIds.add(userMessageId);
@@ -69,7 +70,7 @@ export function applyFileContextEvent(
         turnId,
         userMessageId,
         acceptedMessageDigest: messageDigest(input.userMessage),
-        summaries: fileAttachmentSummaries(fileContext),
+        summaries: fileContext === undefined ? [] : fileAttachmentSummaries(fileContext),
         phase: 'queued',
       });
     }

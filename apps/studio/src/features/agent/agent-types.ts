@@ -1,3 +1,7 @@
+import {
+  executionContextsSchema,
+  type ExecutionContext,
+} from '../file-context/execution-context-types.js';
 import { fileReferencesSchema, type FileReference } from '../file-context/file-context-types.js';
 import { z } from 'zod';
 import type { AgentExecutionSnapshot, AgentExecutionStatusFrame } from './agent-execution-types.js';
@@ -46,6 +50,7 @@ export interface AgentRunRequestInput {
   readonly useProviderDefaults?: boolean | undefined;
   readonly skills?: readonly SkillRef[] | undefined;
   readonly files?: readonly FileReference[] | undefined;
+  readonly contexts?: readonly ExecutionContext[] | undefined;
   /** Provider-specific reasoning effort hint; omit for the provider default. */
   readonly reasoningEffort?: string | undefined;
   /** Approval mode for this run. */
@@ -109,6 +114,7 @@ export const agentRunRequestSchema: z.ZodType<AgentRunRequestInput> = z
     useProviderDefaults: z.boolean().optional(),
     skills: skillRefsSchema.optional(),
     files: fileReferencesSchema.optional(),
+    contexts: executionContextsSchema.optional(),
     reasoningEffort: nonEmptyStringSchema.optional(),
     permissionMode: z.enum(['ask', 'trust', 'yolo']).optional(),
   })

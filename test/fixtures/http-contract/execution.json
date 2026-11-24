@@ -30,8 +30,21 @@
             "text": "block-one"
           }
         ]
-      }
+      },
+      "contexts": [
+        {
+          "kind": "project-tree"
+        }
+      ]
     },
+    "contextAttachments": [
+      {
+        "kind": "project-tree",
+        "capturedAt": "2026-11-24T00:00:00.000Z",
+        "byteLength": 9,
+        "truncated": false
+      }
+    ],
     "effectiveSettings": {
       "useProviderDefaults": false
     },
@@ -94,8 +107,21 @@
                   "text": "block-one"
                 }
               ]
-            }
+            },
+            "contexts": [
+              {
+                "kind": "project-tree"
+              }
+            ]
           },
+          "contextAttachments": [
+            {
+              "kind": "project-tree",
+              "capturedAt": "2026-11-24T00:00:00.000Z",
+              "byteLength": 9,
+              "truncated": false
+            }
+          ],
           "effectiveSettings": {
             "useProviderDefaults": false
           },
@@ -107,13 +133,13 @@
               "type": "context",
               "breakdown": {
                 "windowTokens": 128000,
-                "sentTokens": 5707,
-                "ratio": 0.0445859375,
+                "sentTokens": 5782,
+                "ratio": 0.045171875,
                 "trimmed": false,
                 "categories": {
                   "system": 900,
                   "tools": 4800,
-                  "userMessages": 7,
+                  "userMessages": 82,
                   "assistantText": 0,
                   "assistantReasoning": 0,
                   "toolCalls": 0,

@@ -86,3 +86,10 @@ export type { SafeFileSnapshot } from './safe-file-undo.js';
 export { capturedFileContextSchema, fileAttachmentSummaries } from './file-context.js';
 export type { CapturedFile, CapturedFileContext } from './file-context.js';
 export { projectMessageFileContexts } from './file-context-projection.js';
+export {
+  capturedWorkspaceContextSchema,
+  workspaceContextMatches,
+  workspaceContextSummaries,
+} from './workspace-context.js';
+export type { CapturedContextSnapshot, CapturedWorkspaceContext } from './workspace-context.js';
+export { projectMessageWorkspaceContexts } from './workspace-context-projection.js';

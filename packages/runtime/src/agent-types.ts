@@ -5,7 +5,9 @@ import {
   toolCallSchema,
   userMessageSchema,
   skillRefsSchema,
+  executionContextsSchema,
   fileReferencesSchema,
+  type ExecutionContext,
   type FileReference,
   type SkillRef,
   type AgentPlan,
@@ -38,6 +40,7 @@ export interface AgentRunRequest {
     | undefined;
   readonly skills?: readonly SkillRef[] | undefined;
   readonly files?: readonly FileReference[] | undefined;
+  readonly contexts?: readonly ExecutionContext[] | undefined;
   readonly sessionId: string;
   readonly userMessage: UserMessage;
   readonly provider: string;
@@ -79,6 +82,7 @@ export const agentRunRequestSchema: z.ZodType<AgentRunRequest> = z
     permissionMode: toolPermissionModeSchema.optional(),
     skills: skillRefsSchema.optional(),
     files: fileReferencesSchema.optional(),
+    contexts: executionContextsSchema.optional(),
     signal: z.instanceof(AbortSignal).optional(),
   })
   .passthrough();

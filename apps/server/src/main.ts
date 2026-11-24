@@ -11,7 +11,7 @@ import {
   type ServerMemoryResource,
 } from './memory-composition.js';
 import { freezeExecutionInput } from './agent-execution-input.js';
-import { createFileContextCapture } from './agent-file-context.js';
+import { createFileContextCapture, createWorkspaceContextCapture } from './agent-file-context.js';
 import {
   createAgentExecutionService,
   createAgentTaskService,
@@ -456,6 +456,7 @@ export async function startServer(
       runner: coordinator.runner,
       sessionStore,
       captureFiles: createFileContextCapture(projects),
+      captureContexts: createWorkspaceContextCapture(projects),
       resolveInput: async (_sessionId, input) =>
         freezeExecutionInput(
           input,

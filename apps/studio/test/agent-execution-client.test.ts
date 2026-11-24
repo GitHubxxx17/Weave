@@ -330,6 +330,7 @@ describe('recoverable execution client', () => {
 it.each([
   [503, 'execution-file-capture-timeout'],
   [500, 'execution-file-capture-failed'],
+  [500, 'execution-context-capture-failed'],
 ])('treats capture %s as a definite rejection with one launch', async (status, code) => {
   vi.useFakeTimers();
   const fetcher = vi
@@ -381,4 +382,49 @@ it('freezes ordered logical file refs into every ambiguous transport retry', asy
     { path: 'a.ts' },
   ]);
   expect(String(fetcher.mock.calls[0]?.[1]?.body)).not.toContain('sha256');
+});
+
+it('freezes context kinds into every ambiguous retry and parses the accepted summaries', async () => {
+  vi.useFakeTimers();
+  const contexts = [{ kind: 'git-changes' }, { kind: 'project-tree' }] as const;
+  const accepted = {
+    ...snapshot,
+    status: 'cancelled',
+    durableThroughSequence: 10,
+    input: { ...snapshot.input, contexts },
+    contextAttachments: contexts.map(({ kind }) => ({
+      kind,
+      capturedAt: '2026-11-24T10:00:00.000Z',
+      byteLength: 12,
+      truncated: kind === 'project-tree',
+    })),
+  };
+  const fetcher = vi
+    .fn()
+    .mockRejectedValueOnce(new TypeError('lost'))
+    .mockResolvedValueOnce(Response.json(accepted));
+  vi.stubGlobal('fetch', fetcher);
+  const received = vi.fn();
+  const run = streamAgentRun(
+    { ...input, contexts: [...contexts] },
+    { onEvent: vi.fn(), onReceipt: received },
+    { requestId: 'request-1' },
+  );
+  await vi.runAllTimersAsync();
+  await run;
+  expect(fetcher.mock.calls[0]?.[1]?.body).toBe(fetcher.mock.calls[1]?.[1]?.body);
+  expect(JSON.parse(fetcher.mock.calls[0]?.[1]?.body as string).input.contexts).toEqual(contexts);
+  expect(received.mock.calls[0]?.[0].contextAttachments).toHaveLength(2);
+});
+
+it('rejects duplicate context kinds before any request is sent', async () => {
+  const fetcher = vi.fn();
+  vi.stubGlobal('fetch', fetcher);
+  await expect(
+    streamAgentRun(
+      { ...input, contexts: [{ kind: 'git-changes' }, { kind: 'git-changes' }] },
+      { onEvent: vi.fn() },
+    ),
+  ).rejects.toThrow();
+  expect(fetcher).not.toHaveBeenCalled();
 });

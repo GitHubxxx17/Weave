@@ -136,7 +136,8 @@ function matchesExecution(task: AgentTaskAccepted, acceptance: ExecutionAccepted
     payload.requestDigest === expectedInput &&
     agentTaskFactDigest(payload.input) === expectedInput &&
     (payload.runInput === undefined || agentTaskFactDigest(payload.runInput) === expectedInput) &&
-    payload.fileContext === undefined
+    payload.fileContext === undefined &&
+    payload.workspaceContext === undefined
   );
 }
 

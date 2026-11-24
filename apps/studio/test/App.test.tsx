@@ -4487,11 +4487,15 @@ describe('Studio Agent Chat', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '添加上下文' }));
     expect(screen.getByRole('menu', { name: '添加上下文' })).toBeTruthy();
-    for (const name of [/Git 变更/, /项目目录/]) {
-      const item = screen.getByRole('menuitem', { name }) as HTMLButtonElement;
-      expect(item.disabled).toBe(true);
-      expect(item.textContent).toContain('即将推出');
-    }
+    // Without a readable availability answer Git changes stays disabled; the tree needs only a project.
+    const git = (await screen.findByRole('menuitem', {
+      name: /Git 变更/,
+    })) as HTMLButtonElement;
+    await waitFor(() => expect(git.textContent).toContain('无法检查 Git 状态'));
+    expect(git.disabled).toBe(true);
+    expect((screen.getByRole('menuitem', { name: /项目目录/ }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
     expect((screen.getByRole('menuitem', { name: '当前文件' }) as HTMLButtonElement).disabled).toBe(
       true,
     );
@@ -5566,6 +5570,79 @@ describe('explicit project file context', () => {
       false,
     );
     expect(streamAgentRunMock).toHaveBeenCalledTimes(1);
+  });
+  function availabilityRoute(gitChanges: { available: boolean; reason?: string }): void {
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith('/context-availability'))
+        return Response.json({ gitChanges, projectTree: { available: true } });
+      return base(input, init);
+    });
+  }
+  it('adds Git changes and project tree from the context menu, sends them, then clears the labels', async () => {
+    availabilityRoute({ available: true });
+    streamAgentRunMock.mockResolvedValue(undefined);
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: '添加上下文' }));
+    const git = (await screen.findByRole('menuitem', { name: /Git 变更/ })) as HTMLButtonElement;
+    await waitFor(() => expect(git.disabled).toBe(false));
+    fireEvent.click(git);
+    fireEvent.click(screen.getByRole('button', { name: '添加上下文' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /项目目录/ }));
+    expect(screen.getByRole('button', { name: '移除Git 变更' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '移除项目目录' })).toBeTruthy();
+    // A chosen kind cannot be added twice.
+    fireEvent.click(screen.getByRole('button', { name: '添加上下文' }));
+    expect((screen.getByRole('menuitem', { name: /项目目录/ }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '添加上下文' }));
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: 'review' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(streamAgentRunMock).toHaveBeenCalledOnce());
+    expect(streamAgentRunMock.mock.calls[0]?.[0].contexts).toEqual([
+      { kind: 'git-changes' },
+      { kind: 'project-tree' },
+    ]);
+    await waitFor(() => expect(screen.queryByRole('button', { name: '移除Git 变更' })).toBeNull());
+    expect(screen.queryByRole('button', { name: '移除项目目录' })).toBeNull();
+  });
+  it('removes a chosen context before sending and omits contexts when none remain', async () => {
+    availabilityRoute({ available: true });
+    streamAgentRunMock.mockResolvedValue(undefined);
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: '添加上下文' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /项目目录/ }));
+    fireEvent.click(screen.getByRole('button', { name: '移除项目目录' }));
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: 'plain' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(streamAgentRunMock).toHaveBeenCalledOnce());
+    expect(streamAgentRunMock.mock.calls[0]?.[0].contexts).toBeUndefined();
+  });
+  it('disables Git changes with a reason when the project has no commits', async () => {
+    availabilityRoute({ available: false, reason: 'git-unavailable' });
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: '添加上下文' }));
+    const git = (await screen.findByRole('menuitem', { name: /Git 变更/ })) as HTMLButtonElement;
+    await waitFor(() => expect(git.textContent).toContain('需要有提交的 Git 仓库'));
+    expect(git.disabled).toBe(true);
+    expect(git.title).toContain('不是 Git 仓库');
+  });
+  it('keeps the draft and explains a Git changes rejection from the Server', async () => {
+    availabilityRoute({ available: true });
+    streamAgentRunMock.mockRejectedValueOnce(
+      new AgentStreamError('execution-context-git-unavailable', 'unavailable'),
+    );
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: '添加上下文' }));
+    const git = (await screen.findByRole('menuitem', { name: /Git 变更/ })) as HTMLButtonElement;
+    await waitFor(() => expect(git.disabled).toBe(false));
+    fireEvent.click(git);
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: 'review' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await screen.findByText(/Git 变更不可用.*草稿已保留/);
+    expect(screen.getByRole('button', { name: '移除Git 变更' })).toBeTruthy();
+    expect((screen.getByLabelText('发送消息') as HTMLTextAreaElement).value).toBe('review');
   });
   it('keeps a toolbar menu open when focus selection fires and avoids IME submission', async () => {
     fileRoutes();

@@ -257,7 +257,7 @@ export function applyEvent(state: ProjectionState, event: SessionEvent): void {
   try {
     if (
       event.type === 'execution.accepted' &&
-      event.payload.fileContext !== undefined &&
+      (event.payload.fileContext !== undefined || event.payload.workspaceContext !== undefined) &&
       (state.messageIds.has(event.payload.userMessageId) ||
         state.turnById.has(event.payload.turnId))
     ) {
@@ -329,7 +329,9 @@ export function applyEvent(state: ProjectionState, event: SessionEvent): void {
       state.messages[index] = {
         ...message,
         turnId: turn.turnId,
-        ...(fileBinding === undefined ? {} : { fileAttachments: fileBinding.summaries }),
+        ...(fileBinding === undefined || fileBinding.summaries.length === 0
+          ? {}
+          : { fileAttachments: fileBinding.summaries }),
       };
       state.boundUserMessageIds.add(message.messageId);
       turn.userMessageId = message.messageId;

@@ -1,6 +1,11 @@
 import { useFilePicker } from '../features/file-context/use-file-picker.js';
 import { FilePicker } from '../features/file-context/file-picker.js';
-import { DraftFileAttachments } from '../features/file-context/file-attachments.js';
+import {
+  DraftContextAttachments,
+  DraftFileAttachments,
+} from '../features/file-context/file-attachments.js';
+import { fetchContextAvailability } from '../features/file-context/context-availability-api.js';
+import type { ExecutionContextKind } from '../features/file-context/execution-context-types.js';
 import {
   ChangeEvent,
   type ClipboardEvent as ReactClipboardEvent,
@@ -730,6 +735,11 @@ function StudioApp(): ReactElement {
     fallbackProviderSettings.providers[0]?.defaultModel ?? '',
   );
   const [viewerFilePath, setViewerFilePath] = useState<string | null>(null);
+  // Whether the active project can supply Git changes; read when the context menu opens.
+  const [gitChangesAvailability, setGitChangesAvailability] = useState<{
+    readonly projectId: string;
+    readonly state: 'available' | 'unavailable' | 'unknown';
+  } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [providerForm, setProviderForm] = useState<ProviderFormState | null>(null);
   const [providerFormError, setProviderFormError] = useState<string | null>(null);
@@ -2121,6 +2131,7 @@ function StudioApp(): ReactElement {
         ? pendingImages
         : retry.userMessage.content.filter((part) => part.type === 'image');
     const files = retry === undefined ? composerDraft.draft.files : (retry.files ?? []);
+    const contexts = retry === undefined ? composerDraft.draft.contexts : (retry.contexts ?? []);
     const selectedSkills = retry === undefined ? [...sessionSkills.draft.selected] : [];
     const selectedRevision = sessionSkills.draft.revision;
     const selectedSessionId = activeSessionId;
@@ -2194,6 +2205,7 @@ function StudioApp(): ReactElement {
         ...settings,
         skills: selectedSessionId === sessionId ? selectedSkills.map(skillRef) : [],
         ...(files.length === 0 ? {} : { files }),
+        ...(contexts.length === 0 ? {} : { contexts }),
       },
     );
 
@@ -2427,7 +2439,10 @@ function StudioApp(): ReactElement {
         void queueController.refresh(projectId, sessionId).catch(() => undefined);
         return;
       }
-      if (error instanceof AgentStreamError && error.code.startsWith('execution-file-')) {
+      if (
+        error instanceof AgentStreamError &&
+        (error.code.startsWith('execution-file-') || error.code.startsWith('execution-context-'))
+      ) {
         updateSessionMessages(projectId, sessionId, (current) =>
           current.filter((message) => message.turnId !== liveTurnId),
         );
@@ -2444,8 +2459,19 @@ function StudioApp(): ReactElement {
           'execution-file-changed': '读取时项目文件已变化，请确认文件后重新发送。草稿已保留。',
           'execution-file-capture-timeout': '文件读取超时，请重试。草稿已保留。',
           'execution-file-capture-failed': '无法读取所选文件，请确认文件后重新发送。草稿已保留。',
+          'execution-context-git-unavailable':
+            'Git 变更不可用：项目不是 Git 仓库，或还没有任何提交。请移除“Git 变更”后重新发送。草稿已保留。',
+          'execution-context-unavailable':
+            '无法读取项目目录或 Git 变更，请确认项目文件夹后重新发送。草稿已保留。',
+          'execution-context-capture-failed':
+            '无法读取所选上下文，请重试，或移除后重新发送。草稿已保留。',
         };
-        setNotice(messages[error.code] ?? '文件读取失败，请重新添加文件后发送。草稿已保留。');
+        setNotice(
+          messages[error.code] ??
+            (error.code.startsWith('execution-context-')
+              ? '上下文读取失败，请重试。草稿已保留。'
+              : '文件读取失败，请重新添加文件后发送。草稿已保留。'),
+        );
         return;
       }
       if (error instanceof DOMException && error.name === 'AbortError') {
@@ -3138,6 +3164,28 @@ function StudioApp(): ReactElement {
     setNotice(null);
   }
 
+  useEffect(() => {
+    if (openMenu !== 'context' || activeProjectId === '') return undefined;
+    const controller = new AbortController();
+    void fetchContextAvailability(activeProjectId, { signal: controller.signal })
+      .then((availability) =>
+        setGitChangesAvailability({
+          projectId: activeProjectId,
+          state: availability.gitChanges.available ? 'available' : 'unavailable',
+        }),
+      )
+      .catch(() => {
+        if (!controller.signal.aborted)
+          setGitChangesAvailability({ projectId: activeProjectId, state: 'unknown' });
+      });
+    return () => controller.abort();
+  }, [openMenu, activeProjectId]);
+
+  function addComposerContext(kind: ExecutionContextKind): void {
+    composerDraft.addContext(composerDraft.owner, kind);
+    setOpenMenu(null);
+  }
+
   function addViewerFileContext(): void {
     if (viewerFilePath !== null) {
       const result = composerDraft.addFile(composerDraft.owner, viewerFilePath);
@@ -3175,6 +3223,7 @@ function StudioApp(): ReactElement {
         current.text !== '' ||
         current.images.length > 0 ||
         current.files.length > 0 ||
+        current.contexts.length > 0 ||
         latestSessionSkills.current.draft.selected.length > 0
       )
         setCopyRequest({ snapshot, owner });
@@ -3219,6 +3268,15 @@ function StudioApp(): ReactElement {
         data: part.data,
       }));
     composerDraft.setFiles(files);
+    const copiedContexts = [
+      ...(append ? current.contexts : []),
+      ...(snapshot.input.contexts ?? []),
+    ];
+    composerDraft.setContexts(
+      copiedContexts.filter(
+        ({ kind }, index) => copiedContexts.findIndex((entry) => entry.kind === kind) === index,
+      ),
+    );
     setMessageInput((current) => (append && current !== '' ? `${current}\n\n${text}` : text));
     setPendingImages((current) => (append ? [...current, ...images] : images));
     setSelectedProviderId(snapshot.input.provider);
@@ -3967,6 +4025,10 @@ function StudioApp(): ReactElement {
                 files={composerDraft.draft.files}
                 onRemove={composerDraft.removeFile}
               />
+              <DraftContextAttachments
+                contexts={composerDraft.draft.contexts}
+                onRemove={composerDraft.removeContext}
+              />
               {pendingImages.length > 0 ? (
                 <div className="composer-attachments" aria-label="待发送图片">
                   {pendingImages.map((image) => (
@@ -4075,19 +4137,59 @@ function StudioApp(): ReactElement {
                             <Check className="menu-check" aria-hidden="true" />
                           ) : null}
                         </button>
-                        <button type="button" role="menuitem" disabled>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          disabled={
+                            gitChangesAvailability?.projectId !== activeProjectId ||
+                            gitChangesAvailability.state !== 'available' ||
+                            composerDraft.draft.contexts.some(({ kind }) => kind === 'git-changes')
+                          }
+                          title={
+                            gitChangesAvailability?.projectId === activeProjectId &&
+                            gitChangesAvailability.state === 'unavailable'
+                              ? '项目不是 Git 仓库，或还没有任何提交'
+                              : gitChangesAvailability?.projectId === activeProjectId &&
+                                  gitChangesAvailability.state === 'unknown'
+                                ? '无法检查 Git 状态'
+                                : undefined
+                          }
+                          onClick={() => addComposerContext('git-changes')}
+                        >
                           <span className="menu-icon">
                             <GitBranch aria-hidden="true" />
                           </span>
                           Git 变更
-                          <small>即将推出</small>
+                          {composerDraft.draft.contexts.some(
+                            ({ kind }) => kind === 'git-changes',
+                          ) ? (
+                            <Check className="menu-check" aria-hidden="true" />
+                          ) : gitChangesAvailability?.projectId === activeProjectId &&
+                            gitChangesAvailability.state === 'unavailable' ? (
+                            <small>需要有提交的 Git 仓库</small>
+                          ) : gitChangesAvailability?.projectId === activeProjectId &&
+                            gitChangesAvailability.state === 'unknown' ? (
+                            <small>无法检查 Git 状态</small>
+                          ) : null}
                         </button>
-                        <button type="button" role="menuitem" disabled>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          disabled={
+                            activeProjectId === '' ||
+                            composerDraft.draft.contexts.some(({ kind }) => kind === 'project-tree')
+                          }
+                          onClick={() => addComposerContext('project-tree')}
+                        >
                           <span className="menu-icon">
                             <FolderOpen aria-hidden="true" />
                           </span>
                           项目目录
-                          <small>即将推出</small>
+                          {composerDraft.draft.contexts.some(
+                            ({ kind }) => kind === 'project-tree',
+                          ) ? (
+                            <Check className="menu-check" aria-hidden="true" />
+                          ) : null}
                         </button>
                       </div>
                     ) : null}

@@ -1,6 +1,7 @@
 import { createRuntime } from '@weave/runtime';
 import { createInMemoryProjectStore } from '@weave/workspace';
 import { afterEach, describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,7 +15,7 @@ afterEach(async () => {
 
 async function setup(
   withFolder = true,
-): Promise<{ app: ReturnType<typeof createApp>; projectId: string }> {
+): Promise<{ app: ReturnType<typeof createApp>; projectId: string; folder: string }> {
   const runtime = createRuntime();
   await runtime.start();
   const projectStore = createInMemoryProjectStore();
@@ -36,7 +37,7 @@ async function setup(
     folderName: 'weave',
     ...(folder === undefined ? {} : { folderPath: folder }),
   });
-  return { app: createApp(runtime, { projectStore }), projectId: project.id };
+  return { app: createApp(runtime, { projectStore }), projectId: project.id, folder: folder ?? '' };
 }
 
 describe('Project file HTTP API', () => {
@@ -112,5 +113,49 @@ describe('Project file HTTP API', () => {
       `/projects/${projectId}/file-diff?path=${encodeURIComponent('../escape.txt')}`,
     );
     expect(response.status).toBe(400);
+  });
+
+  it('reports context availability: tree always, Git changes only with a commit', async () => {
+    const { app, projectId } = await setup();
+    const plain = await app.request(`/projects/${projectId}/context-availability`);
+    expect(plain.status).toBe(200);
+    expect(await plain.json()).toEqual({
+      gitChanges: { available: false, reason: 'git-unavailable' },
+      projectTree: { available: true },
+    });
+  });
+
+  it('reports Git changes as available for a repository with a commit', async () => {
+    const { app, projectId, folder } = await setup();
+    const run = (...args: string[]) =>
+      execFileSync(
+        'git',
+        [
+          '-c',
+          'user.name=T',
+          '-c',
+          'user.email=t@example.com',
+          '-c',
+          'commit.gpgsign=false',
+          ...args,
+        ],
+        { cwd: folder, stdio: 'ignore' },
+      );
+    run('init', '-q');
+    run('add', '-A');
+    run('commit', '-q', '-m', 'initial');
+    const response = await app.request(`/projects/${projectId}/context-availability`);
+    expect(await response.json()).toEqual({
+      gitChanges: { available: true },
+      projectTree: { available: true },
+    });
+  });
+
+  it('answers context availability errors like the other project routes', async () => {
+    const { app } = await setup();
+    expect((await app.request('/projects/missing/context-availability')).status).toBe(404);
+    const unset = await setup(false);
+    const response = await unset.app.request(`/projects/${unset.projectId}/context-availability`);
+    expect(response.status).toBe(409);
   });
 });
