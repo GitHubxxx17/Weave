@@ -296,7 +296,7 @@ a Project that has a folder and send one `/tool <name> <json arguments>` line
 per call; several lines start several calls in the same step:
 
 ```text
-/tool run_command {"command":"echo hello"}
+/tool run_command {"command":"echo hello","risk":"low","riskReason":"prints one line"}
 /tool write_file {"path":"mock-test.md","content":"mock 测试\n"}
 ```
 
