@@ -1651,7 +1651,7 @@ describe('Studio Agent Chat', () => {
         within(archiveView).getByRole('button', { name: '恢复会话 Session event store' }),
       ).toBeTruthy();
       expect(
-        within(archiveView).getByRole('button', { name: '永久删除会话 Session event store' }),
+        within(archiveView).getByRole('button', { name: '删除会话 Session event store' }),
       ).toBeTruthy();
     });
   });
@@ -1694,13 +1694,11 @@ describe('Studio Agent Chat', () => {
       expect(screen.queryByRole('button', { name: /Session event store/ })).toBeNull();
     });
     fireEvent.click(screen.getByRole('button', { name: '归档' }));
-    fireEvent.click(
-      await screen.findByRole('button', { name: '永久删除会话 Session event store' }),
-    );
+    fireEvent.click(await screen.findByRole('button', { name: '删除会话 Session event store' }));
 
-    const dialog = screen.getByRole('dialog', { name: '永久删除会话' });
-    expect(within(dialog).getByText(/无法恢复/)).toBeTruthy();
-    fireEvent.click(within(dialog).getByRole('button', { name: '确认永久删除' }));
+    const dialog = screen.getByRole('dialog', { name: '删除会话' });
+    expect(within(dialog).getByText(/无法在界面中恢复/)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认删除' }));
 
     await waitFor(() => {
       expect(screen.queryByText('Session event store')).toBeNull();
@@ -1749,12 +1747,10 @@ describe('Studio Agent Chat', () => {
       expect(screen.queryByRole('button', { name: /Session event store/ })).toBeNull(),
     );
     fireEvent.click(screen.getByRole('button', { name: '归档' }));
+    fireEvent.click(await screen.findByRole('button', { name: '删除会话 Session event store' }));
     fireEvent.click(
-      await screen.findByRole('button', { name: '永久删除会话 Session event store' }),
-    );
-    fireEvent.click(
-      within(screen.getByRole('dialog', { name: '永久删除会话' })).getByRole('button', {
-        name: '确认永久删除',
+      within(screen.getByRole('dialog', { name: '删除会话' })).getByRole('button', {
+        name: '确认删除',
       }),
     );
     await waitFor(() => expect(screen.queryByText('Session event store')).toBeNull());

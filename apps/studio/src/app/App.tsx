@@ -462,7 +462,7 @@ const viewLabels: Record<
   },
   archived: {
     title: '归档',
-    description: '已归档的会话可以恢复，也可以在这里永久删除',
+    description: '已归档的会话可以恢复，也可以在这里删除',
   },
   settings: {
     title: '设置',
@@ -4444,7 +4444,7 @@ function StudioApp(): ReactElement {
                 <header className="page-header">
                   <div className="page-header-copy">
                     <h2>归档</h2>
-                    <p>归档会话不会出现在项目树中，可以恢复或永久删除。</p>
+                    <p>归档会话不会出现在项目树中，可以恢复或删除。</p>
                   </div>
                 </header>
                 <div className="archive-overview-list" aria-label="归档会话列表">
@@ -4481,7 +4481,7 @@ function StudioApp(): ReactElement {
                                 <button
                                   className="danger-button"
                                   type="button"
-                                  aria-label={`永久删除会话 ${session.title}`}
+                                  aria-label={`删除会话 ${session.title}`}
                                   onClick={() =>
                                     setSessionToDelete({
                                       projectId: project.id,
@@ -4492,7 +4492,7 @@ function StudioApp(): ReactElement {
                                   disabled={sessionHasWork}
                                 >
                                   <Trash2 aria-hidden="true" />
-                                  永久删除
+                                  删除
                                 </button>
                               </div>
                             </article>
@@ -5204,12 +5204,12 @@ function StudioApp(): ReactElement {
             <header className="project-dialog-header">
               <div>
                 <p>归档会话</p>
-                <h2 id="delete-session-dialog-title">永久删除会话</h2>
+                <h2 id="delete-session-dialog-title">删除会话</h2>
               </div>
               <button
                 className="icon-button"
                 type="button"
-                aria-label="关闭永久删除确认"
+                aria-label="关闭删除确认"
                 onClick={() => setSessionToDelete(null)}
               >
                 <X aria-hidden="true" />
@@ -5217,7 +5217,8 @@ function StudioApp(): ReactElement {
             </header>
             <div className="project-dialog-form">
               <p className="delete-session-warning">
-                确定要永久删除“{sessionToDelete.title}”吗？删除后无法恢复。
+                确定要删除“{sessionToDelete.title}
+                ”吗？删除后无法在界面中恢复。会话的历史记录仍保留在本机数据文件中。
               </p>
               <footer className="project-dialog-actions">
                 <button
@@ -5230,11 +5231,11 @@ function StudioApp(): ReactElement {
                 <button
                   className="danger-button"
                   type="button"
-                  aria-label="确认永久删除"
+                  aria-label="确认删除"
                   onClick={() => void permanentlyDeleteSession()}
                 >
                   <Trash2 aria-hidden="true" />
-                  永久删除
+                  删除
                 </button>
               </footer>
             </div>

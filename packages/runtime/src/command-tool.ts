@@ -365,7 +365,7 @@ function shorten(text: string, maxLength: number): string {
   return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
 }
 
-/** Creates the `run_command` tool, which always waits for Approval. */
+/** Creates the `run_command` tool, whose Approval depends on the permission mode. */
 export function createCommandTool(
   options: CommandToolOptions,
 ): ToolDefinition<RunCommandInput, string> {
@@ -380,8 +380,8 @@ export function createCommandTool(
       'Run a shell command in the project folder (or in cwd inside it) and return its exit code ' +
       'and output. Use it for tests, builds, linters, git and other commands that finish on ' +
       'their own; do not start servers or watch mode. stdin is closed, and long output keeps ' +
-      'only its beginning and end. Every command waits for user approval and does not run in ' +
-      'a sandbox.',
+      'only its beginning and end. Depending on the session permission mode, the user may be ' +
+      'asked to approve the command. It does not run in a sandbox.',
     parameters: {
       type: 'object',
       properties: {

@@ -254,7 +254,7 @@ function ScopeMemory({
           <strong>Agent 与检索使用权限</strong>
           <p>
             {access.level === 'disabled'
-              ? '已停用使用。你仍可查看、编辑和审阅本地记忆。'
+              ? '已停用：Agent 不能读取或写入这个范围的记忆；你仍然可以在这里手动查看、编辑和审阅。'
               : '只有明确读取才会进入 Agent 上下文。个人记忆需要单独启用。'}
           </p>
         </div>
