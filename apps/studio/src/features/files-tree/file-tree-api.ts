@@ -81,11 +81,16 @@ export function fetchFileTree(
 }
 
 /** Fetches one file's text content for the viewer. */
-export function fetchFileContent(projectId: string, filePath: string): Promise<FileContent> {
+export function fetchFileContent(
+  projectId: string,
+  filePath: string,
+  options?: { readonly signal?: AbortSignal },
+): Promise<FileContent> {
   return requestJson(
     runtimeApiUrl(
       `/projects/${encodeURIComponent(projectId)}/file?path=${encodeURIComponent(filePath)}`,
     ),
     contentSchema,
+    options,
   );
 }

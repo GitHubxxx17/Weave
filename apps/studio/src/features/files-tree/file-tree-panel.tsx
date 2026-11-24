@@ -3,6 +3,7 @@ import {
   Suspense,
   lazy,
   useCallback,
+  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
@@ -11,7 +12,7 @@ import {
   type PointerEvent,
   type ReactElement,
 } from 'react';
-import { ChevronDown, ChevronRight, File, Folder, RotateCcw, X } from 'lucide-react';
+import { Folder, RotateCcw, X } from 'lucide-react';
 
 import {
   FileTreeApiError,
@@ -20,83 +21,22 @@ import {
   type FileContent,
 } from './file-tree-api.js';
 import { highlightToHtml, languageForPath } from './highlight.js';
+import { createFileTreeModel, fileTreeRows, type FileTreeModel } from './file-tree-model.js';
+import { FileTreeList } from './file-tree-list.js';
+export { buildFileTree, flattenTree, type FileTreeNode } from './file-tree-model.js';
 
 /**
  * The diff view pulls in `@git-diff-view` and a Shiki highlighter, so it is
  * code-split and only loaded the first time a file's "改动" view is opened.
  */
 const FileDiffView = lazy(() =>
-  import('./file-diff-view.js').then((module) => ({ default: module.FileDiffView })),
+  import('./file-diff-view.js').then((module) => ({
+    default: module.FileDiffView,
+  })),
 );
 
 /** Which face of a selected file the viewer shows. */
 type ViewMode = 'content' | 'diff';
-
-/** One node of the project file tree, keyed by path segment. */
-export interface FileTreeNode {
-  readonly name: string;
-  readonly path: string;
-  readonly isFile: boolean;
-  readonly children: Map<string, FileTreeNode>;
-}
-
-/** Builds a nested tree from a flat set of POSIX-relative file paths. */
-export function buildFileTree(files: readonly string[]): FileTreeNode {
-  const root: FileTreeNode = { name: '', path: '', isFile: false, children: new Map() };
-  for (const file of files) {
-    const parts = file.split('/').filter((part) => part !== '');
-    let node = root;
-    let prefix = '';
-    parts.forEach((part, index) => {
-      prefix = prefix === '' ? part : `${prefix}/${part}`;
-      const existing = node.children.get(part);
-      if (existing === undefined) {
-        const created: FileTreeNode = {
-          name: part,
-          path: prefix,
-          isFile: index === parts.length - 1,
-          children: new Map(),
-        };
-        node.children.set(part, created);
-        node = created;
-      } else {
-        node = existing;
-      }
-    });
-  }
-  return root;
-}
-
-interface FlatRow {
-  readonly node: FileTreeNode;
-  readonly depth: number;
-}
-
-/** Flattens the tree into display rows, following the expanded directory set. */
-export function flattenTree(
-  root: FileTreeNode,
-  expanded: ReadonlySet<string>,
-  depth = 0,
-): FlatRow[] {
-  const children = [...root.children.values()];
-  const directories = children
-    .filter((child) => !child.isFile)
-    .sort((left, right) => left.name.localeCompare(right.name));
-  const files = children
-    .filter((child) => child.isFile)
-    .sort((left, right) => left.name.localeCompare(right.name));
-  const rows: FlatRow[] = [];
-  for (const directory of directories) {
-    rows.push({ node: directory, depth });
-    if (expanded.has(directory.path)) {
-      rows.push(...flattenTree(directory, expanded, depth + 1));
-    }
-  }
-  for (const file of files) {
-    rows.push({ node: file, depth });
-  }
-  return rows;
-}
 
 type LoadStatus = 'idle' | 'loading' | 'error';
 
@@ -149,12 +89,23 @@ export function FileTreePanel({
   onAddFile,
   selectedFiles = [],
 }: FileTreePanelProps): ReactElement {
-  const [files, setFiles] = useState<readonly string[] | null>(null);
+  const [model, setModel] = useState<FileTreeModel>(() => createFileTreeModel([]));
+  const [treeRevision, setTreeRevision] = useState(0);
+  const treeEpoch = useRef(0);
+  const contentEpoch = useRef(0);
+  const ownerRef = useRef({ projectId, epoch: 0 });
+  if (ownerRef.current.projectId !== projectId)
+    ownerRef.current = { projectId, epoch: ownerRef.current.epoch + 1 };
+  const loadedTreeOwner = useRef<typeof ownerRef.current | undefined>(undefined);
   const [treeStatus, setTreeStatus] = useState<LoadStatus>('loading');
-  const [treeError, setTreeError] = useState<{ code: string; message: string } | null>(null);
+  const [treeError, setTreeError] = useState<{
+    code: string;
+    message: string;
+  } | null>(null);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const [filter, setFilter] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
+  const [contentSelectionRevision, setContentSelectionRevision] = useState(0);
   const [content, setContent] = useState<FileContent | null>(null);
   const [contentStatus, setContentStatus] = useState<LoadStatus>('idle');
   const [contentError, setContentError] = useState('');
@@ -184,32 +135,76 @@ export function FileTreePanel({
     observerRef.current = observer;
   }, []);
 
-  const loadTree = useCallback(() => {
+  const loadTree = useCallback(() => setTreeRevision((current) => current + 1), []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const epoch = ++treeEpoch.current;
+    const owner = ownerRef.current;
+    const valid = () =>
+      !controller.signal.aborted && treeEpoch.current === epoch && ownerRef.current === owner;
+    if (loadedTreeOwner.current !== owner) {
+      setSelected(null);
+      setContent(null);
+      setExpanded(new Set());
+      setFilter('');
+      loadedTreeOwner.current = owner;
+    }
+    setModel(createFileTreeModel([]));
     if (projectId === undefined || projectId === '') {
-      setFiles(null);
       setTreeStatus('idle');
-      return;
+      return () => controller.abort();
     }
     setTreeStatus('loading');
     setTreeError(null);
-    fetchFileTree(projectId)
+    void fetchFileTree(projectId, { signal: controller.signal })
       .then((listing) => {
-        setFiles(listing.files);
+        if (!valid()) return;
+        const nextModel = createFileTreeModel(listing.files, listing.truncated);
+        setModel(nextModel);
         setTreeStatus('idle');
       })
       .catch((error: unknown) => {
+        if (!valid()) return;
         setTreeError({
           code: error instanceof FileTreeApiError ? error.code : 'file-tree-failed',
           message: error instanceof Error ? error.message : '加载失败',
         });
         setTreeStatus('error');
       });
-  }, [projectId]);
+    return () => controller.abort();
+  }, [projectId, treeRevision]);
 
   useEffect(() => {
-    setSelected(null);
-    loadTree();
-  }, [loadTree]);
+    const controller = new AbortController();
+    const epoch = ++contentEpoch.current;
+    const owner = ownerRef.current;
+    const valid = () =>
+      !controller.signal.aborted && contentEpoch.current === epoch && ownerRef.current === owner;
+    setContent(null);
+    setContentError('');
+    if (selected === null || projectId === undefined || projectId === '') {
+      setContentStatus('idle');
+      return () => controller.abort();
+    }
+    const path = selected;
+    setContentStatus('loading');
+    void fetchFileContent(projectId, path, { signal: controller.signal })
+      .then((result) => {
+        if (!valid()) return;
+        if (result.path !== path)
+          throw new FileTreeApiError('file-content-owner', '返回的文件路径不匹配', 0);
+        setContent(result);
+        setContentStatus('idle');
+      })
+      .catch((error: unknown) => {
+        if (valid()) {
+          setContentError(error instanceof Error ? error.message : '加载失败');
+          setContentStatus('error');
+        }
+      });
+    return () => controller.abort();
+  }, [projectId, selected, contentSelectionRevision]);
 
   useEffect(() => {
     if (selected === null || contentStatus !== 'idle' || content === null) {
@@ -222,8 +217,10 @@ export function FileTreePanel({
       return;
     }
     let active = true;
+    const owner = ownerRef.current;
+    const epoch = contentEpoch.current;
     void highlightToHtml(content.content, language).then((html) => {
-      if (active) {
+      if (active && ownerRef.current === owner && contentEpoch.current === epoch) {
         setHighlightedHtml(html ?? null);
       }
     });
@@ -234,23 +231,15 @@ export function FileTreePanel({
 
   const openFile = useCallback(
     (path: string) => {
-      if (projectId === undefined) {
-        return;
-      }
+      if (projectId === undefined || projectId === '') return;
+      contentEpoch.current += 1;
       setSelected(path);
-      setViewMode('content');
+      setContentSelectionRevision((current) => current + 1);
       setContent(null);
       setContentStatus('loading');
       setContentError('');
-      fetchFileContent(projectId, path)
-        .then((result) => {
-          setContent(result);
-          setContentStatus('idle');
-        })
-        .catch((error: unknown) => {
-          setContentError(error instanceof Error ? error.message : '加载失败');
-          setContentStatus('error');
-        });
+      setHighlightedHtml(null);
+      setViewMode('content');
     },
     [projectId],
   );
@@ -330,14 +319,9 @@ export function FileTreePanel({
     }
   }
 
-  const tree = useMemo(() => buildFileTree(files ?? []), [files]);
-  const rows = useMemo(() => flattenTree(tree, expanded), [tree, expanded]);
-  const query = filter.trim().toLowerCase();
-  const matches = useMemo(
-    () =>
-      query === '' ? null : (files ?? []).filter((file) => file.toLowerCase().includes(query)),
-    [files, query],
-  );
+  const deferredFilter = useDeferredValue(filter);
+  const query = deferredFilter.trim().toLocaleLowerCase();
+  const rows = useMemo(() => fileTreeRows(model, expanded, query), [model, expanded, query]);
 
   if (projectId === undefined || projectId === '') {
     return (
@@ -404,58 +388,28 @@ export function FileTreePanel({
                 {treeError?.message ?? '加载失败'}
               </p>
             )
-          ) : matches !== null ? (
-            <div className="file-tree-list" role="tree" aria-label="筛选结果">
-              {matches.length === 0 ? (
-                <p className="file-tree-hint">没有匹配的文件</p>
-              ) : (
-                matches.map((path) => (
-                  <button
-                    key={path}
-                    type="button"
-                    role="treeitem"
-                    aria-selected={path === selected}
-                    className={`file-tree-row file-tree-file${
-                      path === selected ? ' file-tree-row-active' : ''
-                    }`}
-                    onClick={() => openFile(path)}
-                    title={path}
-                  >
-                    <File aria-hidden="true" />
-                    <span className="file-tree-name">{path}</span>
-                  </button>
-                ))
-              )}
-            </div>
-          ) : rows.length === 0 ? (
-            <p className="file-tree-hint">目录为空</p>
           ) : (
-            <div className="file-tree-list" role="tree" aria-label="项目文件">
-              {rows.map(({ node, depth }) => (
-                <button
-                  key={node.path}
-                  type="button"
-                  role="treeitem"
-                  aria-expanded={node.isFile ? undefined : expanded.has(node.path)}
-                  aria-selected={node.isFile ? node.path === selected : undefined}
-                  className={`file-tree-row${node.isFile ? ' file-tree-file' : ' file-tree-dir'}${
-                    node.isFile && node.path === selected ? ' file-tree-row-active' : ''
-                  }`}
-                  style={{ paddingLeft: `${8 + depth * 12}px` }}
-                  onClick={() => (node.isFile ? openFile(node.path) : toggle(node.path))}
-                  title={node.name}
-                >
-                  {node.isFile ? (
-                    <File aria-hidden="true" />
-                  ) : expanded.has(node.path) ? (
-                    <ChevronDown aria-hidden="true" />
-                  ) : (
-                    <ChevronRight aria-hidden="true" />
-                  )}
-                  <span className="file-tree-name">{node.name}</span>
-                </button>
-              ))}
-            </div>
+            <>
+              {model.truncated ? (
+                <p className="file-tree-hint" role="status">
+                  列表未完整：仅显示服务返回的文件。
+                </p>
+              ) : null}
+              {filter !== deferredFilter ? (
+                <p className="file-tree-hint" role="status">
+                  正在筛选…
+                </p>
+              ) : null}
+              <FileTreeList
+                key={JSON.stringify([projectId, ownerRef.current.epoch])}
+                rows={rows}
+                expanded={expanded}
+                selected={selected}
+                onOpen={openFile}
+                onToggle={toggle}
+                filterMode={query !== ''}
+              />
+            </>
           )}
         </div>
         {selected !== null ? (

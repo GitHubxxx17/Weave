@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "stage": "supplemental-same-command-three-phase",
+  "note": "Independent supplement; formal36raw remains unchanged. Every repeat freshfixture/browser. Allthreephases withinoneCLIcommand to diagnose page loss betweenCLIcommands.",
+  "scriptHash": "8f0e3388e423bccdf27b4631f0c040a5c3708071a01ae5630d045aaf49e4e159",
+  "cliTimeoutMs": 240000,
+  "readinessWaitTimeoutMs": 120000,
+  "samples": [
+    {
+      "repeat": 0,
+      "fixtureHash": "51dd9c6d659da97501a588f8ac59c223b1910354629a1eca468f97f6468128e2",
+      "status": "failed",
+      "results": [],
+      "events": [
+        {
+          "type": "framenavigated",
+          "message": "http://127.0.0.1:56895/"
+        },
+        {
+          "type": "crash",
+          "message": ""
+        }
+      ],
+      "failedPhase": "plain-content",
+      "error": "page.evaluate: Target crashed ",
+      "url": "http://127.0.0.1:56895/"
+    }
+  ]
+}

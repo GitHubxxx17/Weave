@@ -1,0 +1,14 @@
+{
+  "sample": {
+    "bytes": 102400,
+    "encoding": "ascii",
+    "lineShape": "single",
+    "repeat": 0
+  },
+  "status": "aborted-known-probe-defect",
+  "failedPhase": "typescript-diff",
+  "reason": "Exact line readiness accepted only .diff-line-content-raw; installed DiffView syntax mode uses .diff-line-syntax-raw. Real two line rows were already rendered. Aborted before accepting any sample; no timeout increased.",
+  "productionDistHash": "77834acaf4229ce4e5e3c5a780d1951497085426644f5d539c3ec9849679610d",
+  "sourceTreeHash": "76d2f31f3d10068bdf22ab13718b8ea8983d116dbf990d3f0bcb46ff13232e10",
+  "completedPhases": ["plain-content", "typescript-content"]
+}

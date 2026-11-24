@@ -7,3 +7,11 @@ marketplace/index.json
 
 # Actual CLI bundle bytes; web-plugin:verify compares a deterministic rebuild.
 plugins/official/weave-web/index.mjs
+
+# Frozen Explorer before bytes: hashes and real failures must remain reproducible.
+docs/learning/artifacts/2026-11-24-studio-explorer-rendering/before-harness/**
+docs/learning/artifacts/2026-11-24-studio-explorer-rendering/explorer-before.json
+docs/learning/artifacts/2026-11-24-studio-explorer-rendering/explorer-before-first-failure.json
+
+# Independent supplemental scriptHash binds the original diagnostic bytes.
+docs/learning/artifacts/2026-11-24-studio-explorer-rendering/viewer-supplemental-harness.mjs

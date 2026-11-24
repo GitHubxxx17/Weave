@@ -1,0 +1,131 @@
+{
+  "fixture": {
+    "plainPath": "file-00999.txt",
+    "highlightPath": "file-00000.ts",
+    "bytes": 1992294,
+    "codeUnits": 1354766,
+    "lineCount": 1,
+    "longestLine": 1354766,
+    "contentHash": "31fb66d3bb4c0acb72e016c4b0cd07a9ae19670ade914dc5e0e1b9fd2fd5093d",
+    "oldContentHash": "abf9fa8ad441644e6cee1cfcd32bd132a97029bce47226819c6534baeb3168de",
+    "newContentHash": "31fb66d3bb4c0acb72e016c4b0cd07a9ae19670ade914dc5e0e1b9fd2fd5093d",
+    "expectedHighlight": false,
+    "highlightGateUnits": "UTF-16 code units",
+    "highlightGate": 400000,
+    "contentTruncated": false,
+    "diffTruncationFieldAvailable": false
+  },
+  "events": [],
+  "phases": [
+    {
+      "phase": "plain-content",
+      "result": {
+        "phases": [
+          {
+            "name": "plain-content",
+            "status": "passed",
+            "startedAt": 192.79999995231628,
+            "endedAt": 806,
+            "elapsedMs": 614,
+            "renderStartedAt": 200.19999992847443,
+            "readyAt": 526.8999999761581,
+            "fetchHeadersMs": 43,
+            "fetchJsonMs": 112,
+            "plainOrHighlightedReadyMs": 326,
+            "initialRenderMode": "plain",
+            "validationStartedAt": 601.5,
+            "validationEndedAt": 805.5999999046326,
+            "path": "file-00999.txt",
+            "paintedBytes": 1992294,
+            "paintedCodeUnits": 1354766,
+            "renderLongTasks": [
+              {
+                "startTime": 282.89999997615814,
+                "duration": 221
+              }
+            ],
+            "validationLongTasks": [
+              {
+                "startTime": 669.5999999046326,
+                "duration": 135
+              }
+            ]
+          }
+        ],
+        "failures": [],
+        "errors": [],
+        "fixture": {
+          "bytes": 1992294,
+          "codeUnits": 1354766,
+          "lineCount": 1,
+          "contentHash": "31fb66d3bb4c0acb72e016c4b0cd07a9ae19670ade914dc5e0e1b9fd2fd5093d"
+        },
+        "longTasks": [
+          {
+            "startTime": 282.89999997615814,
+            "duration": 221
+          },
+          {
+            "startTime": 669.5999999046326,
+            "duration": 135
+          }
+        ],
+        "domElements": 547
+      },
+      "snapshot": {
+        "url": "about:blank",
+        "title": "",
+        "body": "",
+        "filter": 0,
+        "pages": [
+          {
+            "url": "about:blank",
+            "closed": false
+          }
+        ]
+      }
+    },
+    {
+      "phase": "typescript-content",
+      "result": {
+        "phases": [
+          {
+            "name": "typescript-content",
+            "status": "failed",
+            "startedAt": 795.5,
+            "endedAt": 30801.600000023842,
+            "elapsedMs": 30007,
+            "error": "locator.fill: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('textbox', { name: '筛选文件', exact: true })\u001b[22m\n"
+          }
+        ],
+        "failures": [
+          {
+            "phase": "typescript-content",
+            "message": "locator.fill: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('textbox', { name: '筛选文件', exact: true })\u001b[22m\n"
+          }
+        ],
+        "errors": [],
+        "fixture": {
+          "bytes": 1992294,
+          "codeUnits": 1354766,
+          "lineCount": 1,
+          "contentHash": "31fb66d3bb4c0acb72e016c4b0cd07a9ae19670ade914dc5e0e1b9fd2fd5093d"
+        },
+        "longTasks": [],
+        "domElements": 3
+      },
+      "snapshot": {
+        "url": "about:blank",
+        "title": "",
+        "body": "",
+        "filter": 0,
+        "pages": [
+          {
+            "url": "about:blank",
+            "closed": false
+          }
+        ]
+      }
+    }
+  ]
+}

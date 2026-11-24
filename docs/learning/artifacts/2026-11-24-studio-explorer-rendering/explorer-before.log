@@ -1,0 +1,20 @@
+(node:59338) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+Measuring Explorer 1000/wide-root, repeat 1/3
+Measuring Explorer 1000/wide-root, repeat 2/3
+Measuring Explorer 1000/wide-root, repeat 3/3
+Measuring Explorer 1000/wide-src, repeat 1/3
+Measuring Explorer 1000/wide-src, repeat 2/3
+Measuring Explorer 1000/wide-src, repeat 3/3
+Measuring Explorer 10000/wide-root, repeat 1/3
+Measuring Explorer 10000/wide-root, repeat 2/3
+Measuring Explorer 10000/wide-root, repeat 3/3
+Measuring Explorer 10000/wide-src, repeat 1/3
+Measuring Explorer 10000/wide-src, repeat 2/3
+Measuring Explorer 10000/wide-src, repeat 3/3
+Measuring Explorer 50000/wide-root, repeat 1/3
+Measuring Explorer 50000/wide-root, repeat 2/3
+Measuring Explorer 50000/wide-root, repeat 3/3
+Measuring Explorer 50000/wide-src, repeat 1/3
+Measuring Explorer 50000/wide-src, repeat 2/3
+Measuring Explorer 50000/wide-src, repeat 3/3

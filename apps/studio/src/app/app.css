@@ -6008,3 +6008,28 @@ body:has(.panel-resizer-active) {
   font: inherit;
   font-size: 12px;
 }
+
+/* Fixed row geometry shared with fileTreeRowHeight = 28. */
+.file-tree-list.file-tree-window {
+  padding: 0;
+  overflow-anchor: none;
+}
+
+.file-tree-window-space {
+  flex: 0 0 auto;
+}
+
+.file-tree-window .file-tree-window-row {
+  height: 28px;
+  min-height: 28px;
+  max-height: 28px;
+  box-sizing: border-box;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.file-tree-window-row:focus-visible {
+  z-index: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}

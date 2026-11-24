@@ -17,8 +17,10 @@ import {
 } from '@weave/runtime';
 import { createInMemorySessionEventStore, projectSession } from '@weave/session';
 import { createScenario, scenarioOptionsSchema } from './scenario.mjs';
+import { createTreeScenario, treeOptionsSchema, treeResponse } from './tree-scenario.mjs';
 
 const optionsSchema = scenarioOptionsSchema.extend({
+  tree: treeOptionsSchema.optional(),
   streamVariant: z.enum(['text', 'tools']).default('text'),
   intervalMs: z.number().int().min(0).max(100).default(20),
   distDirectory: z.string().min(1).optional(),
@@ -56,6 +58,8 @@ export async function startPerformanceFixture(input) {
     options.distDirectory ??
       resolve(dirname(fileURLToPath(import.meta.url)), '../../../studio/dist'),
   );
+  const tree = options.tree ? createTreeScenario(options.tree) : undefined;
+  if (tree) scenario.project.folderPath = '/synthetic/benchmark-project';
   const store = createInMemorySessionEventStore();
   for (const session of scenario.sessions)
     await store.append(session.id, [
@@ -325,6 +329,11 @@ export async function startPerformanceFixture(input) {
       json(response, fixtureError('benchmark-not-found'), 404);
       return;
     }
+    if (tree && path.startsWith('/projects/benchmark-project/')) {
+      const result = treeResponse(tree, path, url.searchParams);
+      json(response, result.body, result.status);
+      return;
+    }
     if (path === '/projects') {
       json(response, { projects: [scenario.project], warnings: [] });
       return;
@@ -453,6 +462,14 @@ export async function startPerformanceFixture(input) {
   const address = server.address();
   return {
     url: `http://127.0.0.1:${address.port}`,
+    tree: tree
+      ? {
+          options: tree.options,
+          sentinels: tree.sentinels,
+          hash: tree.hash,
+          viewer: tree.viewerMetadata,
+        }
+      : undefined,
     metadata: {
       logicalMessageCount: options.count,
       rawHistoryRecordCount: scenario.sessions[0].messages.length,

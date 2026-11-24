@@ -1,0 +1,5 @@
+(node:94518) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+Measuring Explorer contention, repeat 1/3
+Measuring Explorer contention, repeat 2/3
+Measuring Explorer contention, repeat 3/3
