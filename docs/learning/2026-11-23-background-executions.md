@@ -1,6 +1,6 @@
 # Background executions verification
 
-The execution service separates durable acceptance, owned production and detachable observation. This feature deliberately permits one accepted/running execution per Session; message queue ordering is the following feature. It reuses the existing stable Generation facade and shared Tool Pipeline.
+The execution service separates durable acceptance, owned production and detachable observation. Each Session runs at most one execution at a time; later accepted inputs wait in a durable per-Session queue (at most 10 waiting per Session and 100 across the service, the running execution excluded). When the current execution reaches a terminal state, `claimNext` records `execution.claimed` for the queue head, and reordering is recorded as `execution.queue-reordered`; see [message queue](2026-11-23-message-queue.md). It reuses the existing stable Generation facade and shared Tool Pipeline.
 
 ## Behavior verified
 
