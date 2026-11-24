@@ -16,9 +16,7 @@
         "resultKind": "none",
         "preview": "",
         "previewTruncated": false,
-        "pendingApprovalIds": [
-          "00000000-0000-4000-8000-000000000028"
-        ],
+        "pendingApprovalIds": ["00000000-0000-4000-8000-000000000028"],
         "pendingApprovalCount": 1
       }
     ],
@@ -45,9 +43,7 @@
     "resultKind": "none",
     "preview": "",
     "previewTruncated": false,
-    "pendingApprovalIds": [
-      "00000000-0000-4000-8000-000000000028"
-    ],
+    "pendingApprovalIds": ["00000000-0000-4000-8000-000000000028"],
     "pendingApprovalCount": 1
   }
 }

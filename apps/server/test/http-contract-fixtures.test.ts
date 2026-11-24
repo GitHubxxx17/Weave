@@ -7,7 +7,7 @@ const directory = fileURLToPath(new URL('../../../test/fixtures/http-contract/',
 const update = process.env.WEAVE_UPDATE_HTTP_CONTRACT === '1';
 const regenerate =
   'Studio reads these files in apps/studio/test/http-contract.test.ts. If the Server change is intended, regenerate with: ' +
-  'WEAVE_UPDATE_HTTP_CONTRACT=1 pnpm --filter @weave/server exec vitest run --root ../.. --config vitest.config.ts apps/server/test/http-contract-fixtures.test.ts';
+  'WEAVE_UPDATE_HTTP_CONTRACT=1 pnpm --filter @weave/server exec vitest run --root ../.. --config vitest.config.ts apps/server/test/http-contract-fixtures.test.ts && pnpm format';
 
 describe('Server HTTP contract fixtures consumed by Studio', () => {
   it('match what the real Server currently sends', async () => {

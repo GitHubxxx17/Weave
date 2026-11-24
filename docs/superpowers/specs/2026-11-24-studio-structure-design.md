@@ -141,7 +141,7 @@
 
 - 夹具由 Server 测试生成：`apps/server/test/http-contract-capture.ts` 启动真实 `startServer`（HTTP、SQLite、Runtime、审批代理、Agent 任务全部是生产组合，只有 Provider 的 `fetch` 被脚本化），驱动一个固定场景并记录各接口的真实响应。每次运行都会变化的值（随机 ID、时间戳、带签名的任务游标、临时目录、受系统提示词长度影响的上下文词元数）在 `neutralizeContract` 中替换为稳定值，替换后保持原有语法与相互引用（同一个 ID 在整份夹具里映射为同一个值），因此 Studio 的校验（如游标中段等于会话 ID）仍然成立。
 - 夹具位置：仓库根 `test/fixtures/http-contract/{workspace,execution,queue,approvals,tasks}.json`。放在 `apps/server/test/` 下时，Studio 的相对导入会被 `weave/package-boundaries` 规则判为跨包访问源码（lint 实测报错），因此改放在不属于任何工作区单元的仓库根目录，两侧都只通过相对路径读取 JSON 数据。SSE 帧以 `{ id?, event, data }` 保存，`data` 是解析后的 JSON。
-- 一致性测试：`apps/server/test/http-contract-fixtures.test.ts` 重新捕获并与已提交的夹具比较，不一致时失败并提示重新生成的命令：`WEAVE_UPDATE_HTTP_CONTRACT=1 pnpm --filter @weave/server exec vitest run --root ../.. --config vitest.config.ts apps/server/test/http-contract-fixtures.test.ts`。
+- 一致性测试：`apps/server/test/http-contract-fixtures.test.ts` 重新捕获并与已提交的夹具比较，不一致时失败并提示重新生成的命令：`WEAVE_UPDATE_HTTP_CONTRACT=1 pnpm --filter @weave/server exec vitest run --root ../.. --config vitest.config.ts apps/server/test/http-contract-fixtures.test.ts && pnpm format`（生成的 JSON 需要再格式化）。
 - Studio 测试：`apps/studio/test/http-contract.test.ts` 以相对路径导入这些 JSON（只读数据，不导入任何 TS 或 `@weave/*` 代码，边界规则不变），把它们作为桩 `fetch` 的响应，调用 Studio 真实的客户端（`createWorkspaceApi`、`listAgentExecutions`、`getAgentExecution`、`observeAgentExecution`、`getExecutionQueue`、`observeExecutionQueue`、`subscribeApprovals`、`getAgentTaskTree`、`getAgentTask`），因此同时校验手写 schema 与帧分发逻辑。另有四个漂移用例（多出字段、缺少字段、字段改名）确认解析会失败。
 - 场景：父会话委派一个 workspace 任务，子任务的 `write_file` 停在待审批状态（得到审批列表、审批 SSE 快照和任务视图）；另一个会话中一个执行停在 Provider，另有两个排队项（得到队列快照、队列 SSE 帧），释放后读取该执行的事件帧与状态帧和完成态快照。
 
