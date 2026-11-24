@@ -755,7 +755,14 @@ consistent with every other Runtime tool. The design is in
   call. It runs `$SHELL -c` (PowerShell on Windows) in a directory inside the
   Workspace with stdin closed, merges and trims output to its first 4 KB and
   last 24 KB, stops the whole process group on timeout or cancellation, and
-  removes `WEAVE_*` and credential-like variables from the environment.
+  removes `WEAVE_*` and credential-like variables from the environment. Input
+  requires `risk` (`low` or `high`) and `riskReason` (1 to 200 characters)
+  declared by the model; a missing or invalid value is a recoverable
+  `tool-invalid-arguments` error. In `trust` mode the call asks when it hits the
+  deny list (never overridden by the declaration), otherwise runs when it hits
+  the exact allow list, otherwise follows the declaration (`high` asks). `ask`
+  and `yolo` ignore the declaration. The Approval summary carries `risk`,
+  `riskReason` and `askReason`.
 
 `ToolApprovalRequirement.summarize(input, context)` may be asynchronous and
 receives the execution context, so protected tools can validate their input and

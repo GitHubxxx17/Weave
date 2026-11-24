@@ -214,12 +214,20 @@ export interface CommandApprovalSummary {
   /** Working directory relative to the project folder. */
   readonly cwd: string;
   readonly timeoutMs: number;
+  /** Risk the model declared for the command, when the Server recorded it. */
+  readonly risk?: 'low' | 'high' | undefined;
+  readonly riskReason?: string | undefined;
+  /** Why the command asks in trust mode: deny list hit or declared high risk. */
+  readonly askReason?: 'denylist' | 'declared-high' | 'undeclared' | undefined;
 }
 
 const commandSummarySchema = z.object({
   command: z.string(),
   cwd: z.string(),
   timeoutMs: z.number(),
+  risk: z.enum(['low', 'high']).optional(),
+  riskReason: z.string().optional(),
+  askReason: z.enum(['denylist', 'declared-high', 'undeclared']).optional(),
 });
 
 export function readCommandSummary(approval: ApprovalRequest): CommandApprovalSummary | undefined {

@@ -3,12 +3,85 @@ import type { ToolPermissionMode } from './tool-types.js';
 /** Approval outcome the pipeline applies to one protected tool call. */
 export type ApprovalRiskDecision = 'auto' | 'ask';
 
+/** Risk level the model declares for a `run_command` call. */
+export type DeclaredCommandRisk = 'low' | 'high';
+
+/** Why a `run_command` call asks for Approval in `trust` mode. */
+export type CommandAskReason = 'denylist' | 'declared-high' | 'undeclared';
+
 /**
- * Commands that delete data, touch the network, or escalate privilege. In
- * `trust` mode these still require Approval; other commands run directly.
+ * Deny list: commands that delete data, touch the network, or escalate
+ * privilege. In `trust` mode these always require Approval, whatever risk the
+ * model declared.
  */
 const dangerousCommandPattern =
   /\b(sudo|rm|rmdir|mkfs|dd|shutdown|reboot|kill|pkill|chmod|chown|curl|wget|nc|ssh|scp)\b|\bgit\s+(push|reset|clean)\b|\b(npm|pnpm|yarn)\s+publish\b/i;
+
+/**
+ * Allow list for `trust` mode, matched on program plus subcommand (token
+ * prefix). Further arguments are accepted unless they hit
+ * `unsafeAllowListArguments`.
+ */
+const allowListedCommands: readonly (readonly string[])[] = [
+  ['ls'],
+  ['pwd'],
+  ['cat'],
+  ['head'],
+  ['tail'],
+  ['wc'],
+  ['rg'],
+  ['grep'],
+  ['git', 'status'],
+  ['git', 'diff'],
+  ['git', 'log'],
+  ['git', 'show'],
+  ['pnpm', 'test'],
+  ['pnpm', 'lint'],
+  ['pnpm', 'typecheck'],
+  ['pnpm', 'build'],
+  ['npm', 'test'],
+  ['npx', 'vitest'],
+  ['tsc', '--noEmit'],
+];
+
+/** Arguments that make an allow-listed program run other programs or write files. */
+const unsafeAllowListArguments = /^(--pre(=.*)?|--output(=.*)?|--ext-diff|--textconv)$/;
+
+/**
+ * Shell syntax that can chain, redirect, substitute or indirectly run another
+ * command. A command containing any of these never matches the allow list.
+ */
+const shellMetacharacterPattern = /;|&|\||>|<|\$\(|`|\n|\r|\beval\b|\b(sh|bash)\s+-c\b/;
+
+/** Whether a command line is a plain allow-listed command. */
+export function isAllowListedCommand(command: string): boolean {
+  if (shellMetacharacterPattern.test(command)) {
+    return false;
+  }
+  const tokens = command.trim().split(/\s+/);
+  if (tokens.some((token) => unsafeAllowListArguments.test(token))) {
+    return false;
+  }
+  return allowListedCommands.some((entry) => entry.every((word, index) => tokens[index] === word));
+}
+
+/**
+ * Decides whether a `run_command` call asks in `trust` mode and why. `null`
+ * means it runs directly. The deny list wins over the allow list, which wins
+ * over the model's declaration.
+ */
+export function commandAskReason(command: string, risk: unknown): CommandAskReason | null {
+  if (dangerousCommandPattern.test(command)) {
+    return 'denylist';
+  }
+  if (isAllowListedCommand(command)) {
+    return null;
+  }
+  if (risk === 'high') {
+    return 'declared-high';
+  }
+  return risk === 'low' ? null : 'undeclared';
+}
 
 function readStringField(input: unknown, key: string): string {
   if (typeof input === 'object' && input !== null) {
@@ -26,7 +99,11 @@ function readStringField(input: unknown, key: string): string {
  */
 export function classifyApprovalRisk(operation: string, input: unknown): ApprovalRiskDecision {
   if (operation === 'shell.run_command') {
-    return dangerousCommandPattern.test(readStringField(input, 'command')) ? 'ask' : 'auto';
+    const risk =
+      typeof input === 'object' && input !== null
+        ? (input as Record<string, unknown>).risk
+        : undefined;
+    return commandAskReason(readStringField(input, 'command'), risk) === null ? 'auto' : 'ask';
   }
   if (operation === 'workspace.write_file' || operation === 'workspace.edit_file') {
     return 'auto';
