@@ -120,6 +120,17 @@ function renderDetails(approval: ApprovalRequest): ReactElement | null {
         <p className="approval-meta">
           工作目录 <code>{command.cwd}</code> · 超时 {formatDuration(command.timeoutMs)}
         </p>
+        {command.risk === undefined ? null : (
+          <p className="approval-meta">
+            模型声明风险：{command.risk === 'high' ? '高' : '低'}
+            {command.riskReason === undefined ? '' : `（${command.riskReason}）`}
+            {command.askReason === 'denylist'
+              ? ' · 询问原因：命中危险命令名单'
+              : command.askReason === 'declared-high'
+                ? ' · 询问原因：模型声明为高风险'
+                : ''}
+          </p>
+        )}
         <pre className="approval-code" tabIndex={0}>
           {command.command}
         </pre>

@@ -322,6 +322,26 @@ describe('ApprovalPanel', () => {
     expect(document.querySelector('.approval-card-content')).toBeNull();
   });
 
+  it('shows the declared risk, reason and why a command asks', () => {
+    const declared: ApprovalRequest = {
+      ...pendingCommand,
+      inputSummary: {
+        command: 'rm -rf dist',
+        cwd: '.',
+        timeoutMs: 120_000,
+        risk: 'low',
+        riskReason: '只清理构建产物',
+        askReason: 'denylist',
+      },
+    };
+    render(<ApprovalPanel pending={[declared]} onDecide={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: '展开' }));
+
+    const text = document.querySelector('.approval-card-content')?.textContent ?? '';
+    expect(text).toContain('模型声明风险：低（只清理构建产物）');
+    expect(text).toContain('询问原因：命中危险命令名单');
+  });
+
   it('shows the diff of an edit with added and removed lines marked', () => {
     render(<ApprovalPanel pending={[pendingEdit]} onDecide={vi.fn()} />);
 
