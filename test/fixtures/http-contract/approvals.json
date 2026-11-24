@@ -1,0 +1,57 @@
+{
+  "list": {
+    "approvals": [
+      {
+        "approvalId": "00000000-0000-4000-8000-000000000028",
+        "toolCallId": "call-contract",
+        "toolName": "write_file",
+        "operation": "workspace.write_file",
+        "summary": "写入 Workspace 文件 review.txt",
+        "risk": "high",
+        "inputSummary": {
+          "path": "review.txt",
+          "bytes": 6,
+          "lines": 1,
+          "overwrite": false,
+          "createdDirectories": []
+        },
+        "sessionId": "00000000-0000-4000-8000-000000000003",
+        "executionId": "00000000-0000-4000-8000-000000000009",
+        "turnId": "00000000-0000-4000-8000-000000000010",
+        "status": "pending",
+        "createdAt": "2026-11-24T00:00:00.000Z",
+        "expiresAt": "2026-11-24T00:00:00.000Z"
+      }
+    ]
+  },
+  "frames": [
+    {
+      "event": "approval.snapshot",
+      "data": {
+        "approvals": [
+          {
+            "approvalId": "00000000-0000-4000-8000-000000000028",
+            "toolCallId": "call-contract",
+            "toolName": "write_file",
+            "operation": "workspace.write_file",
+            "summary": "写入 Workspace 文件 review.txt",
+            "risk": "high",
+            "inputSummary": {
+              "path": "review.txt",
+              "bytes": 6,
+              "lines": 1,
+              "overwrite": false,
+              "createdDirectories": []
+            },
+            "sessionId": "00000000-0000-4000-8000-000000000003",
+            "executionId": "00000000-0000-4000-8000-000000000009",
+            "turnId": "00000000-0000-4000-8000-000000000010",
+            "status": "pending",
+            "createdAt": "2026-11-24T00:00:00.000Z",
+            "expiresAt": "2026-11-24T00:00:00.000Z"
+          }
+        ]
+      }
+    }
+  ]
+}

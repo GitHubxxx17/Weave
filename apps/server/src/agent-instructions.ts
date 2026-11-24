@@ -214,7 +214,7 @@ export function createAgentInstructions(options: {
         );
       } else if (permissionMode === 'trust') {
         sections.push(
-          `权限：当前是"信任"模式。本会话内常规改动会自动执行，只有高风险操作（删除、git push、sudo、联网等）才需要用户确认${sandboxNote}。`,
+          `权限：当前是"信任"模式。本会话内文件改动会自动执行；run_command 中只读命令和常见测试构建命令直接执行，删除、git push、sudo、联网等危险命令一定需要用户确认，其他命令按你声明的 risk 判断：high 时需要确认，low 时直接执行。调用 run_command 必须声明 risk（low 或 high）和 riskReason；会删除或覆盖数据、联网、改权限、影响工作区外文件的命令必须声明 high${sandboxNote}。`,
         );
       } else {
         sections.push(

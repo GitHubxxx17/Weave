@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { parseSseFrame } from '../agent/agent-stream.js';
+import { readSseStream, type SseFrame } from '../../lib/sse.js';
 import { executionRetryDelayMs } from '../agent/agent-execution-client.js';
 import { runtimeApiUrl } from '../runtime/runtime-bridge.js';
 
@@ -44,11 +44,7 @@ export interface ApprovalStreamOptions {
   readonly retryDelayMs?: number;
 }
 
-function dispatch(frame: string, handlers: ApprovalStreamHandlers): void {
-  const parsed = parseSseFrame(frame);
-  if (parsed === null) {
-    return;
-  }
+function dispatch(parsed: SseFrame, handlers: ApprovalStreamHandlers): void {
   let data: unknown;
   try {
     data = JSON.parse(parsed.data) as unknown;
@@ -110,31 +106,12 @@ export async function subscribeApprovals(
       });
       if (response.ok && response.body !== null) {
         attempt = 0;
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        try {
-          for (;;) {
-            const chunk = await reader.read();
-            if (chunk.done) {
-              break;
-            }
-            buffer += decoder.decode(chunk.value, { stream: true });
-            let match = /\r?\n\r?\n/.exec(buffer);
-            while (match !== null) {
-              if (match.index > maxFrameChars) {
-                throw new Error('approval stream frame too large');
-              }
-              dispatch(buffer.slice(0, match.index), handlers);
-              buffer = buffer.slice(match.index + match[0].length);
-              match = /\r?\n\r?\n/.exec(buffer);
-            }
-            if (buffer.length > maxFrameChars) {
-              throw new Error('approval stream frame too large');
-            }
-          }
-        } finally {
-          await reader.cancel().catch(() => undefined);
+        for await (const frame of readSseStream(response, {
+          maxFrameChars,
+          maxBufferChars: maxFrameChars,
+          signal: options.signal,
+        })) {
+          dispatch(frame, handlers);
         }
       }
     } catch {
@@ -237,12 +214,20 @@ export interface CommandApprovalSummary {
   /** Working directory relative to the project folder. */
   readonly cwd: string;
   readonly timeoutMs: number;
+  /** Risk the model declared for the command, when the Server recorded it. */
+  readonly risk?: 'low' | 'high' | undefined;
+  readonly riskReason?: string | undefined;
+  /** Why the command asks in trust mode: deny list hit or declared high risk. */
+  readonly askReason?: 'denylist' | 'declared-high' | 'undeclared' | undefined;
 }
 
 const commandSummarySchema = z.object({
   command: z.string(),
   cwd: z.string(),
   timeoutMs: z.number(),
+  risk: z.enum(['low', 'high']).optional(),
+  riskReason: z.string().optional(),
+  askReason: z.enum(['denylist', 'declared-high', 'undeclared']).optional(),
 });
 
 export function readCommandSummary(approval: ApprovalRequest): CommandApprovalSummary | undefined {

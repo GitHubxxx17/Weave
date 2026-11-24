@@ -255,7 +255,11 @@ describe('Default Agent Workspace file tools', () => {
       const folder = await createTemporaryFolder();
       const { run, broker } = await createAgentApp(
         [
-          toolCallScript('call-cmd', 'run_command', { command: 'echo hello-from-command' }),
+          toolCallScript('call-cmd', 'run_command', {
+            risk: 'low',
+            riskReason: 'test',
+            command: 'echo hello-from-command',
+          }),
           finalText,
         ],
         folder,

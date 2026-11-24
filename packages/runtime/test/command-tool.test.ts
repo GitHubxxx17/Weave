@@ -106,7 +106,12 @@ describe.skipIf(process.platform === 'win32')('run_command', () => {
     const execution = pipeline.execute({
       toolCallId: 'command-1',
       name: 'run_command',
-      arguments: JSON.stringify({ command: 'echo hi', cwd: 'pkg' }),
+      arguments: JSON.stringify({
+        risk: 'low',
+        riskReason: 'test',
+        command: 'echo hi',
+        cwd: 'pkg',
+      }),
     });
     const pending = (await waitForApproval(approvalBroker, execution))!;
 
@@ -121,10 +126,71 @@ describe.skipIf(process.platform === 'win32')('run_command', () => {
     await expect(execution).rejects.toMatchObject({ code: 'tool-approval-rejected' });
   });
 
+  it('returns tool-invalid-arguments when risk or riskReason is missing or invalid', async () => {
+    const root = await createWorkspace();
+    const { pipeline } = createPipeline(root);
+
+    for (const args of [
+      { command: 'echo hi' },
+      { command: 'echo hi', risk: 'low' },
+      { command: 'echo hi', risk: 'medium', riskReason: 'x' },
+      { command: 'echo hi', risk: 'low', riskReason: '' },
+      { command: 'echo hi', risk: 'low', riskReason: 'x'.repeat(201) },
+    ]) {
+      await expect(
+        pipeline.execute({
+          toolCallId: 'invalid',
+          name: 'run_command',
+          arguments: JSON.stringify(args),
+          permissionMode: 'yolo',
+        }),
+      ).rejects.toMatchObject({ code: 'tool-invalid-arguments' });
+    }
+  });
+
+  it('in trust mode runs allow-listed and low-risk commands and asks for denied or high-risk ones', async () => {
+    const root = await createWorkspace();
+    const { approvalBroker, pipeline } = createPipeline(root);
+
+    const run = (command: string, risk: 'low' | 'high') =>
+      pipeline.execute({
+        toolCallId: 'trust',
+        name: 'run_command',
+        arguments: JSON.stringify({ command, risk, riskReason: 'test' }),
+        permissionMode: 'trust',
+      });
+
+    await expect(run('ls', 'high')).resolves.toMatchObject({ content: expect.any(String) });
+    await expect(run('echo unknown', 'low')).resolves.toMatchObject({
+      content: expect.stringContaining('unknown'),
+    });
+    expect(approvalBroker.list()).toHaveLength(0);
+
+    const denied = run('rm -rf nothing', 'low');
+    const deniedPending = (await waitForApproval(approvalBroker, denied))!;
+    expect(deniedPending.inputSummary).toMatchObject({
+      risk: 'low',
+      riskReason: 'test',
+      askReason: 'denylist',
+    });
+    approvalBroker.reject(deniedPending.approvalId);
+    await expect(denied).rejects.toMatchObject({ code: 'tool-approval-rejected' });
+
+    const high = run('echo unknown', 'high');
+    const highPending = (await waitForApproval(approvalBroker, high))!;
+    expect(highPending.inputSummary).toMatchObject({ risk: 'high', askReason: 'declared-high' });
+    approvalBroker.reject(highPending.approvalId);
+    await expect(high).rejects.toMatchObject({ code: 'tool-approval-rejected' });
+  });
+
   it('returns the exit code and merged output without failing on a non-zero exit', async () => {
     const root = await createWorkspace();
 
-    const output = await runApproved(root, { command: 'echo out; echo err 1>&2; exit 3' });
+    const output = await runApproved(root, {
+      risk: 'low',
+      riskReason: 'test',
+      command: 'echo out; echo err 1>&2; exit 3',
+    });
 
     expect(output).toMatch(
       /^\$ echo out; echo err 1>&2; exit 3\nexit code: 3 · \d+\.\d s\n--- 输出 ---\n/,
@@ -137,6 +203,8 @@ describe.skipIf(process.platform === 'win32')('run_command', () => {
     const root = await createWorkspace();
 
     const output = await runApproved(root, {
+      risk: 'low',
+      riskReason: 'test',
       command: "pwd; printf '\\033[31mred\\033[0m\\n'",
       cwd: 'pkg',
     });
@@ -155,7 +223,7 @@ describe.skipIf(process.platform === 'win32')('run_command', () => {
       pipeline.execute({
         toolCallId: 'outside',
         name: 'run_command',
-        arguments: JSON.stringify({ command: 'ls', cwd: '..' }),
+        arguments: JSON.stringify({ risk: 'low', riskReason: 'test', command: 'ls', cwd: '..' }),
       }),
     ).rejects.toMatchObject({
       cause: expect.objectContaining({ code: 'workspace-file-outside-root' }),
@@ -164,7 +232,12 @@ describe.skipIf(process.platform === 'win32')('run_command', () => {
       pipeline.execute({
         toolCallId: 'file',
         name: 'run_command',
-        arguments: JSON.stringify({ command: 'ls', cwd: 'file.txt' }),
+        arguments: JSON.stringify({
+          risk: 'low',
+          riskReason: 'test',
+          command: 'ls',
+          cwd: 'file.txt',
+        }),
       }),
     ).rejects.toMatchObject({
       cause: expect.objectContaining({ code: 'workspace-file-not-directory' }),
@@ -175,14 +248,18 @@ describe.skipIf(process.platform === 'win32')('run_command', () => {
   it('hides Weave settings and credential variables from the command', async () => {
     const root = await createWorkspace();
 
-    const output = await runApproved(root, { command: 'env' }, () => ({
-      PATH: process.env.PATH,
-      WEAVE_LLM_PROVIDERS: '[{"apiKey":"provider-secret"}]',
-      OPENAI_API_KEY: 'sk-test-secret',
-      GITHUB_TOKEN: 'ghp-test-secret',
-      DB_PASSWORD: 'db-test-secret',
-      NORMAL_VAR: 'visible',
-    }));
+    const output = await runApproved(
+      root,
+      { risk: 'low', riskReason: 'test', command: 'env' },
+      () => ({
+        PATH: process.env.PATH,
+        WEAVE_LLM_PROVIDERS: '[{"apiKey":"provider-secret"}]',
+        OPENAI_API_KEY: 'sk-test-secret',
+        GITHUB_TOKEN: 'ghp-test-secret',
+        DB_PASSWORD: 'db-test-secret',
+        NORMAL_VAR: 'visible',
+      }),
+    );
 
     expect(output).toContain('NORMAL_VAR=visible');
     expect(output).toContain('NO_COLOR=1');
@@ -194,6 +271,8 @@ describe.skipIf(process.platform === 'win32')('run_command', () => {
     const root = await createWorkspace();
 
     const output = await runApproved(root, {
+      risk: 'low',
+      riskReason: 'test',
       command: 'i=0; while [ $i -lt 3000 ]; do echo "line $i of the long output"; i=$((i+1)); done',
     });
 
@@ -208,6 +287,8 @@ describe.skipIf(process.platform === 'win32')('run_command', () => {
 
     const started = Date.now();
     const output = await runApproved(root, {
+      risk: 'low',
+      riskReason: 'test',
       command: 'sleep 30 & echo "child $!"; wait',
       timeoutMs: 1000,
     });
@@ -223,7 +304,11 @@ describe.skipIf(process.platform === 'win32')('run_command', () => {
   it('stops background processes that outlive the shell', async () => {
     const root = await createWorkspace();
 
-    const output = await runApproved(root, { command: 'sleep 30 & echo "child $!"' });
+    const output = await runApproved(root, {
+      risk: 'low',
+      riskReason: 'test',
+      command: 'sleep 30 & echo "child $!"',
+    });
 
     expect(output).toContain('exit code: 0');
     expect(output).toContain('已将其结束');
@@ -240,7 +325,7 @@ describe.skipIf(process.platform === 'win32')('run_command', () => {
     const execution = pipeline.execute({
       toolCallId: 'command-1',
       name: 'run_command',
-      arguments: JSON.stringify({ command: 'sleep 30' }),
+      arguments: JSON.stringify({ risk: 'low', riskReason: 'test', command: 'sleep 30' }),
       signal: controller.signal,
     });
     const pending = (await waitForApproval(approvalBroker, execution))!;

@@ -17,12 +17,17 @@ import {
   defaultCommandShell,
   filterCommandEnvironment,
 } from './shell-environment.js';
+import { commandAskReason, type DeclaredCommandRisk } from './approval-risk.js';
 import type { ToolDefinition, ToolExecutionContext } from './tool-types.js';
 
 /** Input accepted by the `run_command` Runtime tool. */
 export interface RunCommandInput {
   /** Shell command line. */
   readonly command: string;
+  /** Risk the model declares for this command; required in every permission mode. */
+  readonly risk: DeclaredCommandRisk;
+  /** Short reason for the declared risk (1 to 200 characters). */
+  readonly riskReason: string;
   /** Workspace-relative working directory; defaults to the Workspace root. */
   readonly cwd?: string | undefined;
   /** Milliseconds before the command is stopped. */
@@ -34,6 +39,8 @@ export const maxCommandTimeoutMs = 600_000;
 
 export const runCommandInputSchema: z.ZodType<RunCommandInput> = z.object({
   command: z.string().min(1).max(20_000),
+  risk: z.enum(['low', 'high']),
+  riskReason: z.string().min(1).max(200),
   cwd: z.string().min(1).optional(),
   timeoutMs: z.number().int().min(1000).max(maxCommandTimeoutMs).optional(),
 });
@@ -381,11 +388,22 @@ export function createCommandTool(
       'and output. Use it for tests, builds, linters, git and other commands that finish on ' +
       'their own; do not start servers or watch mode. stdin is closed, and long output keeps ' +
       'only its beginning and end. Depending on the session permission mode, the user may be ' +
-      'asked to approve the command. It does not run in a sandbox.',
+      'asked to approve the command. It does not run in a sandbox. You must declare risk ' +
+      '("low" or "high") and a short riskReason. Declare "high" for any command that deletes or ' +
+      'overwrites data, uses the network, changes permissions, or affects files outside the ' +
+      'project folder. In trust mode a high declaration asks the user; known dangerous commands ' +
+      'always ask regardless of the declaration.',
     parameters: {
       type: 'object',
       properties: {
         command: { type: 'string', minLength: 1 },
+        risk: {
+          type: 'string',
+          enum: ['low', 'high'],
+          description:
+            'high for commands that delete or overwrite data, use the network, change permissions or touch files outside the project folder',
+        },
+        riskReason: { type: 'string', minLength: 1, maxLength: 200 },
         cwd: {
           type: 'string',
           minLength: 1,
@@ -393,7 +411,7 @@ export function createCommandTool(
         },
         timeoutMs: { type: 'integer', minimum: 1000, maximum: maxCommandTimeoutMs },
       },
-      required: ['command'],
+      required: ['command', 'risk', 'riskReason'],
       additionalProperties: false,
     },
     inputSchema: runCommandInputSchema,
@@ -408,6 +426,9 @@ export function createCommandTool(
             command: input.command,
             cwd: cwd.relativePath,
             timeoutMs: effectiveTimeout(options, input),
+            risk: input.risk,
+            riskReason: input.riskReason,
+            askReason: commandAskReason(input.command, input.risk) ?? undefined,
           },
         };
       },
