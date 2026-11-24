@@ -10,8 +10,88 @@ import { z } from 'zod';
 import { createScenario } from './performance/scenario.mjs';
 // @ts-expect-error Node-only acceptance tooling is JavaScript, outside production TS contracts.
 import { startPerformanceFixture } from './performance/fixture.mjs';
+// @ts-expect-error Node-only acceptance tooling is JavaScript, outside production TS contracts.
+import { performanceSamples, runnerOptionsSchema } from './performance/sample-fixtures.mjs';
 
 describe('Studio performance fixture', () => {
+  it('starts fresh fixture state for every repeat and closes each sample', async () => {
+    const urls: string[] = [];
+    for await (const sample of performanceSamples({
+      counts: [100],
+      variants: ['markdown'],
+      streamVariants: ['text'],
+      repeats: 2,
+    })) {
+      urls.push(sample.fixture.url);
+      const detail = await (await fetch(`${sample.fixture.url}/sessions/benchmark-history`)).json();
+      expect(detail.messages).toHaveLength(100);
+      expect(sample.fixture.metadata).toMatchObject({
+        logicalMessageCount: 100,
+        rawHistoryRecordCount: 100,
+        historyBytes: expect.any(Number),
+        fixtureHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        executionApiMode: 'agent-execution-service',
+      });
+      const accepted = await fetch(`${sample.fixture.url}/sessions/benchmark-history/executions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          requestId: 'same-request',
+          input: {
+            userMessage: { role: 'user', content: [{ type: 'text', text: 'sample' }] },
+            provider: 'mock',
+            model: 'benchmark',
+            permissionMode: 'ask',
+          },
+        }),
+      });
+      const receipt = await accepted.json();
+      await (
+        await fetch(
+          `${sample.fixture.url}/sessions/benchmark-history/executions/${receipt.executionId}/events?after=${encodeURIComponent(receipt.cursor)}`,
+        )
+      ).text();
+    }
+    expect(urls).toHaveLength(2);
+    for (const url of urls) await expect(fetch(url)).rejects.toThrow();
+  });
+
+  it('validates the runner matrix before opening browsers', () => {
+    expect(
+      runnerOptionsSchema.parse({
+        counts: ['100'],
+        variants: ['tools'],
+        repeats: '3',
+        output: 'raw.json',
+      }).streamVariants,
+    ).toEqual(['text']);
+    expect(() =>
+      runnerOptionsSchema.parse({
+        counts: [3],
+        variants: ['tools'],
+        repeats: 3,
+        output: 'raw.json',
+      }),
+    ).toThrow();
+    expect(() =>
+      runnerOptionsSchema.parse({
+        counts: [100],
+        variants: ['tools'],
+        streamVariants: ['unknown'],
+        repeats: 3,
+        output: 'raw.json',
+      }),
+    ).toThrow();
+    expect(() =>
+      runnerOptionsSchema.parse({
+        counts: [100],
+        variants: ['tools'],
+        repeats: 6,
+        output: 'raw.json',
+      }),
+    ).toThrow();
+  });
+
   it('bounds inputs and creates paired history with exactly the requested visible messages', () => {
     expect(() => createScenario(3, 'markdown')).toThrow();
     expect(() => createScenario(50_000, 'markdown')).toThrow();
@@ -152,6 +232,143 @@ describe('Studio performance fixture', () => {
       await fixture.close();
     }
   });
+  it('streams tool lifecycle through ExecutionService and restores the durable identities and summaries', async () => {
+    const fixture = await startPerformanceFixture({
+      count: 100,
+      variant: 'tools',
+      streamVariant: 'tools',
+      intervalMs: 0,
+    });
+    try {
+      const response = await fetch(`${fixture.url}/sessions/benchmark-history/executions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          requestId: 'tool-stream',
+          input: {
+            userMessage: { role: 'user', content: [{ type: 'text', text: 'benchmark request' }] },
+            provider: 'mock',
+            model: 'benchmark',
+            permissionMode: 'ask',
+          },
+        }),
+      });
+      expect(response.status).toBe(202);
+      const receipt = agentExecutionSnapshotSchema.parse(await response.json());
+      const path = `${fixture.url}/sessions/benchmark-history/executions/${receipt.executionId}`;
+      const body = await (
+        await fetch(`${path}/events?after=${encodeURIComponent(receipt.cursor)}`)
+      ).text();
+      const frames = body
+        .trim()
+        .split('\n\n')
+        .map((frame) => agentExecutionFrameSchema.parse(JSON.parse(frame.split('\ndata: ')[1]!)));
+      const events = frames.flatMap((frame) => (frame.type === 'event' ? [frame.event] : []));
+      expect(events.filter((event) => event.type === 'reasoning-delta')).toHaveLength(10);
+      const calls = events.flatMap((event) => (event.type === 'tool-call' ? [event.toolCall] : []));
+      expect(calls).toHaveLength(10);
+      expect(
+        events.filter((event) => event.type.startsWith('tool-')).map((event) => event.type),
+      ).toEqual(
+        Array.from({ length: 10 }, () => ['tool-call', 'tool-executing', 'tool-result']).flat(),
+      );
+      const results = events.flatMap((event) =>
+        event.type === 'tool-result' ? [event.result] : [],
+      );
+      expect(results.map((result) => result.toolCallId)).toEqual(calls.map((call) => call.id));
+      const detail = await (await fetch(`${fixture.url}/sessions/benchmark-history`)).json();
+      const turn = detail.turns.find(
+        (value: { turnId: string }) => value.turnId === receipt.turnId,
+      );
+      expect(turn).toMatchObject({
+        status: 'completed',
+        toolCalls: 10,
+        failedToolCalls: 0,
+        toolResults: calls.map((call) => ({ toolCallId: call.id, status: 'completed' })),
+      });
+      expect(turn.modelSteps).toHaveLength(11);
+      const durable = detail.messages.filter(
+        (message: { turnId: string }) => message.turnId === receipt.turnId,
+      );
+      expect(
+        durable
+          .filter((message: { role: string }) => message.role === 'tool')
+          .map((message: { toolCallId: string; content: unknown }) => ({
+            toolCallId: message.toolCallId,
+            content: message.content,
+          })),
+      ).toEqual(
+        results.map((result) => ({
+          toolCallId: result.toolCallId,
+          content: [{ type: 'text', text: result.content }],
+        })),
+      );
+      expect(
+        durable.flatMap((message: { toolCalls?: unknown[] }) => message.toolCalls ?? []),
+      ).toEqual(calls);
+      expect(
+        durable
+          .filter((message: { role: string }) => message.role === 'assistant')
+          .flatMap((message: { content: { type: string; text: string }[] }) =>
+            message.content.filter((part) => part.type === 'text').map((part) => part.text),
+          )
+          .join(''),
+      ).toBe(
+        Array.from(
+          { length: 100 },
+          (_, index) => `benchmark-stream-${String(index).padStart(3, '0')} `,
+        ).join(''),
+      );
+      expect(agentExecutionSnapshotSchema.parse(await (await fetch(path)).json())).toMatchObject({
+        status: 'completed',
+        events: [],
+      });
+      const reloaded = await (await fetch(`${fixture.url}/sessions/benchmark-history`)).json();
+      expect(reloaded).toEqual(detail);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it('fingerprints stream workload and serves the bounded 500-tool diagnostic', async () => {
+    const text = await startPerformanceFixture({ count: 2, variant: 'tools', intervalMs: 0 });
+    const tools = await startPerformanceFixture({
+      count: 2,
+      variant: 'tools',
+      streamVariant: 'tools',
+      historyShape: 'mixed',
+      toolsPerTurn: 500,
+      intervalMs: 0,
+    });
+    try {
+      expect(text.metadata.fixtureHash).not.toBe(tools.metadata.fixtureHash);
+      expect(tools.metadata).toMatchObject({ logicalMessageCount: 2, rawHistoryRecordCount: 502 });
+      const detail = await (await fetch(`${tools.url}/sessions/benchmark-history`)).json();
+      expect(detail.messages[1].toolCalls.at(-1).id).toBe('benchmark-call-0-499');
+      expect(detail.turns[0].toolResults).toHaveLength(500);
+      expect((await fetch(`${tools.url}/sessions/benchmark-history/events`)).status).toBe(404);
+      expect(
+        (await fetch(`${tools.url}/sessions/benchmark-history/executions/unknown`)).status,
+      ).toBe(404);
+    } finally {
+      await text.close();
+      await tools.close();
+    }
+  });
+
+  it('bounds optional mixed-height and dense-tool diagnostics while preserving old scenarios', () => {
+    const old = createScenario(100, 'tools');
+    expect(createScenario(100, 'tools', { historyShape: 'standard', toolsPerTurn: 1 })).toEqual(
+      old,
+    );
+    const dense = createScenario(2, 'tools', { historyShape: 'mixed', toolsPerTurn: 500 });
+    expect(dense.sessions[0].messages).toHaveLength(502);
+    expect(dense.sessions[0].messages[1].toolCalls).toHaveLength(500);
+    expect(dense.sessions[0].turns[0].toolCalls).toBe(500);
+    expect(() => createScenario(100, 'tools', { toolsPerTurn: 501 })).toThrow();
+    expect(() => createScenario(100, 'markdown', { historyShape: 'unknown' })).toThrow();
+  });
+
   it('exposes queue replacement state used by production Studio without changing benchmark work', async () => {
     const fixture = await startPerformanceFixture({ count: 100, variant: 'markdown' });
     try {

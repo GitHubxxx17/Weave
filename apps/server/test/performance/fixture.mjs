@@ -1,4 +1,6 @@
 import { once } from 'node:events';
+import { createHash } from 'node:crypto';
+import { Buffer } from 'node:buffer';
 import { createServer } from 'node:http';
 import { readFile, realpath } from 'node:fs/promises';
 import { dirname, extname, resolve, relative, sep } from 'node:path';
@@ -9,11 +11,15 @@ import {
   AgentExecutionError,
   agentExecutionLaunchSchema,
   createAgentExecutionService,
+  createAgentRunner,
+  createToolPipeline,
+  createToolRegistry,
 } from '@weave/runtime';
 import { createInMemorySessionEventStore, projectSession } from '@weave/session';
 import { createScenario, scenarioOptionsSchema } from './scenario.mjs';
 
 const optionsSchema = scenarioOptionsSchema.extend({
+  streamVariant: z.enum(['text', 'tools']).default('text'),
   intervalMs: z.number().int().min(0).max(100).default(20),
   distDirectory: z.string().min(1).optional(),
 });
@@ -42,7 +48,10 @@ const mime = {
 /** Test-only server. Its only disk reads are built Studio assets inside dist. */
 export async function startPerformanceFixture(input) {
   const options = optionsSchema.parse(input);
-  const scenario = createScenario(options.count, options.variant);
+  const scenario = createScenario(options.count, options.variant, {
+    historyShape: options.historyShape,
+    toolsPerTurn: options.toolsPerTurn,
+  });
   const dist = resolve(
     options.distDirectory ??
       resolve(dirname(fileURLToPath(import.meta.url)), '../../../studio/dist'),
@@ -54,6 +63,52 @@ export async function startPerformanceFixture(input) {
     ]);
   // Exercise the actual ownership/replay boundary without a real provider or
   // workspace. Only the existing 100 paced text deltas make up the workload.
+  const textRunner = {
+    run(request) {
+      return {
+        async *[Symbol.asyncIterator]() {
+          const { turnId, userMessageId, executionId } = request.executionIdentity;
+          await store.append(request.sessionId, [
+            {
+              type: 'message.created',
+              payload: { messageId: userMessageId, message: request.userMessage },
+            },
+            { type: 'turn.started', payload: { turnId, userMessageId, executionId } },
+          ]);
+          let text = '';
+          let failure;
+          try {
+            for (let index = 0; index < 100; index++) {
+              request.signal.throwIfAborted();
+              const token = `benchmark-stream-${String(index).padStart(3, '0')} `;
+              text += token;
+              yield { type: 'text-delta', text: token };
+              await delay(options.intervalMs, undefined, { signal: request.signal });
+            }
+          } catch (error) {
+            failure = error;
+          }
+          const status = request.signal.aborted ? 'cancelled' : failure ? 'failed' : 'completed';
+          await store.append(request.sessionId, [
+            ...(text
+              ? [
+                  {
+                    type: 'message.created',
+                    payload: {
+                      messageId: `${turnId}-assistant`,
+                      message: { role: 'assistant', content: [{ type: 'text', text }] },
+                    },
+                  },
+                ]
+              : []),
+            { type: 'turn.completed', payload: { turnId, status } },
+          ]);
+          if (failure) throw failure;
+          yield { type: 'completed', turnId };
+        },
+      };
+    },
+  };
   const executions = createAgentExecutionService({
     sessionStore: store,
     admit: async (sessionId) => {
@@ -62,51 +117,66 @@ export async function startPerformanceFixture(input) {
     },
     runner: {
       run(request) {
-        return {
-          async *[Symbol.asyncIterator]() {
-            const { turnId, userMessageId, executionId } = request.executionIdentity;
-            await store.append(request.sessionId, [
-              {
-                type: 'message.created',
-                payload: { messageId: userMessageId, message: request.userMessage },
-              },
-              { type: 'turn.started', payload: { turnId, userMessageId, executionId } },
-            ]);
-            let text = '';
-            let failure;
-            try {
-              for (let index = 0; index < 100; index++) {
-                request.signal.throwIfAborted();
-                const token = `benchmark-stream-${String(index).padStart(3, '0')} `;
-                text += token;
-                yield { type: 'text-delta', text: token };
-                await delay(options.intervalMs, undefined, { signal: request.signal });
-              }
-            } catch (error) {
-              failure = error;
-            }
-            const status = request.signal.aborted ? 'cancelled' : failure ? 'failed' : 'completed';
-            await store.append(request.sessionId, [
-              ...(text
-                ? [
-                    {
-                      type: 'message.created',
-                      payload: {
-                        messageId: `${turnId}-assistant`,
-                        message: { role: 'assistant', content: [{ type: 'text', text }] },
-                      },
-                    },
-                  ]
-                : []),
-              { type: 'turn.completed', payload: { turnId, status } },
-            ]);
-            if (failure) throw failure;
-            yield { type: 'completed', turnId };
+        if (options.streamVariant === 'text') return textRunner.run(request);
+        const registry = createToolRegistry();
+        registry.register({
+          name: 'benchmark_echo',
+          description: 'Return a bounded synthetic result without I/O',
+          parameters: {
+            type: 'object',
+            properties: { index: { type: 'integer' } },
+            required: ['index'],
           },
-        };
+          inputSchema: z.strictObject({ index: z.number().int().min(0).max(9) }),
+          readOnly: true,
+          execute: ({ index }) => `benchmark-result-${String(index).padStart(3, '0')}`,
+        });
+        let step = 0;
+        const runner = createAgentRunner({
+          sessionStore: store,
+          toolRegistry: registry,
+          toolPipeline: createToolPipeline({ registry }),
+          maxSteps: 11,
+          llm: {
+            async *stream(_request, streamOptions) {
+              const current = step++;
+              for (
+                let index = Math.max(0, (current - 1) * 10);
+                current > 0 && index < current * 10;
+                index++
+              ) {
+                streamOptions.signal.throwIfAborted();
+                yield {
+                  type: 'text-delta',
+                  text: `benchmark-stream-${String(index).padStart(3, '0')} `,
+                };
+                await delay(options.intervalMs, undefined, { signal: streamOptions.signal });
+              }
+              if (current < 10) {
+                yield {
+                  type: 'reasoning-delta',
+                  text: `benchmark-reasoning-${String(current).padStart(3, '0')} `,
+                };
+                yield {
+                  type: 'tool-call-start',
+                  id: `benchmark-stream-call-${current}`,
+                  name: 'benchmark_echo',
+                };
+                yield {
+                  type: 'tool-call-delta',
+                  id: `benchmark-stream-call-${current}`,
+                  argumentsDelta: JSON.stringify({ index: current }),
+                };
+              }
+              yield { type: 'finish', reason: current < 10 ? 'tool-call' : 'stop' };
+            },
+          },
+        });
+        return runner.run(request);
       },
     },
   });
+
   const sockets = new Set();
   let closing;
   const json = (response, data, status = 200) => {
@@ -279,10 +349,19 @@ export async function startPerformanceFixture(input) {
             ...turn,
             provider: 'mock',
             model: 'benchmark',
-            modelSteps: [],
-            toolCalls: 0,
-            failedToolCalls: 0,
-            toolResults: [],
+            modelSteps: turn.steps
+              .filter((step) => step.kind === 'model')
+              .map((step) => ({
+                startedAt: step.startedAt,
+                ...(step.completedAt ? { completedAt: step.completedAt } : {}),
+              })),
+            toolCalls: turn.toolCalls.length,
+            failedToolCalls: turn.toolResults.filter((result) => result.status === 'failed').length,
+            toolResults: turn.toolResults.map(({ toolCallId, status, errorCode }) => ({
+              toolCallId,
+              status,
+              ...(errorCode ? { errorCode } : {}),
+            })),
           })),
         ],
       });
@@ -374,6 +453,21 @@ export async function startPerformanceFixture(input) {
   const address = server.address();
   return {
     url: `http://127.0.0.1:${address.port}`,
+    metadata: {
+      logicalMessageCount: options.count,
+      rawHistoryRecordCount: scenario.sessions[0].messages.length,
+      historyBytes: Buffer.byteLength(JSON.stringify(scenario.sessions[0])),
+      fixtureHash: createHash('sha256')
+        .update(
+          JSON.stringify({
+            scenario,
+            streamVariant: options.streamVariant,
+            intervalMs: options.intervalMs,
+          }),
+        )
+        .digest('hex'),
+      executionApiMode: 'agent-execution-service',
+    },
     async close() {
       closing ??= (async () => {
         executions.closeSync();

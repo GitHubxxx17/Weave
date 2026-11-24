@@ -1,0 +1,3 @@
+(node:69631) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+{"destination":"/Users/mi/.codex/worktrees/agent-tasks/weave/docs/learning/artifacts/2026-11-24-studio-rendering/conversation-final-acceptance.json","passed":true,"failures":[],"errors":[]}

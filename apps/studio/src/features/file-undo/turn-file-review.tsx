@@ -1,11 +1,15 @@
-import { lazy, Suspense, useRef, useState, type ReactElement } from 'react';
 import {
-  fetchTurnFileReview,
-  undoTurnFiles,
-  type FileUndoReview,
-  type UndoFileResult,
-  type UndoRequest,
-} from './file-undo-api.js';
+  lazy,
+  Suspense,
+  useRef,
+  useState,
+  useMemo,
+  useCallback,
+  useSyncExternalStore,
+  type ReactElement,
+} from 'react';
+import type { UndoFileResult, UndoRequest } from './file-undo-api.js';
+import { createTurnFileReviewStore, type TurnFileReviewStore } from './turn-file-review-store.js';
 import './turn-file-review.css';
 const CapturedDiff = lazy(() =>
   import('../files-tree/file-diff-view.js').then((module) => ({
@@ -38,76 +42,36 @@ export interface TurnFileReviewProps {
   readonly sessionId: string;
   readonly turnId: string;
   readonly disabled: boolean;
+  readonly store?: TurnFileReviewStore;
 }
 export function TurnFileReview({
   projectId,
   sessionId,
   turnId,
   disabled,
+  store: providedStore,
 }: TurnFileReviewProps): ReactElement {
-  const [open, setOpen] = useState(false);
-  const [review, setReview] = useState<FileUndoReview>();
-  const [results, setResults] = useState<readonly UndoFileResult[]>();
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [confirm, setConfirm] = useState(false);
-  const [pending, setPending] = useState<UndoRequest>();
-  const [diffPath, setDiffPath] = useState<string>();
-  const busy = useRef(false);
-  async function load() {
-    if (busy.current) return;
-    busy.current = true;
-    setLoading(true);
-    setError('');
-    try {
-      const next = await fetchTurnFileReview(projectId, sessionId, turnId);
-      setReview(next);
-      setResults(next.operation?.results);
-      if (next.operation?.status === 'pending')
-        setPending({
-          turnId,
-          operationId: next.operation.operationId,
-          requestId: next.operation.requestId,
-        });
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : '加载失败');
-    } finally {
-      busy.current = false;
-      setLoading(false);
-    }
-  }
+  const [localStore] = useState(createTurnFileReviewStore);
+  const store = providedStore ?? localStore;
+  const owner = useMemo(() => ({ projectId, sessionId, turnId }), [projectId, sessionId, turnId]);
+  const subscribe = useCallback(
+    (listener: () => void) => store.subscribe(owner, listener),
+    [store, owner],
+  );
+  const getSnapshot = useCallback(() => store.get(owner), [store, owner]);
+  const { open, review, results, error, loading, confirm, pending, diffPath } =
+    useSyncExternalStore(subscribe, getSnapshot);
+  const disabledRef = useRef(disabled);
+  disabledRef.current = disabled;
+  const setConfirm = (value: boolean) => store.set(owner, { confirm: value });
+  const setOpen = (value: boolean) => store.set(owner, { open: value });
+  const setDiffPath = (value: string | undefined) => store.set(owner, { diffPath: value });
   function show() {
-    setOpen(!open);
-    if (!open && review === undefined) void load();
+    store.set(owner, { open: !open });
+    if (!open && review === undefined) void store.load(owner);
   }
-  async function restore(input?: UndoRequest) {
-    if (busy.current || disabled) return;
-    busy.current = true;
-    setLoading(true);
-    setError('');
-    const exact = input ??
-      pending ?? {
-        turnId,
-        operationId: review?.operation?.operationId ?? crypto.randomUUID(),
-        requestId: crypto.randomUUID(),
-      };
-    setPending(exact);
-    try {
-      const response = await undoTurnFiles(projectId, sessionId, exact);
-      setResults(response.results);
-      setPending(undefined);
-      setConfirm(false);
-      try {
-        setReview(await fetchTurnFileReview(projectId, sessionId, turnId));
-      } catch {
-        setError('结果已保存，重新打开审阅可刷新文件记录。');
-      }
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : '请求未完成，请重试原请求');
-    } finally {
-      busy.current = false;
-      setLoading(false);
-    }
+  function restore(input?: UndoRequest) {
+    return store.restore(owner, () => disabledRef.current, input);
   }
   const diff = review?.files.find((file) => file.path === diffPath);
   const canRestore = review?.files.some((file) => file.unavailableReason === undefined) ?? false;

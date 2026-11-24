@@ -30,7 +30,12 @@ export async function probeStudio(page, options) {
     );
   const ready = async (count) => {
     await page.waitForFunction(
-      (expected) => document.querySelectorAll('.timeline-item').length === expected,
+      (expected) => {
+        const timeline = document.querySelector('[data-session-id][data-logical-count]');
+        return timeline
+          ? Number(timeline.dataset.logicalCount) === expected
+          : document.querySelectorAll('.timeline-item').length === expected;
+      },
       count,
       { timeout: 120000 },
     );
@@ -41,6 +46,10 @@ export async function probeStudio(page, options) {
     await page.goto(options.url, { waitUntil: 'domcontentloaded', timeout: 120000 });
     await ready(options.count);
     const coldReadyMs = Date.now() - coldStarted;
+    const readinessMode = (await page.locator('[data-session-id][data-logical-count]').count())
+      ? 'logical-selector'
+      : 'full-dom';
+    const mountedMessageCount = await page.locator('.timeline-item').count();
     const cold = await page.evaluate(() => ({
       domElements: document.querySelectorAll('*').length,
       heapBytes: performance.memory?.usedJSHeapSize ?? null,
@@ -58,6 +67,33 @@ export async function probeStudio(page, options) {
       .click();
     await ready(options.count);
     const warmSwitchMs = Date.now() - switchStarted;
+    const sentinels = [];
+    for (const index of [0, Math.floor(options.count / 2), options.count - 1]) {
+      const row =
+        readinessMode === 'full-dom'
+          ? page.locator('.timeline-item').nth(index)
+          : page.locator(`[data-message-index="${index}"]`);
+      if (readinessMode === 'logical-selector' && !(await row.count())) {
+        const query =
+          index % 2 === 0 ? `问题 ${Math.floor(index / 2)}：` : `分析 ${Math.floor(index / 2)}`;
+        const search = page.getByRole('searchbox', { name: '查找会话内容', exact: true });
+        await (
+          (await search.count())
+            ? search
+            : page.getByRole('textbox', { name: '查找会话内容', exact: true })
+        ).fill(query);
+        await page
+          .getByRole('button', { name: new RegExp(query) })
+          .first()
+          .click();
+      }
+      await row.scrollIntoViewIfNeeded();
+      const text = await row.textContent();
+      const expected =
+        index % 2 === 0 ? `问题 ${Math.floor(index / 2)}：` : `分析 ${Math.floor(index / 2)}`;
+      if (!text.includes(expected)) throw new Error(`Sentinel ${index} content differs`);
+      sentinels.push({ index, text });
+    }
     const input = page.getByRole('textbox', { name: '发送消息', exact: true });
     await input.fill('benchmark request');
     await page.evaluate(() => {
@@ -105,11 +141,45 @@ export async function probeStudio(page, options) {
     ).join(' ');
     if (last.trim() !== expected)
       throw new Error('Stream content is missing, duplicated or out of order');
+    const response = await page.request.get(`${options.url}/sessions/benchmark-history`);
+    const durable = await response.json();
+    const turn = durable.turns.at(-1);
+    const durableMessages = durable.messages.filter((message) => message.turnId === turn.turnId);
+    const durableText = durableMessages
+      .filter((message) => message.role === 'assistant')
+      .flatMap((message) =>
+        message.content.filter((part) => part.type === 'text').map((part) => part.text),
+      )
+      .join('');
+    if (durableText.trim() !== expected)
+      throw new Error('Durable stream text differs from rendered text');
+    const durableCalls = durableMessages.flatMap((message) => message.toolCalls ?? []);
+    const toolIds = durableCalls.map((call) => call.id);
+    const expectedToolIds =
+      options.streamVariant === 'tools'
+        ? Array.from({ length: 10 }, (_, index) => `benchmark-stream-call-${index}`)
+        : [];
+    if (
+      JSON.stringify(toolIds) !== JSON.stringify(expectedToolIds) ||
+      turn.toolCalls !== expectedToolIds.length ||
+      JSON.stringify(turn.toolResults) !==
+        JSON.stringify(expectedToolIds.map((toolCallId) => ({ toolCallId, status: 'completed' })))
+    )
+      throw new Error('Durable tool identities, order or summaries differ');
     if (errors.length) throw new Error(`Browser errors: ${errors.join('; ')}`);
+    await ready(options.count + 2);
     const visibleMessages = await page.locator('.timeline-item').count();
-    if (visibleMessages !== options.count + 2)
+    if (readinessMode === 'full-dom' && visibleMessages !== options.count + 2)
       throw new Error('Live message count differs from fixture');
     return {
+      readinessMode,
+      logicalMessageCount: options.count,
+      mountedMessageCount,
+      sentinels,
+      finalText: last,
+      durableText,
+      toolIds,
+      durableToolResults: turn.toolResults,
       coldReadyMs,
       warmSwitchMs,
       inputFillToPaintMs,

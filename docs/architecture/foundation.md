@@ -1397,3 +1397,18 @@ fences consuming work synchronously before commit. These are cooperative local
 checks, not a new OS sandbox or atomic filesystem snapshot. Contracts precede code
 in [the retrieval design](../superpowers/specs/2026-11-23-hybrid-retrieval-design.md)
 and [ADR 0013](../adr/0013-explicit-project-retrieval.md).
+
+## Studio conversation rendering
+
+Studio 的长会话渲染优化保持浏览器端边界：Studio 仍只通过 Server HTTP/SSE
+读取和控制执行，不导入 `@weave/*`、Node 或 Electron。会话展示的 immutable
+projection、按 session 订阅的 live store、按帧发布和动态高度窗口只控制呈现，
+不能截断 Session durable history、改变 Agent 上下文、执行工具、取消 producer
+或绕过审批。完整的 execution、Turn、tool 和 durable watermark 身份仍由现有
+HTTP/SSE 与 Session read model 验证；窗口交互通过完整 `sessionId + turnId +
+ toolCallId` 解析目标，文件撤销请求由 App 生命周期 controller 持有。
+
+本阶段先交付长会话与工具流渲染，再从合并后的最新 main 单独交付文件树窗口。
+两项均须使用同一生产浏览器 fixture 保存原始 before/after 数据，区分逻辑消息数、
+挂载行数、DOM、输入代理、长任务和锚点证据；未实测的性能目标不写成结果。正式
+设计、合同和停止扩大范围见 [Studio rendering design](../superpowers/specs/2026-11-24-studio-rendering-design.md)。

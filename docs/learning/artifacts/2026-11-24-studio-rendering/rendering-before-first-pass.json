@@ -1,0 +1,2167 @@
+{
+  "schemaVersion": 2,
+  "harnessHash": "4ac523f296408bec67a6a0dd15b434631c08ed15dc8411cbcfb489b300452f38",
+  "recordedAt": "2026-11-24T03:46:00.279Z",
+  "commit": "f2190032ab23165cbac94f19bbb5ed3e84abb283",
+  "dirty": true,
+  "platform": "darwin",
+  "arch": "arm64",
+  "cpu": "Apple M4 Pro",
+  "node": "v24.4.0",
+  "viewport": {
+    "width": 1440,
+    "height": 1000
+  },
+  "build": "production",
+  "browserIsolation": "fresh-browser-per-sample",
+  "assetCache": "no-store",
+  "synthetic": true,
+  "stream": {
+    "deltas": 100,
+    "intervalMs": 20
+  },
+  "options": {
+    "counts": [100, 1000, 5000],
+    "variants": ["markdown", "tools"],
+    "streamVariants": ["text"],
+    "repeats": 3,
+    "output": "dist/performance/rendering-before.json"
+  },
+  "browser": "158.0.8127.36",
+  "samples": [
+    {
+      "count": 100,
+      "variant": "markdown",
+      "streamVariant": "text",
+      "repeat": 0,
+      "logicalMessageCount": 100,
+      "rawHistoryRecordCount": 100,
+      "historyBytes": 43238,
+      "fixtureHash": "8ded28a812eebdcdae9bb6e7287c9ee98b07ecc81cf8e2ec3aab02337a01b04c",
+      "executionApiMode": "agent-execution-service",
+      "readinessMode": "full-dom",
+      "mountedMessageCount": 100,
+      "sentinels": [
+        {
+          "index": 0,
+          "text": "你11月23日 08:00问题 0：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 50,
+          "text": "你11月23日 08:00问题 25：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 99,
+          "text": "Weave Agent11月23日 08:00分析 49\n保留稳定的会话归属，检查请求结束时的状态。\n\n验证输入\n处理取消\n\nconst state = { status: \"completed\", count: 42 };\n\n结果与持久化记录一致。benchmark · 模型未返回用量 · 0 毫秒11月23日 08:00审阅本轮文件"
+        }
+      ],
+      "finalText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099",
+      "coldReadyMs": 131,
+      "warmSwitchMs": 100,
+      "inputFillToPaintMs": 45,
+      "streamReadyMs": 2283,
+      "cold": {
+        "domElements": 2306,
+        "heapBytes": 13869849,
+        "longTasks": [],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36"
+      },
+      "stream": {
+        "frameGapsMs": [
+          16.69999999999999, 16.599999999999966, 16.700000000000045, 16.69999999999999,
+          16.599999999999966, 16.600000000000023, 16.700000000000045, 16.699999999999932,
+          16.600000000000023, 16.799999999999955, 16.600000000000023, 16.700000000000045,
+          16.699999999999932, 16.600000000000023, 16.700000000000045, 16.699999999999932,
+          16.600000000000023, 16.700000000000045, 16.699999999999932, 16.600000000000023,
+          16.600000000000023, 16.799999999999955, 16.600000000000023, 16.700000000000045,
+          16.699999999999932, 16.600000000000023, 16.600000000000023, 16.700000000000045,
+          16.699999999999932, 16.600000000000023, 16.700000000000045, 16.699999999999932,
+          16.700000000000045, 16.600000000000023, 16.699999999999932, 16.700000000000045,
+          16.600000000000023, 16.700000000000045, 16.699999999999818, 16.600000000000136,
+          16.700000000000045, 16.59999999999991, 16.700000000000045, 16.700000000000045,
+          16.699999999999818, 16.600000000000136, 16.700000000000045, 16.699999999999818,
+          16.600000000000136, 16.700000000000045, 16.59999999999991, 16.700000000000045,
+          16.700000000000045, 16.59999999999991, 16.700000000000045, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.700000000000045, 16.59999999999991,
+          16.700000000000045, 16.700000000000045, 16.59999999999991, 16.799999999999955,
+          16.600000000000136, 16.699999999999818, 16.600000000000136, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.700000000000045, 16.59999999999991,
+          16.700000000000045, 16.700000000000045, 16.59999999999991, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.700000000000045, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.59999999999991, 16.799999999999955,
+          16.600000000000136, 16.59999999999991, 16.700000000000045, 16.700000000000045,
+          16.700000000000045, 16.699999999999818, 16.5, 16.700000000000045, 16.799999999999955,
+          16.600000000000136, 16.700000000000045, 16.59999999999991, 16.700000000000045,
+          16.700000000000045, 16.59999999999991, 16.699999999999818, 16.600000000000364,
+          16.699999999999818, 16.699999999999818, 16.600000000000364, 16.699999999999818,
+          16.699999999999818, 16.600000000000364, 16.699999999999818, 16.59999999999991,
+          16.700000000000273, 16.699999999999818, 16.699999999999818, 16.700000000000273,
+          16.59999999999991, 16.59999999999991, 16.800000000000182, 16.59999999999991,
+          16.699999999999818, 16.600000000000364, 16.699999999999818, 16.699999999999818,
+          16.600000000000364, 16.699999999999818, 16.59999999999991, 16.700000000000273,
+          16.59999999999991, 16.699999999999818, 16.700000000000273, 16.699999999999818, 50,
+          16.699999999999818, 16.600000000000364, 16.699999999999818, 16.699999999999818,
+          16.700000000000273, 16.59999999999991
+        ],
+        "longTasks": [],
+        "domElements": 2339,
+        "heapBytes": 20661856
+      },
+      "visibleMessages": 102
+    },
+    {
+      "count": 100,
+      "variant": "markdown",
+      "streamVariant": "text",
+      "repeat": 1,
+      "logicalMessageCount": 100,
+      "rawHistoryRecordCount": 100,
+      "historyBytes": 43238,
+      "fixtureHash": "8ded28a812eebdcdae9bb6e7287c9ee98b07ecc81cf8e2ec3aab02337a01b04c",
+      "executionApiMode": "agent-execution-service",
+      "readinessMode": "full-dom",
+      "mountedMessageCount": 100,
+      "sentinels": [
+        {
+          "index": 0,
+          "text": "你11月23日 08:00问题 0：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 50,
+          "text": "你11月23日 08:00问题 25：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 99,
+          "text": "Weave Agent11月23日 08:00分析 49\n保留稳定的会话归属，检查请求结束时的状态。\n\n验证输入\n处理取消\n\nconst state = { status: \"completed\", count: 42 };\n\n结果与持久化记录一致。benchmark · 模型未返回用量 · 0 毫秒11月23日 08:00审阅本轮文件"
+        }
+      ],
+      "finalText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099",
+      "coldReadyMs": 142,
+      "warmSwitchMs": 100,
+      "inputFillToPaintMs": 46,
+      "streamReadyMs": 2282,
+      "cold": {
+        "domElements": 2306,
+        "heapBytes": 13885360,
+        "longTasks": [],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36"
+      },
+      "stream": {
+        "frameGapsMs": [
+          16.69999999999999, 16.600000000000023, 16.80000000000001, 16.599999999999966,
+          16.700000000000045, 16.599999999999966, 16.69999999999999, 16.600000000000023,
+          16.700000000000045, 16.699999999999932, 16.700000000000045, 16.600000000000023,
+          16.59999999999991, 16.800000000000068, 16.600000000000023, 16.699999999999932,
+          16.700000000000045, 16.600000000000023, 16.699999999999932, 16.600000000000023,
+          16.700000000000045, 16.699999999999932, 16.600000000000023, 16.700000000000045,
+          16.699999999999932, 16.700000000000045, 16.600000000000023, 16.699999999999932,
+          16.700000000000045, 16.600000000000023, 16.59999999999991, 16.800000000000068,
+          16.600000000000023, 16.699999999999932, 16.600000000000023, 16.700000000000045,
+          16.699999999999932, 16.600000000000023, 16.700000000000045, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.59999999999991, 16.700000000000045,
+          16.700000000000045, 16.700000000000045, 16.59999999999991, 16.700000000000045,
+          16.59999999999991, 16.799999999999955, 16.600000000000136, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.700000000000045, 16.59999999999991,
+          16.700000000000045, 16.700000000000045, 16.699999999999818, 16.600000000000136,
+          16.700000000000045, 16.59999999999991, 16.700000000000045, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.59999999999991, 16.799999999999955,
+          16.600000000000136, 16.700000000000045, 16.59999999999991, 16.700000000000045,
+          16.59999999999991, 16.799999999999955, 16.600000000000136, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.59999999999991, 16.700000000000045,
+          16.700000000000045, 16.59999999999991, 16.700000000000045, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.700000000000045, 16.59999999999991,
+          16.700000000000045, 16.700000000000045, 16.59999999999991, 16.700000000000045,
+          16.700000000000045, 16.59999999999991, 16.700000000000045, 16.59999999999991,
+          16.700000000000045, 16.700000000000045, 16.699999999999818, 16.600000000000364,
+          16.699999999999818, 16.59999999999991, 16.700000000000273, 16.699999999999818,
+          16.699999999999818, 16.600000000000364, 16.699999999999818, 16.699999999999818,
+          16.600000000000364, 16.699999999999818, 16.699999999999818, 16.700000000000273,
+          16.59999999999991, 16.699999999999818, 16.600000000000364, 16.699999999999818,
+          16.699999999999818, 16.600000000000364, 16.699999999999818, 16.699999999999818,
+          16.600000000000364, 16.699999999999818, 16.59999999999991, 16.700000000000273,
+          16.699999999999818, 16.59999999999991, 16.700000000000273, 16.59999999999991,
+          16.799999999999727, 49.90000000000009, 16.700000000000273, 16.699999999999818,
+          16.59999999999991, 16.700000000000273, 16.699999999999818, 16.59999999999991
+        ],
+        "longTasks": [],
+        "domElements": 2339,
+        "heapBytes": 20663919
+      },
+      "visibleMessages": 102
+    },
+    {
+      "count": 100,
+      "variant": "markdown",
+      "streamVariant": "text",
+      "repeat": 2,
+      "logicalMessageCount": 100,
+      "rawHistoryRecordCount": 100,
+      "historyBytes": 43238,
+      "fixtureHash": "8ded28a812eebdcdae9bb6e7287c9ee98b07ecc81cf8e2ec3aab02337a01b04c",
+      "executionApiMode": "agent-execution-service",
+      "readinessMode": "full-dom",
+      "mountedMessageCount": 100,
+      "sentinels": [
+        {
+          "index": 0,
+          "text": "你11月23日 08:00问题 0：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 50,
+          "text": "你11月23日 08:00问题 25：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 99,
+          "text": "Weave Agent11月23日 08:00分析 49\n保留稳定的会话归属，检查请求结束时的状态。\n\n验证输入\n处理取消\n\nconst state = { status: \"completed\", count: 42 };\n\n结果与持久化记录一致。benchmark · 模型未返回用量 · 0 毫秒11月23日 08:00审阅本轮文件"
+        }
+      ],
+      "finalText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099",
+      "coldReadyMs": 141,
+      "warmSwitchMs": 99,
+      "inputFillToPaintMs": 47,
+      "streamReadyMs": 2284,
+      "cold": {
+        "domElements": 2306,
+        "heapBytes": 13931209,
+        "longTasks": [],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36"
+      },
+      "stream": {
+        "frameGapsMs": [
+          16.600000000000023, 16.69999999999999, 16.69999999999999, 16.69999999999999,
+          16.600000000000023, 16.69999999999999, 16.600000000000023, 16.699999999999932,
+          16.600000000000023, 16.700000000000045, 16.699999999999932, 16.600000000000023,
+          16.700000000000045, 16.699999999999932, 16.600000000000023, 16.700000000000045,
+          16.699999999999932, 16.600000000000023, 16.700000000000045, 16.699999999999932,
+          16.700000000000045, 16.700000000000045, 16.5, 16.799999999999955, 16.600000000000023,
+          16.699999999999932, 16.700000000000045, 16.600000000000023, 16.699999999999932,
+          16.600000000000023, 16.700000000000045, 16.699999999999932, 16.600000000000023,
+          16.700000000000045, 16.699999999999932, 16.700000000000045, 16.600000000000023,
+          16.699999999999932, 16.600000000000136, 16.699999999999818, 16.700000000000045,
+          16.600000000000136, 16.699999999999818, 16.700000000000045, 16.600000000000136,
+          16.699999999999818, 16.700000000000045, 16.600000000000136, 16.699999999999818,
+          16.600000000000136, 16.700000000000045, 16.699999999999818, 16.700000000000045,
+          16.600000000000136, 16.699999999999818, 16.700000000000045, 16.600000000000136,
+          16.699999999999818, 16.700000000000045, 16.700000000000045, 16.59999999999991,
+          16.600000000000136, 16.799999999999955, 16.59999999999991, 16.700000000000045,
+          16.700000000000045, 16.59999999999991, 16.700000000000045, 16.700000000000045,
+          16.59999999999991, 16.600000000000136, 16.700000000000045, 16.699999999999818,
+          16.600000000000136, 16.700000000000045, 16.699999999999818, 16.700000000000045,
+          16.700000000000045, 16.59999999999991, 16.600000000000136, 16.700000000000045,
+          16.59999999999991, 16.799999999999955, 16.700000000000045, 16.59999999999991,
+          16.600000000000136, 16.700000000000045, 16.699999999999818, 16.700000000000045,
+          16.600000000000136, 16.699999999999818, 16.600000000000136, 16.700000000000045,
+          16.699999999999818, 16.700000000000045, 16.600000000000136, 16.699999999999818,
+          16.600000000000136, 16.700000000000045, 16.699999999999818, 16.59999999999991,
+          16.700000000000273, 16.699999999999818, 16.700000000000273, 16.59999999999991,
+          16.59999999999991, 16.800000000000182, 16.59999999999991, 16.699999999999818,
+          16.59999999999991, 16.700000000000273, 16.59999999999991, 16.699999999999818,
+          16.700000000000273, 16.699999999999818, 16.700000000000273, 16.59999999999991,
+          16.699999999999818, 16.59999999999991, 16.700000000000273, 16.699999999999818,
+          16.700000000000273, 16.59999999999991, 16.699999999999818, 16.59999999999991,
+          16.700000000000273, 16.699999999999818, 16.59999999999991, 16.600000000000364,
+          16.699999999999818, 50.09999999999991, 16.59999999999991, 16.700000000000273,
+          16.699999999999818, 16.59999999999991, 16.700000000000273
+        ],
+        "longTasks": [],
+        "domElements": 2339,
+        "heapBytes": 19340309
+      },
+      "visibleMessages": 102
+    },
+    {
+      "count": 1000,
+      "variant": "markdown",
+      "streamVariant": "text",
+      "repeat": 0,
+      "logicalMessageCount": 1000,
+      "rawHistoryRecordCount": 1000,
+      "historyBytes": 435842,
+      "fixtureHash": "6318a7fabbf6ea1ded94f4a4d8bdb18412ab95e2b2bb72b853562ae2df719f67",
+      "executionApiMode": "agent-execution-service",
+      "readinessMode": "full-dom",
+      "mountedMessageCount": 1000,
+      "sentinels": [
+        {
+          "index": 0,
+          "text": "你11月23日 08:00问题 0：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 500,
+          "text": "你11月23日 08:00问题 250：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 999,
+          "text": "Weave Agent11月23日 08:00分析 499\n保留稳定的会话归属，检查请求结束时的状态。\n\n验证输入\n处理取消\n\nconst state = { status: \"completed\", count: 42 };\n\n结果与持久化记录一致。benchmark · 模型未返回用量 · 0 毫秒11月23日 08:00审阅本轮文件"
+        }
+      ],
+      "finalText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099",
+      "coldReadyMs": 291,
+      "warmSwitchMs": 456,
+      "inputFillToPaintMs": 388,
+      "streamReadyMs": 3005,
+      "cold": {
+        "domElements": 20306,
+        "heapBytes": 22433038,
+        "longTasks": [
+          {
+            "start": 71.89999997615814,
+            "duration": 128
+          },
+          {
+            "start": 200.39999997615814,
+            "duration": 67
+          }
+        ],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36"
+      },
+      "stream": {
+        "frameGapsMs": [
+          33.299999999999955, 50, 83.40000000000009, 16.59999999999991, 16.600000000000136,
+          16.799999999999955, 50, 16.59999999999991, 16.700000000000045, 33.299999999999955,
+          33.299999999999955, 50, 50.100000000000136, 49.899999999999864, 50.100000000000136,
+          49.899999999999864, 83.40000000000009, 50, 50, 50, 50, 49.90000000000009, 50, 50, 50, 50,
+          50, 50, 33.40000000000009, 49.899999999999636, 50, 50.100000000000364, 50,
+          33.29999999999973, 50, 50, 50, 50, 33.30000000000018, 50, 50, 50, 33.40000000000009,
+          49.899999999999636, 50.100000000000364, 50, 33.19999999999982, 50.09999999999991,
+          49.90000000000009, 50, 33.30000000000018, 50.09999999999991, 33.29999999999973, 50,
+          116.70000000000027, 16.59999999999991, 16.699999999999818, 100, 33.30000000000018,
+          16.699999999999818, 16.700000000000273, 333.2999999999997
+        ],
+        "longTasks": [
+          {
+            "start": 1358.5,
+            "duration": 60
+          },
+          {
+            "start": 3720.7999999523163,
+            "duration": 50
+          }
+        ],
+        "domElements": 20339,
+        "heapBytes": 24885555
+      },
+      "visibleMessages": 1002
+    },
+    {
+      "count": 1000,
+      "variant": "markdown",
+      "streamVariant": "text",
+      "repeat": 1,
+      "logicalMessageCount": 1000,
+      "rawHistoryRecordCount": 1000,
+      "historyBytes": 435842,
+      "fixtureHash": "6318a7fabbf6ea1ded94f4a4d8bdb18412ab95e2b2bb72b853562ae2df719f67",
+      "executionApiMode": "agent-execution-service",
+      "readinessMode": "full-dom",
+      "mountedMessageCount": 1000,
+      "sentinels": [
+        {
+          "index": 0,
+          "text": "你11月23日 08:00问题 0：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 500,
+          "text": "你11月23日 08:00问题 250：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 999,
+          "text": "Weave Agent11月23日 08:00分析 499\n保留稳定的会话归属，检查请求结束时的状态。\n\n验证输入\n处理取消\n\nconst state = { status: \"completed\", count: 42 };\n\n结果与持久化记录一致。benchmark · 模型未返回用量 · 0 毫秒11月23日 08:00审阅本轮文件"
+        }
+      ],
+      "finalText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099",
+      "coldReadyMs": 282,
+      "warmSwitchMs": 433,
+      "inputFillToPaintMs": 390,
+      "streamReadyMs": 2672,
+      "cold": {
+        "domElements": 20306,
+        "heapBytes": 22406878,
+        "longTasks": [
+          {
+            "start": 70.5,
+            "duration": 128
+          },
+          {
+            "start": 199.40000009536743,
+            "duration": 64
+          }
+        ],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36"
+      },
+      "stream": {
+        "frameGapsMs": [
+          33.200000000000045, 50, 83.40000000000009, 16.59999999999991, 16.700000000000045,
+          16.700000000000045, 50, 16.59999999999991, 33.40000000000009, 16.59999999999991,
+          33.40000000000009, 49.899999999999864, 50.100000000000136, 50, 50, 49.899999999999864,
+          100, 33.40000000000009, 50, 66.70000000000005, 49.899999999999864, 33.40000000000009, 50,
+          49.90000000000009, 50, 50.09999999999991, 50, 50, 33.30000000000018, 66.59999999999991,
+          200, 50, 50.09999999999991, 33.30000000000018, 50, 49.899999999999636, 50.100000000000364,
+          50, 50, 49.899999999999636, 33.40000000000009, 50, 50, 50, 50, 33.30000000000018, 50, 50,
+          50, 33.40000000000009, 116.59999999999991, 16.59999999999991, 16.800000000000182,
+          33.29999999999973, 116.59999999999991, 16.700000000000273, 16.699999999999818
+        ],
+        "longTasks": [
+          {
+            "start": 1342.3000000715256,
+            "duration": 62
+          },
+          {
+            "start": 2437.2000000476837,
+            "duration": 56
+          },
+          {
+            "start": 3707.4000000953674,
+            "duration": 51
+          }
+        ],
+        "domElements": 20339,
+        "heapBytes": 67297289
+      },
+      "visibleMessages": 1002
+    },
+    {
+      "count": 1000,
+      "variant": "markdown",
+      "streamVariant": "text",
+      "repeat": 2,
+      "logicalMessageCount": 1000,
+      "rawHistoryRecordCount": 1000,
+      "historyBytes": 435842,
+      "fixtureHash": "6318a7fabbf6ea1ded94f4a4d8bdb18412ab95e2b2bb72b853562ae2df719f67",
+      "executionApiMode": "agent-execution-service",
+      "readinessMode": "full-dom",
+      "mountedMessageCount": 1000,
+      "sentinels": [
+        {
+          "index": 0,
+          "text": "你11月23日 08:00问题 0：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 500,
+          "text": "你11月23日 08:00问题 250：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 999,
+          "text": "Weave Agent11月23日 08:00分析 499\n保留稳定的会话归属，检查请求结束时的状态。\n\n验证输入\n处理取消\n\nconst state = { status: \"completed\", count: 42 };\n\n结果与持久化记录一致。benchmark · 模型未返回用量 · 0 毫秒11月23日 08:00审阅本轮文件"
+        }
+      ],
+      "finalText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099",
+      "coldReadyMs": 292,
+      "warmSwitchMs": 431,
+      "inputFillToPaintMs": 390,
+      "streamReadyMs": 2652,
+      "cold": {
+        "domElements": 20306,
+        "heapBytes": 22392651,
+        "longTasks": [
+          {
+            "start": 70.5,
+            "duration": 129
+          },
+          {
+            "start": 200.19999992847443,
+            "duration": 67
+          }
+        ],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36"
+      },
+      "stream": {
+        "frameGapsMs": [
+          49.90000000000009, 50, 66.70000000000005, 16.59999999999991, 16.799999999999955,
+          16.700000000000045, 33.200000000000045, 16.700000000000045, 16.700000000000045,
+          16.699999999999818, 33.30000000000018, 33.299999999999955, 50, 50, 50, 50, 50,
+          83.29999999999995, 50.09999999999991, 49.90000000000009, 50.09999999999991,
+          49.90000000000009, 50.09999999999991, 49.90000000000009, 50, 50, 50, 33.30000000000018,
+          50, 50.09999999999991, 66.59999999999991, 183.30000000000018, 50, 50, 50, 50,
+          33.399999999999636, 49.90000000000009, 50, 50.09999999999991, 49.90000000000009,
+          50.09999999999991, 33.30000000000018, 49.90000000000009, 50.09999999999991,
+          49.90000000000009, 33.40000000000009, 50, 50, 50, 33.29999999999973, 50.09999999999991,
+          83.30000000000018, 16.59999999999991, 33.30000000000018, 116.69999999999982,
+          16.700000000000273, 16.59999999999991
+        ],
+        "longTasks": [
+          {
+            "start": 1341.8999999761581,
+            "duration": 62
+          },
+          {
+            "start": 2433.899999976158,
+            "duration": 54
+          },
+          {
+            "start": 3697.0999999046326,
+            "duration": 50
+          }
+        ],
+        "domElements": 20339,
+        "heapBytes": 66154960
+      },
+      "visibleMessages": 1002
+    },
+    {
+      "count": 5000,
+      "variant": "markdown",
+      "streamVariant": "text",
+      "repeat": 0,
+      "logicalMessageCount": 5000,
+      "rawHistoryRecordCount": 5000,
+      "historyBytes": 2197342,
+      "fixtureHash": "9b446fc38497118a297f7155785207cf73922e71c5b74447570115641bc72438",
+      "executionApiMode": "agent-execution-service",
+      "readinessMode": "full-dom",
+      "mountedMessageCount": 5000,
+      "sentinels": [
+        {
+          "index": 0,
+          "text": "你11月23日 08:00问题 0：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 2500,
+          "text": "你11月23日 08:00问题 1250：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 4999,
+          "text": "Weave Agent11月23日 08:00分析 2499\n保留稳定的会话归属，检查请求结束时的状态。\n\n验证输入\n处理取消\n\nconst state = { status: \"completed\", count: 42 };\n\n结果与持久化记录一致。benchmark · 模型未返回用量 · 0 毫秒11月23日 08:00审阅本轮文件"
+        }
+      ],
+      "finalText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099",
+      "coldReadyMs": 1023,
+      "warmSwitchMs": 2837,
+      "inputFillToPaintMs": 1684,
+      "streamReadyMs": 6561,
+      "cold": {
+        "domElements": 100306,
+        "heapBytes": 80300023,
+        "longTasks": [
+          {
+            "start": 87.89999997615814,
+            "duration": 622
+          },
+          {
+            "start": 710.2999999523163,
+            "duration": 277
+          },
+          {
+            "start": 1022.2999999523163,
+            "duration": 283
+          }
+        ],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36"
+      },
+      "stream": {
+        "frameGapsMs": [
+          183.30000000000018, 16.699999999999818, 1483.3000000000002, 16.700000000000728,
+          16.69999999999891, 16.600000000000364, 300, 283.2999999999993, 16.700000000000728,
+          266.60000000000036, 283.39999999999964, 266.60000000000036, 316.6999999999989,
+          283.3000000000011, 266.60000000000036, 283.2999999999993, 250, 16.700000000000728,
+          16.69999999999891, 333.3000000000011, 266.6999999999989, 16.600000000000364,
+          1516.7000000000007, 16.599999999998545, 16.700000000000728
+        ],
+        "longTasks": [
+          {
+            "start": 9107.600000023842,
+            "duration": 307
+          },
+          {
+            "start": 9423.5,
+            "duration": 253
+          },
+          {
+            "start": 9706.700000047684,
+            "duration": 260
+          },
+          {
+            "start": 9985.600000023842,
+            "duration": 261
+          },
+          {
+            "start": 10266.299999952316,
+            "duration": 245
+          },
+          {
+            "start": 10576.899999976158,
+            "duration": 259
+          },
+          {
+            "start": 10857.5,
+            "duration": 256
+          },
+          {
+            "start": 11133.700000047684,
+            "duration": 244
+          },
+          {
+            "start": 11401.899999976158,
+            "duration": 260
+          },
+          {
+            "start": 11683.700000047684,
+            "duration": 231
+          },
+          {
+            "start": 11957.100000023842,
+            "duration": 315
+          },
+          {
+            "start": 12344.399999976158,
+            "duration": 223
+          }
+        ],
+        "domElements": 100339,
+        "heapBytes": 318638707
+      },
+      "visibleMessages": 5002
+    },
+    {
+      "count": 5000,
+      "variant": "markdown",
+      "streamVariant": "text",
+      "repeat": 1,
+      "logicalMessageCount": 5000,
+      "rawHistoryRecordCount": 5000,
+      "historyBytes": 2197342,
+      "fixtureHash": "9b446fc38497118a297f7155785207cf73922e71c5b74447570115641bc72438",
+      "executionApiMode": "agent-execution-service",
+      "readinessMode": "full-dom",
+      "mountedMessageCount": 5000,
+      "sentinels": [
+        {
+          "index": 0,
+          "text": "你11月23日 08:00问题 0：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 2500,
+          "text": "你11月23日 08:00问题 1250：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 4999,
+          "text": "Weave Agent11月23日 08:00分析 2499\n保留稳定的会话归属，检查请求结束时的状态。\n\n验证输入\n处理取消\n\nconst state = { status: \"completed\", count: 42 };\n\n结果与持久化记录一致。benchmark · 模型未返回用量 · 0 毫秒11月23日 08:00审阅本轮文件"
+        }
+      ],
+      "finalText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099",
+      "coldReadyMs": 1029,
+      "warmSwitchMs": 2866,
+      "inputFillToPaintMs": 2000,
+      "streamReadyMs": 6519,
+      "cold": {
+        "domElements": 100306,
+        "heapBytes": 80325547,
+        "longTasks": [
+          {
+            "start": 89,
+            "duration": 625
+          },
+          {
+            "start": 714.3000000715256,
+            "duration": 278
+          },
+          {
+            "start": 1027.6000000238419,
+            "duration": 283
+          }
+        ],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36"
+      },
+      "stream": {
+        "frameGapsMs": [
+          183.40000000000055, 16.599999999999454, 1500.000000000001, 16.69999999999891,
+          16.600000000000364, 16.700000000000728, 300, 283.2999999999993, 16.700000000000728,
+          266.59999999999854, 283.40000000000146, 266.59999999999854, 316.60000000000036,
+          283.39999999999964, 250, 283.3000000000011, 266.60000000000036, 16.69999999999891,
+          316.7000000000007, 233.29999999999927, 33.30000000000109, 16.69999999999891,
+          1499.8999999999996, 16.700000000000728, 16.700000000000728
+        ],
+        "longTasks": [
+          {
+            "start": 9143.5,
+            "duration": 312
+          },
+          {
+            "start": 9463.700000047684,
+            "duration": 248
+          },
+          {
+            "start": 9742.600000023842,
+            "duration": 259
+          },
+          {
+            "start": 10020,
+            "duration": 262
+          },
+          {
+            "start": 10301.600000023842,
+            "duration": 242
+          },
+          {
+            "start": 10604.200000047684,
+            "duration": 259
+          },
+          {
+            "start": 10883.900000095367,
+            "duration": 259
+          },
+          {
+            "start": 11163.300000071526,
+            "duration": 242
+          },
+          {
+            "start": 11430.100000023842,
+            "duration": 261
+          },
+          {
+            "start": 11712.300000071526,
+            "duration": 230
+          },
+          {
+            "start": 11977.400000095367,
+            "duration": 307
+          },
+          {
+            "start": 12307.600000023842,
+            "duration": 226
+          }
+        ],
+        "domElements": 100339,
+        "heapBytes": 314774319
+      },
+      "visibleMessages": 5002
+    },
+    {
+      "count": 5000,
+      "variant": "markdown",
+      "streamVariant": "text",
+      "repeat": 2,
+      "logicalMessageCount": 5000,
+      "rawHistoryRecordCount": 5000,
+      "historyBytes": 2197342,
+      "fixtureHash": "9b446fc38497118a297f7155785207cf73922e71c5b74447570115641bc72438",
+      "executionApiMode": "agent-execution-service",
+      "readinessMode": "full-dom",
+      "mountedMessageCount": 5000,
+      "sentinels": [
+        {
+          "index": 0,
+          "text": "你11月23日 08:00问题 0：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 2500,
+          "text": "你11月23日 08:00问题 1250：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 4999,
+          "text": "Weave Agent11月23日 08:00分析 2499\n保留稳定的会话归属，检查请求结束时的状态。\n\n验证输入\n处理取消\n\nconst state = { status: \"completed\", count: 42 };\n\n结果与持久化记录一致。benchmark · 模型未返回用量 · 0 毫秒11月23日 08:00审阅本轮文件"
+        }
+      ],
+      "finalText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099",
+      "coldReadyMs": 1046,
+      "warmSwitchMs": 2855,
+      "inputFillToPaintMs": 1988,
+      "streamReadyMs": 6578,
+      "cold": {
+        "domElements": 100306,
+        "heapBytes": 80105314,
+        "longTasks": [
+          {
+            "start": 89.60000002384186,
+            "duration": 631
+          },
+          {
+            "start": 721.2000000476837,
+            "duration": 285
+          },
+          {
+            "start": 1067.3000000715256,
+            "duration": 293
+          }
+        ],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36"
+      },
+      "stream": {
+        "frameGapsMs": [
+          183.29999999999927, 16.700000000000728, 1516.5, 16.69999999999891, 16.700000000000728,
+          16.700000000000728, 316.59999999999854, 266.60000000000036, 33.399999999999636,
+          266.7000000000007, 283.2999999999993, 266.60000000000036, 316.7000000000007,
+          266.6999999999989, 266.60000000000036, 283.3000000000011, 250, 33.29999999999927,
+          316.7000000000007, 216.6999999999989, 33.30000000000109, 16.69999999999891,
+          1533.2000000000007, 16.69999999999891, 16.700000000000728
+        ],
+        "longTasks": [
+          {
+            "start": 9214.899999976158,
+            "duration": 315
+          },
+          {
+            "start": 9538.5,
+            "duration": 247
+          },
+          {
+            "start": 9815.899999976158,
+            "duration": 263
+          },
+          {
+            "start": 10097.399999976158,
+            "duration": 262
+          },
+          {
+            "start": 10379,
+            "duration": 242
+          },
+          {
+            "start": 10681.800000071526,
+            "duration": 257
+          },
+          {
+            "start": 10959.5,
+            "duration": 257
+          },
+          {
+            "start": 11236.5,
+            "duration": 242
+          },
+          {
+            "start": 11502.700000047684,
+            "duration": 258
+          },
+          {
+            "start": 11781.600000023842,
+            "duration": 225
+          },
+          {
+            "start": 12041.5,
+            "duration": 308
+          },
+          {
+            "start": 12372.5,
+            "duration": 222
+          }
+        ],
+        "domElements": 100339,
+        "heapBytes": 314300294
+      },
+      "visibleMessages": 5002
+    },
+    {
+      "count": 100,
+      "variant": "tools",
+      "streamVariant": "text",
+      "repeat": 0,
+      "logicalMessageCount": 100,
+      "rawHistoryRecordCount": 150,
+      "historyBytes": 89985,
+      "fixtureHash": "9ddc0d63b2165a86c6245cd1513c86ff18cafad47107f75394c06c70a4a4dd76",
+      "executionApiMode": "agent-execution-service",
+      "readinessMode": "full-dom",
+      "mountedMessageCount": 100,
+      "sentinels": [
+        {
+          "index": 0,
+          "text": "你11月23日 08:00问题 0：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 50,
+          "text": "你11月23日 08:00问题 25：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 99,
+          "text": "Weave Agent11月23日 08:001 次工具调用已完成工具调用1 次read_filesrc/component-49.tsx已完成参数{\n  \"path\": \"src/component-49.tsx\"\n}结果export const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\n分析 49\n保留稳定的会话归属，检查请求结束时的状态。\n\n验证输入\n处理取消\n\nconst state = { status: \"completed\", count: 42 };\n\n结果与持久化记录一致。benchmark · 模型未返回用量 · 0 毫秒11月23日 08:00审阅本轮文件"
+        }
+      ],
+      "finalText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099",
+      "coldReadyMs": 137,
+      "warmSwitchMs": 116,
+      "inputFillToPaintMs": 59,
+      "streamReadyMs": 2296,
+      "cold": {
+        "domElements": 4306,
+        "heapBytes": 15173850,
+        "longTasks": [],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36"
+      },
+      "stream": {
+        "frameGapsMs": [
+          16.600000000000023, 16.69999999999999, 16.69999999999999, 16.69999999999999,
+          16.600000000000023, 16.799999999999955, 16.5, 16.700000000000045, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.700000000000045, 16.59999999999991,
+          16.800000000000068, 16.600000000000023, 16.699999999999932, 16.700000000000045,
+          16.600000000000023, 16.59999999999991, 16.800000000000068, 16.600000000000023,
+          16.59999999999991, 16.700000000000045, 16.700000000000045, 16.699999999999932,
+          16.700000000000045, 16.600000000000023, 16.699999999999932, 16.700000000000045, 16.5,
+          16.699999999999932, 16.800000000000068, 16.600000000000023, 16.699999999999932,
+          16.600000000000023, 16.700000000000045, 16.59999999999991, 16.700000000000045,
+          16.700000000000045, 16.700000000000045, 16.699999999999818, 16.600000000000136,
+          16.700000000000045, 16.59999999999991, 16.700000000000045, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.59999999999991, 16.700000000000045,
+          16.700000000000045, 16.59999999999991, 16.700000000000045, 16.59999999999991,
+          16.800000000000182, 16.59999999999991, 16.59999999999991, 16.700000000000045,
+          16.700000000000045, 16.700000000000045, 16.700000000000045, 16.59999999999991,
+          16.700000000000045, 16.59999999999991, 16.700000000000045, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.59999999999991, 16.700000000000045,
+          16.700000000000045, 16.59999999999991, 16.800000000000182, 16.59999999999991,
+          16.700000000000045, 16.59999999999991, 16.700000000000045, 16.59999999999991,
+          16.800000000000182, 16.59999999999991, 16.59999999999991, 16.700000000000045,
+          16.700000000000045, 16.59999999999991, 16.700000000000045, 16.600000000000136,
+          16.799999999999955, 16.59999999999991, 16.700000000000045, 16.59999999999991,
+          16.700000000000045, 16.600000000000136, 33.399999999999864, 16.600000000000136,
+          16.699999999999818, 16.700000000000273, 16.699999999999818, 16.59999999999991,
+          16.700000000000273, 16.699999999999818, 16.59999999999991, 16.700000000000273,
+          16.699999999999818, 16.59999999999991, 16.700000000000273, 16.699999999999818,
+          16.699999999999818, 16.600000000000364, 16.59999999999991, 16.699999999999818,
+          16.700000000000273, 16.699999999999818, 16.59999999999991, 16.700000000000273,
+          16.59999999999991, 16.699999999999818, 16.700000000000273, 16.59999999999991,
+          16.799999999999727, 16.600000000000364, 16.59999999999991, 16.699999999999818,
+          16.700000000000273, 16.59999999999991, 16.699999999999818, 16.700000000000273,
+          16.699999999999818, 16.59999999999991, 16.700000000000273, 16.59999999999991,
+          16.699999999999818, 16.700000000000273, 16.699999999999818, 16.59999999999991,
+          16.700000000000273, 16.699999999999818, 16.59999999999991, 16.700000000000273
+        ],
+        "longTasks": [],
+        "domElements": 4339,
+        "heapBytes": 44144165
+      },
+      "visibleMessages": 102
+    },
+    {
+      "count": 100,
+      "variant": "tools",
+      "streamVariant": "text",
+      "repeat": 1,
+      "logicalMessageCount": 100,
+      "rawHistoryRecordCount": 150,
+      "historyBytes": 89985,
+      "fixtureHash": "9ddc0d63b2165a86c6245cd1513c86ff18cafad47107f75394c06c70a4a4dd76",
+      "executionApiMode": "agent-execution-service",
+      "readinessMode": "full-dom",
+      "mountedMessageCount": 100,
+      "sentinels": [
+        {
+          "index": 0,
+          "text": "你11月23日 08:00问题 0：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 50,
+          "text": "你11月23日 08:00问题 25：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 99,
+          "text": "Weave Agent11月23日 08:001 次工具调用已完成工具调用1 次read_filesrc/component-49.tsx已完成参数{\n  \"path\": \"src/component-49.tsx\"\n}结果export const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\n分析 49\n保留稳定的会话归属，检查请求结束时的状态。\n\n验证输入\n处理取消\n\nconst state = { status: \"completed\", count: 42 };\n\n结果与持久化记录一致。benchmark · 模型未返回用量 · 0 毫秒11月23日 08:00审阅本轮文件"
+        }
+      ],
+      "finalText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099",
+      "coldReadyMs": 140,
+      "warmSwitchMs": 116,
+      "inputFillToPaintMs": 44,
+      "streamReadyMs": 2298,
+      "cold": {
+        "domElements": 4306,
+        "heapBytes": 15081581,
+        "longTasks": [],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36"
+      },
+      "stream": {
+        "frameGapsMs": [
+          16.69999999999999, 16.600000000000023, 16.599999999999966, 16.80000000000001,
+          16.600000000000023, 16.69999999999999, 16.600000000000023, 16.699999999999932,
+          16.700000000000045, 16.600000000000023, 16.699999999999932, 16.700000000000045,
+          16.700000000000045, 16.59999999999991, 16.600000000000023, 16.700000000000045,
+          16.699999999999932, 16.700000000000045, 16.600000000000023, 16.699999999999932,
+          16.700000000000045, 16.600000000000023, 16.699999999999932, 16.700000000000045,
+          16.700000000000045, 16.59999999999991, 16.600000000000023, 16.700000000000045,
+          16.699999999999932, 16.600000000000023, 16.700000000000045, 16.699999999999932,
+          16.600000000000023, 16.700000000000045, 16.699999999999932, 16.600000000000136,
+          33.399999999999864, 16.700000000000045, 16.59999999999991, 16.700000000000045,
+          16.600000000000136, 16.699999999999818, 16.700000000000045, 16.600000000000136,
+          16.799999999999955, 16.59999999999991, 16.700000000000045, 16.700000000000045,
+          16.59999999999991, 16.600000000000136, 16.699999999999818, 16.700000000000045,
+          16.600000000000136, 16.699999999999818, 16.700000000000045, 16.700000000000045,
+          16.59999999999991, 16.600000000000136, 16.799999999999955, 16.59999999999991,
+          16.600000000000136, 16.700000000000045, 16.699999999999818, 16.600000000000136,
+          16.799999999999955, 16.59999999999991, 16.700000000000045, 16.700000000000045,
+          16.59999999999991, 16.600000000000136, 16.799999999999955, 16.59999999999991,
+          16.700000000000045, 16.600000000000136, 16.699999999999818, 16.600000000000136,
+          16.700000000000045, 16.699999999999818, 16.600000000000136, 16.799999999999955,
+          16.59999999999991, 16.600000000000136, 16.700000000000045, 16.699999999999818,
+          16.700000000000045, 16.700000000000045, 16.5, 16.799999999999955, 16.600000000000136,
+          16.59999999999991, 16.799999999999955, 16.600000000000136, 33.299999999999955,
+          16.700000000000045, 16.699999999999818, 16.700000000000273, 16.59999999999991,
+          16.699999999999818, 16.700000000000273, 16.59999999999991, 16.699999999999818,
+          16.59999999999991, 16.700000000000273, 16.699999999999818, 16.59999999999991,
+          16.700000000000273, 16.699999999999818, 16.59999999999991, 16.700000000000273,
+          16.699999999999818, 16.59999999999991, 16.700000000000273, 16.699999999999818,
+          16.59999999999991, 16.700000000000273, 16.699999999999818, 16.59999999999991,
+          16.700000000000273, 16.699999999999818, 16.700000000000273, 16.59999999999991,
+          16.699999999999818, 16.59999999999991, 16.700000000000273, 16.699999999999818,
+          16.59999999999991, 16.700000000000273, 16.699999999999818, 16.59999999999991,
+          16.700000000000273, 16.59999999999991, 16.699999999999818, 16.700000000000273,
+          16.699999999999818, 16.59999999999991, 16.700000000000273, 16.699999999999818
+        ],
+        "longTasks": [],
+        "domElements": 4339,
+        "heapBytes": 40120192
+      },
+      "visibleMessages": 102
+    },
+    {
+      "count": 100,
+      "variant": "tools",
+      "streamVariant": "text",
+      "repeat": 2,
+      "logicalMessageCount": 100,
+      "rawHistoryRecordCount": 150,
+      "historyBytes": 89985,
+      "fixtureHash": "9ddc0d63b2165a86c6245cd1513c86ff18cafad47107f75394c06c70a4a4dd76",
+      "executionApiMode": "agent-execution-service",
+      "readinessMode": "full-dom",
+      "mountedMessageCount": 100,
+      "sentinels": [
+        {
+          "index": 0,
+          "text": "你11月23日 08:00问题 0：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 50,
+          "text": "你11月23日 08:00问题 25：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 99,
+          "text": "Weave Agent11月23日 08:001 次工具调用已完成工具调用1 次read_filesrc/component-49.tsx已完成参数{\n  \"path\": \"src/component-49.tsx\"\n}结果export const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\n分析 49\n保留稳定的会话归属，检查请求结束时的状态。\n\n验证输入\n处理取消\n\nconst state = { status: \"completed\", count: 42 };\n\n结果与持久化记录一致。benchmark · 模型未返回用量 · 0 毫秒11月23日 08:00审阅本轮文件"
+        }
+      ],
+      "finalText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099",
+      "coldReadyMs": 146,
+      "warmSwitchMs": 115,
+      "inputFillToPaintMs": 45,
+      "streamReadyMs": 2299,
+      "cold": {
+        "domElements": 4306,
+        "heapBytes": 15108010,
+        "longTasks": [],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36"
+      },
+      "stream": {
+        "frameGapsMs": [
+          16.69999999999999, 16.599999999999966, 16.80000000000001, 16.600000000000023,
+          16.69999999999999, 16.600000000000023, 16.699999999999932, 16.600000000000023,
+          16.700000000000045, 16.600000000000023, 16.799999999999955, 16.600000000000023,
+          16.699999999999932, 16.600000000000023, 16.700000000000045, 16.699999999999932,
+          16.600000000000023, 16.700000000000045, 16.699999999999932, 16.600000000000023,
+          16.700000000000045, 16.699999999999932, 16.600000000000023, 16.700000000000045,
+          16.699999999999932, 16.600000000000023, 16.700000000000045, 16.699999999999932,
+          16.600000000000023, 16.700000000000045, 16.600000000000023, 16.699999999999932,
+          16.700000000000045, 16.699999999999932, 16.600000000000023, 16.699999999999932,
+          16.700000000000045, 16.600000000000136, 16.699999999999818, 16.700000000000045,
+          16.600000000000136, 16.699999999999818, 16.700000000000045, 16.600000000000136,
+          16.699999999999818, 16.600000000000136, 16.700000000000045, 16.699999999999818,
+          16.600000000000136, 16.700000000000045, 16.699999999999818, 16.600000000000136,
+          16.700000000000045, 16.699999999999818, 16.600000000000136, 16.700000000000045,
+          16.699999999999818, 16.600000000000136, 16.799999999999955, 16.5, 16.700000000000045,
+          16.700000000000045, 16.59999999999991, 16.799999999999955, 16.600000000000136,
+          16.699999999999818, 16.600000000000136, 16.700000000000045, 16.699999999999818,
+          16.600000000000136, 16.700000000000045, 16.699999999999818, 16.700000000000045,
+          16.600000000000136, 16.699999999999818, 16.700000000000045, 16.600000000000136,
+          16.59999999999991, 16.799999999999955, 16.600000000000136, 16.699999999999818,
+          16.700000000000045, 16.600000000000136, 16.59999999999991, 16.700000000000045,
+          16.700000000000045, 16.59999999999991, 16.799999999999955, 16.600000000000136,
+          16.59999999999991, 16.799999999999955, 16.600000000000136, 16.699999999999818,
+          16.600000000000136, 16.700000000000045, 33.29999999999973, 16.700000000000273,
+          16.59999999999991, 16.699999999999818, 16.600000000000364, 16.799999999999727,
+          16.59999999999991, 16.700000000000273, 16.59999999999991, 16.699999999999818,
+          16.700000000000273, 16.59999999999991, 16.699999999999818, 16.700000000000273,
+          16.59999999999991, 16.800000000000182, 16.5, 16.699999999999818, 16.699999999999818,
+          16.700000000000273, 16.59999999999991, 16.699999999999818, 16.700000000000273,
+          16.59999999999991, 16.699999999999818, 16.600000000000364, 16.699999999999818,
+          16.699999999999818, 16.600000000000364, 16.699999999999818, 16.699999999999818,
+          16.700000000000273, 16.59999999999991, 16.699999999999818, 16.700000000000273,
+          16.59999999999991, 16.699999999999818, 16.600000000000364, 16.799999999999727,
+          16.59999999999991, 16.700000000000273, 16.59999999999991, 16.699999999999818
+        ],
+        "longTasks": [],
+        "domElements": 4339,
+        "heapBytes": 37726398
+      },
+      "visibleMessages": 102
+    },
+    {
+      "count": 1000,
+      "variant": "tools",
+      "streamVariant": "text",
+      "repeat": 0,
+      "logicalMessageCount": 1000,
+      "rawHistoryRecordCount": 1500,
+      "historyBytes": 906789,
+      "fixtureHash": "cb1057130de70f446ca7a6d26704a08a2e95a4d562a50944a3a23d77c2695c35",
+      "executionApiMode": "agent-execution-service",
+      "readinessMode": "full-dom",
+      "mountedMessageCount": 1000,
+      "sentinels": [
+        {
+          "index": 0,
+          "text": "你11月23日 08:00问题 0：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 500,
+          "text": "你11月23日 08:00问题 250：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 999,
+          "text": "Weave Agent11月23日 08:001 次工具调用已完成工具调用1 次read_filesrc/component-499.tsx已完成参数{\n  \"path\": \"src/component-499.tsx\"\n}结果export const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\n分析 499\n保留稳定的会话归属，检查请求结束时的状态。\n\n验证输入\n处理取消\n\nconst state = { status: \"completed\", count: 42 };\n\n结果与持久化记录一致。benchmark · 模型未返回用量 · 0 毫秒11月23日 08:00审阅本轮文件"
+        }
+      ],
+      "finalText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099",
+      "coldReadyMs": 348,
+      "warmSwitchMs": 567,
+      "inputFillToPaintMs": 505,
+      "streamReadyMs": 2932,
+      "cold": {
+        "domElements": 40306,
+        "heapBytes": 51169819,
+        "longTasks": [
+          {
+            "start": 78.89999997615814,
+            "duration": 158
+          },
+          {
+            "start": 237,
+            "duration": 92
+          },
+          {
+            "start": 346.2000000476837,
+            "duration": 57
+          }
+        ],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36"
+      },
+      "stream": {
+        "frameGapsMs": [
+          49.90000000000009, 33.40000000000009, 16.59999999999991, 116.70000000000005,
+          16.700000000000045, 16.59999999999991, 16.700000000000045, 16.700000000000045, 50,
+          16.59999999999991, 50.09999999999991, 16.600000000000136, 50, 66.70000000000005,
+          83.29999999999973, 50, 66.70000000000027, 50, 116.59999999999991, 66.59999999999991,
+          66.70000000000027, 166.79999999999973, 66.59999999999991, 49.90000000000009,
+          66.80000000000018, 66.59999999999991, 50, 66.69999999999982, 49.90000000000009,
+          66.70000000000027, 66.69999999999982, 49.90000000000009, 66.79999999999973,
+          49.90000000000009, 66.80000000000018, 66.5, 50.09999999999991, 66.69999999999982,
+          49.90000000000009, 66.70000000000027, 66.69999999999982, 50, 66.59999999999991,
+          50.09999999999991, 199.90000000000055, 16.699999999999818, 16.699999999999818,
+          199.89999999999964, 33.400000000000546, 16.599999999999454, 16.700000000000728
+        ],
+        "longTasks": [
+          {
+            "start": 1790.2000000476837,
+            "duration": 73
+          },
+          {
+            "start": 1867.2999999523163,
+            "duration": 55
+          },
+          {
+            "start": 1931.8999999761581,
+            "duration": 56
+          },
+          {
+            "start": 1994.5,
+            "duration": 62
+          },
+          {
+            "start": 2062.5,
+            "duration": 52
+          },
+          {
+            "start": 2136.899999976158,
+            "duration": 56
+          },
+          {
+            "start": 2198,
+            "duration": 53
+          },
+          {
+            "start": 2255.399999976158,
+            "duration": 54
+          },
+          {
+            "start": 2315.7999999523163,
+            "duration": 56
+          },
+          {
+            "start": 2372.100000023842,
+            "duration": 55
+          },
+          {
+            "start": 2434,
+            "duration": 53
+          },
+          {
+            "start": 2492.100000023842,
+            "duration": 71
+          },
+          {
+            "start": 2706.2999999523163,
+            "duration": 53
+          },
+          {
+            "start": 2786.100000023842,
+            "duration": 55
+          },
+          {
+            "start": 2850.2000000476837,
+            "duration": 53
+          },
+          {
+            "start": 2909.7999999523163,
+            "duration": 55
+          },
+          {
+            "start": 2970.2000000476837,
+            "duration": 53
+          },
+          {
+            "start": 3029,
+            "duration": 55
+          },
+          {
+            "start": 3088.899999976158,
+            "duration": 53
+          },
+          {
+            "start": 3148.2999999523163,
+            "duration": 56
+          },
+          {
+            "start": 3210,
+            "duration": 54
+          },
+          {
+            "start": 3268.5,
+            "duration": 55
+          },
+          {
+            "start": 3329.5,
+            "duration": 54
+          },
+          {
+            "start": 3388.7999999523163,
+            "duration": 56
+          },
+          {
+            "start": 3450.7000000476837,
+            "duration": 54
+          },
+          {
+            "start": 3511.5,
+            "duration": 56
+          },
+          {
+            "start": 3572.600000023842,
+            "duration": 53
+          },
+          {
+            "start": 3632,
+            "duration": 56
+          },
+          {
+            "start": 3692.600000023842,
+            "duration": 53
+          },
+          {
+            "start": 3751.5,
+            "duration": 56
+          },
+          {
+            "start": 3812.100000023842,
+            "duration": 52
+          },
+          {
+            "start": 3870.2999999523163,
+            "duration": 54
+          },
+          {
+            "start": 3930.7999999523163,
+            "duration": 53
+          },
+          {
+            "start": 3988.600000023842,
+            "duration": 54
+          },
+          {
+            "start": 4256.100000023842,
+            "duration": 64
+          }
+        ],
+        "domElements": 40339,
+        "heapBytes": 153261266
+      },
+      "visibleMessages": 1002
+    },
+    {
+      "count": 1000,
+      "variant": "tools",
+      "streamVariant": "text",
+      "repeat": 1,
+      "logicalMessageCount": 1000,
+      "rawHistoryRecordCount": 1500,
+      "historyBytes": 906789,
+      "fixtureHash": "cb1057130de70f446ca7a6d26704a08a2e95a4d562a50944a3a23d77c2695c35",
+      "executionApiMode": "agent-execution-service",
+      "readinessMode": "full-dom",
+      "mountedMessageCount": 1000,
+      "sentinels": [
+        {
+          "index": 0,
+          "text": "你11月23日 08:00问题 0：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 500,
+          "text": "你11月23日 08:00问题 250：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 999,
+          "text": "Weave Agent11月23日 08:001 次工具调用已完成工具调用1 次read_filesrc/component-499.tsx已完成参数{\n  \"path\": \"src/component-499.tsx\"\n}结果export const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\n分析 499\n保留稳定的会话归属，检查请求结束时的状态。\n\n验证输入\n处理取消\n\nconst state = { status: \"completed\", count: 42 };\n\n结果与持久化记录一致。benchmark · 模型未返回用量 · 0 毫秒11月23日 08:00审阅本轮文件"
+        }
+      ],
+      "finalText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099",
+      "coldReadyMs": 347,
+      "warmSwitchMs": 566,
+      "inputFillToPaintMs": 502,
+      "streamReadyMs": 2914,
+      "cold": {
+        "domElements": 40306,
+        "heapBytes": 51167434,
+        "longTasks": [
+          {
+            "start": 78,
+            "duration": 158
+          },
+          {
+            "start": 236.90000009536743,
+            "duration": 91
+          },
+          {
+            "start": 346.10000002384186,
+            "duration": 57
+          }
+        ],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36"
+      },
+      "stream": {
+        "frameGapsMs": [
+          50, 33.399999999999864, 16.600000000000136, 133.29999999999995, 16.700000000000045,
+          16.699999999999818, 16.600000000000136, 50, 16.59999999999991, 50.100000000000136,
+          16.699999999999818, 50, 66.60000000000014, 66.60000000000014, 66.69999999999982, 50,
+          66.69999999999982, 116.60000000000036, 50, 83.39999999999964, 150, 66.70000000000027,
+          66.59999999999991, 50, 66.59999999999991, 50.09999999999991, 66.70000000000027,
+          49.90000000000009, 66.69999999999982, 66.69999999999982, 50, 66.70000000000027, 50,
+          66.59999999999991, 66.69999999999982, 49.90000000000009, 66.70000000000027, 50,
+          66.59999999999991, 50.09999999999991, 66.69999999999982, 49.90000000000009,
+          66.70000000000027, 50, 150, 16.599999999999454, 16.700000000000728, 200,
+          33.399999999999636, 16.600000000000364, 16.699999999999818
+        ],
+        "longTasks": [
+          {
+            "start": 1775,
+            "duration": 73
+          },
+          {
+            "start": 1851.5,
+            "duration": 55
+          },
+          {
+            "start": 1916.1000000238419,
+            "duration": 55
+          },
+          {
+            "start": 1977.4000000953674,
+            "duration": 57
+          },
+          {
+            "start": 2040.1000000238419,
+            "duration": 51
+          },
+          {
+            "start": 2113.100000023842,
+            "duration": 55
+          },
+          {
+            "start": 2173.8000000715256,
+            "duration": 53
+          },
+          {
+            "start": 2231.3000000715256,
+            "duration": 55
+          },
+          {
+            "start": 2292.3000000715256,
+            "duration": 55
+          },
+          {
+            "start": 2348.100000023842,
+            "duration": 55
+          },
+          {
+            "start": 2410,
+            "duration": 52
+          },
+          {
+            "start": 2467.7000000476837,
+            "duration": 70
+          },
+          {
+            "start": 2677.600000023842,
+            "duration": 53
+          },
+          {
+            "start": 2757.3000000715256,
+            "duration": 57
+          },
+          {
+            "start": 2823,
+            "duration": 53
+          },
+          {
+            "start": 2881.7000000476837,
+            "duration": 55
+          },
+          {
+            "start": 2942.4000000953674,
+            "duration": 53
+          },
+          {
+            "start": 3000.9000000953674,
+            "duration": 55
+          },
+          {
+            "start": 3060.8000000715256,
+            "duration": 53
+          },
+          {
+            "start": 3119.8000000715256,
+            "duration": 55
+          },
+          {
+            "start": 3180.100000023842,
+            "duration": 53
+          },
+          {
+            "start": 3239.3000000715256,
+            "duration": 55
+          },
+          {
+            "start": 3300.4000000953674,
+            "duration": 53
+          },
+          {
+            "start": 3358.4000000953674,
+            "duration": 55
+          },
+          {
+            "start": 3420,
+            "duration": 53
+          },
+          {
+            "start": 3478.100000023842,
+            "duration": 54
+          },
+          {
+            "start": 3538.3000000715256,
+            "duration": 54
+          },
+          {
+            "start": 3598.7000000476837,
+            "duration": 54
+          },
+          {
+            "start": 3658.100000023842,
+            "duration": 53
+          },
+          {
+            "start": 3717.3000000715256,
+            "duration": 55
+          },
+          {
+            "start": 3776.9000000953674,
+            "duration": 52
+          },
+          {
+            "start": 3834.7000000476837,
+            "duration": 54
+          },
+          {
+            "start": 3893.8000000715256,
+            "duration": 53
+          },
+          {
+            "start": 3952.5,
+            "duration": 53
+          },
+          {
+            "start": 4012.600000023842,
+            "duration": 52
+          },
+          {
+            "start": 4226.400000095367,
+            "duration": 61
+          }
+        ],
+        "domElements": 40339,
+        "heapBytes": 154551002
+      },
+      "visibleMessages": 1002
+    },
+    {
+      "count": 1000,
+      "variant": "tools",
+      "streamVariant": "text",
+      "repeat": 2,
+      "logicalMessageCount": 1000,
+      "rawHistoryRecordCount": 1500,
+      "historyBytes": 906789,
+      "fixtureHash": "cb1057130de70f446ca7a6d26704a08a2e95a4d562a50944a3a23d77c2695c35",
+      "executionApiMode": "agent-execution-service",
+      "readinessMode": "full-dom",
+      "mountedMessageCount": 1000,
+      "sentinels": [
+        {
+          "index": 0,
+          "text": "你11月23日 08:00问题 0：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 500,
+          "text": "你11月23日 08:00问题 250：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 999,
+          "text": "Weave Agent11月23日 08:001 次工具调用已完成工具调用1 次read_filesrc/component-499.tsx已完成参数{\n  \"path\": \"src/component-499.tsx\"\n}结果export const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\n分析 499\n保留稳定的会话归属，检查请求结束时的状态。\n\n验证输入\n处理取消\n\nconst state = { status: \"completed\", count: 42 };\n\n结果与持久化记录一致。benchmark · 模型未返回用量 · 0 毫秒11月23日 08:00审阅本轮文件"
+        }
+      ],
+      "finalText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099",
+      "coldReadyMs": 354,
+      "warmSwitchMs": 567,
+      "inputFillToPaintMs": 506,
+      "streamReadyMs": 2913,
+      "cold": {
+        "domElements": 40306,
+        "heapBytes": 51180014,
+        "longTasks": [
+          {
+            "start": 78.69999992847443,
+            "duration": 157
+          },
+          {
+            "start": 236.60000002384186,
+            "duration": 91
+          },
+          {
+            "start": 352.89999997615814,
+            "duration": 58
+          }
+        ],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36"
+      },
+      "stream": {
+        "frameGapsMs": [
+          50, 33.40000000000009, 16.59999999999991, 133.4000000000001, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 50, 16.59999999999991, 50, 16.600000000000136, 50,
+          66.70000000000005, 66.69999999999982, 66.70000000000027, 49.899999999999636,
+          66.70000000000027, 116.69999999999982, 50, 83.30000000000018, 166.69999999999982, 50,
+          66.70000000000027, 66.59999999999991, 66.69999999999982, 50, 66.70000000000027,
+          49.899999999999636, 66.70000000000027, 50, 66.69999999999982, 49.90000000000009,
+          66.80000000000018, 66.59999999999991, 50, 66.59999999999991, 50.09999999999991,
+          66.59999999999991, 50, 66.70000000000027, 66.59999999999991, 50, 66.69999999999982, 50,
+          150, 16.699999999999818, 49.900000000000546, 150, 33.399999999999636, 16.699999999999818,
+          16.600000000000364
+        ],
+        "longTasks": [
+          {
+            "start": 1809,
+            "duration": 73
+          },
+          {
+            "start": 1885.6999999284744,
+            "duration": 54
+          },
+          {
+            "start": 1949.1999999284744,
+            "duration": 54
+          },
+          {
+            "start": 2010,
+            "duration": 58
+          },
+          {
+            "start": 2073,
+            "duration": 52
+          },
+          {
+            "start": 2146.600000023842,
+            "duration": 56
+          },
+          {
+            "start": 2208.1999999284744,
+            "duration": 53
+          },
+          {
+            "start": 2265.899999976158,
+            "duration": 54
+          },
+          {
+            "start": 2326.1999999284744,
+            "duration": 55
+          },
+          {
+            "start": 2382.2999999523163,
+            "duration": 55
+          },
+          {
+            "start": 2444.100000023842,
+            "duration": 53
+          },
+          {
+            "start": 2502.600000023842,
+            "duration": 72
+          },
+          {
+            "start": 2722.5,
+            "duration": 53
+          },
+          {
+            "start": 2803,
+            "duration": 55
+          },
+          {
+            "start": 2866.7999999523163,
+            "duration": 53
+          },
+          {
+            "start": 2925.7999999523163,
+            "duration": 56
+          },
+          {
+            "start": 2986.5,
+            "duration": 53
+          },
+          {
+            "start": 3045.2999999523163,
+            "duration": 55
+          },
+          {
+            "start": 3104.7999999523163,
+            "duration": 52
+          },
+          {
+            "start": 3163,
+            "duration": 54
+          },
+          {
+            "start": 3223.2999999523163,
+            "duration": 53
+          },
+          {
+            "start": 3281.2999999523163,
+            "duration": 55
+          },
+          {
+            "start": 3341.899999976158,
+            "duration": 53
+          },
+          {
+            "start": 3399.6999999284744,
+            "duration": 55
+          },
+          {
+            "start": 3460.6999999284744,
+            "duration": 53
+          },
+          {
+            "start": 3518.899999976158,
+            "duration": 55
+          },
+          {
+            "start": 3579.5,
+            "duration": 53
+          },
+          {
+            "start": 3638.7999999523163,
+            "duration": 55
+          },
+          {
+            "start": 3698.7999999523163,
+            "duration": 54
+          },
+          {
+            "start": 3758.899999976158,
+            "duration": 56
+          },
+          {
+            "start": 3819.399999976158,
+            "duration": 52
+          },
+          {
+            "start": 3877.100000023842,
+            "duration": 54
+          },
+          {
+            "start": 3937,
+            "duration": 51
+          },
+          {
+            "start": 3993.1999999284744,
+            "duration": 53
+          },
+          {
+            "start": 4052.899999976158,
+            "duration": 52
+          },
+          {
+            "start": 4263.299999952316,
+            "duration": 63
+          }
+        ],
+        "domElements": 40339,
+        "heapBytes": 153460168
+      },
+      "visibleMessages": 1002
+    },
+    {
+      "count": 5000,
+      "variant": "tools",
+      "streamVariant": "text",
+      "repeat": 0,
+      "logicalMessageCount": 5000,
+      "rawHistoryRecordCount": 7500,
+      "historyBytes": 4561789,
+      "fixtureHash": "4e309834d9cd181a053a76eb1d891cf4b3e2b40538909a021278cab3449bc676",
+      "executionApiMode": "agent-execution-service",
+      "readinessMode": "full-dom",
+      "mountedMessageCount": 5000,
+      "sentinels": [
+        {
+          "index": 0,
+          "text": "你11月23日 08:00问题 0：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 2500,
+          "text": "你11月23日 08:00问题 1250：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 4999,
+          "text": "Weave Agent11月23日 08:001 次工具调用已完成工具调用1 次read_filesrc/component-2499.tsx已完成参数{\n  \"path\": \"src/component-2499.tsx\"\n}结果export const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\n分析 2499\n保留稳定的会话归属，检查请求结束时的状态。\n\n验证输入\n处理取消\n\nconst state = { status: \"completed\", count: 42 };\n\n结果与持久化记录一致。benchmark · 模型未返回用量 · 0 毫秒11月23日 08:00审阅本轮文件"
+        }
+      ],
+      "finalText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099",
+      "coldReadyMs": 1364,
+      "warmSwitchMs": 4570,
+      "inputFillToPaintMs": 2529,
+      "streamReadyMs": 11738,
+      "cold": {
+        "domElements": 200306,
+        "heapBytes": 144330698,
+        "longTasks": [
+          {
+            "start": 102.89999997615814,
+            "duration": 57
+          },
+          {
+            "start": 161.80000007152557,
+            "duration": 758
+          },
+          {
+            "start": 920.6000000238419,
+            "duration": 385
+          },
+          {
+            "start": 1362.8999999761581,
+            "duration": 343
+          }
+        ],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36"
+      },
+      "stream": {
+        "frameGapsMs": [
+          183.20000000000073, 16.69999999999891, 3099.8999999999996, 16.700000000000728,
+          16.600000000000364, 16.69999999999891, 400, 316.60000000000036, 16.700000000000728,
+          316.60000000000036, 350.09999999999854, 333.3000000000011, 449.89999999999964, 350,
+          333.40000000000146, 350, 233.1999999999971, 83.40000000000146, 416.59999999999854,
+          233.40000000000146, 83.29999999999927, 16.700000000000728, 3199.7999999999993,
+          1066.7000000000007, 16.700000000000728, 16.599999999998545
+        ],
+        "longTasks": [
+          {
+            "start": 14603.300000071526,
+            "duration": 396
+          },
+          {
+            "start": 15010.899999976158,
+            "duration": 289
+          },
+          {
+            "start": 15336.899999976158,
+            "duration": 310
+          },
+          {
+            "start": 15679.399999976158,
+            "duration": 308
+          },
+          {
+            "start": 16015.5,
+            "duration": 300
+          },
+          {
+            "start": 16436,
+            "duration": 321
+          },
+          {
+            "start": 16795.399999976158,
+            "duration": 318
+          },
+          {
+            "start": 17144.5,
+            "duration": 308
+          },
+          {
+            "start": 17477.300000071526,
+            "duration": 324
+          },
+          {
+            "start": 17839,
+            "duration": 192
+          },
+          {
+            "start": 18055,
+            "duration": 67
+          },
+          {
+            "start": 18133.899999976158,
+            "duration": 388
+          },
+          {
+            "start": 18555.100000023842,
+            "duration": 236
+          }
+        ],
+        "domElements": 200339,
+        "heapBytes": 154968773
+      },
+      "visibleMessages": 5002
+    },
+    {
+      "count": 5000,
+      "variant": "tools",
+      "streamVariant": "text",
+      "repeat": 1,
+      "logicalMessageCount": 5000,
+      "rawHistoryRecordCount": 7500,
+      "historyBytes": 4561789,
+      "fixtureHash": "4e309834d9cd181a053a76eb1d891cf4b3e2b40538909a021278cab3449bc676",
+      "executionApiMode": "agent-execution-service",
+      "readinessMode": "full-dom",
+      "mountedMessageCount": 5000,
+      "sentinels": [
+        {
+          "index": 0,
+          "text": "你11月23日 08:00问题 0：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 2500,
+          "text": "你11月23日 08:00问题 1250：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 4999,
+          "text": "Weave Agent11月23日 08:001 次工具调用已完成工具调用1 次read_filesrc/component-2499.tsx已完成参数{\n  \"path\": \"src/component-2499.tsx\"\n}结果export const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\n分析 2499\n保留稳定的会话归属，检查请求结束时的状态。\n\n验证输入\n处理取消\n\nconst state = { status: \"completed\", count: 42 };\n\n结果与持久化记录一致。benchmark · 模型未返回用量 · 0 毫秒11月23日 08:00审阅本轮文件"
+        }
+      ],
+      "finalText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099",
+      "coldReadyMs": 1355,
+      "warmSwitchMs": 4544,
+      "inputFillToPaintMs": 2247,
+      "streamReadyMs": 11420,
+      "cold": {
+        "domElements": 200306,
+        "heapBytes": 144333888,
+        "longTasks": [
+          {
+            "start": 100.39999997615814,
+            "duration": 58
+          },
+          {
+            "start": 160.39999997615814,
+            "duration": 754
+          },
+          {
+            "start": 914.7999999523163,
+            "duration": 383
+          },
+          {
+            "start": 1353.5999999046326,
+            "duration": 339
+          }
+        ],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36"
+      },
+      "stream": {
+        "frameGapsMs": [
+          183.39999999999964, 16.700000000000728, 3083.199999999999, 16.600000000000364,
+          16.700000000000728, 16.69999999999891, 399.90000000000146, 316.6999999999989,
+          16.600000000000364, 316.7000000000007, 350.09999999999854, 316.5, 416.7000000000007, 350,
+          333.2999999999993, 533.2999999999993, 216.60000000000218, 16.700000000000728,
+          66.69999999999709, 400, 333.40000000000146, 16.5, 3116.5999999999985, 733.4000000000015,
+          16.599999999998545, 16.700000000000728
+        ],
+        "longTasks": [
+          {
+            "start": 14569.599999904633,
+            "duration": 395
+          },
+          {
+            "start": 14976.599999904633,
+            "duration": 288
+          },
+          {
+            "start": 15301.899999976158,
+            "duration": 308
+          },
+          {
+            "start": 15641.799999952316,
+            "duration": 308
+          },
+          {
+            "start": 15978.099999904633,
+            "duration": 295
+          },
+          {
+            "start": 16383.599999904633,
+            "duration": 309
+          },
+          {
+            "start": 16726.299999952316,
+            "duration": 308
+          },
+          {
+            "start": 17062.399999976158,
+            "duration": 308
+          },
+          {
+            "start": 17400.899999976158,
+            "duration": 194
+          },
+          {
+            "start": 17594.899999976158,
+            "duration": 302
+          },
+          {
+            "start": 17927.699999928474,
+            "duration": 187
+          },
+          {
+            "start": 18154.699999928474,
+            "duration": 70
+          },
+          {
+            "start": 18234.399999976158,
+            "duration": 370
+          },
+          {
+            "start": 18716.199999928474,
+            "duration": 231
+          }
+        ],
+        "domElements": 200339,
+        "heapBytes": 154980854
+      },
+      "visibleMessages": 5002
+    },
+    {
+      "count": 5000,
+      "variant": "tools",
+      "streamVariant": "text",
+      "repeat": 2,
+      "logicalMessageCount": 5000,
+      "rawHistoryRecordCount": 7500,
+      "historyBytes": 4561789,
+      "fixtureHash": "4e309834d9cd181a053a76eb1d891cf4b3e2b40538909a021278cab3449bc676",
+      "executionApiMode": "agent-execution-service",
+      "readinessMode": "full-dom",
+      "mountedMessageCount": 5000,
+      "sentinels": [
+        {
+          "index": 0,
+          "text": "你11月23日 08:00问题 0：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 2500,
+          "text": "你11月23日 08:00问题 1250：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 4999,
+          "text": "Weave Agent11月23日 08:001 次工具调用已完成工具调用1 次read_filesrc/component-2499.tsx已完成参数{\n  \"path\": \"src/component-2499.tsx\"\n}结果export const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\nexport const component = \"bounded fixture\";\n分析 2499\n保留稳定的会话归属，检查请求结束时的状态。\n\n验证输入\n处理取消\n\nconst state = { status: \"completed\", count: 42 };\n\n结果与持久化记录一致。benchmark · 模型未返回用量 · 0 毫秒11月23日 08:00审阅本轮文件"
+        }
+      ],
+      "finalText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099",
+      "coldReadyMs": 1401,
+      "warmSwitchMs": 4603,
+      "inputFillToPaintMs": 2247,
+      "streamReadyMs": 11684,
+      "cold": {
+        "domElements": 200306,
+        "heapBytes": 144391540,
+        "longTasks": [
+          {
+            "start": 103,
+            "duration": 58
+          },
+          {
+            "start": 162.90000009536743,
+            "duration": 772
+          },
+          {
+            "start": 935.5,
+            "duration": 402
+          },
+          {
+            "start": 1400.1000000238419,
+            "duration": 349
+          }
+        ],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36"
+      },
+      "stream": {
+        "frameGapsMs": [
+          200, 16.700000000000728, 3083.199999999999, 16.600000000000364, 16.700000000000728,
+          16.69999999999891, 400, 316.60000000000036, 16.700000000000728, 16.69999999999891,
+          316.60000000000036, 350, 316.7000000000007, 433.2000000000007, 333.2999999999993,
+          333.3999999999978, 533.3000000000029, 216.6999999999971, 33.30000000000291,
+          66.69999999999709, 383.3000000000029, 316.59999999999854, 16.700000000000728,
+          16.700000000000728, 3149.7999999999993, 933.2999999999993, 16.700000000000728,
+          16.599999999998545
+        ],
+        "longTasks": [
+          {
+            "start": 14716.100000023842,
+            "duration": 397
+          },
+          {
+            "start": 15124.800000071526,
+            "duration": 289
+          },
+          {
+            "start": 15462.5,
+            "duration": 311
+          },
+          {
+            "start": 15806.5,
+            "duration": 310
+          },
+          {
+            "start": 16145.600000023842,
+            "duration": 296
+          },
+          {
+            "start": 16549.400000095367,
+            "duration": 312
+          },
+          {
+            "start": 16894.900000095367,
+            "duration": 307
+          },
+          {
+            "start": 17229.200000047684,
+            "duration": 306
+          },
+          {
+            "start": 17566.200000047684,
+            "duration": 192
+          },
+          {
+            "start": 17758.300000071526,
+            "duration": 301
+          },
+          {
+            "start": 18091.100000023842,
+            "duration": 189
+          },
+          {
+            "start": 18322.700000047684,
+            "duration": 69
+          },
+          {
+            "start": 18401.200000047684,
+            "duration": 367
+          },
+          {
+            "start": 18876.400000095367,
+            "duration": 235
+          }
+        ],
+        "domElements": 200339,
+        "heapBytes": 154565745
+      },
+      "visibleMessages": 5002
+    }
+  ],
+  "summaries": [
+    {
+      "count": 100,
+      "variant": "markdown",
+      "streamVariant": "text",
+      "coldReadyMedianMs": 141,
+      "warmSwitchMedianMs": 100,
+      "inputFillToPaintMedianMs": 46,
+      "streamFrameGapP95Ms": 16.700000000000273,
+      "streamBlockingMs": [0, 0, 0],
+      "coldDomElements": [2306, 2306, 2306]
+    },
+    {
+      "count": 1000,
+      "variant": "markdown",
+      "streamVariant": "text",
+      "coldReadyMedianMs": 291,
+      "warmSwitchMedianMs": 433,
+      "inputFillToPaintMedianMs": 390,
+      "streamFrameGapP95Ms": 100,
+      "streamBlockingMs": [10, 19, 16],
+      "coldDomElements": [20306, 20306, 20306]
+    },
+    {
+      "count": 5000,
+      "variant": "markdown",
+      "streamVariant": "text",
+      "coldReadyMedianMs": 1029,
+      "warmSwitchMedianMs": 2855,
+      "inputFillToPaintMedianMs": 1988,
+      "streamFrameGapP95Ms": 1500.000000000001,
+      "streamBlockingMs": [2514, 2507, 2498],
+      "coldDomElements": [100306, 100306, 100306]
+    },
+    {
+      "count": 100,
+      "variant": "tools",
+      "streamVariant": "text",
+      "coldReadyMedianMs": 140,
+      "warmSwitchMedianMs": 116,
+      "inputFillToPaintMedianMs": 45,
+      "streamFrameGapP95Ms": 16.799999999999955,
+      "streamBlockingMs": [0, 0, 0],
+      "coldDomElements": [4306, 4306, 4306]
+    },
+    {
+      "count": 1000,
+      "variant": "tools",
+      "streamVariant": "text",
+      "coldReadyMedianMs": 348,
+      "warmSwitchMedianMs": 567,
+      "inputFillToPaintMedianMs": 505,
+      "streamFrameGapP95Ms": 150,
+      "streamBlockingMs": [203, 184, 187],
+      "coldDomElements": [40306, 40306, 40306]
+    },
+    {
+      "count": 5000,
+      "variant": "tools",
+      "streamVariant": "text",
+      "coldReadyMedianMs": 1364,
+      "warmSwitchMedianMs": 4570,
+      "inputFillToPaintMedianMs": 2247,
+      "streamFrameGapP95Ms": 3083.199999999999,
+      "streamBlockingMs": [3107, 3173, 3181],
+      "coldDomElements": [200306, 200306, 200306]
+    }
+  ]
+}

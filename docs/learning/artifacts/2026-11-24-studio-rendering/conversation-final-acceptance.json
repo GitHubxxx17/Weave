@@ -1,0 +1,55 @@
+{
+  "recordedAt": "2026-11-24T05:08:40.906Z",
+  "browser": "158.0.8127.36",
+  "fixture": {
+    "logicalMessageCount": 100,
+    "rawHistoryRecordCount": 25100,
+    "historyBytes": 23582503,
+    "fixtureHash": "7c97d94916e4dd1ec90a89645e74ecf02b7dfd66d0e7d34d7f75489c7d283bdb",
+    "executionApiMode": "agent-execution-service"
+  },
+  "probeHash": "75fd6a6dcfca6972fa04923be14ad13ea568b78ec651444b901600d5470c1130",
+  "initial": {
+    "logical": 100,
+    "mounted": 9,
+    "bottom": 0
+  },
+  "tool500": {
+    "text": "{\n  \"path\": \"src/component-24-499.tsx\"\n}",
+    "top": 325,
+    "bottom": 392.125,
+    "viewportTop": 119,
+    "viewportBottom": 811.34375,
+    "row": "49",
+    "bodies": 1,
+    "mounted": 17
+  },
+  "pins": {
+    "focused": false,
+    "rowRetained": false
+  },
+  "restored": 1,
+  "anchorBefore": {
+    "id": "benchmark-message-10040",
+    "offset": -86,
+    "scroll": 14738
+  },
+  "anchorAfter": {
+    "id": "benchmark-message-10040",
+    "offset": -86,
+    "scroll": 14738
+  },
+  "widthAfter": {
+    "id": "benchmark-message-10040",
+    "offset": -86,
+    "scroll": 12145
+  },
+  "followed": {
+    "gap": 0,
+    "mounted": 9
+  },
+  "transcriptLength": 14468342,
+  "errors": [],
+  "failures": [],
+  "passed": true
+}

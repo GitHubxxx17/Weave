@@ -1,0 +1,117 @@
+.message-list.conversation-window {
+  display: block;
+  overflow-anchor: none;
+}
+.conversation-window-space {
+  position: relative;
+  width: 100%;
+  flex-shrink: 0;
+}
+.conversation-window-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  padding-bottom: 30px;
+  box-sizing: border-box;
+  contain: layout style;
+}
+.conversation-window-row > .timeline-content {
+  display: flow-root;
+}
+.conversation-pane {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+.conversation-tools {
+  display: flex;
+  gap: 8px;
+  padding: 5px 28px;
+  border-bottom: 1px solid var(--line);
+}
+.conversation-tools > button {
+  border: 0;
+  color: var(--ink-soft);
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+}
+.conversation-search {
+  position: relative;
+  flex: 1;
+}
+.conversation-search > input {
+  width: min(320px, 100%);
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.conversation-search-results {
+  position: absolute;
+  top: 30px;
+  left: 0;
+  right: 0;
+  z-index: 8;
+  max-height: 280px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: var(--shadow-popover);
+}
+.conversation-search-results > p {
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+.conversation-search-results > button {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 6px;
+  text-align: left;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.conversation-search-results > button:hover {
+  background: var(--surface-soft);
+}
+.conversation-search-results small {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink-soft);
+}
+.conversation-transcript {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  padding: 12px 28px;
+  gap: 8px;
+}
+.conversation-transcript > header {
+  display: flex;
+  justify-content: space-between;
+}
+.conversation-transcript h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.conversation-transcript > textarea {
+  flex: 1;
+  min-height: 100px;
+  resize: none;
+  padding: 12px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
