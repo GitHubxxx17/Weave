@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { confirmationRequiredHookIds, hookImpacts, requiresHookConfirmation } from '../src/index.js';
+import {
+  confirmationRequiredHookIds,
+  hookImpacts,
+  requiresHookConfirmation,
+} from '../src/index.js';
 import { createPluginKernel, definePlugin } from '../src/kernel.js';
 import { type PluginManifest } from '../src/manifest.js';
 import { toolAroundHook, toolPolicyHook, toolResultHook } from '../src/seams.js';
@@ -105,6 +109,56 @@ describe('undeclared high-risk hook confirmation', () => {
     expect(isConfirmed).not.toHaveBeenCalled();
     expect(kernel.plugins()[0]?.pendingHooks).toEqual([]);
     expect(kernel.hooks.count(toolAroundHook)).toBe(1);
+    await kernel.dispose();
+  });
+
+  it('holds an undeclared high-risk hook of a governed plugin that declares contributes', async () => {
+    const kernel = createPluginKernel({ hookConfirmation: { isConfirmed: () => false } });
+    await kernel.register(
+      definePlugin({
+        manifest: manifest('p', { contributes: { tools: [] } }),
+        setup(env) {
+          env.onHook(toolAroundHook, async (input, next) => next(input));
+        },
+      }),
+    );
+    expect(kernel.plugins()[0]?.pendingHooks).toEqual(['weave.tools.around']);
+    expect(kernel.hooks.count(toolAroundHook)).toBe(0);
+    await kernel.dispose();
+  });
+
+  it('still rejects an undeclared low-risk hook when contributes is declared', async () => {
+    const kernel = createPluginKernel({ hookConfirmation: { isConfirmed: () => false } });
+    await expect(
+      kernel.register(
+        definePlugin({
+          manifest: manifest('p', { contributes: { tools: [] } }),
+          setup(env) {
+            env.onHook(toolResultHook, () => undefined);
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({ code: 'plugin-contributes-exceeds-manifest' });
+    await kernel.dispose();
+  });
+
+  it('leaves ungoverned plugins on the plain declaration check', async () => {
+    const kernel = createPluginKernel({
+      hookConfirmation: { governs: (id) => id === 'local', isConfirmed: () => false },
+    });
+    await kernel.register(subscribingPlugin('host'));
+    expect(kernel.plugins()[0]?.pendingHooks).toEqual([]);
+    expect(kernel.hooks.count(toolAroundHook)).toBe(1);
+    await expect(
+      kernel.register(
+        definePlugin({
+          manifest: manifest('host-declared', { contributes: { tools: [] } }),
+          setup(env) {
+            env.onHook(toolAroundHook, async (input, next) => next(input));
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({ code: 'plugin-contributes-exceeds-manifest' });
     await kernel.dispose();
   });
 });

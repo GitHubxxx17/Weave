@@ -109,9 +109,14 @@ export function createServerExtensionCoordinator(
         }),
       );
       return {
+        governs(pluginId: string) {
+          return digests.has(pluginId);
+        },
         isConfirmed(pluginId: string, hookId: string) {
           const digest = digests.get(pluginId);
-          return digest === undefined || confirmed.has(hookConfirmationKey(pluginId, digest, hookId));
+          return (
+            digest !== undefined && confirmed.has(hookConfirmationKey(pluginId, digest, hookId))
+          );
         },
       };
     }

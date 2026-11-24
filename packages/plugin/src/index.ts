@@ -88,11 +88,7 @@ export type {
   PluginDeclaration,
 } from './extension-point.js';
 export { defineHook, HookRegistry } from './hook.js';
-export {
-  confirmationRequiredHookIds,
-  hookImpacts,
-  requiresHookConfirmation,
-} from './hook-risk.js';
+export { confirmationRequiredHookIds, hookImpacts, requiresHookConfirmation } from './hook-risk.js';
 export type { HookImpact, HookRiskLevel } from './hook-risk.js';
 export type {
   DecideHandler,

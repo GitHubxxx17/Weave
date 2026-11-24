@@ -175,8 +175,7 @@ export function projectPluginCatalog(
       record.active.generation === snapshot.generation.id
         ? actual.get(record.id)?.provides
         : undefined;
-    const pendingHooks =
-      provides === undefined ? undefined : actual.get(record.id)?.pendingHooks;
+    const pendingHooks = provides === undefined ? undefined : actual.get(record.id)?.pendingHooks;
     return pluginListItemSchema.parse({
       id: record.id,
       name: manifest?.name ?? record.id,

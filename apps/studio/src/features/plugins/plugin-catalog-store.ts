@@ -1,5 +1,6 @@
 import {
   PluginApiError,
+  confirmPluginHooks,
   fetchPluginCatalog,
   reloadPlugins,
   revokePluginTrust,
@@ -55,6 +56,7 @@ export type PluginPendingOperation = {
   readonly kind:
     | 'reload'
     | 'trust'
+    | 'confirm-hooks'
     | 'enable'
     | 'disable'
     | 'revoke'
@@ -122,6 +124,7 @@ export interface PluginCatalogStore {
   retryManaged(): Promise<ManagedAttemptOutcome>;
   stopTrackingManaged(): Promise<void>;
   trust(id: string, digest: string): Promise<void>;
+  confirmHooks(id: string, digest: string, hooks: readonly string[]): Promise<void>;
   setEnabled(id: string, enabled: boolean, immediate?: boolean): Promise<void>;
   revoke(id: string, immediate?: boolean): Promise<void>;
   configureMcp(expectedSequence: number, config: McpServerConfig): Promise<void>;
@@ -676,6 +679,10 @@ export function createPluginCatalogStore(): PluginCatalogStore {
     stopTrackingManaged,
     trust: (id, digest) =>
       start({ kind: 'trust', id, digest }, () => esmWrite(() => trustPlugin(id, digest), id)),
+    confirmHooks: (id, digest, hooks) =>
+      start({ kind: 'confirm-hooks', id, digest }, () =>
+        esmWrite(() => confirmPluginHooks(id, digest, hooks), id),
+      ),
     setEnabled: (id, enabled, immediate = false) =>
       start({ kind: enabled ? 'enable' : 'disable', id }, () =>
         esmWrite(() => setPluginEnabled(id, enabled, { immediate }), id),

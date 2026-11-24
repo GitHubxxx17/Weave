@@ -118,6 +118,13 @@ export interface PluginKernelOptions {
    */
   readonly hookConfirmation?:
     | {
+        /**
+         * Whether the plugin is subject to confirmation. Defaults to every
+         * plugin. For a governed plugin an undeclared high-risk subscription
+         * registers (held) even when `contributes` is present and omits it;
+         * ungoverned plugins keep the plain declaration check.
+         */
+        governs?(pluginId: string): boolean;
         isConfirmed(pluginId: string, hookId: string): boolean;
       }
     | undefined;
@@ -181,6 +188,11 @@ export function createPluginKernel(options: PluginKernelOptions = {}): PluginKer
     const disposers: (() => void)[] = [];
     const usage = createServiceUsage();
     const entry: LoadedPlugin = { plugin, manifest, usage, disposers, abort, pendingHooks: [] };
+    const confirmation =
+      options.hookConfirmation !== undefined &&
+      (options.hookConfirmation.governs?.(manifest.id) ?? true)
+        ? options.hookConfirmation
+        : undefined;
     const env = createPluginEnv({
       manifest,
       signal: abort.signal,
@@ -189,13 +201,13 @@ export function createPluginKernel(options: PluginKernelOptions = {}): PluginKer
       hooks,
       track: (disposer) => disposers.push(disposer),
       usage,
+      ...(confirmation === undefined ? {} : { holdsUndeclaredHook: requiresHookConfirmation }),
     });
 
     try {
       await plugin.setup(env);
       assertServicePermissions(manifest, usage);
       usage.closed = true;
-      const confirmation = options.hookConfirmation;
       if (confirmation !== undefined) {
         const declaredHooks = manifest.contributes?.hooks ?? [];
         const pending = [...usage.hooks].filter(

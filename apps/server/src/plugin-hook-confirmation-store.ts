@@ -75,7 +75,13 @@ export function createSqlitePluginHookConfirmationStore(options: {
             // A malformed row can never match a real plugin, so it is ignored.
             const parsed = rowSchema.safeParse(row);
             return parsed.success
-              ? [hookConfirmationKey(parsed.data.plugin_id, parsed.data.digest, parsed.data.hook_id)]
+              ? [
+                  hookConfirmationKey(
+                    parsed.data.plugin_id,
+                    parsed.data.digest,
+                    parsed.data.hook_id,
+                  ),
+                ]
               : [];
           }),
         );

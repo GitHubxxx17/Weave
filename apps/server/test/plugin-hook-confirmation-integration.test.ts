@@ -28,13 +28,15 @@ function pluginSource(marker: string, note = ''): string {
 }
 
 async function writePlugin(directory: string, marker: string, note = ''): Promise<string> {
-  // No `contributes`: the hook subscription is undeclared.
+  // `contributes.hooks` is absent: the hook subscription is undeclared.
   const manifest: PluginManifest = {
     id: pluginId,
     name: pluginId,
     version: '1.0.0',
     apiVersion: '1.0.0',
     capabilities: ['tool'],
+    contributes: { tools: ['spy_echo'] },
+    permissions: [],
   };
   await mkdir(directory, { recursive: true });
   await writeFile(
@@ -47,9 +49,14 @@ async function writePlugin(directory: string, marker: string, note = ''): Promis
 
 type Server = Awaited<ReturnType<typeof startServer>>;
 
+interface ResponseBody {
+  readonly plugins: readonly { readonly id: string; readonly pendingHooks?: readonly string[] }[];
+  readonly error: { readonly code: string };
+}
+
 async function request(server: Server, path: string, init?: RequestInit) {
   const response = await fetch(`http://127.0.0.1:${server.port}${path}`, init);
-  return { status: response.status, body: (await response.json()) as Record<string, any> };
+  return { status: response.status, body: (await response.json()) as ResponseBody };
 }
 
 function post(server: Server, path: string, body: unknown) {
@@ -170,9 +177,9 @@ describe('undeclared high-risk hook confirmation', () => {
       expect(changedDigest).not.toBe(digest);
       const changed = await startServer(0, options);
       try {
-        expect((await post(changed, `/plugins/${pluginId}/trust`, { digest: changedDigest })).status).toBe(
-          200,
-        );
+        expect(
+          (await post(changed, `/plugins/${pluginId}/trust`, { digest: changedDigest })).status,
+        ).toBe(200);
         const again = await request(changed, '/plugins/hook-confirmations');
         expect(again.body.plugins).toMatchObject([
           { pluginId, digest: changedDigest, hooks: [{ id: 'weave.tools.around' }] },
