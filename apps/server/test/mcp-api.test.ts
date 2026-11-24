@@ -64,7 +64,7 @@ describe('MCP HTTP management', () => {
         snapshot: () => ({ ...snapshot(), resolvedEnv: { SERVICE_TOKEN: 'private-token' } }),
         reload,
       }),
-    ).request('/mcp', { headers: { Host: 'remote.example' } });
+    ).request('/mcp', { headers: { Host: 'localhost:4317' } });
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(snapshot());
     expect(reload).not.toHaveBeenCalled();
