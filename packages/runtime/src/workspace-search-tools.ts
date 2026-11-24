@@ -15,6 +15,7 @@ import {
   toPosixPath,
 } from './workspace-access.js';
 import { indexWorkspaceFiles, walkWorkspaceFiles } from './workspace-file-index.js';
+import { isSecretFile } from './secret-files.js';
 import type { WorkspaceSource } from './workspace-file-types.js';
 import type { ToolDefinition, ToolExecutionContext } from './tool-types.js';
 
@@ -94,12 +95,6 @@ const grepLimits = {
   maxFileBytes: 1_000_000,
   maxLineLength: 300,
 } as const;
-
-/** Files whose contents `grep` never reads. */
-function isSecretFile(file: string): boolean {
-  const name = path.posix.basename(file);
-  return name === '.env' || name.startsWith('.env.');
-}
 
 interface SearchScope {
   /** Real Workspace root. */

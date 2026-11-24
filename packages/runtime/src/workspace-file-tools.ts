@@ -36,6 +36,7 @@ import {
   planTextEdit,
   type TextEditPlan,
 } from './workspace-text.js';
+import { isSecretFile } from './secret-files.js';
 import { runCapturedWrite } from './workspace-write-capture.js';
 import type { ToolDefinition, ToolExecutionContext } from './tool-types.js';
 
@@ -441,7 +442,9 @@ export function createWorkspaceFileTools(options: WorkspaceFileToolOptions): Wor
       'Read a UTF-8 text file inside the project folder. Small files are returned whole. ' +
       'Larger files are returned in pages of up to 2000 lines (about 28 KB); a note at the ' +
       'end gives the lines shown, the total line count, and the offset of the next page. ' +
-      'Pass offset and limit to read a specific range, for example around a line found by grep.',
+      'Pass offset and limit to read a specific range, for example around a line found by grep. ' +
+      'Reading a .env or .env.* file may contain secrets and waits for user approval ' +
+      'unless the run is in yolo mode.',
     readOnly: true,
     parameters: {
       type: 'object',
@@ -454,6 +457,16 @@ export function createWorkspaceFileTools(options: WorkspaceFileToolOptions): Wor
       additionalProperties: false,
     },
     inputSchema: readFileInputSchema,
+    approval: {
+      operation: 'workspace.read_secret_file',
+      risk: 'high',
+      appliesTo: (input) => isSecretFile(input.path),
+      // The summary carries only the path, never the file content.
+      summarize: (input) => ({
+        summary: `读取可能包含密钥的文件 ${input.path}`,
+        inputSummary: { path: input.path },
+      }),
+    },
     execute: (input, context) => readWorkspaceFile(input, context, normalizedOptions),
   };
 

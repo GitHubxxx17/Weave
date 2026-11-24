@@ -48,6 +48,12 @@ export interface ToolApprovalRequirement<TInput = unknown> {
   /** Risk level shown to the caller before approval. */
   readonly risk: ApprovalRisk;
   /**
+   * Optional per-call filter. When present and it returns `false` for the
+   * validated input, this call needs no Approval from the tool itself (a policy
+   * vote of `ask` still forces one). Omitted means every call is protected.
+   */
+  readonly appliesTo?: ((input: TInput) => boolean) | undefined;
+  /**
    * Converts validated input into safe, user-facing approval metadata.
    *
    * It may inspect the filesystem through `context` (for example to build a
@@ -145,6 +151,9 @@ export const toolDefinitionSchema = z
       .object({
         operation: nonEmptyStringSchema,
         risk: approvalRiskSchema,
+        appliesTo: z
+          .custom<(...args: never[]) => unknown>((value) => typeof value === 'function')
+          .optional(),
         summarize: z.custom<(...args: never[]) => unknown>((value) => typeof value === 'function'),
       })
       .optional(),
