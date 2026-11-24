@@ -1,5 +1,6 @@
+import { readSseStream } from '../../lib/sse.js';
 import { runtimeApiUrl } from '../runtime/runtime-bridge.js';
-import { AgentStreamError, parseSseFrame } from './agent-legacy-stream.js';
+import { AgentStreamError } from './agent-legacy-stream.js';
 import { requestExecutionJson, waitForExecutionRetry } from './agent-execution-client.js';
 import {
   agentExecutionQueueSnapshotSchema,
@@ -101,10 +102,6 @@ export async function observeExecutionQueue(
   let attempt = 0;
   while (true) {
     options?.signal?.throwIfAborted();
-    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-    const abort = (): void => {
-      void reader?.cancel().catch(() => undefined);
-    };
     try {
       const response = await fetch(runtimeApiUrl(`${pathFor(sessionId)}/queue/events`), {
         headers: { Accept: 'text/event-stream' },
@@ -115,58 +112,39 @@ export async function observeExecutionQueue(
         if (response.status >= 500) throw new TypeError('Queue unavailable');
         throw new AgentStreamError(`http-${response.status}`, 'Queue observation failed');
       }
-      if (
-        response.body === null ||
-        !response.headers.get('Content-Type')?.includes('text/event-stream')
-      )
-        throw new AgentStreamError('agent-stream-protocol', 'Queue stream is invalid');
-      reader = response.body.getReader();
-      options?.signal?.addEventListener('abort', abort, { once: true });
-      const decoder = new TextDecoder();
-      let buffer = '';
+      const frames = readSseStream(response, {
+        maxFrameChars: 65536,
+        maxBufferChars: 65536,
+        signal: options?.signal,
+        createError: (reason) =>
+          reason === 'frame-too-large' || reason === 'buffer-too-large'
+            ? new AgentStreamError('agent-stream-protocol', 'Queue frame exceeds limit')
+            : new AgentStreamError('agent-stream-protocol', 'Queue stream is invalid'),
+      });
       options?.onConnection?.('connected');
-      while (true) {
-        const result = await reader.read();
-        options?.signal?.throwIfAborted();
-        buffer += decoder.decode(result.value, { stream: !result.done });
-        let delimiter = /\r?\n\r?\n/.exec(buffer);
-        while (delimiter !== null) {
-          const raw = buffer.slice(0, delimiter.index);
-          buffer = buffer.slice(delimiter.index + delimiter[0].length);
-          if (raw.length > 65536)
-            throw new AgentStreamError('agent-stream-protocol', 'Queue frame exceeds limit');
-          const frame = parseSseFrame(raw);
-          if (frame?.event === 'queue') {
-            let payload: unknown;
-            try {
-              payload = JSON.parse(frame.data) as unknown;
-            } catch {
-              throw new AgentStreamError('agent-stream-protocol', 'Queue frame is invalid');
-            }
-            const parsed = agentExecutionQueueSnapshotSchema.safeParse(payload);
-            if (!parsed.success)
-              throw new AgentStreamError('agent-stream-protocol', 'Queue frame is invalid');
-            const state = validateQueue(parsed.data, sessionId);
-            const [epoch, , sequence] = state.cursor.split(':');
-            const [previousEpoch, , previousSequence] = cursor.split(':');
-            if (epoch !== previousEpoch || Number(sequence) > Number(previousSequence)) {
-              cursor = state.cursor;
-              onSnapshot(state);
-            }
+      for await (const frame of frames) {
+        if (frame.event === 'queue') {
+          let payload: unknown;
+          try {
+            payload = JSON.parse(frame.data) as unknown;
+          } catch {
+            throw new AgentStreamError('agent-stream-protocol', 'Queue frame is invalid');
           }
-          delimiter = /\r?\n\r?\n/.exec(buffer);
+          const parsed = agentExecutionQueueSnapshotSchema.safeParse(payload);
+          if (!parsed.success)
+            throw new AgentStreamError('agent-stream-protocol', 'Queue frame is invalid');
+          const state = validateQueue(parsed.data, sessionId);
+          const [epoch, , sequence] = state.cursor.split(':');
+          const [previousEpoch, , previousSequence] = cursor.split(':');
+          if (epoch !== previousEpoch || Number(sequence) > Number(previousSequence)) {
+            cursor = state.cursor;
+            onSnapshot(state);
+          }
         }
-        if (buffer.length > 65536)
-          throw new AgentStreamError('agent-stream-protocol', 'Queue frame exceeds limit');
-        if (result.done) break;
       }
     } catch (error: unknown) {
       options?.signal?.throwIfAborted();
       if (!(error instanceof TypeError)) throw error;
-    } finally {
-      options?.signal?.removeEventListener('abort', abort);
-      await reader?.cancel().catch(() => undefined);
-      reader?.releaseLock();
     }
     options?.onConnection?.('reconnecting');
     await waitForExecutionRetry(attempt++, options?.signal);

@@ -6,7 +6,11 @@ import {
   type AgentRuntimeEvent,
   type AgentStreamHandlers,
 } from './agent-types.js';
+import { readSseStream } from '../../lib/sse.js';
 import { runtimeApiUrl } from '../runtime/runtime-bridge.js';
+
+/** Largest single frame (or unterminated buffer) accepted from the legacy Agent stream. */
+const legacyMaxFrameChars = 8 * 1024 * 1024 + 65536;
 
 /** A safe, typed failure surfaced by the browser-side Agent stream client. */
 export class AgentStreamError extends Error {
@@ -19,43 +23,7 @@ export class AgentStreamError extends Error {
   }
 }
 
-/**
- * Parses one complete SSE frame. Data fields follow the SSE rule of joining
- * multiple lines with a newline; comments and unsupported fields are ignored.
- */
-export function parseSseFrame(
-  frame: string,
-): { readonly event: string; readonly data: string } | null {
-  let event: string | undefined;
-  const dataLines: string[] = [];
-
-  for (const line of frame.split(/\r\n|\n/)) {
-    if (line === '' || line.startsWith(':')) {
-      continue;
-    }
-
-    const separator = line.indexOf(':');
-    const field = separator === -1 ? line : line.slice(0, separator);
-    const value =
-      separator === -1
-        ? ''
-        : line.slice(separator + 1).startsWith(' ')
-          ? line.slice(separator + 2)
-          : line.slice(separator + 1);
-
-    if (field === 'event') {
-      event = value;
-    } else if (field === 'data') {
-      dataLines.push(value);
-    }
-  }
-
-  if (event === undefined || dataLines.length === 0) {
-    return null;
-  }
-
-  return { event, data: dataLines.join('\n') };
-}
+export { parseSseFrame } from '../../lib/sse.js';
 
 /** Validates and maps a known SSE event, ignoring events added in the future. */
 export function parseAgentEvent(eventName: string, dataText: string): AgentRuntimeEvent | null {
@@ -120,74 +88,20 @@ export async function streamLegacyAgentRun(
     throw new AgentStreamError('agent-stream-protocol', 'Agent stream has no response body');
   }
 
+  const frames = readSseStream(response, {
+    maxFrameChars: legacyMaxFrameChars,
+    maxBufferChars: legacyMaxFrameChars,
+    flushTrailingFrame: true,
+    createError: () => new AgentStreamError('agent-stream-protocol', 'Agent stream is invalid'),
+    ...(options?.signal === undefined ? {} : { signal: options.signal }),
+  });
   handlers.onAccepted?.();
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  try {
-    while (true) {
-      const result = await reader.read();
-      if (result.done) {
-        buffer += decoder.decode();
-        if (buffer.length > 0) {
-          dispatchFrame(buffer, handlers);
-        }
-        return;
-      }
-
-      buffer += decoder.decode(result.value, { stream: true });
-      let delimiterIndex = findFrameDelimiter(buffer);
-      while (delimiterIndex !== -1) {
-        const delimiterLength = buffer.startsWith('\r\n', delimiterIndex) ? 4 : 2;
-        const frame = buffer.slice(0, delimiterIndex);
-        buffer = buffer.slice(delimiterIndex + delimiterLength);
-        if (dispatchFrame(frame, handlers)) {
-          await cancelReader(reader);
-          return;
-        }
-        delimiterIndex = findFrameDelimiter(buffer);
-      }
+  for await (const frame of frames) {
+    const event = parseAgentEvent(frame.event, frame.data);
+    if (event !== null) {
+      handlers.onEvent(event);
+      if (event.type === 'completed') return;
     }
-  } catch (error: unknown) {
-    await cancelReader(reader);
-    throw error;
-  } finally {
-    reader.releaseLock();
-  }
-}
-
-function findFrameDelimiter(buffer: string): number {
-  const lfIndex = buffer.indexOf('\n\n');
-  const crlfIndex = buffer.indexOf('\r\n\r\n');
-  if (lfIndex === -1) {
-    return crlfIndex;
-  }
-  if (crlfIndex === -1) {
-    return lfIndex;
-  }
-  return Math.min(lfIndex, crlfIndex);
-}
-
-function dispatchFrame(frame: string, handlers: AgentStreamHandlers): boolean {
-  const parsedFrame = parseSseFrame(frame);
-  if (parsedFrame === null) {
-    return false;
-  }
-
-  const event = parseAgentEvent(parsedFrame.event, parsedFrame.data);
-  if (event !== null) {
-    handlers.onEvent(event);
-    return event.type === 'completed';
-  }
-  return false;
-}
-
-async function cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
-  try {
-    await reader.cancel();
-  } catch {
-    // Preserve the original stream or protocol error if cancellation fails.
   }
 }
 

@@ -1,6 +1,7 @@
 import { z } from 'zod';
+import { readSseStream, type SseFrame } from '../../lib/sse.js';
 import { runtimeApiUrl } from '../runtime/runtime-bridge.js';
-import { AgentStreamError, parseSseFrame } from './agent-legacy-stream.js';
+import { AgentStreamError } from './agent-legacy-stream.js';
 import {
   agentRunRequestSchema,
   agentStreamErrorPayloadSchema,
@@ -227,10 +228,8 @@ export async function observeAgentExecution(
     cursor = next;
     return true;
   };
-  const dispatch = (raw: string): void => {
-    if (new TextEncoder().encode(raw).byteLength > maxFrameBytes) throw protocolError();
-    const frame = parseSseFrame(raw);
-    if (frame === null || !['snapshot', 'event', 'status'].includes(frame.event)) return;
+  const dispatch = (frame: SseFrame): void => {
+    if (!['snapshot', 'event', 'status'].includes(frame.event)) return;
     let payload: unknown;
     try {
       payload = JSON.parse(frame.data) as unknown;
@@ -290,10 +289,6 @@ export async function observeAgentExecution(
   while (!terminal) {
     checkAbort(options?.signal);
     handlers.onConnection?.(attempt === 0 ? 'connecting' : 'reconnecting');
-    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-    const abort = (): void => {
-      void reader?.cancel().catch(() => undefined);
-    };
     try {
       const response = await fetch(
         runtimeApiUrl(
@@ -310,38 +305,21 @@ export async function observeAgentExecution(
           throw new AgentStreamError(`http-${response.status}`, 'Execution observation failed');
         throw new TypeError('Execution observation unavailable');
       }
-      if (
-        response.body === null ||
-        !response.headers.get('Content-Type')?.includes('text/event-stream')
-      )
-        throw protocolError();
-      reader = response.body.getReader();
-      options?.signal?.addEventListener('abort', abort, { once: true });
       checkAbort(options?.signal);
+      const frames = readSseStream(response, {
+        maxFrameChars: maxFrameBytes,
+        maxBufferChars: maxFrameBytes,
+        createError: protocolError,
+        signal: options?.signal,
+      });
       handlers.onConnection?.('connected');
-      const decoder = new TextDecoder();
-      let buffer = '';
-      while (!terminal) {
-        const result = await reader.read();
-        checkAbort(options?.signal);
-        buffer += decoder.decode(result.value, { stream: !result.done });
-        let match = /\r?\n\r?\n/.exec(buffer);
-        while (match !== null) {
-          dispatch(buffer.slice(0, match.index));
-          buffer = buffer.slice(match.index + match[0].length);
-          if (terminal) break;
-          match = /\r?\n\r?\n/.exec(buffer);
-        }
-        if (buffer.length > maxFrameBytes) throw protocolError();
-        if (result.done) break;
+      for await (const frame of frames) {
+        dispatch(frame);
+        if (terminal) break;
       }
     } catch (error: unknown) {
       checkAbort(options?.signal);
       if (!(error instanceof TypeError)) throw error;
-    } finally {
-      options?.signal?.removeEventListener('abort', abort);
-      await reader?.cancel().catch(() => undefined);
-      reader?.releaseLock();
     }
     if (!terminal) {
       handlers.onConnection?.('reconnecting');
