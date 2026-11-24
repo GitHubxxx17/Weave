@@ -4,6 +4,7 @@ const safeStorage = {
   isEncryptionAvailable: vi.fn(),
   encryptString: vi.fn(),
   decryptString: vi.fn(),
+  getSelectedStorageBackend: vi.fn(),
 };
 
 vi.mock('electron', () => ({ safeStorage }));
@@ -34,6 +35,30 @@ describe('Electron Provider Secret Codec', () => {
 
     expect(() => codec.encrypt('secret')).toThrow();
     expect(safeStorage.encryptString).not.toHaveBeenCalled();
+  });
+
+  it('treats the Linux basic_text backend as unavailable', () => {
+    safeStorage.isEncryptionAvailable.mockReturnValue(true);
+    safeStorage.getSelectedStorageBackend.mockReturnValue('basic_text');
+
+    const codec = createElectronProviderSecretCodec('linux');
+
+    expect(codec.isAvailable()).toBe(false);
+    expect(() => codec.encrypt('secret')).toThrow();
+  });
+
+  it('accepts a real Linux keyring backend', () => {
+    safeStorage.isEncryptionAvailable.mockReturnValue(true);
+    safeStorage.getSelectedStorageBackend.mockReturnValue('gnome_libsecret');
+
+    expect(createElectronProviderSecretCodec('linux').isAvailable()).toBe(true);
+  });
+
+  it('does not query the storage backend on other platforms', () => {
+    safeStorage.isEncryptionAvailable.mockReturnValue(true);
+
+    expect(createElectronProviderSecretCodec('darwin').isAvailable()).toBe(true);
+    expect(safeStorage.getSelectedStorageBackend).not.toHaveBeenCalled();
   });
 
   it('decrypts persisted base64 values through Electron safeStorage', () => {

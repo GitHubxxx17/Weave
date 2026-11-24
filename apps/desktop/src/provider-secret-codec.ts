@@ -36,10 +36,17 @@ function invalidError(cause?: unknown): ElectronProviderSecretCodecError {
  * The encrypted value is serialized as Base64 only for transport into SQLite;
  * the plaintext API key remains inside the Electron Main process.
  */
-export function createElectronProviderSecretCodec(): ProviderSecretCodec {
+export function createElectronProviderSecretCodec(
+  platform: NodeJS.Platform = process.platform,
+): ProviderSecretCodec {
   const isAvailable = (): boolean => {
     try {
-      return safeStorage.isEncryptionAvailable();
+      if (!safeStorage.isEncryptionAvailable()) {
+        return false;
+      }
+      // Linux without a keyring falls back to a hard-coded password, which is
+      // plaintext in practice; treat that backend as unavailable.
+      return !(platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text');
     } catch {
       return false;
     }
