@@ -1,10 +1,6 @@
 import { useFilePicker } from '../features/file-context/use-file-picker.js';
 import { FilePicker } from '../features/file-context/file-picker.js';
-import {
-  DraftFileAttachments,
-  FileAttachmentSummaries,
-} from '../features/file-context/file-attachments.js';
-import type { FileAttachmentSummary } from '../features/file-context/file-context-types.js';
+import { DraftFileAttachments } from '../features/file-context/file-attachments.js';
 import {
   ChangeEvent,
   type ClipboardEvent as ReactClipboardEvent,
@@ -13,13 +9,15 @@ import {
   KeyboardEvent as ReactKeyboardEvent,
   type ReactElement,
   useEffect,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Archive,
-  ArrowDown,
   Bot,
   BookOpen,
   Check,
@@ -34,7 +32,6 @@ import {
   GitBranch,
   History,
   ImagePlus,
-  LoaderCircle,
   MessageSquarePlus,
   MoreHorizontal,
   PanelRightOpen,
@@ -56,7 +53,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 
 import { AgentStreamError, streamAgentRun } from '../features/agent/agent-stream.js';
-import type { AgentRuntimeEvent, AgentRunRequestInput } from '../features/agent/agent-types.js';
+import type { AgentRuntimeEvent } from '../features/agent/agent-types.js';
 import type { AgentStreamHandlers } from '../features/agent/agent-types.js';
 import {
   cancelAgentExecution,
@@ -70,25 +67,37 @@ import {
   type AgentExecutionSnapshot,
 } from '../features/agent/agent-execution-types.js';
 import { ExecutionQueueList } from '../features/agent/execution-queue-list.js';
-import { mergeExecutionHistory } from '../features/agent/execution-history.js';
 import { useExecutionQueues } from '../features/agent/use-execution-queues.js';
-import { appendExecutionEvent, executionTurnView } from '../features/agent/agent-execution-view.js';
 import { useSessionSkills } from '../features/skills/use-session-skills.js';
 import { SkillPicker } from '../features/skills/skill-picker.js';
-import { SkillHistory } from '../features/skills/skill-history.js';
-import { sameSkill, skillRef, type SkillSummary } from '../features/skills/skill-types.js';
-import { useAutoScroll } from '../features/conversation/use-auto-scroll.js';
-import { MarkdownMessage } from '../features/conversation/markdown-message.js';
-import { ToolStep } from '../features/conversation/tool-step.js';
-import { TurnFileReview } from '../features/file-undo/turn-file-review.js';
-import { MessageFooter } from '../features/conversation/message-footer.js';
+import { sameSkill, skillRef } from '../features/skills/skill-types.js';
+import { ConversationPane } from '../features/conversation/conversation-pane.js';
+import { createConversationStore } from '../features/conversation/conversation-store.js';
+import { usePendingConversationReveal } from '../features/conversation/use-pending-conversation-reveal.js';
+import {
+  conversationRows,
+  projectConversation,
+  getConversationRow,
+  getConversationRetry,
+} from '../features/conversation/conversation-model.js';
+import type {
+  CapturedSubmission,
+  ConversationAction,
+  ConversationRow,
+  TimelineHandle,
+  LiveOwner,
+} from '../features/conversation/conversation-types.js';
+import { createTurnFileReviewStore } from '../features/file-undo/turn-file-review-store.js';
+import {
+  ConnectedContextMeter,
+  ConnectedConversationPanels,
+} from '../features/conversation/connected-conversation-panels.js';
 import {
   useComposerDraft,
   type DraftCapture,
   type DraftMigrationTicket,
 } from '../features/composer/use-composer-draft.js';
 import { usePluginPanels } from '../features/panel/use-plugin-panels.js';
-import { PanelContainer } from '../features/panel/panel-container.js';
 import { createPluginCatalogStore } from '../features/plugins/plugin-catalog-store.js';
 import {
   PluginCatalogProvider,
@@ -99,8 +108,7 @@ import { PluginMarketplacePage } from '../features/plugins/plugin-marketplace-pa
 import { MemoryPage } from '../features/memory/MemoryPage.js';
 import { SearchPage } from '../features/retrieval/SearchPage.js';
 import { useSidePanelWidth } from '../features/panel/panel-resizer.js';
-import { contextWarnThreshold, latestContext } from '../features/panel/panel-data.js';
-import { formatTokens, sumUsage } from '../features/conversation/turn-stats.js';
+import { sumUsage } from '../features/conversation/turn-stats.js';
 import { ApprovalPanel, useApprovals } from '../features/approvals/approval-panel.js';
 import { AgentTaskPanel, isSettledTask } from '../features/tasks/task-panel.js';
 import { useAgentTasks } from '../features/tasks/use-agent-tasks.js';
@@ -127,7 +135,6 @@ import type {
   SessionSummary,
   TurnSummary,
   TurnUsage,
-  WorkspaceMessage,
 } from '../features/workspace/workspace-types.js';
 
 type RunStatus = 'idle' | 'streaming' | 'completed' | 'error' | 'cancelled';
@@ -143,6 +150,7 @@ type SessionRunState = {
 /** Non-reactive bookkeeping for the single in-flight run of one session. */
 type SessionRunHandle = {
   runId: string;
+  observationEpoch: number;
   controller: AbortController;
   assistantId: string;
   tools: readonly ToolActivity[];
@@ -169,27 +177,8 @@ type ProductView =
   | 'retrieval';
 type OpenMenu = 'project' | 'more' | 'context' | 'permission' | 'model' | null;
 
-type AgentSubmissionSnapshot = Readonly<
-  AgentRunRequestInput & { readonly skills: NonNullable<AgentRunRequestInput['skills']> }
->;
-
-type ChatMessage = {
-  readonly id: string;
-  readonly role: 'user' | 'assistant';
-  readonly text: string;
-  readonly reasoning: string;
-  readonly tools: readonly ToolActivity[];
-  readonly occurredAt: string;
-  readonly submission?: AgentSubmissionSnapshot | undefined;
-  readonly originalUserMessage?: AgentRunRequestInput['userMessage'] | undefined;
-  readonly selectedSkills?: readonly SkillSummary[] | undefined;
-  readonly fileAttachments?: readonly FileAttachmentSummary[] | undefined;
-  /** Images attached to a user message, base64-encoded. */
-  readonly images?: readonly { readonly mediaType: string; readonly data: string }[] | undefined;
-  /** Turn that produced an assistant reply; live runs use a temporary id. */
-  readonly turnId?: string | undefined;
-  readonly durableMessageIds?: readonly string[];
-};
+type AgentSubmissionSnapshot = CapturedSubmission;
+type ChatMessage = ConversationRow;
 
 type StudioSession = {
   readonly id: string;
@@ -199,6 +188,7 @@ type StudioSession = {
   readonly messages: readonly ChatMessage[];
   readonly turns: readonly TurnSummary[];
   readonly detailKnown: boolean;
+  readonly durableSequence?: number;
   readonly taskOrigin?: SessionDetail['taskOrigin'];
 };
 
@@ -595,58 +585,6 @@ function liveTurnIdFor(assistantMessageId: string): string {
   return `live-${assistantMessageId}`;
 }
 
-/** Shown when a provider put the whole answer into its reasoning stream. */
-const reasoningOnlyPlaceholder =
-  '模型没有单独输出正文，回答写在了上方的「思考过程」里，展开即可查看。';
-
-function getAssistantPlaceholder(
-  status: RunStatus,
-  isLatest: boolean,
-  hasReasoning = false,
-): string {
-  if (hasReasoning && !(isLatest && status === 'streaming')) {
-    return reasoningOnlyPlaceholder;
-  }
-  if (!isLatest) {
-    return '暂无回复';
-  }
-
-  switch (status) {
-    case 'streaming':
-      return '正在思考…';
-    case 'cancelled':
-      return '本次运行已取消';
-    case 'error':
-      return '本次运行失败，请查看运行错误';
-    case 'completed':
-      return 'Agent 没有返回文本';
-    case 'idle':
-      return '暂无回复';
-  }
-}
-
-function messageText(message: WorkspaceMessage): string {
-  return message.content
-    .filter((part) => part.type === 'text')
-    .map((part) => part.text)
-    .join('');
-}
-
-function messageReasoning(message: WorkspaceMessage): string {
-  return message.content
-    .filter((part) => part.type === 'reasoning')
-    .map((part) => part.text)
-    .join('');
-}
-
-function messageImages(
-  message: WorkspaceMessage,
-): { readonly mediaType: string; readonly data: string }[] {
-  return message.content
-    .filter((part) => part.type === 'image')
-    .map((part) => ({ mediaType: part.mediaType, data: part.data }));
-}
-
 /** Reads an image File as base64 (without the `data:` prefix). */
 function readImageFile(file: File): Promise<{ mediaType: string; data: string }> {
   return new Promise((resolve, reject) => {
@@ -662,115 +600,6 @@ function readImageFile(file: File): Promise<{ mediaType: string; data: string }>
     };
     reader.readAsDataURL(file);
   });
-}
-
-function messageToolResult(
-  messages: readonly WorkspaceMessage[],
-  toolCallId: string,
-): string | undefined {
-  const toolMessage = messages.find(
-    (message) => message.role === 'tool' && message.toolCallId === toolCallId,
-  );
-  return toolMessage === undefined ? undefined : messageText(toolMessage);
-}
-
-function toToolActivities(
-  message: Extract<WorkspaceMessage, { role: 'assistant' }>,
-  messages: readonly WorkspaceMessage[],
-  statusByToolCallId: ReadonlyMap<string, 'completed' | 'failed'>,
-): ToolActivity[] {
-  return (message.toolCalls ?? []).map((toolCall) => {
-    const result = messageToolResult(messages, toolCall.id);
-    return {
-      toolCallId: toolCall.id,
-      name: toolCall.name,
-      arguments: toolCall.arguments,
-      status: statusByToolCallId.get(toolCall.id) ?? 'completed',
-      ...(result === undefined ? {} : { result }),
-    };
-  });
-}
-
-/**
- * Builds the conversation view from durable messages.
- *
- * A Turn can span several model steps, each stored as its own assistant
- * message. They are merged into one card per Turn so a refreshed conversation
- * matches what the live run showed: reasoning and tool calls from every step
- * together, with the final step's text as the answer.
- */
-function toChatMessages(
-  sessionId: string,
-  messages: readonly WorkspaceMessage[],
-  statusByToolCallId: ReadonlyMap<string, 'completed' | 'failed'>,
-): ChatMessage[] {
-  const result: ChatMessage[] = [];
-  const turnCard = new Map<string, ChatMessage>();
-
-  messages.forEach((message, index) => {
-    if (message.role === 'user') {
-      result.push({
-        id: message.messageId ?? `${sessionId}-message-${index + 1}`,
-        role: 'user',
-        text: messageText(message),
-        reasoning: '',
-        tools: [],
-        occurredAt: message.occurredAt ?? '',
-        images: messageImages(message),
-        fileAttachments: message.fileAttachments,
-        originalUserMessage: {
-          role: 'user',
-          content: message.content.filter(
-            (part): part is Extract<typeof part, { type: 'text' | 'image' }> =>
-              part.type === 'text' || part.type === 'image',
-          ),
-        },
-        ...(message.turnId === undefined ? {} : { turnId: message.turnId }),
-      });
-      return;
-    }
-    if (message.role !== 'assistant') {
-      return;
-    }
-
-    const text = messageText(message);
-    const reasoning = messageReasoning(message);
-    const tools = toToolActivities(message, messages, statusByToolCallId);
-    const existing = message.turnId === undefined ? undefined : turnCard.get(message.turnId);
-
-    if (existing !== undefined) {
-      // Append this step onto the Turn's single card.
-      const merged: ChatMessage = {
-        ...existing,
-        text: existing.text + text,
-        reasoning: existing.reasoning + reasoning,
-        tools: [...existing.tools, ...tools],
-        ...(message.messageId === undefined
-          ? {}
-          : { durableMessageIds: [...(existing.durableMessageIds ?? []), message.messageId] }),
-      };
-      turnCard.set(existing.turnId as string, merged);
-      result.splice(result.indexOf(existing), 1, merged);
-      return;
-    }
-
-    const card: ChatMessage = {
-      id: message.turnId ?? message.messageId ?? `${sessionId}-message-${index + 1}`,
-      role: 'assistant',
-      text,
-      reasoning,
-      tools,
-      occurredAt: message.occurredAt ?? '',
-      ...(message.messageId === undefined ? {} : { durableMessageIds: [message.messageId] }),
-      ...(message.turnId === undefined ? {} : { turnId: message.turnId }),
-    };
-    result.push(card);
-    if (message.turnId !== undefined) {
-      turnCard.set(message.turnId, card);
-    }
-  });
-
-  return result;
 }
 
 function formatMessageTime(occurredAt: string): string {
@@ -794,22 +623,15 @@ function formatMessageTime(occurredAt: string): string {
 }
 
 function toStudioSession(session: SessionSummary | SessionDetail): StudioSession {
-  const turns = 'turns' in session ? session.turns : [];
-  const statusByToolCallId = new Map<string, 'completed' | 'failed'>();
-  for (const turn of turns) {
-    for (const result of turn.toolResults) {
-      statusByToolCallId.set(result.toolCallId, result.status);
-    }
-  }
   return {
     id: session.id,
     title: session.title,
     lastUsedLabel: '最近使用',
     archivedAt: session.archivedAt ?? null,
-    messages:
-      'messages' in session ? toChatMessages(session.id, session.messages, statusByToolCallId) : [],
-    turns,
+    messages: 'messages' in session ? conversationRows(projectConversation(session)) : [],
+    turns: 'turns' in session ? session.turns : [],
     detailKnown: 'messages' in session,
+    durableSequence: session.lastSequence,
     ...('taskOrigin' in session ? { taskOrigin: session.taskOrigin } : {}),
   };
 }
@@ -865,6 +687,23 @@ function StudioApp(): ReactElement {
     readonly data: string;
   } | null>(null);
   const [projects, setProjects] = useState<readonly StudioProject[]>([]);
+  const [conversationStore] = useState(createConversationStore);
+  const [fileReviewStore] = useState(createTurnFileReviewStore);
+  const timelineRef = useRef<TimelineHandle>(null);
+  useLayoutEffect(() => {
+    for (const project of projects)
+      for (const session of project.sessions) {
+        conversationStore.hydrateView({
+          sessionId: session.id,
+          messages: session.messages,
+          turns: session.turns,
+          detailKnown: session.detailKnown,
+          ...(session.durableSequence === undefined
+            ? {}
+            : { durableSequence: session.durableSequence }),
+        });
+      }
+  }, [conversationStore, projects]);
   const [activeProjectId, setActiveProjectId] = useState('');
   const [expandedProjectIds, setExpandedProjectIds] = useState<readonly string[]>([]);
   const [activeSessionId, setActiveSessionId] = useState('');
@@ -919,7 +758,10 @@ function StudioApp(): ReactElement {
   const [expandedMessageIds, setExpandedMessageIds] = useState<readonly string[]>([]);
   const [runStateBySession, setRunStateBySession] = useState<Record<string, SessionRunState>>({});
   const runHandles = useRef<Map<string, SessionRunHandle>>(new Map());
+  const observationEpoch = useRef(0);
   const sessionActivityVersions = useRef(new Map<string, number>());
+  // Deleted IDs cannot be revived by an already admitted HTTP read or observer.
+  const deletedSessionIds = useRef(new Set<string>());
   // Durable Session sequences survive navigation and Server epochs; late reads must not roll them back.
   const appliedDurableSequences = useRef(new Map<string, number>());
   const settledExecutionSequences = useRef(new Map<string, number>());
@@ -943,8 +785,15 @@ function StudioApp(): ReactElement {
       mounted.current = false;
       for (const handle of runHandles.current.values()) handle.controller.abort();
       runHandles.current.clear();
+      // StrictMode replays setup synchronously; only a real detach disposes timers.
+      queueMicrotask(() => {
+        if (!mounted.current) {
+          conversationStore.dispose();
+          fileReviewStore.dispose();
+        }
+      });
     };
-  }, []);
+  }, [conversationStore, fileReviewStore]);
 
   /** Run status of any session; a session without a run is idle. */
   function sessionRunStatus(sessionId: string): RunStatus {
@@ -974,10 +823,12 @@ function StudioApp(): ReactElement {
   useEffect(() => {
     for (const [key, handle] of runHandles.current) {
       if (!handle.observing || handle.sessionId === activeSessionId) continue;
+      if (handle.execution !== undefined)
+        conversationStore.detachLive(liveOwner(handle.execution, handle.runId));
       handle.controller.abort();
       runHandles.current.delete(key);
     }
-  }, [activeSessionId]);
+  }, [activeSessionId, conversationStore]);
   const messageInputRef = useRef<HTMLTextAreaElement | null>(null);
   const composerIsComposing = useRef(false);
   const directoryInputRef = useRef<HTMLInputElement | null>(null);
@@ -1057,7 +908,6 @@ function StudioApp(): ReactElement {
     providerSettings.providers.find((provider) => provider.id === selectedProviderId) ??
     providerSettings.providers[0];
   const messages = activeSession?.messages ?? [];
-  const conversationScroll = useAutoScroll<HTMLDivElement>(messages, activeSessionId);
   const approvals = useApprovals(!isLoadingWorkspace);
   function taskForApproval(approval: ApprovalRequest): AgentTaskView | undefined {
     return taskState.tasks.find(
@@ -1068,22 +918,9 @@ function StudioApp(): ReactElement {
     );
   }
   const turns = activeSession?.turns ?? emptyTurns;
-  const currentContext = latestContext(turns);
-  const turnById = new Map(turns.map((turn) => [turn.turnId, turn]));
-  const lastTurnId = turns.at(-1)?.turnId;
-  const lastReplyIdByTurn = new Map<string, string>();
-  for (const message of messages) {
-    if (message.role === 'assistant' && message.turnId !== undefined) {
-      lastReplyIdByTurn.set(message.turnId, message.id);
-    }
-  }
-  // The viewed session's most recent assistant message drives the live / terminal
-  // placeholder and spinner, so it stays correct for any session, including a
-  // background one that is still streaming.
-  const latestAssistantId =
-    [...messages].reverse().find((message) => message.role === 'assistant')?.id ?? null;
-
   function submissionForTurn(turnId: string): AgentSubmissionSnapshot | undefined {
+    const projected = getConversationRetry(conversationStore.getSnapshot(activeSessionId), turnId);
+    if (projected !== undefined) return projected;
     const turn = turns.find((entry) => entry.turnId === turnId);
     const message = messages.find(
       (entry) =>
@@ -1126,52 +963,89 @@ function StudioApp(): ReactElement {
   }
 
   function jumpToMessage(messageId: string): void {
-    const element = document.getElementById(`message-${messageId}`);
-    if (element !== null && typeof element.scrollIntoView === 'function') {
-      element.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
+    void timelineRef.current?.reveal({ kind: 'row', sessionId: activeSessionId, rowId: messageId });
   }
-
   function inspectToolCall(toolCallId: string, turnId?: string): boolean {
-    for (let index = messages.length - 1; index >= 0; index--) {
-      const message = messages[index]!;
-      if (turnId !== undefined && message.turnId !== turnId) continue;
-      if (!message.tools.some((tool) => tool.toolCallId === toolCallId)) continue;
-      const article = document.getElementById(`message-${message.id}`);
-      if (article === null || !conversationScroll.ref.current?.contains(article)) return false;
-      const step = Array.from(
-        article.querySelectorAll<HTMLDetailsElement>('[data-tool-call-id]'),
-      ).find((element) => element.dataset.toolCallId === toolCallId);
-      const parameters = step?.querySelector<HTMLElement>('[data-tool-parameters]');
-      if (step === undefined || parameters === null || parameters === undefined) return false;
-
-      const process = step.closest<HTMLDetailsElement>('details.message-process');
-      if (process !== null) process.open = true;
-      setExpandedMessageIds((current) =>
-        current.includes(message.id) ? current : [...current, message.id],
-      );
-      step.open = true;
-      parameters.focus({ preventScroll: true });
-      parameters.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
-      return true;
-    }
-    return false;
+    if (turnId === undefined) return false;
+    void timelineRef.current?.reveal({
+      kind: 'tool',
+      sessionId: activeSessionId,
+      turnId,
+      toolCallId,
+    });
+    return true;
   }
-
-  useEffect(() => {
-    if (taskTranscriptTarget?.sessionId !== activeSessionId) return;
-    if ('result' in taskTranscriptTarget) {
-      const { messageId, turnId } = taskTranscriptTarget.result;
-      const message = messages.find(
-        (entry) => entry.turnId === turnId && entry.durableMessageIds?.includes(messageId),
-      );
-      if (message === undefined) return;
-      jumpToMessage(message.id);
-    } else if (!inspectToolCall(taskTranscriptTarget.toolCallId, taskTranscriptTarget.turnId)) {
+  const conversationActionHandler = useRef<(action: ConversationAction) => void>(() => {});
+  conversationActionHandler.current = (action) => {
+    if (action.type === 'image') {
+      setPreviewImage(action.image);
       return;
     }
-    setTaskTranscriptTarget(undefined);
-  }, [activeSessionId, messages, taskTranscriptTarget]);
+    if (action.sessionId !== activeSessionId || !canCompose) return;
+    if (action.type === 'retry') retryTurn(action.turnId);
+    if (action.type === 'quote') {
+      const row = getConversationRow(conversationStore.getSnapshot(action.sessionId), action.rowId);
+      if (row !== undefined) quoteReply(row.text);
+    }
+  };
+  const onConversationAction = useCallback(
+    (action: ConversationAction) => conversationActionHandler.current(action),
+    [],
+  );
+  const suggestionHandler = useRef<(text: string) => void>(() => {});
+  suggestionHandler.current = fillSuggestion;
+  const showEmptyConversation = messages.length === 0;
+  const emptyConversation = useMemo(
+    () =>
+      showEmptyConversation ? (
+        <div className="empty-chat">
+          <div className="empty-orbit" aria-hidden="true">
+            <Sparkles aria-hidden="true" />
+          </div>
+          <p className="empty-kicker">WEAVE</p>
+          <h3>今天想完成什么？</h3>
+          <p>当前项目 {activeProject?.name ?? 'Weave'} · 本地运行时已连接</p>
+          <div className="suggestion-list" aria-label="对话示例">
+            <button
+              type="button"
+              onClick={() => suggestionHandler.current('介绍一下 Weave 的架构')}
+            >
+              <Sparkles aria-hidden="true" />
+              介绍一下 Weave 的架构
+            </button>
+            <button type="button" onClick={() => suggestionHandler.current('帮我梳理当前项目状态')}>
+              <TerminalSquare aria-hidden="true" />
+              梳理当前项目状态
+            </button>
+          </div>
+        </div>
+      ) : undefined,
+    [showEmptyConversation, activeProject?.name],
+  );
+  const pendingConversationTarget = useMemo(() => {
+    if (taskTranscriptTarget === undefined) return undefined;
+    return 'result' in taskTranscriptTarget
+      ? {
+          kind: 'durable-message' as const,
+          sessionId: taskTranscriptTarget.sessionId,
+          turnId: taskTranscriptTarget.result.turnId,
+          messageId: taskTranscriptTarget.result.messageId,
+        }
+      : {
+          kind: 'tool' as const,
+          sessionId: taskTranscriptTarget.sessionId,
+          turnId: taskTranscriptTarget.turnId,
+          toolCallId: taskTranscriptTarget.toolCallId,
+        };
+  }, [taskTranscriptTarget]);
+  const clearTranscriptTarget = useCallback(() => setTaskTranscriptTarget(undefined), []);
+  usePendingConversationReveal(
+    conversationStore,
+    activeSessionId,
+    pendingConversationTarget,
+    timelineRef,
+    clearTranscriptTarget,
+  );
   const normalizedSearchQuery = searchQuery.trim().toLocaleLowerCase();
   const visibleProjects = projects
     .map((project) => ({
@@ -1221,7 +1095,14 @@ function StudioApp(): ReactElement {
           return;
         }
 
-        const loadedProjects = response.projects.map(toStudioProject);
+        const loadedProjects = response.projects.map((project) =>
+          toStudioProject({
+            ...project,
+            sessions: project.sessions.filter(
+              (session) => !deletedSessionIds.current.has(session.id),
+            ),
+          }),
+        );
         setProjects((current) =>
           loadedProjects.map((project) => {
             const previous = current.find((entry) => entry.id === project.id);
@@ -1424,8 +1305,10 @@ function StudioApp(): ReactElement {
     detail: SessionDetail,
     addMissing = false,
   ): boolean {
+    if (!mounted.current || deletedSessionIds.current.has(detail.id)) return false;
     if (detail.lastSequence < (appliedDurableSequences.current.get(detail.id) ?? 0)) return false;
     appliedDurableSequences.current.set(detail.id, detail.lastSequence);
+    conversationStore.hydrate(detail);
     setProjects((current) =>
       current.map((project) =>
         project.id !== projectId
@@ -1445,6 +1328,7 @@ function StudioApp(): ReactElement {
   }
 
   async function loadSessionDetail(projectId: string, sessionId: string): Promise<void> {
+    if (deletedSessionIds.current.has(sessionId)) return;
     // A streaming session's freshest messages live in memory; a server snapshot
     // would clobber its in-flight assistant message, so skip the reload while it runs.
     if (hasSessionHandles(sessionId)) {
@@ -1477,7 +1361,7 @@ function StudioApp(): ReactElement {
       }
       await recoverSessionExecution(projectId, sessionId, detail.lastSequence);
     } catch (error: unknown) {
-      if (activeSessionIdRef.current === sessionId) {
+      if (!deletedSessionIds.current.has(sessionId) && activeSessionIdRef.current === sessionId) {
         setNotice(workspaceErrorMessage(error));
       }
     }
@@ -1527,10 +1411,12 @@ function StudioApp(): ReactElement {
     executionId: string,
     supplied?: AgentExecutionSnapshot,
   ): Promise<void> {
+    if (deletedSessionIds.current.has(sessionId)) return;
     if (activeSessionIdRef.current !== sessionId) return;
     if (!mounted.current || runHandles.current.has(executionId)) return;
     const handle: SessionRunHandle = {
       runId: createId('observation'),
+      observationEpoch: ++observationEpoch.current,
       projectId,
       sessionId,
       assistantId: supplied?.turnId ?? executionId,
@@ -1552,7 +1438,12 @@ function StudioApp(): ReactElement {
           await waitForExecutionRetry(attempt++, handle.controller.signal);
         }
       }
-      if (!mounted.current || runHandles.current.get(executionId) !== handle) return;
+      if (
+        !mounted.current ||
+        deletedSessionIds.current.has(sessionId) ||
+        runHandles.current.get(executionId) !== handle
+      )
+        return;
       handle.execution = snapshot;
       handle.assistantId = snapshot.turnId;
       renderExecution(projectId, snapshot, handle.runId);
@@ -1579,76 +1470,27 @@ function StudioApp(): ReactElement {
     return mounted.current && executionHandle(sessionId, runId) !== undefined;
   }
 
+  function liveOwner(snapshot: AgentExecutionSnapshot, runId: string): LiveOwner {
+    return {
+      sessionId: snapshot.sessionId,
+      executionId: snapshot.executionId,
+      turnId: snapshot.turnId,
+      userMessageId: snapshot.userMessageId,
+      runId,
+      epoch: executionHandle(snapshot.sessionId, runId)?.observationEpoch ?? -1,
+    };
+  }
   function renderExecution(
     projectId: string,
     snapshot: AgentExecutionSnapshot,
     runId: string,
   ): void {
+    void projectId;
     const handle = executionHandle(snapshot.sessionId, runId);
     if (handle === undefined || !executionIsCurrent(snapshot.sessionId, runId)) return;
-    const previous = handle.execution;
     handle.execution = snapshot;
-    if (isTerminalExecution(snapshot.status) || snapshot.status === 'queued') return;
-    const view = executionTurnView(snapshot);
-    const statuses = new Map(
-      view.turn.toolResults.map((result) => [result.toolCallId, result.status]),
-    );
-    const messages = toChatMessages(snapshot.sessionId, view.messages, statuses).map((message) => {
-      if (message.role === 'assistant') {
-        const liveTools = new Map<string, ToolActivity['status']>();
-        for (const event of snapshot.events) {
-          if (event.type === 'tool-call') liveTools.set(event.toolCall.id, 'called');
-          if (event.type === 'tool-executing') liveTools.set(event.toolCall.id, 'executing');
-          if (event.type === 'tool-result')
-            liveTools.set(
-              event.result.toolCallId,
-              event.status === 'failed' ? 'failed' : 'completed',
-            );
-        }
-        return {
-          ...message,
-          tools: message.tools.map((tool) => ({
-            ...tool,
-            status: liveTools.get(tool.toolCallId) ?? tool.status,
-          })),
-        };
-      }
-      return {
-        ...message,
-        submission: {
-          sessionId: snapshot.sessionId,
-          ...snapshot.input,
-          skills: snapshot.input.skills ?? [],
-          userMessage: {
-            role: 'user' as const,
-            content: snapshot.input.userMessage.content.filter(
-              (part): part is Extract<typeof part, { type: 'text' | 'image' }> =>
-                part.type === 'text' || part.type === 'image',
-            ),
-          },
-        },
-      };
-    });
-    const temporaryTurnId = liveTurnIdFor(handle.assistantId);
-    updateSessionMessages(projectId, snapshot.sessionId, (current) => [
-      ...current.filter(
-        (message) =>
-          message.turnId !== snapshot.turnId &&
-          message.turnId !== temporaryTurnId &&
-          (previous === undefined || message.turnId !== previous.turnId) &&
-          message.id !== snapshot.userMessageId,
-      ),
-      ...messages,
-    ]);
-    updateSessionTurns(projectId, snapshot.sessionId, (current) => [
-      ...current.filter(
-        (turn) =>
-          turn.turnId !== snapshot.turnId &&
-          turn.turnId !== temporaryTurnId &&
-          (previous === undefined || turn.turnId !== previous.turnId),
-      ),
-      view.turn,
-    ]);
+    if (snapshot.status !== 'queued')
+      conversationStore.replaceLive(liveOwner(snapshot, runId), snapshot);
   }
 
   function executionHandlers(
@@ -1677,12 +1519,13 @@ function StudioApp(): ReactElement {
       onEvent: (event) => {
         const handle = executionHandle(sessionId, runId);
         if (handle?.execution === undefined || !executionIsCurrent(sessionId, runId)) return;
-        renderExecution(projectId, appendExecutionEvent(handle.execution, event), runId);
+        conversationStore.appendLive(liveOwner(handle.execution, runId), event);
       },
       onStatus: (status) => {
         const handle = executionHandle(sessionId, runId);
         if (handle?.execution === undefined || !executionIsCurrent(sessionId, runId)) return;
         handle.execution = { ...handle.execution, ...status };
+        conversationStore.updateLiveStatus(liveOwner(handle.execution, runId), status);
         if (isTerminalExecution(status.status))
           void reconcileExecution(projectId, sessionId, runId);
         if (!executionOwnsStatus(sessionId, runId)) return;
@@ -1738,6 +1581,16 @@ function StudioApp(): ReactElement {
             : { durableThroughSequence: snapshot.durableThroughSequence }),
           ...(snapshot.error === undefined ? {} : { error: snapshot.error }),
         };
+        conversationStore.updateLiveStatus(liveOwner(handle.execution, runId), {
+          cursor: handle.execution.cursor,
+          status: handle.execution.status,
+          ...(handle.execution.durableThroughSequence === undefined
+            ? {}
+            : { durableThroughSequence: handle.execution.durableThroughSequence }),
+          ...(handle.execution.error === undefined ? {} : { error: handle.execution.error }),
+        });
+        if (isTerminalExecution(handle.execution.status))
+          void reconcileExecution(projectId, sessionId, runId);
       }
     } catch (error: unknown) {
       if (executionIsCurrent(sessionId, runId) && executionOwnsStatus(sessionId, runId))
@@ -1781,25 +1634,15 @@ function StudioApp(): ReactElement {
             ((turn !== undefined && turn.status !== 'running') ||
               (turn === undefined && snapshot.status !== 'completed'))
           ) {
-            const durable = toStudioSession(detail);
             const staleHistory =
               detail.lastSequence < (appliedDurableSequences.current.get(sessionId) ?? 0);
             if (!staleHistory) appliedDurableSequences.current.set(sessionId, detail.lastSequence);
-            const overlays = [...runHandles.current.values()].flatMap((candidate) =>
-              candidate !== handle &&
-              candidate.execution?.sessionId === sessionId &&
-              !confirmedExecutionTurn(detail, candidate.execution)
-                ? [candidate.execution]
-                : [],
-            );
-            if (!staleHistory) {
-              updateSessionMessages(projectId, sessionId, (current) =>
-                mergeExecutionHistory(durable.messages, current, overlays),
-              );
-              updateSessionTurns(projectId, sessionId, (current) =>
-                mergeExecutionHistory(durable.turns, current, overlays),
-              );
+            const settlement = conversationStore.settle(liveOwner(snapshot, runId), detail);
+            if (!settlement.confirmed) {
+              await waitForExecutionRetry(attempt++, handle.controller.signal);
+              continue;
             }
+            if (!staleHistory) applySessionDetail(projectId, detail);
             const ownsStatus =
               executionOwnsStatus(sessionId, runId) &&
               snapshot.durableThroughSequence >=
@@ -1813,6 +1656,8 @@ function StudioApp(): ReactElement {
             );
             runHandles.current.delete(snapshot.executionId);
             if (runHandles.current.get(sessionId) === handle) runHandles.current.delete(sessionId);
+            // Durable settlement releases observation only; it never cancels a producer.
+            handle.controller.abort();
             if (!ownsStatus) return;
             setSessionRunState(sessionId, {
               status:
@@ -1846,23 +1691,6 @@ function StudioApp(): ReactElement {
     } finally {
       reconciliationHandle.reconciling = false;
     }
-  }
-
-  function confirmedExecutionTurn(
-    detail: SessionDetail,
-    execution: AgentExecutionSnapshot,
-  ): boolean {
-    return (
-      isTerminalExecution(execution.status) &&
-      execution.durableThroughSequence !== undefined &&
-      detail.lastSequence >= execution.durableThroughSequence &&
-      detail.turns.some(
-        (turn) =>
-          turn.turnId === execution.turnId &&
-          turn.userMessageId === execution.userMessageId &&
-          turn.status !== 'running',
-      )
-    );
   }
 
   async function resumeExecution(
@@ -1919,11 +1747,12 @@ function StudioApp(): ReactElement {
     lastSequence: number,
     disposed?: () => boolean,
   ): Promise<void> {
+    if (deletedSessionIds.current.has(sessionId)) return;
     await queueController.open(projectId, sessionId);
-    if (!mounted.current || disposed?.()) return;
+    if (!mounted.current || disposed?.() || deletedSessionIds.current.has(sessionId)) return;
     try {
       const summaries = await listAgentExecutions(sessionId);
-      if (!mounted.current || disposed?.()) return;
+      if (!mounted.current || disposed?.() || deletedSessionIds.current.has(sessionId)) return;
       for (const summary of summaries) {
         if (
           (summary.status !== 'queued' && !isTerminalExecution(summary.status)) ||
@@ -2104,6 +1933,7 @@ function StudioApp(): ReactElement {
   };
 
   function activateSession(projectId: string, session: StudioSession, expandProject = true): void {
+    if (deletedSessionIds.current.has(session.id)) return;
     navigationTicket.current += 1;
     setTaskTranscriptTarget(undefined);
     setActiveProjectId(projectId);
@@ -2132,6 +1962,7 @@ function StudioApp(): ReactElement {
     const project = activeProject;
     const stillCurrent = () =>
       mounted.current &&
+      !deletedSessionIds.current.has(task.childSessionId) &&
       navigationTicket.current === ticket &&
       activeSessionIdRef.current === source;
     try {
@@ -2401,6 +2232,7 @@ function StudioApp(): ReactElement {
     );
     runHandles.current.set(sessionId, {
       runId,
+      observationEpoch: ++observationEpoch.current,
       sessionId,
       controller: requestController,
       assistantId,
@@ -2408,7 +2240,7 @@ function StudioApp(): ReactElement {
       requestId: crypto.randomUUID(),
     });
     setAdmitting((current) => ({ ...current, [sessionId]: true }));
-    conversationScroll.scrollToBottom('auto');
+    timelineRef.current?.scrollToBottom();
     let optimisticInserted = false;
     const ensureOptimistic = (): void => {
       if (optimisticInserted || queuedAdmission) return;
@@ -2755,7 +2587,7 @@ function StudioApp(): ReactElement {
   async function restoreSession(projectId: string, sessionId: string): Promise<void> {
     try {
       const detail = await workspaceApi.restoreSession(sessionId);
-      applySessionDetail(projectId, detail);
+      if (!applySessionDetail(projectId, detail)) return;
       activeSessionIdRef.current = sessionId;
       setActiveProjectId(projectId);
       setActiveSessionId(sessionId);
@@ -2783,6 +2615,28 @@ function StudioApp(): ReactElement {
 
     try {
       await workspaceApi.deleteSession(session.sessionId);
+      deletedSessionIds.current.add(session.sessionId);
+      sessionActivityVersions.current.set(
+        session.sessionId,
+        (sessionActivityVersions.current.get(session.sessionId) ?? 0) + 1,
+      );
+      for (const [key, handle] of runHandles.current) {
+        if (
+          handle.sessionId !== session.sessionId &&
+          handle.execution?.sessionId !== session.sessionId
+        )
+          continue;
+        runHandles.current.delete(key);
+        handle.controller.abort();
+      }
+      setTaskTranscriptTarget((target) =>
+        target?.sessionId === session.sessionId ? undefined : target,
+      );
+      setRunStateBySession((current) =>
+        Object.fromEntries(Object.entries(current).filter(([id]) => id !== session.sessionId)),
+      );
+      conversationStore.removeSession(session.sessionId);
+      fileReviewStore.removeSession(session.projectId, session.sessionId);
       appliedDurableSequences.current.delete(session.sessionId);
       settledExecutionSequences.current.delete(session.sessionId);
       sessionSkills.forget(session.sessionId);
@@ -3981,225 +3835,20 @@ function StudioApp(): ReactElement {
           </details>
         ) : null}
 
-        <div className="conversation-viewport">
-          <div
-            className="message-list conversation-scroll"
-            aria-label="Agent 工作流"
-            aria-live="polite"
-            ref={conversationScroll.ref}
-            onScroll={conversationScroll.onScroll}
-          >
-            {messages.length === 0 && isChildSession ? (
-              <p className="task-child-empty">子任务会话暂无消息。</p>
-            ) : messages.length === 0 ? (
-              <div className="empty-chat">
-                <div className="empty-orbit" aria-hidden="true">
-                  <Sparkles aria-hidden="true" />
-                </div>
-                <p className="empty-kicker">WEAVE</p>
-                <h3>今天想完成什么？</h3>
-                <p>当前项目 {activeProject?.name ?? 'Weave'} · 本地运行时已连接</p>
-                <div className="suggestion-list" aria-label="对话示例">
-                  <button type="button" onClick={() => fillSuggestion('介绍一下 Weave 的架构')}>
-                    <Sparkles aria-hidden="true" />
-                    介绍一下 Weave 的架构
-                  </button>
-                  <button type="button" onClick={() => fillSuggestion('帮我梳理当前项目状态')}>
-                    <TerminalSquare aria-hidden="true" />
-                    梳理当前项目状态
-                  </button>
-                </div>
-              </div>
-            ) : (
-              messages.map((message) => {
-                const isLatestAssistant =
-                  message.role === 'assistant' && message.id === latestAssistantId;
-                const hasProcess =
-                  message.role === 'assistant' &&
-                  (message.reasoning !== '' ||
-                    message.tools.length > 0 ||
-                    (isLatestAssistant && status === 'streaming'));
-
-                return (
-                  <article
-                    className={`timeline-item timeline-item-${message.role}`}
-                    id={`message-${message.id}`}
-                    key={message.id}
-                  >
-                    <div className="timeline-content">
-                      <div className="message-meta">
-                        {message.role === 'assistant' ? (
-                          <span className="message-avatar" aria-hidden="true">
-                            <Sparkles />
-                          </span>
-                        ) : null}
-                        {message.role === 'user' ? '你' : 'Weave Agent'}
-                        <time dateTime={message.occurredAt}>
-                          {formatMessageTime(message.occurredAt)}
-                        </time>
-                      </div>
-                      {hasProcess ? (
-                        <details
-                          className="message-process"
-                          role="group"
-                          aria-label="本轮过程"
-                          open={expandedMessageIds.includes(message.id)}
-                          onToggle={(event) => {
-                            const isOpen = event.currentTarget.open;
-                            setExpandedMessageIds((current) =>
-                              isOpen
-                                ? current.includes(message.id)
-                                  ? current
-                                  : [...current, message.id]
-                                : current.filter((id) => id !== message.id),
-                            );
-                          }}
-                        >
-                          <summary>
-                            <ChevronRight className="disclosure-icon" aria-hidden="true" />
-                            <span className="message-process-title">
-                              <TerminalSquare aria-hidden="true" />
-                              {message.tools.length > 0
-                                ? `${message.tools.length} 次工具调用`
-                                : '思考过程'}
-                            </span>
-                            {isLatestAssistant && status === 'streaming' ? (
-                              <span className="message-process-state message-process-state-live">
-                                <LoaderCircle className="spin-icon" aria-hidden="true" />
-                                进行中
-                              </span>
-                            ) : (
-                              <span className="message-process-state">已完成</span>
-                            )}
-                          </summary>
-                          <div className="message-process-content">
-                            {message.reasoning !== '' ? (
-                              <section className="message-process-section" aria-label="思考内容">
-                                <div className="message-process-heading">
-                                  <span>思考</span>
-                                  {isLatestAssistant && status === 'streaming' ? (
-                                    <span className="message-process-live">实时</span>
-                                  ) : null}
-                                </div>
-                                <p className="message-process-text">{message.reasoning}</p>
-                              </section>
-                            ) : null}
-                            {message.tools.length > 0 ? (
-                              <section className="message-process-section" aria-label="工具步骤">
-                                <div className="message-process-heading">
-                                  <span>工具调用</span>
-                                  <span>{message.tools.length} 次</span>
-                                </div>
-                                <div className="message-process-tools">
-                                  {message.tools.map((tool) => (
-                                    <ToolStep tool={tool} key={tool.toolCallId} />
-                                  ))}
-                                </div>
-                              </section>
-                            ) : null}
-                            {message.reasoning === '' && message.tools.length === 0 ? (
-                              <p className="message-process-placeholder">Agent 正在准备回复…</p>
-                            ) : null}
-                          </div>
-                        </details>
-                      ) : null}
-                      <div className="message">
-                        <FileAttachmentSummaries files={message.fileAttachments} />
-                        {message.role === 'assistant' && message.text !== '' ? (
-                          <MarkdownMessage text={message.text} />
-                        ) : message.text !== '' || message.role === 'assistant' ? (
-                          <p>
-                            {message.text ||
-                              getAssistantPlaceholder(
-                                status,
-                                isLatestAssistant,
-                                message.role === 'assistant' && message.reasoning !== '',
-                              )}
-                          </p>
-                        ) : null}
-                        {message.role === 'user' ||
-                        (message.role === 'assistant' &&
-                          !messages.some(
-                            (entry) => entry.role === 'user' && entry.turnId === message.turnId,
-                          )) ? (
-                          <SkillHistory
-                            skills={
-                              message.turnId === undefined
-                                ? undefined
-                                : turnById.get(message.turnId)?.skills
-                            }
-                            selected={message.selectedSkills}
-                          />
-                        ) : null}
-                        {message.role === 'user' && (message.images?.length ?? 0) > 0 ? (
-                          <div className="message-images">
-                            {(message.images ?? []).map((image, index) => (
-                              <button
-                                key={`${message.id}-${index}`}
-                                type="button"
-                                className="message-image-button"
-                                aria-label="放大查看图片"
-                                onClick={() => setPreviewImage(image)}
-                              >
-                                <img
-                                  className="message-image"
-                                  src={`data:${image.mediaType};base64,${image.data}`}
-                                  alt="已发送的图片"
-                                />
-                              </button>
-                            ))}
-                          </div>
-                        ) : null}
-                      </div>
-                      {message.role === 'assistant' &&
-                      message.turnId !== undefined &&
-                      lastReplyIdByTurn.get(message.turnId) === message.id &&
-                      !(isLatestAssistant && status === 'streaming') ? (
-                        <>
-                          <MessageFooter
-                            turn={turnById.get(message.turnId)}
-                            timeLabel={formatMessageTime(message.occurredAt)}
-                            text={message.text}
-                            canRetry={message.turnId === lastTurnId}
-                            disabled={sessionHasWork}
-                            readOnly={!canCompose}
-                            retryUnavailableReason={
-                              submissionForTurn(message.turnId) === undefined
-                                ? '旧会话未记录原始请求设置，无法精确重试'
-                                : undefined
-                            }
-                            onRetry={() => retryTurn(message.turnId as string)}
-                            onQuote={() => quoteReply(message.text)}
-                          />
-                          {turnById.get(message.turnId)?.status !== 'running' ? (
-                            <TurnFileReview
-                              key={`${activeSessionId}:${message.turnId}`}
-                              projectId={activeProjectId}
-                              sessionId={activeSessionId}
-                              turnId={message.turnId}
-                              disabled={sessionHasWork || !canCompose}
-                            />
-                          ) : null}
-                        </>
-                      ) : null}
-                    </div>
-                  </article>
-                );
-              })
-            )}
-          </div>
-          {!conversationScroll.isAtBottom && messages.length > 0 ? (
-            <button
-              className="scroll-to-bottom"
-              type="button"
-              aria-label="回到底部"
-              onClick={() => conversationScroll.scrollToBottom()}
-            >
-              <ArrowDown aria-hidden="true" />
-              {status === 'streaming' ? '有新内容' : '回到底部'}
-            </button>
-          ) : null}
-        </div>
+        <ConversationPane
+          ref={timelineRef}
+          store={conversationStore}
+          sessionId={activeSessionId}
+          projectId={activeProjectId}
+          status={status}
+          sessionHasWork={sessionHasWork}
+          canCompose={canCompose}
+          isChildSession={isChildSession}
+          onAction={onConversationAction}
+          fileReviewStore={fileReviewStore}
+          expandedMessageId={expandedMessageIds.at(-1)}
+          emptyContent={emptyConversation}
+        />
 
         <form className="composer" onSubmit={handleSubmit}>
           {canCompose && activeQueue !== undefined ? (
@@ -4525,33 +4174,11 @@ function StudioApp(): ReactElement {
                   ))}
                 </div>
                 <div className="composer-controls">
-                  {currentContext !== undefined ? (
-                    <button
-                      type="button"
-                      className={`composer-context${
-                        currentContext.ratio >= contextWarnThreshold ? ' composer-context-warn' : ''
-                      }`}
-                      aria-label={`上下文窗口占用 ${Math.round(
-                        currentContext.ratio * 100,
-                      )}%，点击查看详情`}
-                      title={`上下文窗口 ${Math.round(currentContext.ratio * 100)}% · ${formatTokens(
-                        currentContext.sentTokens,
-                      )} / ${formatTokens(currentContext.windowTokens)} tokens${
-                        currentContext.trimmed ? ' · 已压缩' : ''
-                      }`}
-                      onClick={() => setIsActivityPanelOpen(true)}
-                    >
-                      <span className="composer-context-track" aria-hidden="true">
-                        <span
-                          className="composer-context-fill"
-                          style={{ width: `${Math.round(currentContext.ratio * 100)}%` }}
-                        />
-                      </span>
-                      <span className="composer-context-value">
-                        {Math.round(currentContext.ratio * 100)}%
-                      </span>
-                    </button>
-                  ) : null}
+                  <ConnectedContextMeter
+                    store={conversationStore}
+                    sessionId={activeSessionId}
+                    onOpen={() => setIsActivityPanelOpen(true)}
+                  />
                   <div className={`menu-anchor${openMenu === 'model' ? ' menu-anchor-open' : ''}`}>
                     <button
                       className="model-button"
@@ -5023,7 +4650,9 @@ function StudioApp(): ReactElement {
         </section>
       ) : null}
 
-      <PanelContainer
+      <ConnectedConversationPanels
+        store={conversationStore}
+        sessionId={activeSessionId}
         pluginPanels={pluginPanels}
         {...(canCompose ? { composerDraft } : {})}
         routeHidden={activeView !== 'studio'}

@@ -1,0 +1,907 @@
+{
+  "schemaVersion": 2,
+  "harnessHash": "dacbcb553c37f35b40481f156c61802568c3392b1b6938faad639263250207d7",
+  "recordedAt": "2026-11-24T04:33:31.974Z",
+  "commit": "f2190032ab23165cbac94f19bbb5ed3e84abb283",
+  "dirty": true,
+  "platform": "darwin",
+  "arch": "arm64",
+  "cpu": "Apple M4 Pro",
+  "node": "v24.4.0",
+  "viewport": {
+    "width": 1440,
+    "height": 1000
+  },
+  "build": "production",
+  "browserIsolation": "fresh-browser-per-sample",
+  "assetCache": "no-store",
+  "synthetic": true,
+  "stream": {
+    "deltas": 100,
+    "intervalMs": 20
+  },
+  "options": {
+    "counts": [100, 5000],
+    "variants": ["tools"],
+    "historyShapes": ["standard"],
+    "toolsPerTurn": 1,
+    "streamVariants": ["tools"],
+    "repeats": 3,
+    "output": "dist/performance/rendering-after-tools-stream.json"
+  },
+  "browser": "158.0.8127.36",
+  "samples": [
+    {
+      "count": 100,
+      "variant": "tools",
+      "streamVariant": "tools",
+      "historyShape": "standard",
+      "toolsPerTurn": 1,
+      "repeat": 0,
+      "logicalMessageCount": 100,
+      "rawHistoryRecordCount": 150,
+      "historyBytes": 89985,
+      "fixtureHash": "140c7c8b12d1bf6504ef7e1b27ccdc76575e3d131561b585c2eecf3452bdccf2",
+      "executionApiMode": "agent-execution-service",
+      "readinessMode": "logical-selector",
+      "mountedMessageCount": 15,
+      "sentinels": [
+        {
+          "index": 0,
+          "text": "你11/23 08:00问题 0：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 50,
+          "text": "你11/23 08:00问题 25：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 99,
+          "text": "Weave Agent11/23 08:001 次工具调用已完成工具调用1 次read_filesrc/component-49.tsx已完成分析 49\n保留稳定的会话归属，检查请求结束时的状态。\n\n验证输入\n处理取消\n\nconst state = { status: \"completed\", count: 42 };\n\n结果与持久化记录一致。benchmark · 模型未返回用量 · 0 毫秒11/23 08:00审阅本轮文件"
+        }
+      ],
+      "finalText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099",
+      "durableText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099 ",
+      "toolIds": [
+        "benchmark-stream-call-0",
+        "benchmark-stream-call-1",
+        "benchmark-stream-call-2",
+        "benchmark-stream-call-3",
+        "benchmark-stream-call-4",
+        "benchmark-stream-call-5",
+        "benchmark-stream-call-6",
+        "benchmark-stream-call-7",
+        "benchmark-stream-call-8",
+        "benchmark-stream-call-9"
+      ],
+      "durableToolResults": [
+        {
+          "toolCallId": "benchmark-stream-call-0",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-1",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-2",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-3",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-4",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-5",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-6",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-7",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-8",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-9",
+          "status": "completed"
+        }
+      ],
+      "coldReadyMs": 125,
+      "warmSwitchMs": 68,
+      "inputFillToPaintMs": 32,
+      "streamReadyMs": 2332,
+      "cold": {
+        "domElements": 707,
+        "heapBytes": 14057291,
+        "longTasks": [],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36"
+      },
+      "stream": {
+        "frameGapsMs": [
+          16.699999999999932, 16.700000000000045, 16.700000000000045, 16.59999999999991,
+          16.700000000000045, 16.600000000000023, 16.699999999999932, 16.700000000000045,
+          16.700000000000045, 16.700000000000045, 16.59999999999991, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.700000000000045, 16.59999999999991,
+          16.700000000000045, 16.700000000000045, 16.59999999999991, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.700000000000045, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.700000000000045, 16.59999999999991,
+          16.600000000000136, 16.799999999999955, 16.59999999999991, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.700000000000045, 16.700000000000045,
+          16.59999999999991, 16.600000000000136, 16.799999999999955, 16.59999999999991,
+          16.700000000000045, 16.59999999999991, 16.700000000000045, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.700000000000045, 16.59999999999991,
+          16.700000000000045, 16.700000000000045, 16.59999999999991, 16.700000000000045,
+          16.700000000000045, 16.700000000000045, 16.59999999999991, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.700000000000045, 16.59999999999991,
+          16.700000000000045, 16.600000000000136, 16.699999999999818, 16.700000000000045,
+          16.700000000000045, 16.59999999999991, 16.700000000000045, 16.600000000000136,
+          16.699999999999818, 16.700000000000273, 16.699999999999818, 16.59999999999991,
+          16.700000000000273, 16.699999999999818, 16.59999999999991, 16.59999999999991,
+          16.800000000000182, 16.59999999999991, 16.700000000000273, 16.59999999999991,
+          16.699999999999818, 16.59999999999991, 16.700000000000273, 16.699999999999818,
+          16.59999999999991, 16.700000000000273, 16.699999999999818, 16.700000000000273,
+          16.59999999999991, 16.699999999999818, 16.59999999999991, 16.800000000000182,
+          16.59999999999991, 16.700000000000273, 16.59999999999991, 16.799999999999727,
+          16.600000000000364, 16.699999999999818, 16.59999999999991, 16.700000000000273,
+          16.59999999999991, 16.699999999999818, 16.700000000000273, 16.59999999999991,
+          16.699999999999818, 16.700000000000273, 16.59999999999991, 16.699999999999818,
+          16.700000000000273, 16.59999999999991, 16.59999999999991, 16.800000000000182,
+          16.59999999999991, 16.699999999999818, 16.700000000000273, 16.59999999999991,
+          16.699999999999818, 16.59999999999991, 16.800000000000182, 16.59999999999991,
+          16.59999999999991, 16.700000000000273, 16.699999999999818, 16.59999999999991,
+          16.700000000000273, 16.699999999999818, 16.700000000000273, 16.59999999999991,
+          16.699999999999818, 16.700000000000273, 16.59999999999991, 16.699999999999818,
+          16.59999999999991, 16.700000000000273, 16.699999999999818, 16.700000000000273,
+          16.59999999999991, 16.699999999999818, 16.59999999999991, 16.700000000000273
+        ],
+        "longTasks": [],
+        "domElements": 579,
+        "heapBytes": 17083176
+      },
+      "visibleMessages": 9
+    },
+    {
+      "count": 100,
+      "variant": "tools",
+      "streamVariant": "tools",
+      "historyShape": "standard",
+      "toolsPerTurn": 1,
+      "repeat": 1,
+      "logicalMessageCount": 100,
+      "rawHistoryRecordCount": 150,
+      "historyBytes": 89985,
+      "fixtureHash": "140c7c8b12d1bf6504ef7e1b27ccdc76575e3d131561b585c2eecf3452bdccf2",
+      "executionApiMode": "agent-execution-service",
+      "readinessMode": "logical-selector",
+      "mountedMessageCount": 15,
+      "sentinels": [
+        {
+          "index": 0,
+          "text": "你11/23 08:00问题 0：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 50,
+          "text": "你11/23 08:00问题 25：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 99,
+          "text": "Weave Agent11/23 08:001 次工具调用已完成工具调用1 次read_filesrc/component-49.tsx已完成分析 49\n保留稳定的会话归属，检查请求结束时的状态。\n\n验证输入\n处理取消\n\nconst state = { status: \"completed\", count: 42 };\n\n结果与持久化记录一致。benchmark · 模型未返回用量 · 0 毫秒11/23 08:00审阅本轮文件"
+        }
+      ],
+      "finalText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099",
+      "durableText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099 ",
+      "toolIds": [
+        "benchmark-stream-call-0",
+        "benchmark-stream-call-1",
+        "benchmark-stream-call-2",
+        "benchmark-stream-call-3",
+        "benchmark-stream-call-4",
+        "benchmark-stream-call-5",
+        "benchmark-stream-call-6",
+        "benchmark-stream-call-7",
+        "benchmark-stream-call-8",
+        "benchmark-stream-call-9"
+      ],
+      "durableToolResults": [
+        {
+          "toolCallId": "benchmark-stream-call-0",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-1",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-2",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-3",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-4",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-5",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-6",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-7",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-8",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-9",
+          "status": "completed"
+        }
+      ],
+      "coldReadyMs": 126,
+      "warmSwitchMs": 67,
+      "inputFillToPaintMs": 33,
+      "streamReadyMs": 2258,
+      "cold": {
+        "domElements": 707,
+        "heapBytes": 14061334,
+        "longTasks": [],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36"
+      },
+      "stream": {
+        "frameGapsMs": [
+          16.700000000000045, 16.699999999999932, 16.600000000000023, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.700000000000045, 16.59999999999991,
+          16.700000000000045, 16.59999999999991, 16.800000000000182, 16.59999999999991,
+          16.59999999999991, 16.700000000000045, 16.700000000000045, 16.59999999999991,
+          16.700000000000045, 16.700000000000045, 16.700000000000045, 16.59999999999991,
+          16.700000000000045, 16.59999999999991, 16.700000000000045, 16.700000000000045,
+          16.700000000000045, 16.59999999999991, 16.600000000000136, 16.699999999999818,
+          16.700000000000045, 16.700000000000045, 16.59999999999991, 16.700000000000045,
+          16.600000000000136, 16.699999999999818, 16.700000000000045, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.700000000000045, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.700000000000045, 16.59999999999991,
+          16.600000000000136, 16.699999999999818, 16.700000000000045, 16.600000000000136,
+          16.799999999999955, 16.59999999999991, 16.600000000000136, 16.699999999999818,
+          16.700000000000045, 16.700000000000045, 16.59999999999991, 16.700000000000045,
+          16.700000000000045, 16.59999999999991, 16.700000000000045, 16.600000000000136,
+          16.699999999999818, 16.700000000000045, 16.700000000000045, 16.700000000000045,
+          16.59999999999991, 16.600000000000136, 16.699999999999818, 16.700000000000045,
+          16.700000000000045, 16.59999999999991, 16.700000000000273, 16.59999999999991,
+          16.799999999999727, 16.600000000000364, 16.699999999999818, 16.59999999999991,
+          16.700000000000273, 16.59999999999991, 16.699999999999818, 16.700000000000273,
+          16.699999999999818, 16.59999999999991, 16.700000000000273, 16.699999999999818,
+          16.59999999999991, 16.59999999999991, 16.800000000000182, 16.59999999999991,
+          16.59999999999991, 16.800000000000182, 16.59999999999991, 16.59999999999991,
+          16.700000000000273, 16.699999999999818, 16.59999999999991, 16.700000000000273,
+          16.699999999999818, 16.59999999999991, 16.800000000000182, 16.59999999999991,
+          16.59999999999991, 16.700000000000273, 16.699999999999818, 16.59999999999991,
+          16.800000000000182, 16.59999999999991, 16.700000000000273, 16.59999999999991,
+          16.699999999999818, 16.59999999999991, 16.700000000000273, 16.699999999999818,
+          16.700000000000273, 16.59999999999991, 16.699999999999818, 16.59999999999991,
+          16.700000000000273, 16.699999999999818, 16.59999999999991, 16.700000000000273,
+          16.59999999999991, 16.800000000000182, 16.59999999999991, 16.699999999999818,
+          16.59999999999991, 16.700000000000273, 16.699999999999818, 16.59999999999991,
+          16.700000000000273, 16.699999999999818, 16.700000000000273, 16.59999999999991,
+          16.699999999999818, 16.700000000000273, 16.59999999999991, 16.699999999999818
+        ],
+        "longTasks": [],
+        "domElements": 579,
+        "heapBytes": 17081803
+      },
+      "visibleMessages": 9
+    },
+    {
+      "count": 100,
+      "variant": "tools",
+      "streamVariant": "tools",
+      "historyShape": "standard",
+      "toolsPerTurn": 1,
+      "repeat": 2,
+      "logicalMessageCount": 100,
+      "rawHistoryRecordCount": 150,
+      "historyBytes": 89985,
+      "fixtureHash": "140c7c8b12d1bf6504ef7e1b27ccdc76575e3d131561b585c2eecf3452bdccf2",
+      "executionApiMode": "agent-execution-service",
+      "readinessMode": "logical-selector",
+      "mountedMessageCount": 15,
+      "sentinels": [
+        {
+          "index": 0,
+          "text": "你11/23 08:00问题 0：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 50,
+          "text": "你11/23 08:00问题 25：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 99,
+          "text": "Weave Agent11/23 08:001 次工具调用已完成工具调用1 次read_filesrc/component-49.tsx已完成分析 49\n保留稳定的会话归属，检查请求结束时的状态。\n\n验证输入\n处理取消\n\nconst state = { status: \"completed\", count: 42 };\n\n结果与持久化记录一致。benchmark · 模型未返回用量 · 0 毫秒11/23 08:00审阅本轮文件"
+        }
+      ],
+      "finalText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099",
+      "durableText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099 ",
+      "toolIds": [
+        "benchmark-stream-call-0",
+        "benchmark-stream-call-1",
+        "benchmark-stream-call-2",
+        "benchmark-stream-call-3",
+        "benchmark-stream-call-4",
+        "benchmark-stream-call-5",
+        "benchmark-stream-call-6",
+        "benchmark-stream-call-7",
+        "benchmark-stream-call-8",
+        "benchmark-stream-call-9"
+      ],
+      "durableToolResults": [
+        {
+          "toolCallId": "benchmark-stream-call-0",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-1",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-2",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-3",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-4",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-5",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-6",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-7",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-8",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-9",
+          "status": "completed"
+        }
+      ],
+      "coldReadyMs": 123,
+      "warmSwitchMs": 66,
+      "inputFillToPaintMs": 32,
+      "streamReadyMs": 2290,
+      "cold": {
+        "domElements": 707,
+        "heapBytes": 14463029,
+        "longTasks": [],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36"
+      },
+      "stream": {
+        "frameGapsMs": [
+          16.700000000000045, 16.699999999999932, 16.5, 16.800000000000068, 16.600000000000023,
+          16.59999999999991, 16.800000000000068, 16.600000000000023, 16.700000000000045,
+          16.699999999999818, 16.700000000000045, 16.600000000000136, 16.699999999999818,
+          16.700000000000045, 16.600000000000136, 16.699999999999818, 16.600000000000136,
+          16.700000000000045, 16.59999999999991, 16.700000000000045, 16.700000000000045,
+          16.699999999999818, 16.600000000000136, 16.700000000000045, 16.699999999999818,
+          16.600000000000136, 16.700000000000045, 16.699999999999818, 16.600000000000136,
+          16.700000000000045, 16.59999999999991, 16.700000000000045, 16.59999999999991,
+          16.700000000000045, 16.700000000000045, 16.59999999999991, 16.700000000000045,
+          16.700000000000045, 16.700000000000045, 16.59999999999991, 16.700000000000045,
+          16.700000000000045, 16.699999999999818, 16.600000000000136, 16.700000000000045,
+          16.699999999999818, 16.600000000000136, 16.59999999999991, 16.700000000000045,
+          16.700000000000045, 16.59999999999991, 16.700000000000045, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.700000000000045, 16.59999999999991,
+          16.700000000000045, 16.700000000000045, 16.700000000000045, 16.699999999999818,
+          16.600000000000136, 16.700000000000045, 16.699999999999818, 16.600000000000136,
+          16.700000000000045, 16.59999999999991, 16.700000000000045, 16.700000000000045,
+          16.59999999999991, 16.59999999999991, 16.700000000000273, 16.699999999999818,
+          16.59999999999991, 16.700000000000273, 16.699999999999818, 16.699999999999818,
+          16.700000000000273, 16.59999999999991, 16.699999999999818, 16.600000000000364,
+          16.699999999999818, 16.59999999999991, 16.700000000000273, 16.699999999999818,
+          16.699999999999818, 16.600000000000364, 16.699999999999818, 16.699999999999818,
+          16.600000000000364, 16.699999999999818, 16.699999999999818, 16.700000000000273,
+          16.59999999999991, 16.59999999999991, 16.800000000000182, 16.59999999999991,
+          16.699999999999818, 16.600000000000364, 16.699999999999818, 16.59999999999991,
+          16.700000000000273, 16.699999999999818, 16.59999999999991, 16.700000000000273,
+          16.699999999999818, 16.59999999999991, 16.700000000000273, 16.699999999999818,
+          16.59999999999991, 16.700000000000273, 16.59999999999991, 16.799999999999727,
+          16.600000000000364, 16.699999999999818, 16.59999999999991, 16.800000000000182,
+          16.59999999999991, 16.59999999999991, 16.800000000000182, 16.59999999999991,
+          16.59999999999991, 16.700000000000273, 16.699999999999818, 16.59999999999991,
+          16.700000000000273, 16.699999999999818, 16.59999999999991, 16.700000000000273,
+          16.699999999999818, 16.699999999999818, 16.600000000000364, 16.699999999999818,
+          16.699999999999818, 16.600000000000364, 16.699999999999818, 16.59999999999991,
+          16.700000000000273
+        ],
+        "longTasks": [],
+        "domElements": 579,
+        "heapBytes": 17097334
+      },
+      "visibleMessages": 9
+    },
+    {
+      "count": 5000,
+      "variant": "tools",
+      "streamVariant": "tools",
+      "historyShape": "standard",
+      "toolsPerTurn": 1,
+      "repeat": 0,
+      "logicalMessageCount": 5000,
+      "rawHistoryRecordCount": 7500,
+      "historyBytes": 4561789,
+      "fixtureHash": "e67533272a2c2f7d5ef8cf82267361e352370f56159dc7852c77505e05e3eda8",
+      "executionApiMode": "agent-execution-service",
+      "readinessMode": "logical-selector",
+      "mountedMessageCount": 15,
+      "sentinels": [
+        {
+          "index": 0,
+          "text": "你11/23 08:00问题 0：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 2500,
+          "text": "你11/23 08:00问题 1250：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 4999,
+          "text": "Weave Agent11/23 08:001 次工具调用已完成工具调用1 次read_filesrc/component-2499.tsx已完成分析 2499\n保留稳定的会话归属，检查请求结束时的状态。\n\n验证输入\n处理取消\n\nconst state = { status: \"completed\", count: 42 };\n\n结果与持久化记录一致。benchmark · 模型未返回用量 · 0 毫秒11/23 08:00审阅本轮文件"
+        }
+      ],
+      "finalText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099",
+      "durableText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099 ",
+      "toolIds": [
+        "benchmark-stream-call-0",
+        "benchmark-stream-call-1",
+        "benchmark-stream-call-2",
+        "benchmark-stream-call-3",
+        "benchmark-stream-call-4",
+        "benchmark-stream-call-5",
+        "benchmark-stream-call-6",
+        "benchmark-stream-call-7",
+        "benchmark-stream-call-8",
+        "benchmark-stream-call-9"
+      ],
+      "durableToolResults": [
+        {
+          "toolCallId": "benchmark-stream-call-0",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-1",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-2",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-3",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-4",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-5",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-6",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-7",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-8",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-9",
+          "status": "completed"
+        }
+      ],
+      "coldReadyMs": 184,
+      "warmSwitchMs": 71,
+      "inputFillToPaintMs": 32,
+      "streamReadyMs": 2381,
+      "cold": {
+        "domElements": 707,
+        "heapBytes": 19015978,
+        "longTasks": [],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36"
+      },
+      "stream": {
+        "frameGapsMs": [
+          16.699999999999932, 16.700000000000045, 16.600000000000136, 16.699999999999818,
+          16.700000000000045, 16.700000000000045, 16.59999999999991, 16.700000000000045,
+          16.600000000000136, 16.699999999999818, 16.700000000000045, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.600000000000136, 16.699999999999818,
+          16.700000000000045, 16.600000000000136, 16.699999999999818, 16.700000000000045,
+          16.600000000000136, 16.699999999999818, 16.700000000000045, 16.600000000000136,
+          16.699999999999818, 16.700000000000045, 16.600000000000136, 16.699999999999818,
+          16.600000000000136, 16.700000000000045, 16.699999999999818, 16.600000000000136,
+          16.700000000000045, 16.59999999999991, 16.700000000000045, 16.700000000000045,
+          16.699999999999818, 16.700000000000045, 16.600000000000136, 16.699999999999818,
+          16.700000000000045, 16.600000000000136, 16.699999999999818, 16.600000000000136,
+          16.799999999999955, 16.59999999999991, 16.600000000000136, 16.700000000000045,
+          16.699999999999818, 16.600000000000136, 16.700000000000045, 16.699999999999818,
+          16.600000000000136, 16.700000000000045, 16.699999999999818, 16.600000000000136,
+          16.700000000000045, 16.699999999999818, 16.700000000000045, 16.600000000000136,
+          16.59999999999991, 16.700000000000045, 16.700000000000045, 16.699999999999818,
+          16.700000000000273, 16.59999999999991, 16.699999999999818, 16.59999999999991,
+          16.700000000000273, 16.59999999999991, 16.699999999999818, 16.700000000000273,
+          16.59999999999991, 16.800000000000182, 16.59999999999991, 16.59999999999991,
+          16.699999999999818, 16.700000000000273, 16.699999999999818, 16.59999999999991,
+          16.700000000000273, 16.699999999999818, 16.59999999999991, 16.700000000000273,
+          16.699999999999818, 16.59999999999991, 16.600000000000364, 16.699999999999818,
+          16.699999999999818, 16.700000000000273, 16.59999999999991, 16.699999999999818,
+          16.700000000000273, 16.59999999999991, 16.699999999999818, 16.700000000000273,
+          16.59999999999991, 16.800000000000182, 16.59999999999991, 16.59999999999991,
+          16.699999999999818, 16.700000000000273, 16.699999999999818, 16.59999999999991,
+          16.700000000000273, 16.699999999999818, 16.59999999999991, 16.700000000000273,
+          16.699999999999818, 16.59999999999991, 16.700000000000273, 16.59999999999991,
+          16.699999999999818, 16.700000000000273, 16.699999999999818, 16.59999999999991,
+          16.600000000000364, 16.699999999999818, 16.699999999999818, 16.600000000000364,
+          16.699999999999818, 16.699999999999818, 16.700000000000273, 16.59999999999991,
+          16.699999999999818, 16.700000000000273, 16.59999999999991, 16.699999999999818,
+          16.700000000000273, 16.59999999999991, 16.699999999999818, 16.600000000000364,
+          16.699999999999818, 16.699999999999818, 16.600000000000364, 16.699999999999818,
+          16.699999999999818, 16.700000000000273, 16.59999999999991, 33.40000000000009,
+          16.59999999999991, 16.699999999999818
+        ],
+        "longTasks": [
+          {
+            "start": 3320.7999999523163,
+            "duration": 55
+          }
+        ],
+        "domElements": 579,
+        "heapBytes": 65316323
+      },
+      "visibleMessages": 9
+    },
+    {
+      "count": 5000,
+      "variant": "tools",
+      "streamVariant": "tools",
+      "historyShape": "standard",
+      "toolsPerTurn": 1,
+      "repeat": 1,
+      "logicalMessageCount": 5000,
+      "rawHistoryRecordCount": 7500,
+      "historyBytes": 4561789,
+      "fixtureHash": "e67533272a2c2f7d5ef8cf82267361e352370f56159dc7852c77505e05e3eda8",
+      "executionApiMode": "agent-execution-service",
+      "readinessMode": "logical-selector",
+      "mountedMessageCount": 15,
+      "sentinels": [
+        {
+          "index": 0,
+          "text": "你11/23 08:00问题 0：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 2500,
+          "text": "你11/23 08:00问题 1250：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 4999,
+          "text": "Weave Agent11/23 08:001 次工具调用已完成工具调用1 次read_filesrc/component-2499.tsx已完成分析 2499\n保留稳定的会话归属，检查请求结束时的状态。\n\n验证输入\n处理取消\n\nconst state = { status: \"completed\", count: 42 };\n\n结果与持久化记录一致。benchmark · 模型未返回用量 · 0 毫秒11/23 08:00审阅本轮文件"
+        }
+      ],
+      "finalText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099",
+      "durableText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099 ",
+      "toolIds": [
+        "benchmark-stream-call-0",
+        "benchmark-stream-call-1",
+        "benchmark-stream-call-2",
+        "benchmark-stream-call-3",
+        "benchmark-stream-call-4",
+        "benchmark-stream-call-5",
+        "benchmark-stream-call-6",
+        "benchmark-stream-call-7",
+        "benchmark-stream-call-8",
+        "benchmark-stream-call-9"
+      ],
+      "durableToolResults": [
+        {
+          "toolCallId": "benchmark-stream-call-0",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-1",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-2",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-3",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-4",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-5",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-6",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-7",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-8",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-9",
+          "status": "completed"
+        }
+      ],
+      "coldReadyMs": 173,
+      "warmSwitchMs": 70,
+      "inputFillToPaintMs": 32,
+      "streamReadyMs": 2384,
+      "cold": {
+        "domElements": 707,
+        "heapBytes": 17954675,
+        "longTasks": [],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36"
+      },
+      "stream": {
+        "frameGapsMs": [
+          16.699999999999932, 16.600000000000023, 16.699999999999932, 16.700000000000045,
+          16.600000000000136, 16.699999999999818, 16.700000000000045, 16.600000000000136,
+          16.699999999999818, 16.700000000000045, 16.700000000000045, 16.59999999999991,
+          16.700000000000045, 16.600000000000136, 16.699999999999818, 16.700000000000045,
+          16.600000000000136, 16.699999999999818, 16.600000000000136, 16.700000000000045,
+          16.699999999999818, 16.700000000000045, 16.700000000000045, 16.59999999999991,
+          16.600000000000136, 16.700000000000045, 16.699999999999818, 16.700000000000045,
+          16.700000000000045, 16.5, 16.799999999999955, 16.600000000000136, 16.699999999999818,
+          16.700000000000045, 16.600000000000136, 16.699999999999818, 16.600000000000136,
+          16.700000000000045, 16.59999999999991, 16.700000000000045, 16.700000000000045,
+          16.699999999999818, 16.600000000000136, 16.700000000000045, 16.699999999999818,
+          16.600000000000136, 16.700000000000045, 16.699999999999818, 16.700000000000045,
+          16.600000000000136, 16.699999999999818, 16.600000000000136, 16.700000000000045,
+          16.699999999999818, 16.600000000000136, 16.700000000000045, 16.59999999999991,
+          16.700000000000045, 16.700000000000045, 16.699999999999818, 16.600000000000136,
+          16.700000000000045, 16.699999999999818, 16.700000000000273, 16.59999999999991,
+          16.699999999999818, 16.59999999999991, 16.700000000000273, 16.59999999999991,
+          16.800000000000182, 16.59999999999991, 16.699999999999818, 16.59999999999991,
+          16.700000000000273, 16.699999999999818, 16.700000000000273, 16.59999999999991,
+          16.699999999999818, 16.59999999999991, 16.600000000000364, 16.799999999999727,
+          16.59999999999991, 16.600000000000364, 16.699999999999818, 16.699999999999818,
+          16.700000000000273, 16.59999999999991, 16.699999999999818, 16.700000000000273,
+          16.59999999999991, 16.699999999999818, 16.700000000000273, 16.699999999999818,
+          16.700000000000273, 16.59999999999991, 16.59999999999991, 16.699999999999818,
+          16.600000000000364, 16.799999999999727, 16.59999999999991, 16.700000000000273,
+          16.699999999999818, 16.59999999999991, 16.600000000000364, 16.699999999999818,
+          16.699999999999818, 16.700000000000273, 16.59999999999991, 16.699999999999818,
+          16.600000000000364, 16.799999999999727, 16.59999999999991, 16.700000000000273,
+          16.699999999999818, 16.59999999999991, 16.700000000000273, 16.699999999999818,
+          16.59999999999991, 16.700000000000273, 16.59999999999991, 16.699999999999818,
+          16.700000000000273, 16.59999999999991, 16.699999999999818, 16.700000000000273,
+          16.59999999999991, 16.699999999999818, 16.700000000000273, 16.59999999999991,
+          16.59999999999991, 16.700000000000273, 16.699999999999818, 16.699999999999818,
+          16.600000000000364, 16.699999999999818, 16.59999999999991, 16.700000000000273,
+          16.799999999999727, 16.59999999999991, 49.90000000000009, 16.700000000000273,
+          16.699999999999818
+        ],
+        "longTasks": [
+          {
+            "start": 3300.6999999284744,
+            "duration": 57
+          }
+        ],
+        "domElements": 579,
+        "heapBytes": 55488593
+      },
+      "visibleMessages": 9
+    },
+    {
+      "count": 5000,
+      "variant": "tools",
+      "streamVariant": "tools",
+      "historyShape": "standard",
+      "toolsPerTurn": 1,
+      "repeat": 2,
+      "logicalMessageCount": 5000,
+      "rawHistoryRecordCount": 7500,
+      "historyBytes": 4561789,
+      "fixtureHash": "e67533272a2c2f7d5ef8cf82267361e352370f56159dc7852c77505e05e3eda8",
+      "executionApiMode": "agent-execution-service",
+      "readinessMode": "logical-selector",
+      "mountedMessageCount": 15,
+      "sentinels": [
+        {
+          "index": 0,
+          "text": "你11/23 08:00问题 0：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 2500,
+          "text": "你11/23 08:00问题 1250：请分析组件的状态更新和取消行为。"
+        },
+        {
+          "index": 4999,
+          "text": "Weave Agent11/23 08:001 次工具调用已完成工具调用1 次read_filesrc/component-2499.tsx已完成分析 2499\n保留稳定的会话归属，检查请求结束时的状态。\n\n验证输入\n处理取消\n\nconst state = { status: \"completed\", count: 42 };\n\n结果与持久化记录一致。benchmark · 模型未返回用量 · 0 毫秒11/23 08:00审阅本轮文件"
+        }
+      ],
+      "finalText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099",
+      "durableText": "benchmark-stream-000 benchmark-stream-001 benchmark-stream-002 benchmark-stream-003 benchmark-stream-004 benchmark-stream-005 benchmark-stream-006 benchmark-stream-007 benchmark-stream-008 benchmark-stream-009 benchmark-stream-010 benchmark-stream-011 benchmark-stream-012 benchmark-stream-013 benchmark-stream-014 benchmark-stream-015 benchmark-stream-016 benchmark-stream-017 benchmark-stream-018 benchmark-stream-019 benchmark-stream-020 benchmark-stream-021 benchmark-stream-022 benchmark-stream-023 benchmark-stream-024 benchmark-stream-025 benchmark-stream-026 benchmark-stream-027 benchmark-stream-028 benchmark-stream-029 benchmark-stream-030 benchmark-stream-031 benchmark-stream-032 benchmark-stream-033 benchmark-stream-034 benchmark-stream-035 benchmark-stream-036 benchmark-stream-037 benchmark-stream-038 benchmark-stream-039 benchmark-stream-040 benchmark-stream-041 benchmark-stream-042 benchmark-stream-043 benchmark-stream-044 benchmark-stream-045 benchmark-stream-046 benchmark-stream-047 benchmark-stream-048 benchmark-stream-049 benchmark-stream-050 benchmark-stream-051 benchmark-stream-052 benchmark-stream-053 benchmark-stream-054 benchmark-stream-055 benchmark-stream-056 benchmark-stream-057 benchmark-stream-058 benchmark-stream-059 benchmark-stream-060 benchmark-stream-061 benchmark-stream-062 benchmark-stream-063 benchmark-stream-064 benchmark-stream-065 benchmark-stream-066 benchmark-stream-067 benchmark-stream-068 benchmark-stream-069 benchmark-stream-070 benchmark-stream-071 benchmark-stream-072 benchmark-stream-073 benchmark-stream-074 benchmark-stream-075 benchmark-stream-076 benchmark-stream-077 benchmark-stream-078 benchmark-stream-079 benchmark-stream-080 benchmark-stream-081 benchmark-stream-082 benchmark-stream-083 benchmark-stream-084 benchmark-stream-085 benchmark-stream-086 benchmark-stream-087 benchmark-stream-088 benchmark-stream-089 benchmark-stream-090 benchmark-stream-091 benchmark-stream-092 benchmark-stream-093 benchmark-stream-094 benchmark-stream-095 benchmark-stream-096 benchmark-stream-097 benchmark-stream-098 benchmark-stream-099 ",
+      "toolIds": [
+        "benchmark-stream-call-0",
+        "benchmark-stream-call-1",
+        "benchmark-stream-call-2",
+        "benchmark-stream-call-3",
+        "benchmark-stream-call-4",
+        "benchmark-stream-call-5",
+        "benchmark-stream-call-6",
+        "benchmark-stream-call-7",
+        "benchmark-stream-call-8",
+        "benchmark-stream-call-9"
+      ],
+      "durableToolResults": [
+        {
+          "toolCallId": "benchmark-stream-call-0",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-1",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-2",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-3",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-4",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-5",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-6",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-7",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-8",
+          "status": "completed"
+        },
+        {
+          "toolCallId": "benchmark-stream-call-9",
+          "status": "completed"
+        }
+      ],
+      "coldReadyMs": 178,
+      "warmSwitchMs": 69,
+      "inputFillToPaintMs": 24,
+      "streamReadyMs": 2380,
+      "cold": {
+        "domElements": 707,
+        "heapBytes": 19217066,
+        "longTasks": [],
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36"
+      },
+      "stream": {
+        "frameGapsMs": [
+          16.700000000000045, 16.59999999999991, 16.700000000000045, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.59999999999991, 16.700000000000045,
+          16.700000000000045, 16.700000000000045, 16.59999999999991, 16.700000000000045,
+          16.700000000000045, 16.59999999999991, 16.700000000000045, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.59999999999991, 16.800000000000182,
+          16.59999999999991, 16.700000000000045, 16.59999999999991, 16.700000000000045,
+          16.700000000000045, 16.700000000000045, 16.59999999999991, 16.59999999999991,
+          16.700000000000045, 16.600000000000136, 16.799999999999955, 16.59999999999991,
+          16.700000000000045, 16.59999999999991, 16.700000000000045, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.700000000000045, 16.700000000000045,
+          16.59999999999991, 16.700000000000045, 16.59999999999991, 16.700000000000045,
+          16.600000000000136, 16.699999999999818, 16.700000000000045, 16.600000000000136,
+          16.699999999999818, 16.700000000000045, 16.700000000000045, 16.59999999999991,
+          16.700000000000045, 16.600000000000136, 16.799999999999955, 16.59999999999991,
+          16.600000000000136, 16.699999999999818, 16.700000000000045, 16.600000000000136,
+          16.699999999999818, 16.700000000000045, 16.700000000000045, 16.59999999999991,
+          16.700000000000273, 16.699999999999818, 16.59999999999991, 16.700000000000273,
+          16.59999999999991, 16.699999999999818, 16.700000000000273, 16.59999999999991,
+          16.699999999999818, 16.59999999999991, 16.700000000000273, 16.699999999999818,
+          16.700000000000273, 16.59999999999991, 16.699999999999818, 16.700000000000273,
+          16.59999999999991, 16.699999999999818, 16.700000000000273, 16.699999999999818,
+          16.59999999999991, 16.700000000000273, 16.59999999999991, 16.699999999999818,
+          16.700000000000273, 16.59999999999991, 16.699999999999818, 16.700000000000273,
+          16.699999999999818, 16.59999999999991, 16.59999999999991, 16.700000000000273,
+          16.699999999999818, 16.700000000000273, 16.699999999999818, 16.59999999999991,
+          16.700000000000273, 16.699999999999818, 16.59999999999991, 16.59999999999991,
+          16.700000000000273, 16.699999999999818, 16.700000000000273, 16.699999999999818,
+          16.59999999999991, 16.59999999999991, 16.800000000000182, 16.59999999999991,
+          16.700000000000273, 16.59999999999991, 16.699999999999818, 16.59999999999991,
+          16.800000000000182, 16.59999999999991, 16.700000000000273, 16.59999999999991,
+          16.699999999999818, 16.59999999999991, 16.700000000000273, 16.59999999999991,
+          16.699999999999818, 16.700000000000273, 16.699999999999818, 16.59999999999991,
+          16.700000000000273, 16.59999999999991, 16.800000000000182, 16.59999999999991,
+          16.699999999999818, 16.700000000000273, 16.59999999999991, 16.59999999999991,
+          16.699999999999818, 16.700000000000273, 50, 16.59999999999991, 16.699999999999818
+        ],
+        "longTasks": [
+          {
+            "start": 3285.3000000715256,
+            "duration": 57
+          }
+        ],
+        "domElements": 579,
+        "heapBytes": 43976126
+      },
+      "visibleMessages": 9
+    }
+  ],
+  "summaries": [
+    {
+      "count": 100,
+      "variant": "tools",
+      "streamVariant": "tools",
+      "historyShape": "standard",
+      "toolsPerTurn": 1,
+      "coldReadyMedianMs": 125,
+      "warmSwitchMedianMs": 67,
+      "inputFillToPaintMedianMs": 32,
+      "streamFrameGapP95Ms": 16.799999999999727,
+      "streamBlockingMs": [0, 0, 0],
+      "coldDomElements": [707, 707, 707]
+    },
+    {
+      "count": 5000,
+      "variant": "tools",
+      "streamVariant": "tools",
+      "historyShape": "standard",
+      "toolsPerTurn": 1,
+      "coldReadyMedianMs": 178,
+      "warmSwitchMedianMs": 70,
+      "inputFillToPaintMedianMs": 32,
+      "streamFrameGapP95Ms": 16.700000000000273,
+      "streamBlockingMs": [5, 7, 7],
+      "coldDomElements": [707, 707, 707]
+    }
+  ]
+}

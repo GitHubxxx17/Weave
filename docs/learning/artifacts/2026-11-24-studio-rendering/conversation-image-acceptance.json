@@ -1,0 +1,49 @@
+{
+  "recordedAt": "2026-11-24T05:14:43.737Z",
+  "browser": "158.0.8127.36",
+  "fixture": {
+    "logicalMessageCount": 100,
+    "rawHistoryRecordCount": 25100,
+    "historyBytes": 23582503,
+    "fixtureHash": "7c97d94916e4dd1ec90a89645e74ecf02b7dfd66d0e7d34d7f75489c7d283bdb",
+    "executionApiMode": "agent-execution-service"
+  },
+  "probeHash": "b0c97f70b8bcec20db37a61a2497530500b055c4ac136dc23723681c9e0eb63b",
+  "methodology": "test-only exact-data-URL src assignment deferred until anchor capture",
+  "measured": {
+    "deferred": true,
+    "before": {
+      "id": "benchmark-message-10040",
+      "index": 40,
+      "offset": -86,
+      "scroll": 16349
+    },
+    "after": {
+      "id": "benchmark-message-10040",
+      "index": 40,
+      "offset": -86,
+      "scroll": 16457
+    },
+    "imageRowMountedBefore": true,
+    "imageRowMountedAfter": true,
+    "imageRowIndex": 38,
+    "imageRowBefore": {
+      "top": -1185,
+      "bottom": -1055.484375,
+      "height": 129.515625
+    },
+    "imageRowAfterHeight": 238.3125,
+    "imageBeforeHeight": 24,
+    "imageAfterHeight": 132.796875,
+    "imageComplete": true,
+    "naturalWidth": 300,
+    "naturalHeight": 180,
+    "resizeHeights": [99.515625, 208.3125],
+    "viewportTop": 119,
+    "stableFrames": 5,
+    "mountedRows": 17
+  },
+  "errors": [],
+  "failures": [],
+  "passed": true
+}

@@ -32,6 +32,7 @@ export interface PanelContext {
   /** Any Studio-observed Session is streaming, including an inactive Session. */
   readonly hasRunningSessions: boolean;
   readonly sessionLabel: string;
+  readonly sessionId?: string;
   readonly folderPath: string | undefined;
   readonly projectId: string | undefined;
   readonly modelLabel: string;

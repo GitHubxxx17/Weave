@@ -113,7 +113,7 @@ fetchFileTree已有可选AbortSignal但panel尚未传入；fetchFileContent增�
 
 **以下是待验证目标，不是测量结果**，最终设计在同机新基线完成后冻结；机器时延不放普通CI硬门槛：
 
-- 标准5000条旧fixture默认窗口DOM≤5,000，常规无pin mounted rows≤64；普通closed工具body DOM为0。定长文件mounted rows≤ceil(viewportHeight/rowHeight)+16+focusPin，50k也成立。
+- 标准5000条旧fixture默认窗口DOM≤5,000，常规无pin mounted rows≤64；普通closed工具body DOM为0。定长文件mounted rows≤ceil(viewportHeight/rowHeight)+17+focusPin（非整行滚动允许多一条 partial row），50k也成立。
 - 同机5k旧fixture coldReady/warmSwitch中位数各≤600ms、输入fill-to-two-rAF中位数≤100ms、stream rAF gap p95≤50ms；100条小场景不得超过对照中位数max(20%,20ms)。如果数据parse主导导致冷就绪没达标，报告失败/拆分页，不调小fixture。
 - 50k tree在新的同机基线后对照：tree/filter/input各阶段中位数，目标filter输入代理≤100ms、结果就绪≤300ms；扩展/滚动阶段rAF p95≤50ms。没有树现有数值，不能写相对提升率。
 - 同一锚点在stream/重测/上方展开后位移≤2 CSS px（字体/浏览器一致且静止后）；keyboard focus最终落到逻辑目标；不丢/重排token、工具状态、引用URL或精确重试参数。
@@ -178,3 +178,72 @@ reveal 是一个可取消的 presentation transaction：解析当前 snapshot ow
 ### 11.6 实施所有权
 
 两个独立主题 PR 仍按先会话后 explorer。每个 PR 开始 root 先冻结 DTO无变化的 presentation types、目标 identity 与测试fixture合同。PR1 可并行：A仅负责 pure conversation-model/keys及单元测试；B仅负责 performance fixture/probe schema及确定性测试；root串行负责 App/controller/store接线和 durable overlay合同。之后 A可负责 ToolStep/row受控lazy正文，B可负责 timeline/viewport与browser像素验证，但共享 App、CSS、exports、manifest和lock由root串行。文件撤销 controller先由root冻结接口再交 row实现者消费。审查者不改实现。PR2中 model/range与fixture可并行，panel/PanelContext/App仅一个所有者；保持原 keyed owner，避免为性能改造新权限层。
+
+## 12. 2026-11-24 implementation contracts
+
+Implementation starts at `origin/main=7eb4c7291b55dd3d03d5d2fd9914a9f28181e8ab`.
+Root retains App projects metadata, durable rows and receipt-less legacy rows.
+Production execution events update only the conversation store; App does not
+subscribe to the full snapshot. Pane and connected context/panel wrappers own
+presentation subscriptions, preserving the existing ComposerOwner instance.
+
+`hydrateView({sessionId,messages,turns,detailKnown,durableSequence?})` accepts the
+existing projected Studio rows without losing captured submission, original
+user message, selected skills or optimistic IDs. A missing sequence is a legacy
+presentation update and cannot raise the durable watermark; an unloaded summary
+cannot overwrite loaded history. Durable replacement is monotonic.
+
+Store includes `updateLiveStatus(owner, frame)` because terminal watermark arrives
+through status frames, and `settle(owner, detail)` returns confirmation and
+history-application results separately. Older details can confirm and remove the
+exact older terminal owner while preserving a newer durable base and all other
+overlays. Each overlay includes its own stable row order. Status ownership stays
+in App; a completed runtime event never confirms durable settlement.
+
+Root owns shared types, App, CSS, dependency manifests and file-review controller.
+Model/store work and performance fixture work can proceed independently. Row and
+viewport implementation consume frozen presentation contracts and never change
+execution authority. The file-review controller key is the exact
+`[projectId,sessionId,turnId]`, and pending mutation IDs survive row unmount.
+
+The exact MIT packages `@tanstack/react-virtual@3.14.28` and
+`@tanstack/virtual-core@3.19.13` were downloaded and their TypeScript/source API
+reviewed on 2026-11-24. Required stable keys, rangeExtractor, measureElement,
+ResizeObserver, getVirtualItems and scrollToIndex are present. Use the normal
+React positioning path, overscan 8, and one Weave scroll adapter; optional direct
+DOM updates and new anchoring conveniences are not adopted. The dependency is
+approved for variable row measurement and shared fixed file rows; actual bundle
+cost is measured after implementation.
+
+The integrated observer lifecycle assigns a monotonically increasing presentation
+epoch per handle. `detachLive(owner)` flushes admitted output and fences the old
+observer without cancelling its producer; a later exact terminal Turn readback
+retires the detached overlay, or a higher observation epoch replaces it. Empty
+terminal transport recovery retains admitted output until durable confirmation.
+Cancel receipts forward status/watermarks to the store, and App releases a handle
+only after `settle` confirms it. Pending cross-Session reveal subscribes only while
+its exact target is unresolved, so later live publications can make it available.
+
+The file-review store retains at most 32 settled, closed, unsubscribed entries;
+open/subscribed/loading and uncertain requests stay protected. Session removal
+prunes settled data while preserving pending request identities until resolution.
+App disposal silences late callbacks and releases presentation caches.
+
+Disclosure cache is limited to the active Session and is reset on Session switch;
+within that Session, row unmount/remount preserves process and full-tool-identity
+open state. The separate file-review controller retains unresolved mutations.
+Full transcript is explicit and may allocate the complete loaded history text.
+
+
+Final review scope: ordinary text/reasoning publications reuse the full historical row IDs
+and maps. Active nonempty search still scans all loaded logical content; opening the
+full-text view rebuilds that text on publication. Loaded history and small execution
+owner tombstones remain until Session removal or App disposal. These explicit modes
+and caches do not imply constant total memory or constant work for search/full text.
+
+
+Final App lifecycle review adds a deleted-Session tombstone and activity fence before
+any late detail hydration, activation or execution recovery. Deletion aborts its
+remaining observation handles and drops pending presentation targets. After exact
+durable settlement, App also aborts the observation controller before discarding
+its handle, so a stalled SSE reader is released without sending producer cancellation.

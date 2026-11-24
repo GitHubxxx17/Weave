@@ -1,4 +1,4 @@
-import { type ReactElement } from 'react';
+import { memo, useMemo, useState, type ReactElement } from 'react';
 import {
   Check,
   ChevronRight,
@@ -73,16 +73,22 @@ function statusLabel(tool: ToolStepData): string {
  * arguments and the result are revealed on expand inside bounded scroll boxes
  * so a large file never stretches the conversation.
  */
-export function ToolStep({
+export const ToolStep = memo(function ToolStep({
   tool,
   defaultOpen = false,
   showTime,
+  open: controlledOpen,
+  onOpenChange,
 }: {
   readonly tool: ToolStepData;
   readonly defaultOpen?: boolean;
   readonly showTime?: string;
+  readonly open?: boolean;
+  readonly onOpenChange?: (toolCallId: string, open: boolean) => void;
 }): ReactElement {
-  const parsed = parseArguments(tool.arguments);
+  const [localOpen, setLocalOpen] = useState(defaultOpen);
+  const open = controlledOpen ?? localOpen;
+  const parsed = useMemo(() => parseArguments(tool.arguments), [tool.arguments]);
   const target = toolTarget(parsed);
   const Icon = toolIcon(tool.name);
   const label = statusLabel(tool);
@@ -91,7 +97,13 @@ export function ToolStep({
     <details
       className={`tool-step tool-step-${tool.status}`}
       data-tool-call-id={tool.toolCallId}
-      open={defaultOpen}
+      open={open}
+      onToggle={(event) => {
+        const next = event.currentTarget.open;
+        if (next === open) return;
+        setLocalOpen(next);
+        onOpenChange?.(tool.toolCallId, next);
+      }}
     >
       <summary className="tool-step-heading">
         <ChevronRight className="disclosure-icon" aria-hidden="true" />
@@ -112,20 +124,22 @@ export function ToolStep({
           <span className={tool.status === 'completed' ? 'sr-only' : undefined}>{label}</span>
         </span>
       </summary>
-      <div className="tool-step-body">
-        <div className="tool-step-block">
-          <span className="tool-step-label">参数</span>
-          <pre className="tool-step-code" data-tool-parameters="" tabIndex={-1}>
-            {formatArguments(tool.arguments, parsed)}
-          </pre>
-        </div>
-        {tool.result !== undefined && tool.result !== '' ? (
+      {open ? (
+        <div className="tool-step-body">
           <div className="tool-step-block">
-            <span className="tool-step-label">结果</span>
-            <pre className="tool-step-code tool-step-code-result">{tool.result}</pre>
+            <span className="tool-step-label">参数</span>
+            <pre className="tool-step-code" data-tool-parameters="" tabIndex={-1}>
+              {formatArguments(tool.arguments, parsed)}
+            </pre>
           </div>
-        ) : null}
-      </div>
+          {tool.result !== undefined && tool.result !== '' ? (
+            <div className="tool-step-block">
+              <span className="tool-step-label">结果</span>
+              <pre className="tool-step-code tool-step-code-result">{tool.result}</pre>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </details>
   );
-}
+});

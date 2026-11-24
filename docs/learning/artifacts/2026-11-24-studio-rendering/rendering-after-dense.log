@@ -1,0 +1,6 @@
+(node:58708) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+Measuring 2 tools/tools/mixed/500, repeat 1/3
+Measuring 2 tools/tools/mixed/500, repeat 2/3
+Measuring 2 tools/tools/mixed/500, repeat 3/3
+Raw observations saved to /Users/mi/.codex/worktrees/agent-tasks/weave/dist/performance/rendering-after-dense.json

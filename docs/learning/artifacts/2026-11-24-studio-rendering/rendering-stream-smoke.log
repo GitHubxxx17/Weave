@@ -1,0 +1,5 @@
+(node:39139) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+Measuring 100 markdown/text/standard/1, repeat 1/1
+Measuring 100 markdown/tools/standard/1, repeat 1/1
+Raw observations saved to /Users/mi/.codex/worktrees/agent-tasks/weave/dist/performance/rendering-stream-smoke.json

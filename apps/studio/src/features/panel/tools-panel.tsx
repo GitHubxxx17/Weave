@@ -26,7 +26,11 @@ export function ToolsPanel(props: PanelContext): ReactElement {
           <div className="tool-list">
             {timeline.map(({ tool, message }) => (
               <ToolStep
-                key={tool.toolCallId}
+                key={JSON.stringify([
+                  props.sessionId ?? props.sessionLabel,
+                  message.turnId ?? message.id,
+                  tool.toolCallId,
+                ])}
                 tool={tool}
                 showTime={props.formatTime(message.occurredAt)}
               />

@@ -1,4 +1,4 @@
-# Studio 大规模渲染 Implementation Plan（只读研究稿）
+# Studio 大规模渲染 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,11 +8,11 @@
 
 **Tech Stack:** TypeScript strict/ESM、React19.3.1、现有Zod/Vitest/Testing Library/Vite/Playwright CLI。推荐新增exact版本 `@tanstack/react-virtual`，只有正式设计批准和依赖理由入文档后安装；研究时registry候选3.14.28/MIT，实施时复核。
 
-**Spec:** `/tmp/weave-rendering-design-final.md`。root审阅后正式文件建议名为 `docs/superpowers/specs/2026-11-23-studio-rendering-design.md`（实际顺序启动若跨日则统一更新日期）；此稿不属于当前web/release实现。
+**Spec:** `docs/superpowers/specs/2026-11-24-studio-rendering-design.md`。下列步骤保留研究时的检查清单；实际执行范围、偏差和证据见文末执行记录以及 learning 结果。
 
 ## Global Constraints
 
-- 当前任务仅写/tmp，执行本计划发生在用户路线的多Agent/记忆/检索之后；从最新origin/main创建新独立分支。绝不在web/release分支实施。
+- 本计划在多 Agent、记忆、检索合并后实施；每个 PR 从最新 origin/main 创建独立分支。
 - Studio不import任何 `@weave/*`、Node或Electron模块；不修改Runtime、Session事实、协议、服务端分页或模型上下文。
 - 外部HTTP/SSE输入继续Zod验证。渲染丢帧可以合并显示，事件不能丢失、乱序、跨execution或覆盖已确认terminal history。
 - exact draft owner/epoch、请求捕获、文件附件、plugin insertion、producer detach/cancel区别、watermark、精确重试、审批与文件撤销请求身份必须保留。
@@ -218,7 +218,7 @@ interface FileTreeModel {
 - [ ] 使用PR1已验证virtualizer的fixed estimateSize（CSS同一高度）窗口；匹配与目录共享行组件，overscan8；focused项可pin，逻辑导航先scroll再focus；deferred query有pending提示。
 - [ ] 保留现有 PanelContext.fileOwnerKey=JSON.stringify(composerDraft.owner) 的 key remount 和 captured onAddFile owner；给tree/content request加每effect setup新controller、AbortSignal+epoch+project/selection比较；红测试A慢B快、project A→B→A、refresh迟到、unmount、过滤后index变化不打开错path。参考file picker的owner检查，不能用字符串path单独识别跨project归属。
 - [ ] 保留splitter、附件、lazy diff/highlight及面板keepAlive=false；不加无界tree cache、不改变Server cap。运行tree/attachment/panel测试和browser键盘选择。
-- [ ] 运行50k matrix，断言mounted≤ceil(viewportHeight/rowHeight)+16+focusPin，逻辑计数与sentinel准确。记录新基线/after，不预填百分比。
+- [ ] 运行50k matrix，断言mounted≤ceil(viewportHeight/rowHeight)+17+focusPin（包含非整行滚动的一条 partial row），逻辑计数与sentinel准确。记录新基线/after，不预填百分比。
 
 ### Task 7: 争用、viewer诊断与最终履历证据
 
@@ -236,7 +236,7 @@ interface FileTreeModel {
 
 所有行为回归绿、真实浏览器窗口/锚点/查找/审批/文件撤销验证、raw before/after样本与明确指标定义齐全，才可称完成。若冷就绪瓶颈转为HTTP/JSON/历史投影，或单条Markdown/高亮主导，提交当前有证据的改善与限制；另写分页/worker设计，不通过提高server cap、删逻辑内容、隐藏失败case或换fixture达标。
 
-本稿仅计划，未运行新的计时实验、未安装virtualizer、未开始任一PR。
+以上是原始计划清单。实际执行状态以文末记录为准。
 
 
 ## 当前源码对齐修订的执行顺序
@@ -252,3 +252,23 @@ interface FileTreeModel {
 - [ ] 报告区分合成历史HTTP read model、真实ExecutionService live fixture、合成50k目录组件压力与真实本机文件I/O；没有新运行不得填任何提升率。
 
 只读复核于 Memory 提交工作区 `da9120ae174289f0650bcea13a49debe08eaf159`；未运行benchmark、未安装依赖、未改仓库。正式实施前仍从检索合并后的最新 main 重采baseline并复核源码。
+
+## 执行记录（2026-11-24）
+
+正式执行起点为 `7eb4c72`，设计提交 `f219003`，当前独立分支为
+`feat/studio-conversation-rendering`。Task 1 的冻结 before 为 18 个生产样本；
+Task 2–4 的代码并行集成，因此没有单独保留 indexed/isolated 计时 checkpoint，
+最终报告不得虚构这两个消融结果。后续使用 before 与完整 windowed 实现比较，
+稳定引用、按帧发布和精确定位另由行为测试证明。
+
+已修复的集成回归包括 terminal 空事件恢复、观察 detach/reattach epoch、取消回执
+状态同步、旧 durable read 不回退新历史、按需挂载工具正文以及 pending target
+随 live publication 重试。文件审阅缓存将 settled/closed/unsubscribed 条目限制为
+32 个，未确认请求保留精确身份；缓存与网络都不获得执行权。浏览器布局验证和
+正式 after 数据完成后，在 learning 结果中记录范围和未达目标。
+
+
+PR1 的 18 个标准 after、6 个工具 stream 和 3 个 mixed/500 工具样本均已完成。
+before/after 按阶段顺序采样，没有实现原计划的随机交错；结果文档明确该限制。
+正式 timing dist 与最后 pending reveal 一帧重试的源码不同，最终构建 smoke 单独记录。
+PR2 草稿仅在 /tmp 准备，须在 PR1 squash 后的新分支集成。
