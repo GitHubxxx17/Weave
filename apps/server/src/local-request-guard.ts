@@ -1,16 +1,11 @@
 import type { Hono, MiddlewareHandler } from 'hono';
+import { isTrustedAuthority } from './local-authority.js';
 
-const loopback = /^(localhost|127\.0\.0\.1|\[::1\])(?::([0-9]{1,5}))?$/;
 const bodyMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const managedWritePrefixes = ['/plugins', '/mcp'];
 
 function owns(path: string, prefix: string): boolean {
   return path === prefix || path.startsWith(prefix + '/');
-}
-
-function isLoopback(value: string): boolean {
-  const match = loopback.exec(value);
-  return match !== null && (match[2] === undefined || Number(match[2]) <= 65535);
 }
 
 function requestHost(context: Parameters<MiddlewareHandler>[0]): string {
@@ -38,7 +33,11 @@ function hasRequestBody(context: Parameters<MiddlewareHandler>[0]): boolean {
  * families that registered a path guard. `/health` stays open for liveness
  * probes. Path guards keep their own, more specific error codes.
  */
-export function registerLocalRequestGuard(app: Hono, studioOrigin?: string): void {
+export function registerLocalRequestGuard(
+  app: Hono,
+  studioOrigin?: string,
+  trustedHost?: string,
+): void {
   const guard: MiddlewareHandler = async (context, next) => {
     if (context.req.path === '/health') return next();
     // Plugin and MCP management mount `managementWriteGuard` on every write
@@ -51,7 +50,7 @@ export function registerLocalRequestGuard(app: Hono, studioOrigin?: string): voi
     }
 
     let allowed =
-      isLoopback(requestHost(context)) &&
+      isTrustedAuthority(requestHost(context), trustedHost) &&
       context.req.header('Sec-Fetch-Site')?.trim().toLowerCase() !== 'cross-site';
     const origin = context.req.header('Origin');
     if (origin !== undefined) {
@@ -60,7 +59,9 @@ export function registerLocalRequestGuard(app: Hono, studioOrigin?: string): voi
         allowed &&=
           (value.protocol === 'http:' || value.protocol === 'https:') &&
           value.origin === origin &&
-          (studioOrigin === undefined ? isLoopback(value.host) : origin === studioOrigin);
+          (studioOrigin === undefined
+            ? isTrustedAuthority(value.host, trustedHost)
+            : origin === studioOrigin);
       } catch {
         allowed = false;
       }

@@ -1,5 +1,6 @@
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { basename } from 'node:path';
+import { basename, join } from 'node:path';
 import {
   app,
   BrowserWindow,
@@ -20,6 +21,55 @@ import type { ProviderSecretCodec } from '@weave/server';
 interface DesktopServer {
   readonly port: number;
   readonly stop: () => Promise<void>;
+  /** Present when the Server listens beyond loopback (`--host`). */
+  readonly accessToken?: string | undefined;
+}
+
+/** Where the window loads Studio from, and the only origin the bridge trusts. */
+export interface StudioTarget {
+  readonly url: string;
+  readonly origin: string;
+}
+
+/**
+ * Picks the page the window loads. `WEAVE_STUDIO_URL` (development) wins;
+ * otherwise the window loads the embedded Server, which hosts the built Studio,
+ * so the trusted origin is the Server's own loopback origin. A non-loopback
+ * `--host` requires the access token, which rides on the first page load and
+ * is exchanged for a cookie by the Server.
+ */
+export function resolveStudioTarget(
+  config: DesktopConfig,
+  serverUrl: string,
+  accessToken?: string,
+): StudioTarget {
+  if (config.studioUrl !== undefined && config.studioOrigin !== undefined) {
+    return { url: config.studioUrl, origin: config.studioOrigin };
+  }
+  const origin = new URL(serverUrl).origin;
+  return {
+    url: accessToken === undefined ? `${origin}/` : `${origin}/?token=${accessToken}`,
+    origin,
+  };
+}
+
+/** Built Studio shipped next to the desktop app (`apps/studio/dist`). */
+export function getStudioDirectory(): string {
+  return fileURLToPath(new URL('../../studio/dist', import.meta.url));
+}
+
+/** Describes why the hosted Studio cannot be loaded, or `undefined` when it can. */
+export function describeMissingStudio(config: DesktopConfig): string | undefined {
+  if (config.studioUrl !== undefined) {
+    return undefined;
+  }
+  if (
+    config.studioDirectory === undefined ||
+    !existsSync(join(config.studioDirectory, 'index.html'))
+  ) {
+    return `找不到已构建的 Studio（${config.studioDirectory ?? '未配置目录'}/index.html）。请先运行 pnpm --filter @weave/studio build，或设置 WEAVE_STUDIO_URL 指向开发服务器。`;
+  }
+  return undefined;
 }
 
 const serverUrlArgumentPrefix = '--weave-server-url=';
@@ -107,10 +157,10 @@ export async function handlePickDirectory(
   return { path: folderPath, name: isPluginImport ? folderName || folderPath : folderName };
 }
 
-function registerDesktopIpc(config: DesktopConfig): void {
+function registerDesktopIpc(studioOrigin: string): void {
   ipcMain.removeHandler(pickDirectoryChannel);
   ipcMain.handle(pickDirectoryChannel, (event, ...pickerArgs: unknown[]) =>
-    handlePickDirectory(event, config.studioOrigin, ...pickerArgs),
+    handlePickDirectory(event, studioOrigin, ...pickerArgs),
   );
 }
 
@@ -175,7 +225,9 @@ export function createMainWindow(
   config: DesktopConfig,
   serverUrl: string,
   chrome: WindowChrome = getWindowChrome(),
+  options: { readonly target?: StudioTarget; readonly startupError?: unknown } = {},
 ): BrowserWindow {
+  const target = options.target ?? resolveStudioTarget(config, serverUrl);
   const window = new BrowserWindow({
     backgroundColor: studioBackgroundColor,
     ...getWindowChromeOptions(chrome),
@@ -191,7 +243,7 @@ export function createMainWindow(
   });
 
   window.webContents.on('will-navigate', (event, url) => {
-    if (new URL(url).origin !== config.studioOrigin) {
+    if (new URL(url).origin !== target.origin) {
       event.preventDefault();
     }
   });
@@ -201,9 +253,13 @@ export function createMainWindow(
     return { action: 'deny' };
   });
 
-  void window.loadURL(config.studioUrl).catch((error: unknown) => {
-    showWindowError(window, error);
-  });
+  if (options.startupError !== undefined) {
+    showWindowError(window, options.startupError);
+  } else {
+    void window.loadURL(target.url).catch((error: unknown) => {
+      showWindowError(window, error);
+    });
+  }
 
   return window;
 }
@@ -260,7 +316,8 @@ export function registerSingleInstance(getWindow: () => BrowserWindow | undefine
 export async function startDesktopServer(
   config: DesktopConfig,
   providerSecretCodec: ProviderSecretCodec,
-): Promise<{ port: number; stop: () => Promise<void> }> {
+  hostStudio = true,
+): Promise<{ port: number; stop: () => Promise<void>; accessToken?: string | undefined }> {
   const server = await startServer(0, {
     databaseFile: config.databaseFile,
     dataDirectory: config.userDataDirectory,
@@ -268,7 +325,13 @@ export async function startDesktopServer(
     ...(config.allowInitialManagedPluginBinding
       ? { managedPluginStore: { initialBinding: 'allow-unbound' } }
       : {}),
-    studioOrigin: config.studioOrigin,
+    // With `WEAVE_STUDIO_URL` the page comes from another origin (Vite); otherwise
+    // the Server hosts the built Studio itself and the page is same-origin.
+    ...(config.studioOrigin === undefined ? {} : { studioOrigin: config.studioOrigin }),
+    ...(hostStudio && config.studioUrl === undefined && config.studioDirectory !== undefined
+      ? { studioDirectory: config.studioDirectory }
+      : {}),
+    ...(config.host === undefined ? {} : { host: config.host }),
     providerSecretCodec,
     fetch: createDesktopFetch(),
   });
@@ -276,6 +339,7 @@ export async function startDesktopServer(
   return {
     port: server.port,
     stop: server.stop,
+    ...(server.accessToken === undefined ? {} : { accessToken: server.accessToken }),
   };
 }
 
@@ -323,14 +387,26 @@ export async function startDesktopApplication(): Promise<void> {
     const config = createDesktopConfig({
       userDataDirectory: app.getPath('userData'),
       environment: process.env,
+      studioDirectory: getStudioDirectory(),
+      argv: process.argv.slice(1),
     });
-    desktopServer = await startDesktopServer(config, createElectronProviderSecretCodec());
-    registerDesktopIpc(config);
-    const window = createMainWindow(config, `http://127.0.0.1:${desktopServer.port}`);
+    const missingStudio = describeMissingStudio(config);
+    desktopServer = await startDesktopServer(
+      config,
+      createElectronProviderSecretCodec(),
+      missingStudio === undefined,
+    );
+    const serverUrl = `http://127.0.0.1:${desktopServer.port}`;
+    const target = resolveStudioTarget(config, serverUrl, desktopServer.accessToken);
+    registerDesktopIpc(target.origin);
+    const window = createMainWindow(config, serverUrl, getWindowChrome(), {
+      target,
+      ...(missingStudio === undefined ? {} : { startupError: new Error(missingStudio) }),
+    });
     mainWindow = window;
     terminalHost = registerTerminalHost({
       ipcMain,
-      studioOrigin: config.studioOrigin,
+      studioOrigin: target.origin,
       getWebContents: () => (window.isDestroyed() ? undefined : window.webContents),
     });
     watchRendererLifecycle(window, () => terminalHost?.disposeSessions());

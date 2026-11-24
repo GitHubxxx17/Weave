@@ -207,6 +207,35 @@ Open `http://127.0.0.1:5173`. Vite serves the React Studio and proxies
 separate CORS setup. The Server `dev` script builds the TypeScript packages
 first and then starts `dist/main.js`.
 
+### Serving Studio from the Server and LAN access
+
+After `pnpm --filter @weave/studio build`, the Server can host Studio itself on
+the same origin as the API. Set `WEAVE_STUDIO_DIRECTORY` to
+`apps/studio/dist` (Desktop does this automatically):
+
+```bash
+WEAVE_STUDIO_DIRECTORY=apps/studio/dist pnpm --filter @weave/server dev
+```
+
+By default the Server listens on `127.0.0.1` only. To open Weave from another
+device on the local network, pass `--host` (or set `WEAVE_HOST`):
+
+```bash
+node apps/server/dist/main.js --host 0.0.0.0
+```
+
+A non-loopback address turns on an access token. The Server prints
+`http://<address>:<port>/?token=<token>` at startup; opening it stores the token
+in an `HttpOnly` cookie, and API clients can send `Authorization: Bearer <token>`.
+Set `WEAVE_ACCESS_TOKEN` (16 to 256 characters of `A-Za-z0-9._~-`) to keep the
+token stable across restarts. Desktop accepts the same `--host` argument and
+`WEAVE_HOST`.
+
+**Security:** anyone on the network who has the token can use every Server API
+on this computer, including Agent runs that read and write the Project folders.
+The connection is plain HTTP, so use it only on a network you trust and do not
+share the URL.
+
 Browser acceptance flow:
 
 1. Confirm the Studio workspace is visible in the first viewport.

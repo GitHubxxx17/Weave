@@ -35,7 +35,7 @@ import { createSqliteProjectStore, type ProjectStore } from '@weave/workspace';
 import { z } from 'zod';
 import { resolveSkillsDirectory } from './skill-path.js';
 import { createSkillCatalogService } from './skill-catalog.js';
-import { createApp } from './app.js';
+import { createApp, type AppOptions } from './app.js';
 import { createAgentTaskWorkspaceBindings } from './agent-task-workspace.js';
 import {
   createProjectFolderAuthority,
@@ -70,6 +70,12 @@ import { createSqliteMcpAuthorityStore, type McpAuthorityStore } from './mcp-aut
 import type { connectMcp } from '@weave/mcp-client';
 import type { ServerMcpManager } from './mcp-management-types.js';
 import type { ProviderSecretCodec } from './provider-secret-codec.js';
+import {
+  formatAccessUrl,
+  readHostSetting,
+  resolveListenConfig,
+  trustedHostFor,
+} from './listen-config.js';
 import {
   createProviderSettingsManager,
   type ProviderSettingsManager,
@@ -129,6 +135,14 @@ export interface StartServerOptions {
   readonly dataDirectory?: string;
   readonly skillsDirectory?: string | false;
   readonly studioOrigin?: string;
+  /** Studio `vite build` output directory; served on paths no API route handles. */
+  readonly studioDirectory?: string;
+  /** Listen address; defaults to `127.0.0.1`. Non-loopback addresses require an access token. */
+  readonly host?: string;
+  /** Access token for non-loopback listeners; defaults to `WEAVE_ACCESS_TOKEN` or a random token. */
+  readonly accessToken?: string;
+  /** Receives the access URL (with token) for non-loopback listeners. Defaults to `console.info`. */
+  readonly announce?: (line: string) => void;
   readonly environment?: NodeJS.ProcessEnv;
   readonly fetch?: typeof globalThis.fetch;
   readonly providerSettingsStore?: ProviderSettingsStore;
@@ -170,6 +184,11 @@ export async function startServer(
   const port = portSchema.parse(portInput);
   persistenceOptionsSchema.parse(options);
   const studioOrigin = studioOriginSchema.parse(options.studioOrigin);
+  const listen = resolveListenConfig({
+    host: options.host,
+    accessToken: options.accessToken,
+    environment: options.environment ?? process.env,
+  });
   const maxSteps = parseAgentMaxSteps((options.environment ?? process.env).WEAVE_AGENT_MAX_STEPS);
   const pluginStartup = resolvePluginStartupOptions(options);
   const { databaseFile, pluginsDirectory } = pluginStartup;
@@ -480,44 +499,65 @@ export async function startServer(
       resolveListening = resolve;
       rejectListening = reject;
     });
+    const appOptions = {
+      approvalBrokerService,
+      panelService,
+      agentRunner: coordinator.runner,
+      agentExecutionService,
+      agentTaskService,
+      agentTaskObserver,
+      projectStore: projects,
+      projectFolderAuthority,
+      sessionService,
+      memoryService: memory.service,
+      retrievalService: retrieval.service,
+      retrievalEmbedding: retrieval.embedding,
+      skillCatalogService: createSkillCatalogService({
+        current: () => runtime.serverHost.controller()?.current(),
+      }),
+      providerRegistry: runtime.serverHost.providerRegistry,
+      defaultProvider: providerSettings.defaultProvider,
+      providerSettingsManager,
+      canManageProviders: providerSettingsManager !== undefined,
+      pluginCatalog: () => listServerPlugins(runtime),
+      pluginMarketplaceManager,
+      generationSnapshot: coordinator.generationSnapshot,
+      commandCatalog: () => listServerCommands(runtime),
+      ...(pluginHost === undefined ? {} : { pluginManager: pluginHost }),
+      ...(installer === undefined ? {} : { managedPluginInstaller: installer }),
+      assertManualPluginIdSync: (id) =>
+        assertManualPluginIdSync(startup.authority.snapshotSync, id),
+      ...(mcpManager === undefined ? {} : { mcpManager }),
+      ...(studioOrigin === undefined ? {} : { studioOrigin }),
+      ...(options.studioDirectory === undefined
+        ? {}
+        : { studioDirectory: options.studioDirectory }),
+    } satisfies AppOptions;
+    // The trusted `Host` includes the bound port, which is only known once
+    // listening; no request can arrive before the callback installs the app.
+    let handle: ReturnType<typeof createApp>['fetch'] | undefined;
     const createdServer = serve(
       {
-        fetch: createApp(runtime, {
-          approvalBrokerService,
-          panelService,
-          agentRunner: coordinator.runner,
-          agentExecutionService,
-          agentTaskService,
-          agentTaskObserver,
-          projectStore: projects,
-          projectFolderAuthority,
-          sessionService,
-          memoryService: memory.service,
-          retrievalService: retrieval.service,
-          retrievalEmbedding: retrieval.embedding,
-          skillCatalogService: createSkillCatalogService({
-            current: () => runtime.serverHost.controller()?.current(),
-          }),
-          providerRegistry: runtime.serverHost.providerRegistry,
-          defaultProvider: providerSettings.defaultProvider,
-          providerSettingsManager,
-          canManageProviders: providerSettingsManager !== undefined,
-          pluginCatalog: () => listServerPlugins(runtime),
-          pluginMarketplaceManager,
-          generationSnapshot: coordinator.generationSnapshot,
-          commandCatalog: () => listServerCommands(runtime),
-          ...(pluginHost === undefined ? {} : { pluginManager: pluginHost }),
-          ...(installer === undefined ? {} : { managedPluginInstaller: installer }),
-          assertManualPluginIdSync: (id) =>
-            assertManualPluginIdSync(startup.authority.snapshotSync, id),
-          ...(mcpManager === undefined ? {} : { mcpManager }),
-          ...(studioOrigin === undefined ? {} : { studioOrigin }),
-        }).fetch,
-        hostname: '127.0.0.1',
+        fetch: (request, env) =>
+          handle === undefined
+            ? new Response('Server is starting', { status: 503 })
+            : handle(request, env),
+        hostname: listen.host,
         port,
       },
-      () => {
-        resolveListening();
+      (info) => {
+        try {
+          const trustedHost = trustedHostFor(listen, info.port);
+          handle = createApp(runtime, {
+            ...appOptions,
+            ...(trustedHost === undefined || listen.accessToken === undefined
+              ? {}
+              : { trustedHost, accessToken: listen.accessToken }),
+          }).fetch;
+          resolveListening();
+        } catch (error) {
+          rejectListening(error);
+        }
       },
     );
     server = createdServer;
@@ -533,11 +573,19 @@ export async function startServer(
       throw new Error('Expected the server to have a TCP address after listening');
     }
 
+    const accessUrl = formatAccessUrl(listen, address.port);
+    if (accessUrl !== undefined) {
+      (options.announce ?? console.info)(`Weave Studio (LAN): ${accessUrl}`);
+    }
+
     process.on('SIGINT', onSignal);
     process.on('SIGTERM', onSignal);
 
     return {
       port: address.port,
+      host: listen.host,
+      accessToken: listen.accessToken,
+      accessUrl,
       runtime,
       pluginHost,
       mcpManager,
@@ -552,5 +600,10 @@ export async function startServer(
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  await startServer();
+  const host = readHostSetting(process.argv.slice(2), process.env);
+  const studioDirectory = process.env.WEAVE_STUDIO_DIRECTORY;
+  await startServer(undefined, {
+    ...(host === undefined ? {} : { host }),
+    ...(studioDirectory === undefined ? {} : { studioDirectory }),
+  });
 }

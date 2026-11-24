@@ -1,7 +1,6 @@
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
 
-const defaultStudioUrl = 'http://127.0.0.1:5173';
 const loopbackHosts = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 const desktopConfigInputSchema = z.object({
@@ -26,6 +25,13 @@ const desktopConfigInputSchema = z.object({
       }
     })
     .optional(),
+  host: z
+    .string()
+    .trim()
+    .min(1)
+    .max(253)
+    .regex(/^[A-Za-z0-9.:[\]-]+$/, 'Host must be a hostname or IP address')
+    .optional(),
 });
 
 export interface DesktopConfig {
@@ -33,13 +39,47 @@ export interface DesktopConfig {
   readonly databaseFile: string;
   readonly pluginsDirectory: string;
   readonly allowInitialManagedPluginBinding: boolean;
-  readonly studioUrl: string;
-  readonly studioOrigin: string;
+  /**
+   * Studio URL from `WEAVE_STUDIO_URL` (development, usually Vite). When unset
+   * the window loads the built Studio hosted by the embedded Server.
+   */
+  readonly studioUrl: string | undefined;
+  /** Origin of `studioUrl`; `undefined` when the embedded Server hosts Studio. */
+  readonly studioOrigin: string | undefined;
+  /** Studio `vite build` output hosted by the embedded Server. */
+  readonly studioDirectory: string | undefined;
+  /** Server listen address from `--host` or `WEAVE_HOST`; `undefined` means loopback. */
+  readonly host: string | undefined;
 }
 
 export interface CreateDesktopConfigInput {
   readonly userDataDirectory: string;
   readonly environment?: NodeJS.ProcessEnv;
+  readonly studioDirectory?: string;
+  /** Command-line arguments after the executable and script, e.g. `process.argv.slice(1)`. */
+  readonly argv?: readonly string[];
+}
+
+/** Reads `--host <address>` or `--host=<address>`, falling back to `WEAVE_HOST`. */
+function readHost(
+  argv: readonly string[],
+  environment: NodeJS.ProcessEnv | undefined,
+): string | undefined {
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index];
+    if (argument === '--host') {
+      const value = argv[index + 1];
+      if (value === undefined || value.startsWith('--')) {
+        throw new Error('--host requires an address');
+      }
+      return value;
+    }
+    if (argument?.startsWith('--host=') === true) {
+      return argument.slice('--host='.length);
+    }
+  }
+  const fromEnvironment = environment?.WEAVE_HOST?.trim();
+  return fromEnvironment === undefined || fromEnvironment === '' ? undefined : fromEnvironment;
 }
 
 export function createDesktopConfig(input: CreateDesktopConfigInput): DesktopConfig {
@@ -47,6 +87,7 @@ export function createDesktopConfig(input: CreateDesktopConfigInput): DesktopCon
     userDataDirectory: input.userDataDirectory,
     pluginsDirectory: input.environment?.WEAVE_PLUGINS_DIR,
     studioUrl: input.environment?.WEAVE_STUDIO_URL,
+    host: readHost(input.argv ?? [], input.environment),
   });
   const userDataDirectory = resolve(parsed.userDataDirectory);
   const databaseFile = join(userDataDirectory, 'weave.sqlite');
@@ -60,7 +101,9 @@ export function createDesktopConfig(input: CreateDesktopConfigInput): DesktopCon
     databaseFile,
     pluginsDirectory,
     allowInitialManagedPluginBinding,
-    studioUrl: parsed.studioUrl ?? defaultStudioUrl,
-    studioOrigin: new URL(parsed.studioUrl ?? defaultStudioUrl).origin,
+    studioUrl: parsed.studioUrl,
+    studioOrigin: parsed.studioUrl === undefined ? undefined : new URL(parsed.studioUrl).origin,
+    studioDirectory: input.studioDirectory,
+    host: parsed.host,
   };
 }

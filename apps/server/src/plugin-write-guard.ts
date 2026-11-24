@@ -1,13 +1,7 @@
 import type { MiddlewareHandler } from 'hono';
 import { pluginErrorResponseSchema } from './plugin-management-types.js';
 
-const authority = /^(localhost|127\.0\.0\.1|\[::1\])(?::([0-9]{1,5}))?$/;
-
-/** No URL normalization may turn a remote or ambiguous authority into loopback. */
-function isLoopbackAuthority(value: string): boolean {
-  const parsed = authority.exec(value);
-  return parsed !== null && (parsed[2] === undefined || Number(parsed[2]) <= 65535);
-}
+import { isTrustedAuthority } from './local-authority.js';
 
 function parseOrigin(value: string): URL | undefined {
   try {
@@ -21,7 +15,10 @@ function parseOrigin(value: string): URL | undefined {
 }
 
 /** Every local management write shares this guard, including future subpaths. */
-export function managementWriteGuard(studioOrigin?: string): MiddlewareHandler {
+export function managementWriteGuard(
+  studioOrigin?: string,
+  trustedHost?: string,
+): MiddlewareHandler {
   return async (context, next) => {
     if (
       context.req.method === 'GET' ||
@@ -52,7 +49,7 @@ export function managementWriteGuard(studioOrigin?: string): MiddlewareHandler {
         }),
         403,
       );
-    if (!isLoopbackAuthority(context.req.header('Host') ?? '')) return forbidden();
+    if (!isTrustedAuthority(context.req.header('Host') ?? '', trustedHost)) return forbidden();
     if (context.req.header('Sec-Fetch-Site')?.trim().toLowerCase() === 'cross-site')
       return forbidden();
     const origin = context.req.header('Origin');
@@ -60,7 +57,9 @@ export function managementWriteGuard(studioOrigin?: string): MiddlewareHandler {
       const parsed = parseOrigin(origin);
       if (
         parsed === undefined ||
-        (studioOrigin === undefined ? !isLoopbackAuthority(parsed.host) : origin !== studioOrigin)
+        (studioOrigin === undefined
+          ? !isTrustedAuthority(parsed.host, trustedHost)
+          : origin !== studioOrigin)
       )
         return forbidden();
     }

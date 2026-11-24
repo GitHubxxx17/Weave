@@ -1,15 +1,11 @@
 import type { MiddlewareHandler } from 'hono';
 import { PanelError, panelErrorBody } from './plugin-panel-errors.js';
-const loopback = /^(localhost|127\.0\.0\.1|\[::1\])(?::([0-9]{1,5}))?$/;
-function local(value: string) {
-  const match = loopback.exec(value);
-  return match !== null && (match[2] === undefined || Number(match[2]) <= 65535);
-}
-export function panelRequestGuard(studioOrigin?: string): MiddlewareHandler {
+import { isTrustedAuthority } from './local-authority.js';
+export function panelRequestGuard(studioOrigin?: string, trustedHost?: string): MiddlewareHandler {
   return async (context, next) => {
     context.header('Cache-Control', 'no-store');
     let allowed =
-      local(context.req.header('Host') ?? '') &&
+      isTrustedAuthority(context.req.header('Host') ?? '', trustedHost) &&
       context.req.header('Sec-Fetch-Site')?.trim().toLowerCase() !== 'cross-site';
     const origin = context.req.header('Origin');
     if (origin !== undefined) {
@@ -18,7 +14,9 @@ export function panelRequestGuard(studioOrigin?: string): MiddlewareHandler {
         allowed &&=
           (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
           parsed.origin === origin &&
-          (studioOrigin === undefined ? local(parsed.host) : studioOrigin === origin);
+          (studioOrigin === undefined
+            ? isTrustedAuthority(parsed.host, trustedHost)
+            : studioOrigin === origin);
       } catch {
         allowed = false;
       }

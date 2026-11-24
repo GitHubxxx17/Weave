@@ -12,6 +12,8 @@ import {
 import { Hono } from 'hono';
 import { registerRetrievalRoutes, type RetrievalRouteOptions } from './retrieval-routes.js';
 import { registerLocalRequestGuard } from './local-request-guard.js';
+import { registerAccessTokenGuard } from './access-token.js';
+import { registerStudioStatic } from './studio-static.js';
 import { registerRetrievalGuard } from './retrieval-guard.js';
 import { registerMemoryRoutes, type MemoryAppOptions } from './memory-api.js';
 import { cors } from 'hono/cors';
@@ -74,11 +76,21 @@ export interface AppOptions
    * randomly-port Server use different origins.
    */
   readonly studioOrigin?: string;
+  /**
+   * `<host>:<port>` (or `*:<port>`) admitted as `Host`/`Origin` besides loopback.
+   * Set only when the Server listens beyond loopback.
+   */
+  readonly trustedHost?: string;
+  /** Requires this token on every request except `/health`; set with `trustedHost`. */
+  readonly accessToken?: string;
+  /** Studio `vite build` output served on paths no API route handles. */
+  readonly studioDirectory?: string;
 }
 
 export function createApp(runtime: Runtime, options?: AppOptions): Hono {
   const app = new Hono();
   const studioOrigin = options?.studioOrigin;
+  const trustedHost = options?.trustedHost;
   const workspaceOptions = {
     ...options,
     projectFolderAuthority:
@@ -94,18 +106,24 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
     await next();
   });
 
-  registerRetrievalGuard(app, studioOrigin);
-  registerAgentExecutionGuards(app, studioOrigin, ['/memory', '/memory/*']);
+  // The token check precedes every guard so an unauthenticated peer learns nothing.
+  if (options?.accessToken !== undefined) registerAccessTokenGuard(app, options.accessToken);
+
+  registerRetrievalGuard(app, studioOrigin, trustedHost);
+  registerAgentExecutionGuards(app, studioOrigin, ['/memory', '/memory/*'], undefined, trustedHost);
   registerPanelGuards(app, options ?? {});
-  registerAgentExecutionGuards(app, studioOrigin);
-  registerAgentExecutionGuards(app, studioOrigin, [
-    '/sessions/:sessionId/tasks',
-    '/sessions/:sessionId/tasks/*',
-  ]);
+  registerAgentExecutionGuards(app, studioOrigin, undefined, undefined, trustedHost);
+  registerAgentExecutionGuards(
+    app,
+    studioOrigin,
+    ['/sessions/:sessionId/tasks', '/sessions/:sessionId/tasks/*'],
+    undefined,
+    trustedHost,
+  );
   registerFileUndoGuards(app, options ?? {});
   // Registered after the path guards so they keep their specific error codes;
   // everything they do not cover is admitted (or rejected) here, before CORS.
-  registerLocalRequestGuard(app, studioOrigin);
+  registerLocalRequestGuard(app, studioOrigin, trustedHost);
 
   if (studioOrigin !== undefined) {
     app.use(
@@ -147,6 +165,9 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
   registerPanelRoutes(app, options ?? {});
   registerPluginMarketplaceRoutes(app, options ?? {});
   registerMcpRoutes(app, options ?? {});
+  if (options?.studioDirectory !== undefined) {
+    registerStudioStatic(app, options.studioDirectory);
+  }
 
   return app;
 }
