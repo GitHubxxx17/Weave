@@ -7,6 +7,7 @@ import {
   type ToolPolicy,
 } from '@weave/runtime';
 import { describe, expect, it, vi } from 'vitest';
+import { mcpDescriptionPrefix } from '../src/mcp-result.js';
 import { createMcpTool, mcpToolName } from '../src/mcp-tool.js';
 import type { McpPluginOptions } from '../src/mcp-plugin.js';
 
@@ -189,6 +190,13 @@ describe('MCP tool adapter', () => {
     expect(JSON.stringify(request)).not.toContain('credential');
     broker.reject(request.approvalId);
     await expect(pending).rejects.toMatchObject({ code: 'tool-approval-rejected' });
+  });
+
+  it('prefixes model-facing descriptions as third-party text and marks them untrusted', () => {
+    const { options } = fixture();
+    const tool = createMcpTool(options, snapshot);
+    expect(tool.description).toBe(`${mcpDescriptionPrefix}Remote third-party tool`);
+    expect(tool.trust).toBe('untrusted');
   });
 
   it('redacts displayed descriptions and names without changing protocol arguments', async () => {

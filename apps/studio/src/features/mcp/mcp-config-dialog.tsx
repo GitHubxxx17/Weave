@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactElement 
 
 import { PluginDialog, pluginDialogError } from '../plugins/plugin-dialog.js';
 import { McpApiError } from './mcp-api.js';
+import { unboundArgumentPaths } from './mcp-review.js';
 import { mcpServerConfigSchema, type McpServerConfig } from './mcp-types.js';
 
 import './mcp-dialog.css';
@@ -29,6 +30,7 @@ const fieldNames: Readonly<Record<string, string>> = {
   args: '参数',
   cwd: '工作目录',
   env: '环境引用',
+  contentPaths: '绑定内容路径',
 };
 const staleMessage = '配置或授权已变化，本次配置已失效。请关闭后重新打开，保留草稿供你复制。';
 
@@ -48,6 +50,7 @@ export function McpConfigDialog({
   const [command, setCommand] = useState(() => initial?.command ?? '');
   const [cwd, setCwd] = useState(() => initial?.cwd ?? '');
   const [argsText, setArgsText] = useState(() => JSON.stringify(initial?.args ?? [], null, 2));
+  const [pathsText, setPathsText] = useState(() => (initial?.contentPaths ?? []).join('\n'));
   const [rows, setRows] = useState<readonly EnvironmentRow[]>(() =>
     Object.entries(initial?.env ?? {}).map(([target, value], key) => ({
       key,
@@ -82,6 +85,23 @@ export function McpConfigDialog({
     else targetRefs.current.get(target)?.focus();
   }, [rows]);
 
+  const contentPaths = pathsText
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const suggestedPaths = (() => {
+    try {
+      const parsed = JSON.parse(argsText) as unknown;
+      return Array.isArray(parsed)
+        ? unboundArgumentPaths(
+            parsed.filter((value): value is string => typeof value === 'string'),
+            contentPaths,
+          )
+        : [];
+    } catch {
+      return [];
+    }
+  })();
   const expired = stale || invalidated;
   const canSubmit = !busy && !submitting && !expired;
   const fieldProps = (field: string) => ({
@@ -136,6 +156,7 @@ export function McpConfigDialog({
       args,
       cwd,
       env,
+      ...(contentPaths.length === 0 ? {} : { contentPaths }),
     });
     if (!result.success) {
       const field = String(result.error.issues[0]?.path[0] ?? '');
@@ -242,6 +263,43 @@ export function McpConfigDialog({
           每个字符串是一个原样传入的参数，保留空字符串、空格及顺序；不进行 shell 拆分或展开。最多 64
           项，每项最多 4096 UTF-8 字节。
         </small>
+        <label>
+          绑定内容路径（每行一个绝对路径）
+          <textarea
+            value={pathsText}
+            rows={3}
+            disabled={busy || submitting}
+            onChange={(event) => setPathsText(event.target.value)}
+            {...fieldProps('contentPaths')}
+          />
+        </label>
+        <small>
+          启动程序文件本身总会被绑定。这里可以再加入脚本文件或项目目录（最多 16 项，目录最多 1000
+          个文件、20 MB，不能含符号链接）；这些内容变化后，信任失效，需要重新保存并信任。
+        </small>
+        {suggestedPaths.length === 0 ? null : (
+          <div className="mcp-content-suggestions" aria-label="建议绑定的路径">
+            <p className="plugin-dialog-note">参数中出现了下列绝对路径，是否加入绑定内容？</p>
+            <ul>
+              {suggestedPaths.map((value) => (
+                <li key={value}>
+                  <code>{value}</code>{' '}
+                  <button
+                    type="button"
+                    disabled={busy || submitting || contentPaths.length >= 16}
+                    onClick={() =>
+                      setPathsText((current) =>
+                        current.trim() === '' ? value : `${current}\n${value}`,
+                      )
+                    }
+                  >
+                    加入绑定内容
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
       <fieldset className="mcp-environment-fields" disabled={busy || submitting}>
         <legend>环境变量引用</legend>

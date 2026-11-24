@@ -373,3 +373,60 @@ describe('McpDecisionDialog', () => {
     );
   });
 });
+
+describe('MCP content binding in dialogs', () => {
+  it('lists bound and unbound content in the trust dialog', () => {
+    const review = createMcpReview(
+      server({
+        config: config({
+          args: ['/opt/demo/main.js', '/opt/demo/lib'],
+          contentPaths: ['/opt/demo/main.js'],
+        }),
+      }),
+      1,
+      1,
+    );
+    render(<McpTrustDialog {...shared} review={review} onTrust={async () => {}} />);
+    const section = screen.getByRole('region', { name: '内容绑定' });
+    const bound = within(section).getAllByRole('list')[0]!;
+    const unbound = within(section).getAllByRole('list')[1]!;
+    expect(bound.textContent).toContain('/opt/demo/server');
+    expect(bound.textContent).toContain('/opt/demo/main.js');
+    expect(unbound.textContent).toContain('/opt/demo/lib');
+    expect(unbound.textContent).not.toContain('/opt/demo/main.js');
+    expect(within(section).queryByText(/无内容保证/)).toBeNull();
+  });
+
+  it.each([
+    ['/usr/local/bin/npx', ['-y', 'pkg']],
+    ['/opt/bin/uvx', ['tool']],
+    ['/opt/bin/pnpm', ['dlx', 'pkg']],
+    ['/opt/bin/bunx', ['pkg']],
+  ])('marks %s as running code without a content guarantee', (command, args) => {
+    const review = createMcpReview(server({ config: config({ command, args }) }), 1, 1);
+    render(<McpTrustDialog {...shared} review={review} onTrust={async () => {}} />);
+    expect(screen.getByRole('note').textContent).toContain('每次启动的代码可能不同，无内容保证');
+  });
+
+  it('suggests absolute argument paths and saves the ones the user adds', async () => {
+    const onSave = vi.fn(async () => {});
+    render(
+      <McpConfigDialog
+        {...shared}
+        expectedSequence={0}
+        onSave={onSave}
+        initial={config({ args: ['/opt/demo/main.js'] })}
+      />,
+    );
+    const suggestions = screen.getByLabelText('建议绑定的路径');
+    expect(suggestions.textContent).toContain('/opt/demo/main.js');
+    fireEvent.click(within(suggestions).getByRole('button', { name: '加入绑定内容' }));
+    expect(screen.queryByLabelText('建议绑定的路径')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '保存配置' }));
+    await act(async () => {});
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ contentPaths: ['/opt/demo/main.js'] }),
+      0,
+    );
+  });
+});
