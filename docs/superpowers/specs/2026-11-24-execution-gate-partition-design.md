@@ -1,0 +1,110 @@
+# Agent 执行服务变更闸门按会话分区设计提案
+
+状态：提案，待评审。本文不是已决定的架构，合并本文不代表方案已定。
+
+对应观察编号：C1。
+
+## 1. 背景
+
+以下现状均已对照 `packages/runtime/src/agent-execution-service.ts`（1743 行）核实，行号为当前基线的大致位置。
+
+- `createAgentExecutionService` 内有一个共享变量 `tail`（Promise 链）和 `gate(_sessionId, operation)`（约第 169 行）。`gate` 把 `operation` 串到 `tail` 之后执行，执行完在 `finally` 中调用 `cleanup(_sessionId)` 并释放。参数 `_sessionId` 只用于 `cleanup`，不参与排队：所有会话共用同一条链，同一时刻整个服务只有一个 `gate` 内的操作在运行。源码注释写明意图："一个短的变更闸门同时让全局待处理预留成为原子操作"。
+- 使用 `gate` 的位置包括：受理流程 `accept`（约第 1110 行，闸门内部包含 `load`、`options.admit`、`options.resolveInput`、文件抓取、`append`）、执行结束收尾 `finish`（约第 601 行）、启动屏障（约第 746 行，只等待闸门放行后再进入 Runner）、任务绑定启动与取消（约第 943、1043、1060 行）、`cancel`（约第 1440 行）、`queue`（约第 1460 行）、`subscribeQueue`（约第 1469 行）、`reorderQueue`（约第 1527 行）、`cancelQueued`（约第 1578 行）、`recover`（约第 1623 行）、`withSessionIdle`（约第 1658 行）、`drain`（约第 1682 行，传入空字符串）。
+- 受理（`accept`）在闸门内依次做这些事，均已核实：
+  1. `load(sessionId)` 读取会话事件并投影；
+  2. `options.admit(sessionId)`（由 `apps/server/src/main.ts` 约第 441 行注入，具体内容未核实）；
+  3. 队列上限检查：非立即执行时，`projection.queued.length >= 10` 或全局待处理数 `>= 100` 抛 `execution-queue-full`；`view()` 也把 `limits: { sessionQueued: 10, globalQueued: 100 }` 返回给客户端；
+  4. `options.resolveInput`（可能是异步的，内容未核实）；
+  5. 当输入带 `files` 时调用 `options.captureFiles`，超时为 `AbortSignal.timeout(5000)`，最长 5 秒，期间闸门不释放；`captureFiles` 在服务端由 `createFileContextCapture(projects)` 提供（`apps/server/src/main.ts` 约第 435 行），内部读取项目文件；
+  6. 预留 `pendingCounts`（非立即时 `+1`），然后 `append` 落盘事件并等待返回。
+- `pendingCounts` 是 `Map<sessionId, number>`；全局待处理数通过遍历求和得到。`sync()`（约第 275 行）用事件投影重置某会话的计数。`cleanup()` 在会话无活动、无排队、无订阅者、无错误时删除该会话的队列状态与计数。
+- 注释写明启动屏障"在进入 Runner 或插件代码之前释放变更闸门"，即 Runner 本身不在闸门内运行，只有受理、取消、重排、恢复等变更在闸门内。
+- 已知保护：同一会话内的并发在 `accept` 里靠投影和 `unresolvedAdmission`、`requireMutable` 等检查保持一致；这些检查依赖闸门的串行化假设（未逐项核实哪些依赖是跨会话的，哪些只是会话内的）。
+
+## 2. 问题
+
+闸门是全局互斥，因此一次慢受理会阻塞所有会话上的以下操作：
+
+- 其他会话的受理（含无文件的快速受理）；
+- 用户点击"停止"（`cancel`）、队列重排与取消排队，只要它们排在慢操作之后；
+- 执行结束时的收尾 `finish`，会延迟状态更新与下一个排队项的 `claimNext`；
+- `recover` 与 `drain`（关闭或恢复流程）。
+
+最坏情况：一个会话的受理在闸门内等待文件抓取 5 秒（超时才放弃），期间 N 个会话的受理与停止按钮串行排队；此外 `append` 与 `options.admit`、`resolveInput` 的耗时同样计入。这是延迟问题，不是正确性问题，实际影响取决于是否真的存在多会话并发使用（未实测）。
+
+另一个约束使"直接按会话拆锁"并不平凡：全局 100 的排队上限依赖 `pendingCounts` 的求和，该检查与 `pendingCounts.set(...)` 预留必须是原子的，否则两个会话可能同时通过检查而超出 100。
+
+## 3. 可选方案
+
+### 方案 A：按会话分区闸门，全局预留单独用一个极短临界区
+
+- 为每个 `sessionId` 维护独立的 `tail`，同一会话内保持串行，不同会话并行。
+- 全局计数检查与预留抽成同步操作（没有 `await`），在 JavaScript 单线程下天然原子：在检查与预留之间不允许出现 `await`。当前代码里检查（约第 1174 行）与预留（约第 1301 行）之间隔着 `resolveInput`、`captureFiles` 等 `await`，所以现在的原子性来自闸门。分区后，需要把"检查加预留"前移到这些 `await` 之前，并在失败路径上回滚预留，或者引入显式的"预留令牌"。
+- `drain`（`''` 作为会话）与 `recover(sessionIds)` 需要定义跨会话语义：例如先获取所有相关会话的闸门（按固定顺序，避免死锁），或者设置 `closed` 标志之后分别等待各会话链排空。
+- 优点：消除跨会话阻塞，改动集中在 `gate` 与预留逻辑。缺点：回滚路径增加复杂度，容易遗漏；`cleanup` 删除会话状态时要同时回收对应 `tail`，避免 Map 无界增长。
+
+### 方案 B：把慢操作移出闸门
+
+保留全局闸门，但把不依赖其他会话状态、且耗时的步骤放在闸门之外，仅在闸门内做"校验加提交"。典型做法是三段式：
+
+1. 闸门外：`resolveInput`、`captureFiles`，生成候选的受理数据；
+2. 闸门内：重新读取投影，校验会话仍处于可受理状态，检查队列上限，预留，`append`；
+3. 若校验失败（会话状态在抓取期间变了），丢弃抓取结果并返回对应错误。
+
+- 优点：不改变并发模型，全局原子性保持；慢操作不再阻塞他人。
+- 缺点：抓取到的文件上下文可能在提交时已过期，需要明确"抓取时间点"的语义（例如以抓取完成时刻为准，并在 `fileContext` 里记录）；`captureFiles` 在闸门外运行意味着同一会话上两个并发受理可能都先抓取、再串行提交，需要依赖 `requestId` 幂等和 `execution-queue-full` 兜底，抓取工作可能被浪费；`options.admit` 是否可放到闸门外取决于它的语义（未核实）。
+
+### 方案 C：A 加 B
+
+按会话分区，并把抓取移出闸门。收益最大，改动也最大。
+
+### 方案 D：保持现状，只加指标
+
+给闸门加等待时长与持有时长的计量，等有数据再决定。风险最低，不解决问题。
+
+### 比较
+
+| 方案 | 跨会话阻塞 | 全局 100 上限的一致性 | 改动范围 | 回归风险 |
+| --- | --- | --- | --- | --- |
+| A | 消除 | 需要显式原子预留与回滚 | 中 | 中高（死锁与回滚路径） |
+| B | 仅消除抓取等慢步骤造成的阻塞，仍是全局串行 | 不变 | 小到中 | 中（过期语义） |
+| C | 消除 | 同 A | 大 | 高 |
+| D | 不变 | 不变 | 极小 | 极低 |
+
+## 4. 推荐方案
+
+先 D 后 B，再视数据决定是否做 A。
+
+1. 先加闸门等待与持有时长的计量（仅内部指标，不改行为），确认问题的真实量级；
+2. 采用方案 B，把 `captureFiles` 与 `resolveInput` 移出闸门，闸门内重新校验。这是收益与风险比最高的一步，且不碰全局上限的原子性；
+3. 只有在数据显示闸门内的 `append`、`load` 本身造成明显排队时，才考虑方案 A。届时再单独设计"检查加预留"的同步化与回滚。
+
+## 5. 受影响的包与契约
+
+- `packages/runtime`：`agent-execution-service.ts`（`gate`、受理流程、预留逻辑）、`agent-execution-types.ts`（`CaptureFiles` 的调用时机说明）。
+- `apps/server`：`main.ts` 中 `captureFiles`、`admit`、`resolveInput` 的注入；`createFileContextCapture` 需要确认可在闸门外并发调用（未核实其内部是否有共享可变状态）。
+- 契约：对外的 `limits: { sessionQueued: 10, globalQueued: 100 }`、`execution-queue-full`、`execution-file-capture-timeout` 等错误码与语义保持不变；若引入"抓取结果过期"的新错误，需要在 `docs/architecture/foundation.md` 与 HTTP 错误码说明里补充，实现 PR 再改，本提案不改。
+
+## 6. 迁移与兼容
+
+- 不涉及持久化格式；`execution.accepted` 事件载荷不变。
+- 方案 B 改变了"抓取发生在受理校验之后"的顺序：以前被队列已满拒绝的请求不会触发文件抓取，现在会先抓取再被拒绝，浪费一次读盘。可以在闸门外增加一次乐观的队列上限预检以避免大部分浪费，闸门内仍做权威检查。
+- 对现有客户端与 SSE 订阅者无接口变化。
+
+## 7. 测试计划
+
+- 并发测试：会话 A 的 `captureFiles` 挂起（人工控制）时，会话 B 的受理、`cancel`、`queue` 能完成（方案 B 之后）。
+- 上限测试：多个会话并发受理，总排队数不超过 100；单会话不超过 10；失败路径不泄漏预留（`pendingCounts` 与投影一致）。
+- 过期语义：抓取期间会话变为不可受理（被取消、关闭），闸门内校验拒绝并不落盘。
+- 幂等：同一 `requestId` 并发受理只产生一个 `execution.accepted`。
+- `drain`、`recover` 在有挂起受理时的行为；服务 `closed` 后受理被拒绝。
+- 计量：指标在正常与超时路径都被记录。
+- 现有 `packages/runtime/test` 下与执行服务相关的测试需要全部保持通过（未列举具体文件，未核实）。
+
+## 8. 未决问题
+
+1. 实际生产或本地使用中是否出现过多会话并发受理，闸门等待时长的真实分布。
+2. `options.admit` 与 `options.resolveInput` 的语义与耗时（未核实），能否放到闸门外。
+3. 文件上下文"抓取时间点"与提交时间点之间的可接受延迟。
+4. 全局 100 上限是否应该改为按"活动会话数"或配置项，而不是硬编码；本提案不改变数值。
+5. `drain` 与 `recover` 在分区之后的跨会话语义。
