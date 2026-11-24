@@ -5,7 +5,7 @@ import { usePluginCatalogState, usePluginCatalogStore } from './plugin-catalog-c
 import { McpPanel } from '../mcp/mcp-panel.js';
 import { ManagedPluginsSection, managedPublishedKernel } from './managed-plugins-section.js';
 import { PluginDecisionDialog } from './plugin-decision-dialog.js';
-import { createPluginReview, type PluginReview } from './plugin-review.js';
+import { createPluginReview, pluginImpact, type PluginReview } from './plugin-review.js';
 import { PluginTrustDialog } from './plugin-trust-dialog.js';
 import type { PluginDeclarations, PluginIssue, PluginListItem } from './plugin-types.js';
 import type { MarketplaceInstallSelection } from './plugin-marketplace-types.js';
@@ -168,6 +168,7 @@ function PluginItem({
   onReview,
   onDecision,
   onEnable,
+  onConfirmHooks,
 }: {
   readonly plugin: PluginListItem;
   readonly manageable: boolean;
@@ -175,6 +176,7 @@ function PluginItem({
   readonly onReview: (plugin: PluginListItem) => void;
   readonly onDecision: (plugin: PluginListItem, action: 'disable' | 'revoke') => void;
   readonly onEnable: (plugin: PluginListItem) => void;
+  readonly onConfirmHooks: (plugin: PluginListItem) => void;
 }): ReactElement {
   const local = plugin.local;
   const review = manageable && ['pending-trust', 'changed'].includes(plugin.state);
@@ -182,6 +184,13 @@ function PluginItem({
   const disable = trusted && ['loaded', 'failed'].includes(plugin.state);
   const revoke = trusted && ['changed', 'loaded', 'disabled', 'failed'].includes(plugin.state);
   const enable = trusted && plugin.state === 'disabled' && local?.digest === local.trusted?.digest;
+  const pendingHooks = plugin.pendingHooks ?? [];
+  const confirmHooks =
+    manageable &&
+    pendingHooks.length > 0 &&
+    plugin.state === 'loaded' &&
+    local?.digest !== undefined &&
+    local.digest === local.trusted?.digest;
   const hasActual = Object.values(plugin.provides).some((names) => (names?.length ?? 0) > 0);
   return (
     <li>
@@ -289,6 +298,29 @@ function PluginItem({
               已有回合仍可使用先前加载的版本；上方状态表示当前发现的插件。默认决定从下一回合起生效。
             </p>
           ) : null}
+          {pendingHooks.length === 0 ? null : (
+            <section className="plugin-contributions" aria-label="待确认的钩子">
+              <h5>该插件订阅了未声明的高风险钩子：{pendingHooks.join('、')}</h5>
+              <ul className="plugin-note">
+                {pendingHooks.map((hook) => (
+                  <li key={hook}>
+                    <code>{hook}</code>：{pluginImpact('hook', hook).description}
+                  </li>
+                ))}
+              </ul>
+              <p className="plugin-note">允许前这些钩子不会生效；允许后从下一个回合起生效。</p>
+              {confirmHooks ? (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={busy}
+                  onClick={() => onConfirmHooks(plugin)}
+                >
+                  允许
+                </button>
+              ) : null}
+            </section>
+          )}
           {review || disable || revoke || enable ? (
             <div className="plugin-actions">
               {review ? (
@@ -519,6 +551,12 @@ export function PluginsPanel({
                       onDecision={(item, action) => setDialog({ kind: action, plugin: item })}
                       onEnable={(item) => {
                         void store.setEnabled(item.id, true).catch(() => undefined);
+                      }}
+                      onConfirmHooks={(item) => {
+                        if (item.local?.digest === undefined) return;
+                        void store
+                          .confirmHooks(item.id, item.local.digest, item.pendingHooks ?? [])
+                          .catch(() => undefined);
                       }}
                     />
                   ))}

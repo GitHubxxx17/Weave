@@ -226,6 +226,13 @@ records used by the later Server composition. See
 [artifact-store usage](../learning/2026-11-21-plugin-artifact-store.md). This is a
 filesystem API, not an end-to-end installer or installation UI.
 
+Hook confirmation: a manual local plugin that subscribes to `weave.llm.request`
+or `weave.tools.around` without listing it in `contributes.hooks` keeps the
+subscription but receives no dispatch until the user confirms it in Studio. The
+confirmation is bound to the plugin id and content digest, stored as plugin
+state beside the authority tables, and takes effect from the next Generation. See
+the [hook capability design](../superpowers/specs/2026-11-24-plugin-hook-capabilities-design.md).
+
 Stage 5.4 extends Studio's existing App-owned plugin catalog store with the MCP
 HTTP catalog and a shared ESM/MCP write gate. The two catalogs are published
 together only after their complete generation/admission projections agree;

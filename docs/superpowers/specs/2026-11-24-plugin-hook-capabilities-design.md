@@ -13,7 +13,7 @@
 
 这样先运行 `setup`、后确认，不违反 ADR 0003"信任先于加载"：插件本身仍需先被信任才会加载，这里额外确认的只是未声明的高风险钩子是否生效。
 
-未决：`weave.tools.result`（可读取所有工具结果，Studio 现分级为 medium）是否也纳入需要确认的范围。
+未决：`weave.tools.result`（可读取所有工具结果，Studio 现分级为 medium）是否也纳入需要确认的范围。本轮实现不纳入，见「实现细节（R2-04）」。
 
 对应观察编号：P2。
 
@@ -95,6 +95,18 @@
 2. 第二步评估方案 B：当有更多需要按能力做策略的场景（例如企业策略、来源分级）时，再把钩子升格为权限，避免过早扩展 manifest。
 
 方案 D 作为独立的补充，不作为主要手段。
+
+### 实现细节（R2-04）
+
+- **风险分级**：`packages/plugin/src/hook-risk.ts` 导出 `hookImpacts`（级别与说明）、`confirmationRequiredHookIds`（`weave.llm.request`、`weave.tools.around`）和 `requiresHookConfirmation()`。`weave.tools.result` 本轮不纳入，保持 medium。
+- **Studio 取舍**：Studio 不能导入 `@weave/*`，保留 `plugin-review.ts` 中的一份镜像，并在 `apps/server/test/studio-hook-risk-mirror.test.ts` 加契约测试（Studio 的 lint 禁止导入 node:fs，故放在 Server 侧），读取 Studio 源文件核对每个钩子的级别和说明。待确认钩子的 id 由 Server 的插件目录（`pendingHooks`）给出，Studio 不自行推算。
+- **与正文现状的差异**：正文 1.2 写"未声明 `contributes` 的情形出现在本地目录加载等路径"。核对当前代码，`packages/plugin-host/src/descriptor.ts` 要求所有文件型插件（本地与托管）都写出 `contributes` 和 `permissions`，所以本地插件省略 `contributes` 已不可能；订阅未列入 `contributes.hooks` 的钩子会以 `plugin-contributes-exceeds-manifest` 加载失败。为让确认机制对本地插件真正可达，受管控插件（`hookConfirmation.governs()` 为真）订阅**高风险**且未列出的钩子时不再失败，而是注册后保留待确认；未列出的中低风险钩子仍按原规则失败。未受管控插件（内置、已注册、宿主配置的内核插件、托管插件）的校验不变。
+- **内核**：`createPluginKernel({ hookConfirmation: { governs?, isConfirmed } })`。`setup` 完成后，对"订阅了、需要确认、未列入 `contributes.hooks`、且未被确认"的钩子，调用 `HookRegistry.hold()`：处理器仍注册，但不派发，也不计入 `count()`。结果记入 `PluginInfo.pendingHooks`。不传该选项时不拦截，嵌入式内核不变。
+- **宿主范围**：只对 `origin === 'manual'` 的本地插件按 `(插件 id, 内容摘要)` 查确认记录；内置、已注册和托管插件不受影响（托管插件的钩子本就要在 `contributes` 中声明并经审阅）。
+- **存储**：`apps/server/src/plugin-hook-confirmation-store.ts`，与插件授权同一个 SQLite 文件中的 `plugin_hook_confirmations(plugin_id, digest, hook_id, confirmed_at)`，主键 `(plugin_id, digest, hook_id)`。属于插件状态，就地更新（ADR 0005 修订）；确认新摘要时清除该插件旧摘要的行，因此内容变化后回到未确认。
+- **接口**（经全局本地准入守卫，写请求必须 JSON）：`GET /plugins/hook-confirmations` 返回待确认的插件、摘要和钩子（含级别与说明）；`POST /plugins/:id/hook-confirmations`，请求体 `{ digest, hooks }`，仅当摘要等于当前加载摘要且钩子确在待确认列表中才接受，否则 409 `plugin-hook-confirmation-not-pending`。插件目录项新增可选字段 `pendingHooks`。
+- **生效时机**：确认后接口立即触发一次 reload，新的 Generation 装配时放行；已在运行的回合保持旧 Generation，下一个回合起生效，无需重启。
+- **Studio**：插件页的插件详情在存在 `pendingHooks` 时显示"该插件订阅了未声明的高风险钩子：…"，逐条列出能力说明，并在插件已被信任且加载的情况下提供"允许"按钮。
 
 ## 5. 受影响的包与契约
 
