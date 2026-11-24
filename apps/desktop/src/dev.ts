@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { watchChildExit } from './dev-process.js';
 
 const defaultStudioUrl = 'http://127.0.0.1:5173';
 const startupTimeoutMs = 30_000;
@@ -51,11 +52,14 @@ function startElectron(repositoryRoot: string): ChildProcess {
   });
 }
 
-async function waitForStudio(studioUrl: string): Promise<void> {
+async function waitForStudio(studioUrl: string, isCancelled: () => boolean): Promise<void> {
   const deadline = Date.now() + startupTimeoutMs;
   let lastError = 'unknown error';
 
   while (Date.now() < deadline) {
+    if (isCancelled()) {
+      return;
+    }
     try {
       const response = await fetch(studioUrl);
       if (response.status < 500) {
@@ -74,6 +78,10 @@ async function waitForStudio(studioUrl: string): Promise<void> {
   throw new Error(
     `Studio did not become ready at ${studioUrl} within ${startupTimeoutMs / 1000} seconds (${lastError}).`,
   );
+}
+
+function studioExited(child: ChildProcess | undefined): boolean {
+  return child !== undefined && child.exitCode !== null;
 }
 
 function stopChildProcess(child: ChildProcess | undefined): void {
@@ -104,21 +112,34 @@ async function run(): Promise<void> {
 
   try {
     studio = startStudio(repositoryRoot, studioUrl);
-    await waitForStudio(studioUrl);
+    const studioFailure = watchChildExit(studio, 'Vite', () => shuttingDown);
+    // Avoid an unhandled rejection if Vite dies after another branch has settled.
+    studioFailure.catch(() => undefined);
+    await Promise.race([
+      waitForStudio(studioUrl, () => shuttingDown || studioExited(studio)),
+      studioFailure,
+    ]);
+    if (studioExited(studio)) {
+      throw new Error('Vite exited before Studio became ready.');
+    }
     electron = startElectron(repositoryRoot);
+    const electronChild = electron;
 
-    await new Promise<void>((resolvePromise, rejectPromise) => {
-      electron?.once('exit', (code, signal) => {
-        if (shuttingDown || code === 0) {
-          resolvePromise();
-          return;
-        }
-        rejectPromise(
-          new Error(`Electron exited with ${signal === null ? `code ${code}` : signal}.`),
-        );
-      });
-      electron?.once('error', rejectPromise);
-    });
+    await Promise.race([
+      studioFailure,
+      new Promise<void>((resolvePromise, rejectPromise) => {
+        electronChild.once('exit', (code, signal) => {
+          if (shuttingDown || code === 0) {
+            resolvePromise();
+            return;
+          }
+          rejectPromise(
+            new Error(`Electron exited with ${signal === null ? `code ${code}` : signal}.`),
+          );
+        });
+        electronChild.once('error', rejectPromise);
+      }),
+    ]);
   } catch (error: unknown) {
     console.error(
       `桌面开发模式启动失败：${error instanceof Error ? error.message : String(error)}`,

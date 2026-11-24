@@ -495,6 +495,15 @@ binary. Studio's `TerminalPanel` renders xterm.js (dynamically imported, so the
 main bundle and non-desktop/browser mode do not load it) and forwards keystrokes
 and output over the Preload `window.weaveDesktop.terminal` bridge.
 
+Desktop IPC sender checks share `isTrustedSender` (`sender-origin.ts`): both
+the frame `origin` and the origin parsed from the frame URL must equal the
+Studio origin, and a missing frame, opaque origin or invalid URL is rejected.
+The terminal environment drops `WEAVE_*` variables (the Server's own
+configuration) and keeps every other user variable. A main-frame navigation or
+Renderer crash kills the window's ptys through `disposeSessions()`; the Desktop
+app also holds a single-instance lock. On Linux, `safeStorage` reporting the
+`basic_text` backend is treated as unavailable for Provider API Keys.
+
 The old `apps/server/.weave/` directory is not automatically deleted or
 migrated. It is a legacy local runtime artifact; migration requires a separate
 backup, confirmation, copy, and rollback flow.

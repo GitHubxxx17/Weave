@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => {
       on: vi.fn(),
       setName: vi.fn(),
       quit: vi.fn(),
+      requestSingleInstanceLock: vi.fn(() => true),
       whenReady: vi.fn(() => new Promise<void>(() => undefined)),
     },
     dialog: {
@@ -65,8 +66,11 @@ const {
   createMainWindow,
   getWindowChrome,
   handlePickDirectory,
+  registerSingleInstance,
+  renderStartupError,
   startDesktopApplication,
   startDesktopServer,
+  watchRendererLifecycle,
 } = await import('../src/main.js');
 
 const config = createDesktopConfig({
@@ -230,6 +234,84 @@ describe('desktop main process', () => {
     expect(mocks.dialog.showErrorBox).toHaveBeenCalledWith('Weave Desktop 启动失败', serverError);
     expect(mocks.app.exit).toHaveBeenCalledWith(1);
     expect(mocks.FakeBrowserWindow.instances).toHaveLength(0);
+  });
+});
+
+describe('desktop window hardening', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.FakeBrowserWindow.instances.length = 0;
+  });
+
+  it('escapes the title and message in the startup error page', () => {
+    const html = renderStartupError('<b>t</b>', new Error('<script>alert(1)</script>&"\''));
+
+    expect(html).not.toContain('<script>');
+    expect(html).not.toContain('<b>t</b>');
+    expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;&amp;&quot;&#39;');
+    expect(html).toContain('&lt;b&gt;t&lt;/b&gt;');
+  });
+
+  function webContentsHandlers(window: InstanceType<typeof mocks.FakeBrowserWindow>) {
+    const find = (name: string) =>
+      window.webContents.on.mock.calls.find(([eventName]) => eventName === name)?.[1] as
+        ((...args: unknown[]) => void) | undefined;
+    return { navigation: find('did-start-navigation'), gone: find('render-process-gone') };
+  }
+
+  it('resets terminals on main-frame navigation but not on same-document or subframe navigation', () => {
+    const window = createMainWindow(config, 'http://127.0.0.1:46321', 'native');
+    const reset = vi.fn();
+    watchRendererLifecycle(window, reset);
+    const { navigation } = webContentsHandlers(
+      window as unknown as InstanceType<typeof mocks.FakeBrowserWindow>,
+    );
+
+    navigation?.({ isMainFrame: false, isSameDocument: false });
+    navigation?.({ isMainFrame: true, isSameDocument: true });
+    expect(reset).not.toHaveBeenCalled();
+
+    navigation?.({ isMainFrame: true, isSameDocument: false });
+    expect(reset).toHaveBeenCalledOnce();
+  });
+
+  it('resets terminals and shows an error page when the renderer process is gone', () => {
+    const window = createMainWindow(config, 'http://127.0.0.1:46321', 'native');
+    const instance = window as unknown as InstanceType<typeof mocks.FakeBrowserWindow>;
+    const reset = vi.fn();
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    watchRendererLifecycle(window, reset);
+
+    webContentsHandlers(instance).gone?.({}, { reason: 'crashed', exitCode: 11 });
+
+    expect(reset).toHaveBeenCalledOnce();
+    expect(instance.loadURL).toHaveBeenLastCalledWith(expect.stringMatching(/^data:text\/html/));
+    consoleError.mockRestore();
+  });
+
+  it('refuses to start without the single-instance lock', () => {
+    mocks.app.requestSingleInstanceLock.mockReturnValueOnce(false);
+
+    expect(registerSingleInstance(() => undefined)).toBe(false);
+    expect(mocks.app.on).not.toHaveBeenCalledWith('second-instance', expect.any(Function));
+  });
+
+  it('restores and focuses the existing window on a second launch', () => {
+    const window = {
+      isDestroyed: vi.fn(() => false),
+      isMinimized: vi.fn(() => true),
+      restore: vi.fn(),
+      focus: vi.fn(),
+    };
+
+    expect(registerSingleInstance(() => window as never)).toBe(true);
+    const handler = mocks.app.on.mock.calls.find(
+      ([eventName]) => eventName === 'second-instance',
+    )?.[1] as (() => void) | undefined;
+    handler?.();
+
+    expect(window.restore).toHaveBeenCalledOnce();
+    expect(window.focus).toHaveBeenCalledOnce();
   });
 });
 

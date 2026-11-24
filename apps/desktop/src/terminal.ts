@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { isAbsolute } from 'node:path';
 import { z } from 'zod';
+import { isTrustedSender } from './sender-origin.js';
 import type { IpcMain, IpcMainEvent, IpcMainInvokeEvent, WebContents } from 'electron';
 
 /** IPC channels for the user-driven terminal. Renderer → Main and Main → Renderer. */
@@ -112,16 +113,24 @@ export interface TerminalHostOptions {
 }
 
 export interface TerminalHost {
+  /** Kills every live pty but keeps the IPC handlers registered. */
+  readonly disposeSessions: () => void;
   /** Kills every live pty and removes the IPC handlers. */
   readonly dispose: () => void;
 }
 
-function frameOrigin(event: IpcMainInvokeEvent | IpcMainEvent): string | undefined {
-  try {
-    return new URL(event.senderFrame?.url ?? '').origin;
-  } catch {
-    return undefined;
+/**
+ * Drops `WEAVE_*` variables (the Server's own configuration, which can carry
+ * model-provider keys). Other variables belong to the user's shell and stay.
+ */
+export function createTerminalEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const result: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(environment)) {
+    if (value !== undefined && !/^WEAVE_/i.test(name)) {
+      result[name] = value;
+    }
   }
+  return result;
 }
 
 /**
@@ -135,7 +144,14 @@ export function registerTerminalHost(options: TerminalHostOptions): TerminalHost
   const sessions = new Map<string, PtyProcess>();
 
   function trusted(event: IpcMainInvokeEvent | IpcMainEvent): boolean {
-    return frameOrigin(event) === options.studioOrigin;
+    return isTrustedSender(event, options.studioOrigin);
+  }
+
+  function disposeSessions(): void {
+    for (const term of sessions.values()) {
+      term.kill();
+    }
+    sessions.clear();
   }
 
   function send(channel: string, payload: unknown): void {
@@ -166,7 +182,10 @@ export function registerTerminalHost(options: TerminalHostOptions): TerminalHost
         cwd: resolveCwd(parsed.data.cwd),
         cols: parsed.data.cols,
         rows: parsed.data.rows,
-        env: { ...(options.env ?? process.env), TERM: 'xterm-256color' },
+        env: {
+          ...createTerminalEnvironment(options.env ?? process.env),
+          TERM: 'xterm-256color',
+        },
       });
     } catch {
       return { error: 'spawn-failed' };
@@ -222,11 +241,9 @@ export function registerTerminalHost(options: TerminalHostOptions): TerminalHost
   options.ipcMain.on(terminalChannels.dispose, handleDispose);
 
   return {
+    disposeSessions,
     dispose() {
-      for (const term of sessions.values()) {
-        term.kill();
-      }
-      sessions.clear();
+      disposeSessions();
       options.ipcMain.removeHandler(terminalChannels.create);
       options.ipcMain.removeAllListeners(terminalChannels.input);
       options.ipcMain.removeAllListeners(terminalChannels.resize);

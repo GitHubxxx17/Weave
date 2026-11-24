@@ -1,4 +1,4 @@
-import { join, relative, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { z } from 'zod';
 
 const defaultStudioUrl = 'http://127.0.0.1:5173';
@@ -50,10 +50,6 @@ export function createDesktopConfig(input: CreateDesktopConfigInput): DesktopCon
   });
   const userDataDirectory = resolve(parsed.userDataDirectory);
   const databaseFile = join(userDataDirectory, 'weave.sqlite');
-
-  if (relative(userDataDirectory, databaseFile).startsWith('..')) {
-    throw new Error('Desktop database file must stay inside the Electron user data directory');
-  }
 
   const override = parsed.pluginsDirectory;
   const pluginsDirectory = override ?? join(userDataDirectory, 'plugins');

@@ -13,6 +13,7 @@ import { startServer } from '@weave/server/main';
 import { z } from 'zod';
 import { createDesktopConfig, type DesktopConfig } from './desktop-config.js';
 import { createElectronProviderSecretCodec } from './provider-secret-codec.js';
+import { isTrustedSender } from './sender-origin.js';
 import { registerTerminalHost, type TerminalHost } from './terminal.js';
 import type { ProviderSecretCodec } from '@weave/server';
 
@@ -82,17 +83,7 @@ export async function handlePickDirectory(
   studioOrigin: string,
   ...pickerArgs: unknown[]
 ): Promise<PickedDirectory | null> {
-  const senderFrame = event.senderFrame;
-  if (senderFrame?.origin !== studioOrigin) {
-    return null;
-  }
-  let senderUrlOrigin: string | undefined;
-  try {
-    senderUrlOrigin = new URL(senderFrame.url).origin;
-  } catch {
-    senderUrlOrigin = undefined;
-  }
-  if (senderUrlOrigin !== studioOrigin) {
+  if (!isTrustedSender(event, studioOrigin)) {
     return null;
   }
   const parsed = pickerArgsSchema.safeParse(pickerArgs);
@@ -127,8 +118,19 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function renderStartupError(title: string, error: unknown): string {
-  const message = getErrorMessage(error);
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+/** Renders the startup error page; title and message are HTML-escaped. */
+export function renderStartupError(rawTitle: string, error: unknown): string {
+  const title = escapeHtml(rawTitle);
+  const message = escapeHtml(getErrorMessage(error));
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -193,10 +195,9 @@ export function createMainWindow(
       event.preventDefault();
     }
   });
-  window.webContents.setWindowOpenHandler(({ url }) => {
-    if (new URL(url).origin !== config.studioOrigin) {
-      return { action: 'deny' };
-    }
+  window.webContents.setWindowOpenHandler(() => {
+    // Studio never opens child windows; external links go through the system
+    // browser outside this process, so every window.open request is denied.
     return { action: 'deny' };
   });
 
@@ -205,6 +206,55 @@ export function createMainWindow(
   });
 
   return window;
+}
+
+/**
+ * Reacts to the Renderer losing its page state. A main-frame navigation or
+ * reload orphans any pty the old page created, and a crashed Renderer cannot
+ * ask for them to be disposed, so both call `onRendererReset`.
+ */
+export function watchRendererLifecycle(window: BrowserWindow, onRendererReset: () => void): void {
+  window.webContents.on('did-start-navigation', (details: unknown) => {
+    const { isMainFrame, isSameDocument } = details as {
+      isMainFrame?: boolean;
+      isSameDocument?: boolean;
+    };
+    if (isMainFrame === true && isSameDocument !== true) {
+      onRendererReset();
+    }
+  });
+  window.webContents.on('render-process-gone', (_event: unknown, details: unknown) => {
+    const { reason, exitCode } = details as { reason?: string; exitCode?: number };
+    onRendererReset();
+    console.error(
+      `Weave Desktop renderer process gone: ${reason ?? 'unknown'} (${exitCode ?? '?'})`,
+    );
+    showWindowError(
+      window,
+      new Error(`Studio 渲染进程已退出（${reason ?? 'unknown'}），请重启应用。`),
+    );
+  });
+}
+
+/**
+ * Enforces a single running instance. Returns false when another instance
+ * holds the lock; a second launch focuses the existing window instead.
+ */
+export function registerSingleInstance(getWindow: () => BrowserWindow | undefined): boolean {
+  if (!app.requestSingleInstanceLock()) {
+    return false;
+  }
+  app.on('second-instance', () => {
+    const window = getWindow();
+    if (window === undefined || window.isDestroyed()) {
+      return;
+    }
+    if (window.isMinimized()) {
+      window.restore();
+    }
+    window.focus();
+  });
+  return true;
 }
 
 export async function startDesktopServer(
@@ -231,6 +281,7 @@ export async function startDesktopServer(
 
 let desktopServer: DesktopServer | undefined;
 let terminalHost: TerminalHost | undefined;
+let mainWindow: BrowserWindow | undefined;
 let stopPromise: Promise<void> | undefined;
 let isQuitting = false;
 
@@ -276,12 +327,15 @@ export async function startDesktopApplication(): Promise<void> {
     desktopServer = await startDesktopServer(config, createElectronProviderSecretCodec());
     registerDesktopIpc(config);
     const window = createMainWindow(config, `http://127.0.0.1:${desktopServer.port}`);
+    mainWindow = window;
     terminalHost = registerTerminalHost({
       ipcMain,
       studioOrigin: config.studioOrigin,
       getWebContents: () => (window.isDestroyed() ? undefined : window.webContents),
     });
+    watchRendererLifecycle(window, () => terminalHost?.disposeSessions());
     window.on('closed', () => {
+      mainWindow = undefined;
       terminalHost?.dispose();
       terminalHost = undefined;
     });
@@ -313,10 +367,14 @@ app.on('before-quit', (event) => {
   }
 });
 
-void app
-  .whenReady()
-  .then(startDesktopApplication)
-  .catch((error: unknown) => {
-    console.error('Weave Desktop could not initialize Electron:', getErrorMessage(error));
-    app.exit(1);
-  });
+if (!registerSingleInstance(() => mainWindow)) {
+  app.exit(0);
+} else {
+  void app
+    .whenReady()
+    .then(startDesktopApplication)
+    .catch((error: unknown) => {
+      console.error('Weave Desktop could not initialize Electron:', getErrorMessage(error));
+      app.exit(1);
+    });
+}
