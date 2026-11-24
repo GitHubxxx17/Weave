@@ -54,6 +54,7 @@ import type {
   MemoryScopeHead,
   MemorySearchInput,
   MemoryServiceOptions,
+  ReviewedMemoryAccessCapture,
   ReviewedMemoryCapture,
   ReviewedMemorySource,
 } from './memory-types.js';
@@ -141,6 +142,10 @@ export function createMemoryService(options: MemoryServiceOptions) {
   const captures = new WeakMap<
     object,
     { scope: MemoryScope; settingRevision: number; epoch: number }
+  >();
+  const accessCaptures = new WeakMap<
+    ReviewedMemoryAccessCapture,
+    { scope: MemoryScope; evidence: MemoryLocalScopeEvidence }
   >();
   const intents = new WeakMap<MemoryWriteIntent, { evidence: MemoryScopeEvidence }>();
   const active = new Set<Promise<unknown>>();
@@ -894,6 +899,37 @@ export function createMemoryService(options: MemoryServiceOptions) {
   };
 
   const reviewedSource: ReviewedMemorySource = {
+    captureAccess({ projectId, signal }) {
+      return track(async () => {
+        if (signal.aborted) throw new MemoryError('memory-cancelled');
+        const { scope, evidence } = await localEvidence({ kind: 'project', projectId });
+        assertOpen();
+        evidence.assertCurrentSync();
+        if (signal.aborted) throw new MemoryError('memory-cancelled');
+        const { level, settingRevision } = access(scope);
+        const capture: ReviewedMemoryAccessCapture = Object.freeze({
+          projectId,
+          level,
+          settingRevision,
+          liveEpoch: epoch(scope),
+        });
+        accessCaptures.set(capture, { scope, evidence });
+        return capture;
+      });
+    },
+    assertAccessCurrentSync(capture) {
+      assertOpen();
+      const known = accessCaptures.get(capture);
+      if (known === undefined) throw new MemoryError('memory-scope-forbidden');
+      known.evidence.assertCurrentSync();
+      const { level, settingRevision } = access(known.scope);
+      if (
+        level !== capture.level ||
+        settingRevision !== capture.settingRevision ||
+        epoch(known.scope) !== capture.liveEpoch
+      )
+        throw new MemoryError('memory-stale-cursor');
+    },
     capture(input) {
       return track(async () => {
         const scope = memoryScopeSchema.parse({ kind: 'project', projectId: input.projectId });

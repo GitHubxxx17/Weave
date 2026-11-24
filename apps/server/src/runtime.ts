@@ -1,4 +1,5 @@
 import { createLlmProviderRegistry } from '@weave/llm';
+import type { ServerRetrievalTools } from './retrieval-composition.js';
 import type { ServerMemoryTools } from './memory-composition.js';
 import {
   llmRequestHook,
@@ -78,6 +79,7 @@ export const defaultToolTimeoutMs = 10 * 60 * 1000;
 
 export interface ServerAgentRunnerOptions {
   readonly memory?: ServerMemoryTools;
+  readonly retrieval?: ServerRetrievalTools;
   /** Product compatibility version passed to every generation's kernel. */
   readonly hostVersion?: string;
   /** Returns the absolute Workspace folder of a Session, when its Project has one. */
@@ -253,6 +255,7 @@ export async function assembleServerGeneration(
   });
   try {
     options.memory?.install(assembled.registerHostTool);
+    options.retrieval?.install(assembled.registerHostTool);
     skills = [...assembled.skills];
     const { promptSections } = assembled;
     const { hooks } = assembled.kernel;
@@ -344,7 +347,9 @@ export async function assembleServerGeneration(
             identity: { ...request.executionIdentity, sessionId: request.sessionId },
             registry: toolRegistry,
             ownerOf: assembled.toolOwner,
-            rootOnlyTool: options.memory?.rootOnlyTool,
+            rootOnlyTool: (definition) =>
+              options.memory?.rootOnlyTool(definition) === true ||
+              options.retrieval?.rootOnlyTool(definition) === true,
           });
           authorityScopes.set(token, scope);
           return runner.run({ ...request, toolAuthority: token });

@@ -1,4 +1,9 @@
 import {
+  createServerRetrievalComposition,
+  type ServerRetrievalComposition,
+  type ServerRetrievalCompositionOptions,
+} from './retrieval-composition.js';
+import {
   createServerMemoryComposition,
   resolveMemoryBudgets,
   type ServerMemoryComposition,
@@ -117,6 +122,8 @@ export function parseAgentMaxSteps(value: string | undefined): number | undefine
 
 export interface StartServerOptions {
   readonly memory?: ServerMemoryCompositionOptions['budgets'];
+  readonly embeddingFetch?: typeof globalThis.fetch;
+  readonly retrievalIndexFactory?: ServerRetrievalCompositionOptions['indexFactory'];
   readonly memoryStoreFactory?: ServerMemoryCompositionOptions['storeFactory'];
   readonly databaseFile?: string;
   readonly dataDirectory?: string;
@@ -198,6 +205,8 @@ export async function startServer(
   let agentTaskObserver: AgentTaskObserver | undefined;
   let memory: ServerMemoryComposition | undefined;
   let memoryResource: ServerMemoryResource | undefined;
+  let retrieval: ServerRetrievalComposition | undefined;
+  let retrievalResource: ServerMemoryResource | undefined;
   const shutdown = createServerShutdown({
     resources: () => ({
       server,
@@ -210,6 +219,7 @@ export async function startServer(
       agentExecutionService,
       agentTaskService,
       memory: memoryResource,
+      retrieval: retrievalResource,
     }),
     disposeHost: () => {
       agentTaskObserver?.close();
@@ -282,9 +292,22 @@ export async function startServer(
       projectStore: projects,
       sessionStore,
       budgets: memoryBudgets,
+      beforeMemoryCommit: (change) => retrieval?.service.beforeMemoryCommit(change),
       ...(options.memoryStoreFactory === undefined
         ? {}
         : { storeFactory: options.memoryStoreFactory }),
+    });
+    retrieval = await createServerRetrievalComposition({
+      databaseFile,
+      projectFolders: projectFolderAuthority,
+      agentTaskWorkspace,
+      memory,
+      registerResource(resource) {
+        retrievalResource = resource;
+      },
+      environment: options.environment ?? process.env,
+      ...(options.embeddingFetch ? { embeddingFetch: options.embeddingFetch } : {}),
+      ...(options.retrievalIndexFactory ? { indexFactory: options.retrievalIndexFactory } : {}),
     });
     const sessionService = createSessionService({
       projectStore: projects,
@@ -315,6 +338,7 @@ export async function startServer(
       skillsDirectory: resolveSkillsDirectory({ ...options, databaseFile }),
       agentTaskWorkspace,
       memory,
+      retrieval,
       toolResultMaxBytes: memoryBudgets.maxBytes,
       context: { maxToolResultTokens: memoryBudgets.maxToolResultTokens },
       ...(maxSteps === undefined ? {} : { maxSteps }),
@@ -469,6 +493,8 @@ export async function startServer(
           projectFolderAuthority,
           sessionService,
           memoryService: memory.service,
+          retrievalService: retrieval.service,
+          retrievalEmbedding: retrieval.embedding,
           skillCatalogService: createSkillCatalogService({
             current: () => runtime.serverHost.controller()?.current(),
           }),
@@ -516,6 +542,7 @@ export async function startServer(
       pluginHost,
       mcpManager,
       memory,
+      retrieval,
       server: createdServer,
       stop,
     };

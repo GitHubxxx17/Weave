@@ -8,6 +8,7 @@ import type { PluginAuthorityDatabase } from './plugin-authority-types.js';
 import type { PluginMarketplaceManager } from './plugin-marketplace-manager.js';
 
 export interface ServerShutdownResources {
+  readonly retrieval?: ServerShutdownResources['memory'];
   readonly memory?:
     | {
         readonly closeSync: () => void;
@@ -98,6 +99,8 @@ export function createServerShutdown(options: ServerShutdownOptions): ServerShut
   let httpClose: Promise<CleanupOutcome> | undefined;
   let quiesced = false;
   let agentWritersDrained = false;
+  let retrievalDrained = false;
+  let retrievalClosed = false;
   let memoryDrained = false;
   let memoryClosed = false;
   let consumersDrained = false;
@@ -115,6 +118,7 @@ export function createServerShutdown(options: ServerShutdownOptions): ServerShut
 
   function hasUnfinishedResources(): boolean {
     return (
+      (resources?.retrieval !== undefined && !retrievalClosed) ||
       (resources?.memory !== undefined && !memoryClosed) ||
       (!agentWritersDrained &&
         (resources?.agentExecutionService !== undefined ||
@@ -137,8 +141,10 @@ export function createServerShutdown(options: ServerShutdownOptions): ServerShut
       agentTaskService,
       agentExecutionService,
       memory,
+      retrieval,
     } = resources;
     // Fence every Memory entrance before cancellation callbacks can reenter.
+    retrieval?.closeSync();
     memory?.closeSync();
     agentTaskService?.closeSync();
     agentExecutionService?.closeSync();
@@ -161,6 +167,16 @@ export function createServerShutdown(options: ServerShutdownOptions): ServerShut
       });
       if (!drained.ok) return [drained.cause];
       agentWritersDrained = true;
+    }
+    if (retrieval !== undefined && !retrievalDrained) {
+      const drained = await settle(() => retrieval.drain());
+      if (!drained.ok) return [drained.cause];
+      retrievalDrained = true;
+    }
+    if (retrieval !== undefined && !retrievalClosed) {
+      const closed = await settle(() => retrieval.close());
+      if (!closed.ok) return [closed.cause];
+      retrievalClosed = true;
     }
     if (memory !== undefined && !memoryDrained) {
       const drained = await settle(() => memory.drain());

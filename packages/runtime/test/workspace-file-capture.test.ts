@@ -561,6 +561,17 @@ describe('workspace file capture', () => {
     expect((error as Error).message).not.toContain(root);
   });
 
+  it('keeps root access errors unavailable when access changes after the first observation', async () => {
+    const root = await fixture();
+    let rootReads = 0;
+    vi.mocked(lstat).mockImplementation((target, options) => {
+      if (target === root && ++rootReads === 2)
+        return Promise.reject(Object.assign(new Error('Access changed'), { code: 'EACCES' }));
+      return fs.lstat(target, options);
+    });
+    await expect(capture(root)).rejects.toMatchObject({ code: 'execution-file-unavailable' });
+  });
+
   it('rejects inconsistent post-read handle metadata', async () => {
     const root = await fixture();
     transformHandle(join(root, 'a.txt'), (handle) => {

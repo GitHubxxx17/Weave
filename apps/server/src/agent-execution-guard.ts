@@ -24,6 +24,16 @@ export function registerAgentExecutionGuards(
     '/sessions/:sessionId/executions',
     '/sessions/:sessionId/executions/*',
   ],
+  errors = {
+    forbidden: {
+      code: 'execution-request-forbidden',
+      message: 'Execution control requires a trusted local Host and Origin',
+    },
+    contentType: {
+      code: 'execution-unsupported-media-type',
+      message: 'Execution control requires application/json',
+    },
+  },
 ): void {
   const guard: MiddlewareHandler = async (context, next) => {
     context.header('Cache-Control', 'no-store');
@@ -42,16 +52,7 @@ export function registerAgentExecutionGuards(
         allowed = false;
       }
     }
-    if (!allowed)
-      return context.json(
-        {
-          error: {
-            code: 'execution-request-forbidden',
-            message: 'Execution control requires a trusted local Host and Origin',
-          },
-        },
-        403,
-      );
+    if (!allowed) return context.json({ error: errors.forbidden }, 403);
     if (context.req.method === 'OPTIONS') {
       if (studioOrigin !== undefined) context.header('Access-Control-Allow-Origin', studioOrigin);
       context.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
@@ -64,15 +65,7 @@ export function registerAgentExecutionGuards(
       context.req.header('Content-Type')?.split(';', 1)[0]?.trim().toLowerCase() !==
         'application/json'
     ) {
-      return context.json(
-        {
-          error: {
-            code: 'execution-unsupported-media-type',
-            message: 'Execution control requires application/json',
-          },
-        },
-        415,
-      );
+      return context.json({ error: errors.contentType }, 415);
     }
     return next();
   };

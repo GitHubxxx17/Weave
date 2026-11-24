@@ -20,6 +20,12 @@ export interface ProjectFolderSnapshot {
 }
 export interface ProjectFolderAuthority {
   capture(sessionId: string): Promise<ProjectFolderBinding>;
+  captureProject(projectId: string): Promise<ProjectFolderBinding>;
+  checkpointProject(binding: ProjectFolderBinding): Promise<void>;
+  /** Host-only canonical root from the exact captured binding. */
+  projectRoot(binding: ProjectFolderBinding): string;
+  /** Synchronous final effect admission; no network/capture/cleanup callback. */
+  withProjectAuthority<T>(binding: ProjectFolderBinding, operation: () => T): Promise<T>;
   snapshot(binding: ProjectFolderBinding): ProjectFolderSnapshot;
   signal(binding: ProjectFolderBinding): AbortSignal;
   checkpoint(binding: ProjectFolderBinding, sessionId: string): Promise<void>;
@@ -52,7 +58,8 @@ export class ProjectFolderAuthorityError extends Error {
 
 interface BindingState {
   readonly binding: ProjectFolderBinding;
-  readonly capturedSessionId: string;
+  readonly kind: 'session' | 'project';
+  readonly capturedSessionId?: string;
   readonly snapshot: ProjectFolderSnapshot;
   readonly workspace: WorkspacePolicy | undefined;
   readonly controller: AbortController;
@@ -165,6 +172,7 @@ export function createProjectFolderAuthority(
   };
   const validate = async (state: BindingState, sessionId: string): Promise<void> => {
     assertCurrentSync(state.binding);
+    if (state.kind !== 'session') throw failure('task-project-authority-invalid');
     try {
       const projects = await projectsForSession(sessionId);
       if (projects.length !== 1 || projects[0]!.id !== state.snapshot.projectId)
@@ -194,7 +202,94 @@ export function createProjectFolderAuthority(
       throw state.failure ?? failure(code);
     }
   };
+  const validateProject = async (state: BindingState): Promise<void> => {
+    assertCurrentSync(state.binding);
+    if (state.kind !== 'project') throw failure('task-project-authority-invalid');
+    try {
+      const raw = await store.getProject(state.snapshot.projectId);
+      if (raw === undefined) throw failure('task-project-relation-changed');
+      const project = projectSchema.parse(raw);
+      if (project.id !== state.snapshot.projectId) throw failure('task-project-relation-changed');
+      if (
+        project.folderRevision !== state.snapshot.folderRevision ||
+        project.folderPath !== state.snapshot.folderPath
+      )
+        throw failure('task-project-folder-changed');
+      if (project.folderPath === undefined) throw failure('task-project-folder-changed');
+      let identity: string;
+      try {
+        identity = await workspaceRootIdentity(project.folderPath);
+      } catch {
+        throw failure('task-project-root-changed');
+      }
+      if (identity !== state.snapshot.rootDigest) throw failure('task-project-root-changed');
+      assertCurrentSync(state.binding);
+    } catch (error) {
+      const code =
+        error instanceof ProjectFolderAuthorityError
+          ? error.code
+          : 'task-project-authority-unavailable';
+      revokeMany([state], code);
+      throw state.failure ?? failure(code);
+    }
+  };
   return {
+    captureProject: (projectId) =>
+      gate(async () => {
+        requireOpen();
+        let project: ReturnType<typeof projectSchema.parse>;
+        let canonical: string;
+        let rootDigest: string;
+        try {
+          const raw = await store.getProject(projectId);
+          if (raw === undefined) throw failure('task-project-authority-unavailable');
+          project = projectSchema.parse(raw);
+          if (project.id !== projectId || project.folderPath === undefined)
+            throw failure('task-project-authority-unavailable');
+          canonical = await realpath(project.folderPath);
+          rootDigest = await workspaceRootIdentity(canonical);
+        } catch {
+          throw failure('task-project-authority-unavailable');
+        }
+        requireOpen();
+        const binding = Object.freeze({}) as ProjectFolderBinding;
+        const state: BindingState = {
+          binding,
+          kind: 'project',
+          snapshot: Object.freeze({
+            projectId: project.id,
+            folderRevision: project.folderRevision,
+            folderPath: project.folderPath!,
+            rootDigest,
+          }),
+          workspace: createWorkspacePolicy({ root: canonical }),
+          controller: new AbortController(),
+          released: false,
+        };
+        states.set(binding, state);
+        active.add(state);
+        return binding;
+      }),
+    checkpointProject: (binding) => gate(() => validateProject(stateOf(binding))),
+    projectRoot(binding) {
+      assertEffectCurrentSync(binding);
+      const root = stateOf(binding).workspace?.root;
+      if (root === undefined) throw failure('task-project-authority-unavailable');
+      return root;
+    },
+    withProjectAuthority: (binding, operation) =>
+      gate(async () => {
+        await validateProject(stateOf(binding));
+        assertEffectCurrentSync(binding);
+        const result = operation();
+        if (
+          ((typeof result === 'object' && result !== null) || typeof result === 'function') &&
+          typeof (result as { then?: unknown }).then === 'function'
+        )
+          throw failure('task-project-authority-invalid');
+        assertEffectCurrentSync(binding);
+        return result;
+      }),
     capture: (sessionId) =>
       gate(async () => {
         requireOpen();
@@ -215,6 +310,7 @@ export function createProjectFolderAuthority(
         const binding = Object.freeze({}) as ProjectFolderBinding;
         const state: BindingState = {
           binding,
+          kind: 'session',
           capturedSessionId: sessionId,
           snapshot,
           workspace:
@@ -237,7 +333,7 @@ export function createProjectFolderAuthority(
       }),
     assertCapturedFor(binding, sessionId) {
       assertCurrentSync(binding);
-      if (stateOf(binding).capturedSessionId !== sessionId)
+      if (stateOf(binding).kind !== 'session' || stateOf(binding).capturedSessionId !== sessionId)
         throw failure('task-project-authority-invalid');
     },
     assertCurrentSync,

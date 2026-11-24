@@ -25,7 +25,7 @@ extension reloads through the Server control plane.
 `@weave/protocol`, `@weave/llm`, `@weave/session`, `@weave/runtime`,
 `@weave/plugin`, `@weave/server`, and `@weave/studio` form the current
 architecture, alongside `@weave/plugin-builtins`, `@weave/plugin-host`,
-`@weave/mcp-client`, and `@weave/desktop`. OS Sandbox hardening,
+`@weave/mcp-client`, `@weave/memory`, `@weave/retrieval`, and `@weave/desktop`. OS Sandbox hardening,
 remote MCP transports, and the broader Studio product remain later phases. The first
 protected Workspace file tools are now available in `@weave/runtime`.
 
@@ -48,6 +48,43 @@ The Stage 6.1 [local plugin artifact store](docs/learning/2026-11-21-plugin-arti
 provides bounded, non-executing directory copies at fixed content-addressed paths.
 Studio can import these directories as candidates and activate a selected version
 after a separate trust review. See [Local plugin installation](#local-plugin-installation).
+
+## Project search
+
+Studio's Search page builds and queries a local project index. The default lexical
+mode uses SQLite FTS5 and needs no provider key. A build captures safe project
+text files and only the current reviewed project memories you explicitly select;
+it does not index chat history, personal memory, or file attachments. Preview the
+source list and exact captured text before building. Accepted builds continue in
+the background; status and cancellation are available in Studio and through the
+Agent's shared Tool Pipeline.
+
+Hybrid mode uses the fixed OpenAI `text-embedding-3-small` model with 512 dimensions.
+Configure its separate credential in the Server environment:
+
+```bash
+WEAVE_EMBEDDING_PROVIDER=openai
+WEAVE_OPENAI_EMBEDDING_API_KEY=<embedding-key>
+```
+
+The Server never borrows the chat provider key. Building a hybrid index sends the
+approved frozen chunks to `api.openai.com`; each semantic query requires its own
+explicit action. Agent calls require approval even in yolo mode. Typing, changing
+filters, and reconnecting do not send semantic requests. There are no automatic
+embedding retries or resumed embedding jobs after restart.
+
+A generation contains at most 2,000 code files, 48 reviewed memories, and 20,000
+chunks. Queries verify current source identity and exact content before returning
+citations; changed files and revoked memories are omitted, and opening an old
+citation can require a rebuild. Path-based exclusions reduce accidental captures
+but do not inspect file bodies for secrets. Old derived generations and durable
+job records are retained according to the index lifecycle; removing a source is
+not a promise of physical erasure from historical storage.
+
+See the [retrieval design](docs/superpowers/specs/2026-11-23-hybrid-retrieval-design.md)
+and [verification results](docs/verification/2026-11-24-hybrid-retrieval.md) for
+package boundaries, supported limits, fixed quality fixtures, and measurement
+conditions.
 
 ## Planned stack
 

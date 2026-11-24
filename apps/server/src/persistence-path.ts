@@ -113,8 +113,8 @@ export function resolveDatabaseFile(options: ResolveDatabaseFileOptions = {}): s
   );
 }
 
-/** Resolves Session aliases before deriving the independently versioned Memory sidecar. */
-export async function resolveMemoryDatabaseFile(databaseFile: string): Promise<string> {
+/** Resolves Session aliases before deriving independently versioned sidecars. */
+async function resolveSidecarFile(databaseFile: string, suffix: string): Promise<string> {
   const absolute = resolve(parseNonEmptyString(databaseFile, 'database file'));
   let canonical: string;
   try {
@@ -123,5 +123,11 @@ export async function resolveMemoryDatabaseFile(databaseFile: string): Promise<s
     if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause;
     canonical = join(await realpath(dirname(absolute)), basename(absolute));
   }
-  return `${canonical}.memory.sqlite`;
+  return `${canonical}.${suffix}.sqlite`;
 }
+
+export const resolveMemoryDatabaseFile = (databaseFile: string) =>
+  resolveSidecarFile(databaseFile, 'memory');
+
+export const resolveRetrievalDatabaseFile = (databaseFile: string) =>
+  resolveSidecarFile(databaseFile, 'retrieval');

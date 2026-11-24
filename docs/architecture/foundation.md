@@ -825,6 +825,13 @@ cancellation state machine.
 
 ### Product references
 
+Project retrieval checks the pinned official references and unavailable reads in
+[its reference audit](../superpowers/specs/2026-11-23-hybrid-retrieval-design.md#11-实际读取的官方来源与取舍).
+It adopts explicit source versions, local operation and observable unavailability
+from Codex/Kiro/Harness; SQLite FTS5, real OpenAI vectors and rank-based RRF are
+implemented within Weave's own boundaries. No other product's sandbox or source
+freshness guarantee is inherited.
+
 On 2026-11-23, explicit memory checked Codex
 [`a0995c2b2b68248960c69cb812b5f4898dac7e4c` memory protocol](https://github.com/openai/codex/blob/a0995c2b2b68248960c69cb812b5f4898dac7e4c/codex-rs/app-server-protocol/src/protocol/v2/memory.rs),
 Harness
@@ -1362,3 +1369,31 @@ context injection, FTS or embedding is added in this slice. Contracts and the
 verified Codex, Kiro and Harness reference choices are recorded before code in
 [the memory design](../superpowers/specs/2026-11-23-long-term-memory-design.md)
 and [ADR 0012](../adr/0012-memory-authority-store.md).
+
+## Explicit project retrieval
+
+The independent `@weave/retrieval` leaf (`protocol -> retrieval -> server`) owns
+deterministic chunks/tokens, generation-local SQLite FTS5, bounded vector readers,
+RRF and derived generations. Runtime owns capture, Project/Memory authority,
+preview, background jobs, query freshness and shared Pipeline tools through
+structural ports; it imports no concrete retrieval or Memory store. Server
+composes the independent sidecar, Project-only binding, Memory host captures and
+a separate LLM embedding adapter. Studio uses guarded HTTP only.
+
+The corpus is selected project text/code and at most 48 exact current reviewed
+project memories. Local lexical search works with no key. Each hybrid build and
+each semantic query explicitly authorizes exact bytes and the fixed provider;
+configuration alone grants no egress. Actual approved execute admission mints a
+private permit; accepting a build transfers it into a frozen-manifest job grant.
+The original tool completion does not cancel that independent background job.
+
+Accepted/started/finished receipts are append-only. Complete staging plus the
+completed fact publishes atomically; cancellation preserves the previous active
+generation. Uncertain outcomes retain ownership and capacity. Restart interrupts
+unfinished work without network resume. Generation leases bound GC to three
+retained generations per project; Retrieval drains before Memory/Project/Session.
+Sources are revalidated before excerpts or citation opens, and memory revocation
+fences consuming work synchronously before commit. These are cooperative local
+checks, not a new OS sandbox or atomic filesystem snapshot. Contracts precede code
+in [the retrieval design](../superpowers/specs/2026-11-23-hybrid-retrieval-design.md)
+and [ADR 0013](../adr/0013-explicit-project-retrieval.md).

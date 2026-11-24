@@ -73,6 +73,10 @@ The independent `memory` leaf depends only on `protocol` and is consumed only by
 `server`; Runtime defines storage and scope ports but never imports `memory`.
 Memory facts live in an independently versioned SQLite sidecar owned by one
 Server writer; Studio still uses only guarded HTTP.
+The independent `retrieval` leaf depends only on `protocol` and is consumed only
+by `server`; Runtime owns retrieval behavior through structural ports and never
+imports its concrete store. The independent LLM embedding adapter retains the
+existing `protocol -> llm` direction; it has no Project or approval authority.
 `plugin-host` depends only on `plugin` and is consumed by `server` and the
 independent developer-tooling leaf `plugin-cli`; it
 reads and loads plugins from disk but knows nothing of the Runtime, HTTP, or

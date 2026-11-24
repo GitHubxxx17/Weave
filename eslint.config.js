@@ -10,6 +10,7 @@ const workspacePackageNames = new Set([
   '@weave/session',
   '@weave/workspace',
   '@weave/memory',
+  '@weave/retrieval',
   '@weave/runtime',
   '@weave/plugin',
   '@weave/plugin-builtins',
@@ -51,6 +52,7 @@ const packageLayers = new Map([
     },
   ],
   ['@weave/memory', { allowedDependencies: ['@weave/protocol'], layer: 'memory' }],
+  ['@weave/retrieval', { allowedDependencies: ['@weave/protocol'], layer: 'retrieval' }],
   [
     '@weave/runtime',
     {
@@ -106,6 +108,7 @@ const packageLayers = new Map([
       allowedDependencies: [
         '@weave/protocol',
         '@weave/memory',
+        '@weave/retrieval',
         '@weave/llm',
         '@weave/session',
         '@weave/runtime',

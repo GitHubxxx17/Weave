@@ -28,6 +28,10 @@ export interface AgentTaskWorkspaceBindings {
   derive(context: ToolExecutionContext, options: DeriveOptions): AgentToolAuthority;
   resolveWorkspace: WorkspaceResolver;
   resolveRoot(sessionId: string, toolAuthority?: AgentToolAuthority): Promise<string | undefined>;
+  pinnedChildBinding(
+    sessionId: string,
+    toolAuthority: AgentToolAuthority,
+  ): ProjectFolderBinding | undefined;
   assertRunCurrent(
     sessionId: string | undefined,
     toolAuthority: AgentToolAuthority | undefined,
@@ -98,6 +102,13 @@ export function createAgentTaskWorkspaceBindings(
     resolveWorkspace: ({ sessionId, toolAuthority }) => resolve(sessionId, toolAuthority),
     resolveRoot: async (sessionId, toolAuthority) =>
       (await resolve(sessionId, toolAuthority))?.root,
+    pinnedChildBinding(sessionId, toolAuthority) {
+      const child = childFor(toolAuthority);
+      if (child === undefined) return undefined;
+      assertCurrent(child, sessionId);
+      projectFolders.assertEffectCurrentSync(child.binding);
+      return child.binding;
+    },
     assertRunCurrent,
     assertMutationCurrent(context) {
       assertRunCurrent(context.sessionId, context.toolAuthority);
