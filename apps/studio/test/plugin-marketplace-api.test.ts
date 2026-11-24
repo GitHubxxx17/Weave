@@ -37,6 +37,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe('marketplace discovery client', () => {
   const sources = {
     schemaVersion: 1,
+    revision: 4,
     sources: [
       {
         id: 'weave',
@@ -54,18 +55,22 @@ describe('marketplace discovery client', () => {
     const fetch = vi.fn().mockImplementation(() => Promise.resolve(Response.json(sources)));
     vi.stubGlobal('fetch', fetch);
     expect(await fetchPluginMarketplaceSources()).toEqual(sources);
-    await addPluginMarketplaceSource({ name: 'Team', url: 'https://example.com/index.json' });
+    await addPluginMarketplaceSource({ name: 'Team', url: 'https://example.com/index.json' }, 4);
     await refreshPluginMarketplaceSource('remote-team');
-    await removePluginMarketplaceSource('remote-team');
+    await removePluginMarketplaceSource('remote-team', 5);
     expect(fetch.mock.calls.map(([path, init]) => [path, init.method, init.body])).toEqual([
       ['/plugins/marketplace/sources', 'GET', undefined],
       [
         '/plugins/marketplace/sources/add',
         'POST',
-        JSON.stringify({ name: 'Team', url: 'https://example.com/index.json' }),
+        JSON.stringify({ name: 'Team', url: 'https://example.com/index.json', revision: 4 }),
       ],
       ['/plugins/marketplace/refresh', 'POST', JSON.stringify({ sourceId: 'remote-team' })],
-      ['/plugins/marketplace/sources/remove', 'POST', JSON.stringify({ id: 'remote-team' })],
+      [
+        '/plugins/marketplace/sources/remove',
+        'POST',
+        JSON.stringify({ id: 'remote-team', revision: 5 }),
+      ],
     ]);
     expect(fetch.mock.calls[1]![1].headers).toEqual({ 'Content-Type': 'application/json' });
   });
@@ -118,7 +123,7 @@ describe('marketplace discovery client', () => {
       });
     vi.stubGlobal('fetch', fetch);
     await expect(
-      addPluginMarketplaceSource({ name: 'Team', url: 'https://example.com/index.json' }),
+      addPluginMarketplaceSource({ name: 'Team', url: 'https://example.com/index.json' }, 4),
     ).rejects.toMatchObject({ code: 'settings-unavailable', status: 503 });
     await expect(fetchPluginMarketplaceSources(controller.signal)).rejects.toBe(abort);
   });

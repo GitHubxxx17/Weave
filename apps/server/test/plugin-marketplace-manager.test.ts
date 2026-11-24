@@ -1,10 +1,14 @@
-import { appendFile, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.js';
 import { createServerRuntime } from '../src/runtime.js';
-import { createPluginMarketplaceManager } from '../src/plugin-marketplace-manager.js';
+import {
+  createPluginMarketplaceManager,
+  type PluginMarketplaceManager,
+} from '../src/plugin-marketplace-manager.js';
+import { marketplaceRemoteId } from '../src/plugin-marketplace-source-types.js';
 import { maxPluginMarketplaceBytes } from '../src/plugin-marketplace.js';
 
 const cleanups: Array<() => Promise<unknown>> = [];
@@ -15,9 +19,11 @@ afterEach(async () => {
 async function fixture(fetch: typeof globalThis.fetch = vi.fn()) {
   const directory = await mkdtemp(join(tmpdir(), 'weave-market-sources-'));
   cleanups.push(() => rm(directory, { force: true, recursive: true }));
-  const settingsFile = join(directory, 'sources.jsonl');
+  const settingsFile = join(directory, 'sources.json');
+  const legacySettingsFile = join(directory, 'sources.jsonl');
   const manager = await createPluginMarketplaceManager({
     settingsFile,
+    legacySettingsFile,
     builtinCatalogFile: false,
     fetch,
   });
@@ -25,8 +31,40 @@ async function fixture(fetch: typeof globalThis.fetch = vi.fn()) {
     manager.closeSync();
     await manager.drain();
   });
-  return { manager, directory, settingsFile };
+  return { manager, directory, settingsFile, legacySettingsFile };
 }
+const add = (
+  manager: PluginMarketplaceManager,
+  input: { readonly name: string; readonly url: string },
+) => manager.add(input, manager.listSources().revision);
+const remove = (manager: PluginMarketplaceManager, id: string) =>
+  manager.remove(id, manager.listSources().revision);
+async function reopen(settingsFile: string, legacySettingsFile?: string) {
+  const manager = await createPluginMarketplaceManager({
+    settingsFile,
+    ...(legacySettingsFile === undefined ? {} : { legacySettingsFile }),
+    builtinCatalogFile: false,
+  });
+  cleanups.push(async () => {
+    manager.closeSync();
+    await manager.drain();
+  });
+  return manager;
+}
+const remoteUrl = (n: number) => `https://catalog.example/${n}.json`;
+const legacyAdd = (sequence: number, n: number) => ({
+  sequence,
+  operation: 'add',
+  id: marketplaceRemoteId(remoteUrl(n)),
+  name: `Source ${n}`,
+  url: remoteUrl(n),
+});
+const legacyRemove = (sequence: number, n: number) => ({
+  sequence,
+  operation: 'remove',
+  id: marketplaceRemoteId(remoteUrl(n)),
+});
+const jsonl = (events: readonly object[]) => events.map((e) => `${JSON.stringify(e)}\n`).join('');
 const plugin = {
   id: 'community-notes',
   name: 'Notes',
@@ -67,7 +105,7 @@ describe('marketplace index sources', () => {
       .mockResolvedValueOnce(Response.json(futureIndex))
       .mockResolvedValueOnce(Response.json(futureIndex));
     const { manager } = await fixture(fetch);
-    await manager.add({ name: 'Weave', url: 'https://catalog.example/index.json' });
+    await add(manager, { name: 'Weave', url: 'https://catalog.example/index.json' });
     const id = manager.listSources().sources[1]!.id;
     await manager.refresh(id);
     await manager.refresh(id);
@@ -77,7 +115,7 @@ describe('marketplace index sources', () => {
       errorCode: 'invalid-index',
     });
     expect(manager.catalog(id).catalog.plugins).toEqual([plugin]);
-    await manager.add({ name: 'Weave future', url: 'https://catalog.example/future.json' });
+    await add(manager, { name: 'Weave future', url: 'https://catalog.example/future.json' });
     const futureId = manager.listSources().sources[2]!.id;
     await manager.refresh(futureId);
     expect(manager.listSources().sources[2]).toMatchObject({
@@ -88,7 +126,7 @@ describe('marketplace index sources', () => {
     expect(manager.catalog(futureId).catalog.plugins).toEqual([]);
   });
 
-  it('persists add/remove facts, canonicalizes GitHub URLs and never fetches on configuration or reads', async () => {
+  it('persists the current source list, canonicalizes GitHub URLs and never fetches on configuration or reads', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>();
     const { manager, settingsFile } = await fixture(fetch);
     expect(manager.listSources().sources[0]).toMatchObject({
@@ -98,7 +136,7 @@ describe('marketplace index sources', () => {
       removable: false,
       status: 'ready',
     });
-    await manager.add({
+    await add(manager, {
       name: 'Team',
       url: 'https://github.com/team/catalog/blob/main/index.json',
     });
@@ -113,7 +151,7 @@ describe('marketplace index sources', () => {
       plugins: [],
     });
     expect(fetch).not.toHaveBeenCalled();
-    await expect(manager.add({ name: 'Duplicate', url: source.url! })).rejects.toMatchObject({
+    await expect(add(manager, { name: 'Duplicate', url: source.url! })).rejects.toMatchObject({
       status: 409,
     });
     manager.closeSync();
@@ -128,14 +166,13 @@ describe('marketplace index sources', () => {
       await restarted.drain();
     });
     expect(restarted.listSources().sources[1]).toEqual(source);
-    await restarted.remove(source.id);
+    await remove(restarted, source.id);
     expect(restarted.listSources().sources).toHaveLength(1);
-    const events = (await readFile(settingsFile, 'utf8'))
-      .trim()
-      .split('\n')
-      .map((line) => JSON.parse(line));
-    expect(events.map((event) => event.operation)).toEqual(['add', 'remove']);
-    expect(events.map((event) => event.sequence)).toEqual([1, 2]);
+    expect(JSON.parse(await readFile(settingsFile, 'utf8'))).toEqual({
+      version: 1,
+      revision: 2,
+      sources: [],
+    });
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -145,7 +182,7 @@ describe('marketplace index sources', () => {
       .mockResolvedValueOnce(Response.json(index()))
       .mockResolvedValueOnce(new Response('bad json'));
     const { manager } = await fixture(fetch);
-    await manager.add({ name: 'Team', url: 'https://catalog.example/index.json' });
+    await add(manager, { name: 'Team', url: 'https://catalog.example/index.json' });
     const id = manager.listSources().sources[1]!.id;
     await manager.refresh(id);
     expect(fetch).toHaveBeenCalledWith(
@@ -206,7 +243,7 @@ describe('marketplace index sources', () => {
     const { manager } = await fixture(
       vi.fn<typeof globalThis.fetch>().mockResolvedValue(response()),
     );
-    await manager.add({ name: 'Team', url: 'https://catalog.example/index.json' });
+    await add(manager, { name: 'Team', url: 'https://catalog.example/index.json' });
     const id = manager.listSources().sources[1]!.id;
     await manager.refresh(id);
     expect(manager.listSources().sources[1]).toMatchObject({
@@ -230,7 +267,7 @@ describe('marketplace index sources', () => {
         ),
       ),
     );
-    await manager.add({ name: 'Team', url: 'https://catalog.example/index.json' });
+    await add(manager, { name: 'Team', url: 'https://catalog.example/index.json' });
     const id = manager.listSources().sources[1]!.id;
     vi.useFakeTimers();
     const operation = manager.refresh(id);
@@ -248,14 +285,14 @@ describe('marketplace index sources', () => {
       'https://catalog.example/index.json#x',
       'file:///tmp/catalog.json',
     ]) {
-      await expect(manager.add({ name: 'Team', url })).rejects.toMatchObject({ status: 400 });
+      await expect(add(manager, { name: 'Team', url })).rejects.toMatchObject({ status: 400 });
     }
-    await expect(manager.remove('weave')).rejects.toMatchObject({ status: 400 });
+    await expect(remove(manager, 'weave')).rejects.toMatchObject({ status: 400 });
     await expect(manager.refresh('missing')).rejects.toMatchObject({ status: 404 });
     for (let i = 0; i < 10; i++)
-      await manager.add({ name: `Source ${i}`, url: `https://catalog.example/${i}.json` });
+      await add(manager, { name: `Source ${i}`, url: `https://catalog.example/${i}.json` });
     await expect(
-      manager.add({ name: 'Overflow', url: 'https://catalog.example/overflow.json' }),
+      add(manager, { name: 'Overflow', url: 'https://catalog.example/overflow.json' }),
     ).rejects.toMatchObject({ status: 409 });
   });
 
@@ -275,7 +312,7 @@ describe('marketplace index sources', () => {
     });
     expect(broken.listSources().sources).toHaveLength(1);
     await expect(
-      broken.add({ name: 'No', url: 'https://catalog.example/index.json' }),
+      add(broken, { name: 'No', url: 'https://catalog.example/index.json' }),
     ).rejects.toMatchObject({ status: 503 });
     expect(await readFile(settingsFile, 'utf8')).toBe(malformed);
     const link = join(directory, 'link.jsonl');
@@ -289,24 +326,161 @@ describe('marketplace index sources', () => {
       await linked.drain();
     });
     await expect(
-      linked.add({ name: 'No', url: 'https://catalog.example/index.json' }),
+      add(linked, { name: 'No', url: 'https://catalog.example/index.json' }),
     ).rejects.toMatchObject({ status: 503 });
     expect(await readFile(settingsFile, 'utf8')).toBe(malformed);
   });
 
-  it('does not publish settings after an on-disk append conflict and blocks later writes', async () => {
+  it('rejects a stale revision with 409 and leaves the stored list unchanged', async () => {
     const { manager, settingsFile } = await fixture();
-    await manager.add({ name: 'One', url: 'https://catalog.example/1' });
-    await appendFile(settingsFile, 'unknown partial tail');
-    await expect(
-      manager.add({ name: 'Two', url: 'https://catalog.example/2' }),
-    ).rejects.toMatchObject({ status: 503 });
+    await manager.add({ name: 'One', url: remoteUrl(1) }, 0);
+    expect(manager.listSources().revision).toBe(1);
+    const before = await readFile(settingsFile, 'utf8');
+    await expect(manager.add({ name: 'Two', url: remoteUrl(2) }, 0)).rejects.toMatchObject({
+      status: 409,
+      code: 'plugin-marketplace-revision-conflict',
+    });
+    await expect(manager.remove(manager.listSources().sources[1]!.id, 0)).rejects.toMatchObject({
+      status: 409,
+    });
+    await expect(manager.reorder([manager.listSources().sources[1]!.id], 0)).rejects.toMatchObject({
+      status: 409,
+    });
+    expect(await readFile(settingsFile, 'utf8')).toBe(before);
     expect(manager.listSources().sources).toHaveLength(2);
-    expect(manager.listSources().sources[0]).toMatchObject({ errorCode: 'settings-unavailable' });
-    await expect(manager.remove(manager.listSources().sources[1]!.id)).rejects.toMatchObject({
+  });
+
+  it('detects another writer that replaced the settings file', async () => {
+    const { manager, settingsFile } = await fixture();
+    await add(manager, { name: 'One', url: remoteUrl(1) });
+    const other = JSON.parse(await readFile(settingsFile, 'utf8'));
+    other.revision = 7;
+    await writeFile(settingsFile, JSON.stringify(other));
+    await expect(add(manager, { name: 'Two', url: remoteUrl(2) })).rejects.toMatchObject({
+      status: 409,
+    });
+    expect(JSON.parse(await readFile(settingsFile, 'utf8')).revision).toBe(7);
+  });
+
+  it('reorders remote sources and keeps the order across restarts', async () => {
+    const { manager, settingsFile } = await fixture();
+    for (const n of [1, 2, 3]) await add(manager, { name: `Source ${n}`, url: remoteUrl(n) });
+    const ids = manager
+      .listSources()
+      .sources.slice(1)
+      .map(({ id }) => id);
+    await expect(
+      manager.reorder([ids[0]!, ids[1]!], manager.listSources().revision),
+    ).rejects.toMatchObject({ status: 400 });
+    await expect(
+      manager.reorder([ids[0]!, ids[0]!, ids[1]!], manager.listSources().revision),
+    ).rejects.toMatchObject({ status: 400 });
+    const result = await manager.reorder(
+      [ids[2]!, ids[0]!, ids[1]!],
+      manager.listSources().revision,
+    );
+    expect(result.revision).toBe(4);
+    expect(result.sources.map(({ id }) => id)).toEqual(['weave', ids[2], ids[0], ids[1]]);
+    manager.closeSync();
+    await manager.drain();
+    const restarted = await reopen(settingsFile);
+    expect(restarted.listSources().sources.map(({ id }) => id)).toEqual([
+      'weave',
+      ids[2],
+      ids[0],
+      ids[1],
+    ]);
+  });
+
+  it('is not limited to 1024 operations', async () => {
+    const { manager, settingsFile } = await fixture();
+    for (let i = 0; i < 520; i++) {
+      await add(manager, { name: 'Cycle', url: remoteUrl(i % 2) });
+      await remove(manager, marketplaceRemoteId(remoteUrl(i % 2)));
+    }
+    expect(manager.listSources().revision).toBe(1040);
+    await add(manager, { name: 'After', url: remoteUrl(5) });
+    expect(JSON.parse(await readFile(settingsFile, 'utf8')).sources).toHaveLength(1);
+  }, 60_000);
+
+  it('ignores a half-written temporary file left by a crash', async () => {
+    const { manager, settingsFile, directory } = await fixture();
+    await add(manager, { name: 'One', url: remoteUrl(1) });
+    manager.closeSync();
+    await manager.drain();
+    await writeFile(`${settingsFile}.123.abcdef.tmp`, '{"version":1,"revi');
+    const restarted = await reopen(settingsFile);
+    expect(restarted.listSources()).toMatchObject({ revision: 1 });
+    expect(restarted.listSources().sources).toHaveLength(2);
+    await add(restarted, { name: 'Two', url: remoteUrl(2) });
+    expect(restarted.listSources().sources).toHaveLength(3);
+    expect((await readdir(directory)).filter((name) => name.endsWith('.tmp'))).toHaveLength(1);
+  });
+
+  it('migrates the retired append-only log without touching it', async () => {
+    const { manager, settingsFile, legacySettingsFile } = await fixture();
+    manager.closeSync();
+    await manager.drain();
+    const legacy = jsonl([legacyAdd(1, 1), legacyAdd(2, 2), legacyAdd(3, 3), legacyRemove(4, 2)]);
+    await writeFile(legacySettingsFile, legacy);
+    const migrated = await reopen(settingsFile, legacySettingsFile);
+    expect(migrated.listSources().sources.map(({ name }) => name)).toEqual([
+      'Weave 插件目录',
+      'Source 1',
+      'Source 3',
+    ]);
+    expect(await readFile(legacySettingsFile, 'utf8')).toBe(legacy);
+    expect(JSON.parse(await readFile(settingsFile, 'utf8'))).toMatchObject({
+      version: 1,
+      revision: 1,
+    });
+    await add(migrated, { name: 'New', url: remoteUrl(4) });
+    expect(await readFile(legacySettingsFile, 'utf8')).toBe(legacy);
+    migrated.closeSync();
+    await migrated.drain();
+    // The new file wins on restart, even though the old log is still present.
+    const again = await reopen(settingsFile, legacySettingsFile);
+    expect(again.listSources().sources).toHaveLength(4);
+  });
+
+  it('migrates a fully used legacy log into a writable list', async () => {
+    const { manager, settingsFile, legacySettingsFile } = await fixture();
+    manager.closeSync();
+    await manager.drain();
+    const events: object[] = [];
+    for (let i = 0; i < 511; i++)
+      events.push(legacyAdd(events.length + 1, 1), legacyRemove(events.length + 2, 1));
+    events.push(legacyAdd(1023, 7), legacyAdd(1024, 8));
+    const fixed = events.map((event, index) => ({ ...event, sequence: index + 1 }));
+    expect(fixed).toHaveLength(1024);
+    const legacy = jsonl(fixed);
+    await writeFile(legacySettingsFile, legacy);
+    const migrated = await reopen(settingsFile, legacySettingsFile);
+    expect(migrated.listSources().sources.map(({ name }) => name)).toEqual([
+      'Weave 插件目录',
+      'Source 7',
+      'Source 8',
+    ]);
+    await add(migrated, { name: 'Beyond', url: remoteUrl(9) });
+    expect(migrated.listSources().sources).toHaveLength(4);
+    expect(await readFile(legacySettingsFile, 'utf8')).toBe(legacy);
+    expect(JSON.parse(await readFile(settingsFile, 'utf8')).revision).toBe(2);
+  });
+
+  it('keeps a corrupt legacy log untouched, reports unavailable settings and writes nothing', async () => {
+    const { manager, settingsFile, legacySettingsFile } = await fixture();
+    manager.closeSync();
+    await manager.drain();
+    const corrupt = `${jsonl([legacyAdd(1, 1)])}{"sequence":2,"operation":"add"\n`;
+    await writeFile(legacySettingsFile, corrupt);
+    const broken = await reopen(settingsFile, legacySettingsFile);
+    expect(broken.listSources().sources).toHaveLength(1);
+    expect(broken.listSources().sources[0]).toMatchObject({ errorCode: 'settings-unavailable' });
+    await expect(add(broken, { name: 'No', url: remoteUrl(2) })).rejects.toMatchObject({
       status: 503,
     });
-    expect(await readFile(settingsFile, 'utf8')).toContain('unknown partial tail');
+    expect(await readFile(legacySettingsFile, 'utf8')).toBe(corrupt);
+    await expect(readFile(settingsFile, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('keeps cached GETs available when an operator file disappears, and refreshes that file explicitly', async () => {
@@ -344,20 +518,20 @@ describe('marketplace index sources', () => {
     });
     const { manager, settingsFile } = await fixture(fetch);
     await Promise.all([
-      manager.add({ name: 'One', url: 'https://catalog.example/1' }),
-      manager.add({ name: 'Two', url: 'https://catalog.example/2' }),
+      manager.add({ name: 'One', url: 'https://catalog.example/1' }, 0),
+      manager.add({ name: 'Two', url: 'https://catalog.example/2' }, 1),
     ]);
     const id = manager.listSources().sources[1]!.id;
     const active = manager.refresh(id);
     await entered.promise;
-    const queued = manager.add({ name: 'Three', url: 'https://catalog.example/3' });
+    const queued = add(manager, { name: 'Three', url: 'https://catalog.example/3' });
     const queuedResult = queued.catch((error: unknown) => error);
     manager.closeSync();
-    await expect(manager.remove(id)).rejects.toMatchObject({ status: 503 });
+    await expect(remove(manager, id)).rejects.toMatchObject({ status: 503 });
     await active;
     expect(await queuedResult).toMatchObject({ status: 503 });
     await manager.drain();
-    expect((await readFile(settingsFile, 'utf8')).trim().split('\n')).toHaveLength(2);
+    expect(JSON.parse(await readFile(settingsFile, 'utf8'))).toMatchObject({ revision: 2 });
   });
 });
 
@@ -407,7 +581,27 @@ describe('marketplace source HTTP', () => {
     expect(
       (await post(JSON.stringify({ name: 'Team', url: 'https://catalog.example/index.json' })))
         .status,
+    ).toBe(400);
+    const stale = await post(
+      JSON.stringify({ name: 'Other', url: 'https://catalog.example/other.json', revision: 5 }),
+    );
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toMatchObject({
+      error: { code: 'plugin-marketplace-revision-conflict' },
+    });
+    expect(
+      (
+        await post(
+          JSON.stringify({
+            name: 'Team',
+            url: 'https://catalog.example/index.json',
+            revision: 0,
+          }),
+        )
+      ).status,
     ).toBe(200);
+    expect((await app.request('/plugins/marketplace/sources')).status).toBe(200);
+    expect(manager.listSources().revision).toBe(1);
     const source = manager.listSources().sources[1]!;
     const response = await app.request(`/plugins/marketplace?sourceId=${source.id}`);
     expect(await response.json()).toMatchObject({

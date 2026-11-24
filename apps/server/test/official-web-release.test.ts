@@ -97,7 +97,7 @@ describe('published Weave web release', () => {
     const directory = await mkdtemp(join(tmpdir(), 'weave-web-release-'));
     cleanups.push(() => rm(directory, { recursive: true, force: true }));
     const manager = await createPluginMarketplaceManager({
-      settingsFile: join(directory, 'sources.jsonl'),
+      settingsFile: join(directory, 'sources.json'),
     });
     cleanups.push(async () => {
       manager.closeSync();
@@ -199,17 +199,20 @@ describe('published Weave web release', () => {
       },
     ];
     const manager = await createPluginMarketplaceManager({
-      settingsFile: join(directory, 'sources.jsonl'),
+      settingsFile: join(directory, 'sources.json'),
       fetch: async () => Response.json(replies.shift()),
     });
     cleanups.push(async () => {
       manager.closeSync();
       await manager.drain();
     });
-    const added = await manager.add({
-      name: 'Independent web mirror',
-      url: 'https://catalog.example/web.json',
-    });
+    const added = await manager.add(
+      {
+        name: 'Independent web mirror',
+        url: 'https://catalog.example/web.json',
+      },
+      manager.listSources().revision,
+    );
     const remote = added.sources.find(({ kind }) => kind === 'remote')!;
     await manager.refresh(remote.id);
     const app = createApp(createServerRuntime(), { pluginMarketplaceManager: manager });
@@ -219,11 +222,14 @@ describe('published Weave web release', () => {
       return pluginMarketplaceResponseSchema.parse(await response.json());
     };
     const first = await read();
-    expect(first.indexSource).toEqual({
-      id: remote.id,
-      name: 'Independent web mirror',
-      url: 'https://catalog.example/web.json',
-    });
+    expect(first.indexSource).toEqual(
+      {
+        id: remote.id,
+        name: 'Independent web mirror',
+        url: 'https://catalog.example/web.json',
+      },
+      manager.listSources().revision,
+    );
     expect(first.entries).toEqual([
       {
         id: manifest.id,
