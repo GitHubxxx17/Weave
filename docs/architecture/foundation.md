@@ -1201,6 +1201,19 @@ keeps the development endpoint off the network by default and makes the
 security intent explicit. A later deployment surface can choose a different
 binding as part of a deliberate operational configuration.
 
+**Global local admission.** Loopback binding alone does not stop a browser page
+from reaching the Server (DNS rebinding, cross-site requests, `text/plain` form
+posts). `createApp` therefore registers one admission middleware before CORS and
+all routes: `Host` must be loopback, `Sec-Fetch-Site: cross-site` is refused,
+and a present `Origin` must equal `studioOrigin` (or be a loopback http/https
+origin when none is configured), otherwise `403 local-request-forbidden`.
+POST/PUT/PATCH/DELETE requests that carry a body or a `Content-Type` must use
+`application/json`, otherwise `415 local-request-unsupported-media-type`.
+`/health` is exempt. Path guards (execution, memory, retrieval, panel, file
+undo) keep their specific error codes and run first; plugin and MCP management
+writes keep `managementWriteGuard` and its codes, while their reads fall under
+the global guard.
+
 ### Legacy Agent HTTP adapter
 
 The original `POST /agent/runs/stream` used fetch POST with a JSON body and an

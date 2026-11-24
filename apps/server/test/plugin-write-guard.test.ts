@@ -208,14 +208,18 @@ describe('plugin write guard', () => {
     expect(response.status).toBe(403);
   });
 
-  it('does not apply the plugin write guard to catalog reads or unrelated APIs', async () => {
-    expect(
-      (
-        await app().request('/plugins', {
-          headers: { Host: 'evil.example', Origin: 'https://evil.example' },
-        })
-      ).status,
-    ).toBe(200);
+  it('rejects untrusted Host and Origin on catalog reads through the global local guard', async () => {
+    for (const headers of [
+      { Host: 'evil.example', Origin: 'https://evil.example' },
+      { Host: 'evil.example' },
+    ]) {
+      const response = await app().request('/plugins', { headers });
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: 'local-request-forbidden' },
+      });
+    }
+    expect((await app().request('/plugins')).status).toBe(200);
     expect((await app().request('/health', { headers: { Host: 'evil.example' } })).status).toBe(
       200,
     );
@@ -240,16 +244,16 @@ describe('plugin write guard', () => {
   it('keeps CORS behavior on managed preflights, rejected writes, and nearby routes', async () => {
     const origin = 'http://localhost:5173';
     const configured = app(origin);
-    for (const [path, requester, allowed] of [
-      ['/plugins/managed', origin, origin],
-      ['/plugins/managed/notes/disable', 'http://localhost:5174', null],
-      ['/plugins/managed/unknown', origin, origin],
+    for (const [path, requester, allowed, status] of [
+      ['/plugins/managed', origin, origin, 204],
+      ['/plugins/managed/notes/disable', 'http://localhost:5174', null, 403],
+      ['/plugins/managed/unknown', origin, origin, 204],
     ] as const) {
       const response = await configured.request(path, {
         method: 'OPTIONS',
         headers: { Origin: requester, 'Access-Control-Request-Method': 'POST' },
       });
-      expect(response.status).toBe(204);
+      expect(response.status).toBe(status);
       expect(response.headers.get('cache-control')).toBe('no-store');
       expect(response.headers.get('access-control-allow-origin')).toBe(allowed);
     }

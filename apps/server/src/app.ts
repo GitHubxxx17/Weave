@@ -11,6 +11,7 @@ import {
 } from './plugin-panel-api.js';
 import { Hono } from 'hono';
 import { registerRetrievalRoutes, type RetrievalRouteOptions } from './retrieval-routes.js';
+import { registerLocalRequestGuard } from './local-request-guard.js';
 import { registerRetrievalGuard } from './retrieval-guard.js';
 import { registerMemoryRoutes, type MemoryAppOptions } from './memory-api.js';
 import { cors } from 'hono/cors';
@@ -102,6 +103,9 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
     '/sessions/:sessionId/tasks/*',
   ]);
   registerFileUndoGuards(app, options ?? {});
+  // Registered after the path guards so they keep their specific error codes;
+  // everything they do not cover is admitted (or rejected) here, before CORS.
+  registerLocalRequestGuard(app, studioOrigin);
 
   if (studioOrigin !== undefined) {
     app.use(
