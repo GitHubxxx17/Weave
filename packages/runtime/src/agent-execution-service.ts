@@ -159,26 +159,35 @@ export function createAgentExecutionService(
   const pendingCounts = new Map<string, number>();
   const bound = new WeakMap<TaskLaunchAuthority, BoundExecution>();
   const reservedTasks = new Map<string, BoundExecution>();
-  let tail = Promise.resolve();
+  const chains = new Map<string, Promise<void>>();
   let queueSequence = 0;
   let closed = false;
   const captureController = new AbortController();
   const cursor = (executionId: string, sequence: number): string =>
     `${epoch}:${executionId}:${sequence}`;
-  // One short mutation gate also makes global pending reservations atomic.
-  const gate = async <T>(_sessionId: string, operation: () => Promise<T>): Promise<T> => {
-    const previous = tail;
+  // Mutations are serialized per session; different sessions never wait on each other. Global
+  // pending reservations stay atomic because check-and-reserve is one synchronous step.
+  const gate = async <T>(sessionId: string, operation: () => Promise<T>): Promise<T> => {
+    const previous = chains.get(sessionId) ?? Promise.resolve();
     let release!: () => void;
-    tail = new Promise<void>((resolve) => {
+    const mine = new Promise<void>((resolve) => {
       release = resolve;
     });
+    chains.set(sessionId, mine);
     await previous;
     try {
       return await operation();
     } finally {
-      cleanup(_sessionId);
+      cleanup(sessionId);
+      // Reclaim the chain once this session has no later waiter.
+      if (chains.get(sessionId) === mine) chains.delete(sessionId);
       release();
     }
+  };
+  const releaseReservation = (sessionId: string): void => {
+    const next = (pendingCounts.get(sessionId) ?? 0) - 1;
+    if (next > 0) pendingCounts.set(sessionId, next);
+    else pendingCounts.delete(sessionId);
   };
   const requireId = (value: string): void => {
     if (typeof value !== 'string' || value.length === 0 || value.length > 240)
@@ -1107,7 +1116,7 @@ export function createAgentExecutionService(
       const unresolved = queues.get(sessionId)?.unresolvedAdmission;
       const reconciliation = unresolved?.requestId === frozen.requestId;
       if (previous !== undefined && !reconciliation) return previous;
-      return gate(sessionId, async () => {
+      const admitLocked = async (reservation: { held: boolean }) => {
         const { events, projection } = await load(sessionId);
         refuseOrdinaryTaskLaunch(events);
         const unresolved = queues.get(sessionId)?.unresolvedAdmission;
@@ -1164,8 +1173,6 @@ export function createAgentExecutionService(
         const previous = replay(projectAgentExecutions(events));
         if (previous !== undefined) return previous;
         requireMutable(sessionId);
-        await options.admit(sessionId);
-        requireMutable(sessionId);
         const immediate = projection.active === null && projection.queued.length === 0;
         const globalPending = [...pendingCounts.values()].reduce(
           (total, count) => total + count,
@@ -1173,6 +1180,13 @@ export function createAgentExecutionService(
         );
         if (!immediate && (projection.queued.length >= 10 || globalPending >= 100))
           throw new AgentExecutionError('execution-queue-full', 'Execution waiting queue is full');
+        // Check and reserve in one synchronous step, before any further await.
+        if (!immediate) {
+          pendingCounts.set(sessionId, (pendingCounts.get(sessionId) ?? 0) + 1);
+          reservation.held = true;
+        }
+        await options.admit(sessionId);
+        requireMutable(sessionId);
         const resolved =
           options.resolveInput === undefined
             ? { ...structuredClone(frozen.input), useProviderDefaults: false }
@@ -1298,7 +1312,8 @@ export function createAgentExecutionService(
             : []),
         ];
         // Reservation remains conservative if both append and reconciliation read fail.
-        if (!immediate) pendingCounts.set(sessionId, (pendingCounts.get(sessionId) ?? 0) + 1);
+        // From here the append outcome decides the reservation, not the generic rollback.
+        reservation.held = false;
         let appended: readonly SessionEvent[];
         try {
           appended = await append(sessionId, batch);
@@ -1330,6 +1345,15 @@ export function createAgentExecutionService(
         const state = immediate ? install(durableAccepted) : undefined;
         notifyQueue(sessionId);
         return snapshot(durableAccepted, state);
+      };
+      return gate(sessionId, async () => {
+        const reservation = { held: false };
+        try {
+          return await admitLocked(reservation);
+        } catch (error: unknown) {
+          if (reservation.held) releaseReservation(sessionId);
+          throw error;
+        }
       });
     },
     async list(sessionId) {
@@ -1679,42 +1703,56 @@ export function createAgentExecutionService(
     async drain() {
       service.closeSync();
       let failed = false;
-      const { states, tasks } = await gate('', async () => {
-        const states = [...live.values()].filter((state) => state.task === undefined);
-        const tasks = [...reservedTasks.values()];
-        for (const state of states)
+      // Abort what is already running right away; later installs are swept below.
+      const abortLive = (): LiveExecution[] => {
+        const found = [...live.values()].filter((state) => state.task === undefined);
+        for (const state of found)
           if (state.status !== 'persistence-error') {
             if (state.status !== 'cancelling') status(state, 'cancelling');
             state.controller.abort();
           }
-        for (const [sessionId, state] of queues) {
-          if (reservedTasks.has(sessionId)) continue;
-          if (state.error !== undefined) {
-            failed = true;
-            continue;
-          }
-          try {
-            const { events, projection } = await load(sessionId);
-            const batch: NewSessionEvent[] = projection.queued.map((item) => ({
-              type: 'execution.finished',
-              payload: {
-                executionId: item.executionId,
-                status: 'cancelled',
-                reason: 'service-closed',
-              },
-            }));
-            if (batch.length !== 0) {
-              const appended = await append(sessionId, batch);
-              sync(sessionId, [...events, ...appended]);
-              notifyQueue(sessionId);
+        return found;
+      };
+      abortLive();
+      // Each session drains on its own chain, so a slow session cannot block the others and no
+      // step ever holds two session gates (no lock ordering, no deadlock).
+      const sessionIds = new Set<string>([...queues.keys(), ...chains.keys()]);
+      await Promise.all(
+        [...sessionIds].map((sessionId) =>
+          gate(sessionId, async () => {
+            if (reservedTasks.has(sessionId)) return;
+            const state = queues.get(sessionId);
+            if (state === undefined) return;
+            if (state.error !== undefined) {
+              failed = true;
+              return;
             }
-          } catch {
-            failed = true;
-            block(sessionId);
-          }
-        }
-        return { states, tasks };
-      });
+            try {
+              const { events, projection } = await load(sessionId);
+              const batch: NewSessionEvent[] = projection.queued.map((item) => ({
+                type: 'execution.finished',
+                payload: {
+                  executionId: item.executionId,
+                  status: 'cancelled',
+                  reason: 'service-closed',
+                },
+              }));
+              if (batch.length !== 0) {
+                const appended = await append(sessionId, batch);
+                sync(sessionId, [...events, ...appended]);
+                notifyQueue(sessionId);
+              }
+            } catch {
+              failed = true;
+              block(sessionId);
+            }
+          }),
+        ),
+      );
+      // Every session chain has drained; executions installed by in-flight admissions are now
+      // visible, and closed admission means nothing new can appear.
+      const states = abortLive();
+      const tasks = [...reservedTasks.values()];
       const taskOutcomes = await Promise.allSettled(
         tasks.map(async (task) => {
           await boundPort.cancelBoundTask(task.token);
