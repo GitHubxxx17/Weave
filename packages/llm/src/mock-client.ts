@@ -113,7 +113,7 @@ const maxSummaryLineLength = 160;
 const mockLabel = '（本地演示）';
 const usageLines = [
   '格式：/tool 工具名 JSON参数，一行一个调用；参数写在同一行，换行写成 \\n。例如：',
-  '/tool run_command {"command":"echo hello"}',
+  '/tool run_command {"command":"echo hello","risk":"low","riskReason":"只打印一行文字"}',
 ];
 
 function messageText(message: Message): string {
