@@ -297,6 +297,9 @@ export async function captureHttpContract(): Promise<HttpContractFixtures> {
     await new Promise((resolve) => setTimeout(resolve, 100));
     gates[0]!();
     const executionFrames = await liveFrames;
+    // Queue promotion is asynchronous: wait until the next entry is running so
+    // the Session summary below does not depend on how fast the host promotes it.
+    await poll(() => gates.length === 2);
 
     const taskId = (tasks as { tasks: { taskId: string }[] }).tasks[0]!.taskId;
     const frames = (texts: readonly string[]) => texts.map(parseFrame);
