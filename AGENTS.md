@@ -27,7 +27,10 @@ Weave 对标 Codex、Kiro 和 DeepSeek Harness。设计、实现、交互与验�
 
 - TypeScript, ESM, and strict typing.
 - Validate external input with Zod before use.
-- Keep durable facts append-only.
+- Keep durable facts append-only. This covers Session events, Memory, execution
+  and retrieval receipts. Plugin configuration and plugin state (marketplace
+  sources, managed installation, selection and trust records) are current-state
+  data and may be updated in place; see ADR 0005 amendment 2026-11-24.
 - Separate durable session events from transient live-control state.
 - Keep HTTP handlers thin; agent behavior belongs in the runtime.
 - Tools must execute through the shared tool pipeline.

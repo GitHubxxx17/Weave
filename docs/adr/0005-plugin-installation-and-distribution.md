@@ -1,6 +1,7 @@
 # ADR 0005: Managed Plugin Installation
 
-- Status: Accepted direction; delivery is staged below.
+- Status: Accepted direction; delivery is staged below. Amended 2026-11-24, see
+  [Amendment 2026-11-24](#amendment-2026-11-24).
 - Date: 2026-11-21
 - Owner review: 用户同意按 Stage 6 设计、本地安装、Studio、GitHub 固定版本和静态 Catalog 的顺序推进。
 - Refines: ADR 0003 and ADR 0004.
@@ -100,3 +101,45 @@ owns a store; sharing the directory between processes is outside that API's
 concurrency contract. Server must acquire and enforce its store ownership before
 exposing managed installation. No promise of universal power-loss durability or
 protection against another process running as the same OS user is made.
+
+## Amendment 2026-11-24
+
+Owner review (2026-11-24) changes three earlier choices for the plugin domain. The
+reviewed proposal is
+[plugin artifact GC and source settings](../superpowers/specs/2026-11-24-plugin-artifact-gc-design.md).
+This amendment is a direction; each change ships in its own PR with tests.
+
+Changed decisions:
+
+1. **Plugin state is current-state, not append-only.** Marketplace source settings,
+   managed installation records, selection and plugin trust decisions are stored as
+   the current state and updated in place. History of these operations is not kept.
+   The rule "keep durable facts append-only" continues to apply to Session events,
+   Memory, execution receipts and retrieval job receipts, not to plugin
+   configuration or plugin state. MCP authority is out of scope of this amendment.
+2. **Marketplace sources are a plain list.** The append-only source configuration
+   log and its 1024-event ceiling are replaced by one list of current sources,
+   written atomically (temporary file plus rename) with a revision check so two
+   concurrent editors cannot silently overwrite each other.
+3. **Update replaces, and old artifacts are deleted.** An installed plugin with a
+   newer compatible version shows an update action. One confirmation that shows the
+   declaration and permission difference replaces the current record and activates
+   the new artifact. After the switch, the old artifact is deleted once no running
+   Generation or pinned turn still references it. Uninstall deletes the record and
+   the artifact the same way. Local rollback to the replaced version is no longer
+   offered; an older version can be installed again from its source if still listed.
+
+Unchanged requirements:
+
+- Trust stays bound to the exact content digest. Any change of manifest,
+  declarations or code produces a new digest and requires a new human confirmation.
+- Installation still never imports the plugin, runs package managers or scripts,
+  or grants trust by itself.
+- Deleting an artifact must never remove files that an active Generation or an
+  old pinned turn is still using.
+
+Superseded text: "append-only installation records", "Published artifacts are
+retained in the first delivery", "Uninstall appends removal and revocation
+together", "append-only source configuration", the current/candidate/retired lease
+requirement for garbage collection, and the Consequences note that uninstall does
+not reclaim artifacts.
