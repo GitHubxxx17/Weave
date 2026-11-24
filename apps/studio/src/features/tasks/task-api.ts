@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { waitForExecutionRetry } from '../agent/agent-execution-client.js';
-import { parseSseFrame } from '../agent/agent-legacy-stream.js';
+import { readSseStream } from '../../lib/sse.js';
 import { runtimeApiUrl } from '../runtime/runtime-bridge.js';
 import {
   agentTaskTreeSnapshotSchema,
@@ -137,10 +137,6 @@ export async function observeAgentTaskTree(
   let attempt = 0;
   while (true) {
     signal.throwIfAborted();
-    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-    const cancel = () => {
-      void reader?.cancel().catch(() => undefined);
-    };
     try {
       const query = latest === undefined ? '' : `?${new URLSearchParams({ after: latest.cursor })}`;
       const response = await checkedResponse(`${treePath(root)}/events${query}`, {
@@ -148,39 +144,23 @@ export async function observeAgentTaskTree(
         signal,
       });
       signal.throwIfAborted();
-      if (
-        response.body === null ||
-        !response.headers.get('Content-Type')?.includes('text/event-stream')
-      )
-        throw invalidResponse();
-      reader = response.body.getReader();
-      signal.addEventListener('abort', cancel, { once: true });
-      const decoder = new TextDecoder();
-      let buffer = '';
+      const frames = readSseStream(response, {
+        maxFrameChars: maxFrameBytes,
+        maxBufferChars: maxFrameBytes,
+        signal,
+        createError: invalidResponse,
+      });
       onConnection?.('connected');
-      while (true) {
-        const { value, done } = await reader.read();
-        signal.throwIfAborted();
-        buffer += decoder.decode(value, { stream: !done });
-        let delimiter = /\r?\n\r?\n/.exec(buffer);
-        while (delimiter !== null) {
-          const raw = buffer.slice(0, delimiter.index);
-          buffer = buffer.slice(delimiter.index + delimiter[0].length);
-          if (bytes.encode(raw).length > maxFrameBytes) throw invalidResponse();
-          const frame = parseSseFrame(raw);
-          if (frame?.event === 'tasks') {
-            const next = readTree(frame.data, root);
-            if (latest?.epoch !== next.epoch || next.revision > latest.revision) {
-              latest = next;
-              attempt = 0;
-              onSnapshot(next);
-              signal.throwIfAborted();
-            }
+      for await (const frame of frames) {
+        if (frame.event === 'tasks') {
+          const next = readTree(frame.data, root);
+          if (latest?.epoch !== next.epoch || next.revision > latest.revision) {
+            latest = next;
+            attempt = 0;
+            onSnapshot(next);
+            signal.throwIfAborted();
           }
-          delimiter = /\r?\n\r?\n/.exec(buffer);
         }
-        if (bytes.encode(buffer).length > maxFrameBytes) throw invalidResponse();
-        if (done) break;
       }
     } catch (cause: unknown) {
       signal.throwIfAborted();
@@ -192,10 +172,6 @@ export async function observeAgentTaskTree(
         )
       )
         throw cause;
-    } finally {
-      signal.removeEventListener('abort', cancel);
-      cancel();
-      reader?.releaseLock();
     }
     onConnection?.('reconnecting');
     await waitForExecutionRetry(attempt++, signal);
