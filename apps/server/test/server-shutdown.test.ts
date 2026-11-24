@@ -567,3 +567,52 @@ describe('Memory shutdown durability barrier', () => {
     await stop;
   });
 });
+
+describe('Retrieval shutdown dependency barrier', () => {
+  it.each(['stop', 'failStartup'] as const)(
+    'retains Memory and all stores while Retrieval cleanup is incomplete during %s',
+    async (method) => {
+      const calls: string[] = [];
+      const incomplete = new Error('retrieval append uncertain');
+      let blocked = true;
+      const options = cleanupOptions(() => ({
+        retrieval: {
+          closeSync() {
+            calls.push('retrieval-fence');
+          },
+          async drain() {
+            calls.push('retrieval-drain');
+            if (blocked) throw incomplete;
+          },
+          async close() {
+            calls.push('retrieval-close');
+          },
+        },
+        memory: {
+          closeSync() {
+            calls.push('memory-fence');
+          },
+          async drain() {
+            calls.push('memory-drain');
+          },
+          async close() {
+            calls.push('memory-close');
+          },
+        },
+      }));
+      const shutdown = createServerShutdown(options);
+      const startup = new Error('listen failed');
+      const first = await (
+        method === 'stop' ? shutdown.stop() : shutdown.failStartup(startup)
+      ).catch((error) => error);
+      expect(calls).toEqual(['retrieval-fence', 'memory-fence', 'retrieval-drain']);
+      expect(options.closeProjectStore).not.toHaveBeenCalled();
+      expect(options.stopRuntime).not.toHaveBeenCalled();
+      blocked = false;
+      if (method === 'stop') await shutdown.stop();
+      else await retryFailedServerStartupCleanup(first);
+      expect(calls.indexOf('retrieval-close')).toBeLessThan(calls.indexOf('memory-drain'));
+      expect(options.closeProjectStore).toHaveBeenCalledOnce();
+    },
+  );
+});

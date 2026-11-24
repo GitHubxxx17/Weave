@@ -1,3 +1,19 @@
+export {
+  createRetrievalService,
+  retrievalAgentRequestId,
+  describeRetrievalQueryBatch,
+} from './retrieval-service.js';
+export { createRetrievalTools } from './retrieval-tools.js';
+export type { RetrievalTools } from './retrieval-tools.js';
+export { RetrievalError, isRetrievalError } from './retrieval-errors.js';
+export {
+  createRetrievalEgress,
+  issueLocalRetrievalPermit,
+  revokeRetrievalPermit,
+} from './retrieval-egress.js';
+export { describeRetrievalCaller, retrievalCallerAuthority } from './retrieval-caller.js';
+export { createRetrievalWorkspaceCapture } from './retrieval-capture.js';
+export type * from './retrieval-types.js';
 export { createRuntime } from './runtime.js';
 export { MemoryError } from './memory-errors.js';
 export { createMemoryService } from './memory-service.js';
@@ -15,6 +31,7 @@ export type {
   MemoryInvalidation,
   BeforeMemoryCommit,
   ReviewedMemoryCapture,
+  ReviewedMemoryAccessCapture,
   ReviewedMemorySource,
 } from './memory-types.js';
 export { memoryCallerAuthority, configureMemoryToolDefinition } from './memory-tool-attempt.js';

@@ -34,6 +34,7 @@ export interface ServerMemoryCompositionOptions {
   readonly projectStore: ProjectStore;
   readonly sessionStore: SessionEventStore;
   readonly budgets?: MemoryServiceOptions['budgets'];
+  readonly beforeMemoryCommit?: MemoryServiceOptions['beforeMemoryCommit'];
   readonly storeFactory?: (options: { readonly filename: string }) => MemoryStorePort;
 }
 
@@ -86,7 +87,7 @@ export async function createServerMemoryComposition(
     store,
     resolveAgentScope: scopes.resolveAgentScope,
     resolveLocalScope: scopes.resolveLocalScope,
-    beforeMemoryCommit: () => undefined,
+    beforeMemoryCommit: options.beforeMemoryCommit ?? (() => undefined),
     budgets,
   });
   state.service = service;

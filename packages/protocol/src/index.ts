@@ -107,3 +107,4 @@ export type {
 } from './skills.js';
 
 export * from './memory.js';
+export * from './retrieval.js';

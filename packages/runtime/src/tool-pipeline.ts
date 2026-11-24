@@ -18,6 +18,12 @@ import {
 } from './agent-tool-authority.js';
 import type { ToolRegistry } from './tool-registry.js';
 import { isMemoryError } from './memory-errors.js';
+import { isRetrievalError } from './retrieval-errors.js';
+import {
+  assertRetrievalToolAuthority,
+  beginRetrievalToolAttempt,
+  retrievalToolConfiguration,
+} from './retrieval-tool-attempt.js';
 import {
   assertMemoryToolAuthority,
   beginMemoryToolAttempt,
@@ -252,6 +258,12 @@ function withAround(
         });
       }
       const request = Object.freeze(parsedRequest.data);
+      assertRetrievalToolAuthority(
+        request,
+        registry,
+        registry.get(request.name),
+        allowHostToolContext,
+      );
       assertMemoryToolAuthority(
         request,
         registry,
@@ -413,6 +425,7 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
 
       const tool = options.registry.get(request.name);
       assertMemoryToolAuthority(request, options.registry, tool, options.allowHostToolContext);
+      assertRetrievalToolAuthority(request, options.registry, tool, options.allowHostToolContext);
       const authority = assertAuthorizedTool(request, options.registry, tool);
       if (tool === undefined) {
         throw new ToolExecutionError('tool-not-found', `Tool "${request.name}" was not found`);
@@ -430,11 +443,12 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
 
       const controller = new AbortController();
       const memory = memoryToolConfiguration(tool);
+      const retrieval = retrievalToolConfiguration(tool);
       const invocationSignal = createCombinedSignal(request.signal, controller);
       const signal =
-        memory?.signal === undefined
+        (memory?.signal ?? retrieval?.signal) === undefined
           ? invocationSignal
-          : AbortSignal.any([invocationSignal, memory.signal]);
+          : AbortSignal.any([invocationSignal, (memory?.signal ?? retrieval?.signal)!]);
       const effectiveTimeoutMs = request.timeoutMs ?? timeoutMs;
       const publicContext = {
         signal,
@@ -457,6 +471,7 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
           : hostContext;
       const summaryContext = Object.freeze({ ...context });
       let memoryAttempt: ReturnType<typeof beginMemoryToolAttempt> | undefined;
+      let retrievalAttempt: ReturnType<typeof beginRetrievalToolAttempt> | undefined;
       let timedOut = false;
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
@@ -470,6 +485,13 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
           });
         }
         assertAuthorizedTool(request, options.registry, options.registry.get(request.name));
+        if (retrieval !== undefined)
+          assertRetrievalToolAuthority(
+            request,
+            options.registry,
+            options.registry.get(request.name),
+            options.allowHostToolContext,
+          );
         if (memory !== undefined)
           assertMemoryToolAuthority(
             request,
@@ -526,12 +548,21 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
           });
         }
 
+        if (retrieval !== undefined && retrievalAttempt === undefined)
+          retrievalAttempt = beginRetrievalToolAttempt({
+            definition: tool,
+            request,
+            registry: options.registry,
+            context,
+            summaryContext,
+            assertCurrent,
+          });
         if (authority !== undefined) {
           await checkHostAuthority();
           assertCurrent();
         }
         const toolWithApproval = tool as unknown as ToolDefinition<unknown, unknown>;
-        let forceApproval = false;
+        let forceApproval = retrieval?.forceApproval?.(inputResult.data) === true;
         if (options.policy !== undefined) {
           const { vote, cause, aborted } = await consultPolicy(options.policy, request, signal);
           if (aborted === true) {
@@ -551,7 +582,7 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
               cause === undefined ? undefined : { cause },
             );
           }
-          forceApproval = vote === 'ask';
+          forceApproval = forceApproval || vote === 'ask';
         }
         // A policy that asks makes Approval mandatory: for a tool without its own
         // Approval metadata, and in any permission mode.
@@ -582,11 +613,15 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
           }
           try {
             const endPreview =
-              memory?.classification === 'root-write' ? memoryAttempt!.beginPreview() : undefined;
+              memory?.classification === 'root-write'
+                ? memoryAttempt!.beginPreview()
+                : retrieval?.protected
+                  ? retrievalAttempt!.beginPreview()
+                  : undefined;
             try {
               const pendingSummary = approval.summarize(
                 inputResult.data,
-                memory === undefined ? { ...context } : summaryContext,
+                memory === undefined && retrieval === undefined ? { ...context } : summaryContext,
               );
               summary = isPromiseLike(pendingSummary) ? await pendingSummary : pendingSummary;
             } finally {
@@ -603,6 +638,8 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
                 cause: error,
               });
             }
+            if (retrieval !== undefined && isRetrievalError(error))
+              throw new ToolExecutionError(error.code, error.message);
             if (memory !== undefined && isMemoryError(error)) {
               throw new ToolExecutionError(error.code, error.message);
             }
@@ -666,9 +703,11 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
           }
           approved = true;
           if (memory?.classification === 'root-write') memoryAttempt!.approve();
+          if (retrieval?.protected) retrievalAttempt!.approve();
         }
 
         if (memory?.classification === 'root-write' && !approved) memoryAttempt!.automatic();
+        if (retrieval?.protected && !approved) retrievalAttempt!.automatic();
 
         let result: unknown;
         if (authority !== undefined) {
@@ -677,6 +716,7 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
         }
         const endExecution = beginAgentToolExecution(context, request);
         const endMemoryExecution = memoryAttempt?.beginExecute();
+        const endRetrievalExecution = retrievalAttempt?.beginExecute();
         try {
           result = await (tool as RegisteredToolDefinition).execute(inputResult.data, context);
         } catch (error: unknown) {
@@ -690,6 +730,8 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
               cause: error,
             });
           }
+          if (retrieval !== undefined && isRetrievalError(error))
+            throw new ToolExecutionError(error.code, error.message);
           if (memory !== undefined && isMemoryError(error)) {
             throw new ToolExecutionError(error.code, error.message);
           }
@@ -699,6 +741,7 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
             memory === undefined ? { cause: error } : undefined,
           );
         } finally {
+          endRetrievalExecution?.();
           endMemoryExecution?.();
           endExecution();
         }
@@ -729,6 +772,7 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
           ...limitUtf8(content, maxResultBytes),
         };
       } finally {
+        retrievalAttempt?.close();
         memoryAttempt?.close();
         if (timeoutId !== undefined) {
           clearTimeout(timeoutId);

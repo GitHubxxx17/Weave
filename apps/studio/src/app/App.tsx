@@ -97,6 +97,7 @@ import {
 } from '../features/plugins/plugin-catalog-context.js';
 import { PluginMarketplacePage } from '../features/plugins/plugin-marketplace-page.js';
 import { MemoryPage } from '../features/memory/MemoryPage.js';
+import { SearchPage } from '../features/retrieval/SearchPage.js';
 import { useSidePanelWidth } from '../features/panel/panel-resizer.js';
 import { contextWarnThreshold, latestContext } from '../features/panel/panel-data.js';
 import { formatTokens, sumUsage } from '../features/conversation/turn-stats.js';
@@ -158,7 +159,14 @@ type SessionRunHandle = {
 const idleRunState: SessionRunState = { status: 'idle', errorMessage: null };
 
 type ProductView =
-  'studio' | 'projects' | 'history' | 'archived' | 'settings' | 'marketplace' | 'memory';
+  | 'studio'
+  | 'projects'
+  | 'history'
+  | 'archived'
+  | 'settings'
+  | 'marketplace'
+  | 'memory'
+  | 'retrieval';
 type OpenMenu = 'project' | 'more' | 'context' | 'permission' | 'model' | null;
 
 type AgentSubmissionSnapshot = Readonly<
@@ -451,7 +459,7 @@ const statusLabels: Record<RunStatus, string> = {
 };
 
 const viewLabels: Record<
-  Exclude<ProductView, 'studio' | 'marketplace' | 'memory'>,
+  Exclude<ProductView, 'studio' | 'marketplace' | 'memory' | 'retrieval'>,
   { title: string; description: string }
 > = {
   projects: {
@@ -3495,7 +3503,7 @@ function StudioApp(): ReactElement {
   return (
     <main
       ref={shellRef}
-      className={`studio-shell studio-shell-fixed${activeView === 'studio' && !isActivityPanelOpen ? ' studio-shell-panel-collapsed' : ''}${activeView !== 'studio' && activeView !== 'settings' ? ' studio-shell-context-collapsed' : ''}${activeView === 'settings' ? ' studio-shell-settings' : ''}${activeView === 'marketplace' || activeView === 'memory' ? ' studio-shell-marketplace' : ''}`}
+      className={`studio-shell studio-shell-fixed${activeView === 'studio' && !isActivityPanelOpen ? ' studio-shell-panel-collapsed' : ''}${activeView !== 'studio' && activeView !== 'settings' ? ' studio-shell-context-collapsed' : ''}${activeView === 'settings' ? ' studio-shell-settings' : ''}${activeView === 'marketplace' || activeView === 'memory' || activeView === 'retrieval' ? ' studio-shell-marketplace' : ''}`}
       style={{ '--panel-width': `${panelWidth}px` } as CSSProperties}
     >
       {openMenu !== null ? (
@@ -3528,6 +3536,15 @@ function StudioApp(): ReactElement {
           >
             <FolderKanban aria-hidden="true" />
             <small>项目</small>
+          </button>
+          <button
+            className={`workspace-nav-button${activeView === 'retrieval' ? ' workspace-nav-button-active' : ''}`}
+            type="button"
+            aria-current={activeView === 'retrieval' ? 'page' : undefined}
+            onClick={() => selectProductView('retrieval')}
+          >
+            <Search aria-hidden="true" />
+            <small>搜索</small>
           </button>
           <button
             className={`workspace-nav-button workspace-nav-marketplace${activeView === 'marketplace' ? ' workspace-nav-button-active' : ''}`}
@@ -3623,8 +3640,12 @@ function StudioApp(): ReactElement {
         <aside
           className="session-rail"
           aria-label="会话列表"
-          hidden={activeView === 'marketplace' || activeView === 'memory'}
-          inert={activeView === 'marketplace' || activeView === 'memory'}
+          hidden={
+            activeView === 'marketplace' || activeView === 'memory' || activeView === 'retrieval'
+          }
+          inert={
+            activeView === 'marketplace' || activeView === 'memory' || activeView === 'retrieval'
+          }
         >
           <div className={`menu-anchor${openMenu === 'project' ? ' menu-anchor-open' : ''}`}>
             <button
@@ -4660,7 +4681,9 @@ function StudioApp(): ReactElement {
           )}
         </form>
       </section>
-      {activeView === 'memory' ? (
+      {activeView === 'retrieval' ? (
+        <SearchPage selectedProjectId={activeProjectId} projects={projects} />
+      ) : activeView === 'memory' ? (
         <MemoryPage
           selectedProjectId={activeProjectId}
           verifiedSessionIds={projects.flatMap((project) =>

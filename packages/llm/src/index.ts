@@ -26,3 +26,12 @@ export type {
   SseParserState,
   StreamEvent,
 } from './types.js';
+
+export { createOpenAiEmbeddingClient, describeOpenAiEmbeddingBatches } from './openai-embedding.js';
+export type { OpenAiEmbeddingClientOptions } from './openai-embedding.js';
+export type {
+  EmbeddingBatch,
+  EmbeddingClient,
+  EmbeddingInput,
+  EmbeddingVector,
+} from './embedding-types.js';

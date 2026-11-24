@@ -288,6 +288,7 @@ export function createLocalExtensionSource(
             try {
               if (!(await source.recheck(prepared, signal)).valid) return false;
             } catch (cause: unknown) {
+              if (signal.aborted && cause === signal.reason) throw cause;
               if (managed !== undefined) managed.invalidateAuthoritySync(cause);
               throw cause;
             }

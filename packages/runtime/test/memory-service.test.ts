@@ -250,3 +250,69 @@ describe('Memory service local management and reviewed captures', () => {
     }
   });
 });
+
+describe('host-only Memory access evidence', () => {
+  it('captures disabled metadata without granting record reads', async () => {
+    const f = fixture();
+    f.setAccess({ scope: f.scope, level: 'disabled', settingRevision: 2 });
+    const input = {
+      projectId: f.scope.kind === 'project' ? f.scope.projectId : '',
+      signal: new AbortController().signal,
+    };
+    const capture = await f.service.reviewedSource.captureAccess(input);
+    expect(capture).toEqual({
+      projectId: input.projectId,
+      level: 'disabled',
+      settingRevision: 2,
+      liveEpoch: 0,
+    });
+    expect(Object.isFrozen(capture)).toBe(true);
+    expect(f.store.readSnapshot).not.toHaveBeenCalled();
+    f.service.reviewedSource.assertAccessCurrentSync(capture);
+    await expect(
+      f.service.reviewedSource.capture({ ...input, refs: [f.record.ref] }),
+    ).rejects.toMatchObject({ code: 'memory-disabled' });
+  });
+
+  it('rejects cloned, foreign, revoked, changed and closed access evidence', async () => {
+    const f = fixture();
+    const input = {
+      projectId: f.scope.kind === 'project' ? f.scope.projectId : '',
+      signal: new AbortController().signal,
+    };
+    const capture = await f.service.reviewedSource.captureAccess(input);
+    expect(() => f.service.reviewedSource.assertAccessCurrentSync({ ...capture })).toThrow();
+    expect(() => fixture().service.reviewedSource.assertAccessCurrentSync(capture)).toThrow();
+    f.setAccess({ scope: f.scope, level: 'disabled', settingRevision: 2 });
+    expect(() => f.service.reviewedSource.assertAccessCurrentSync(capture)).toThrow();
+    const disabled = await f.service.reviewedSource.captureAccess(input);
+    f.revokeLocal();
+    expect(() => f.service.reviewedSource.assertAccessCurrentSync(disabled)).toThrow();
+    f.service.closeSync();
+    expect(() => f.service.reviewedSource.assertAccessCurrentSync(disabled)).toThrow();
+  });
+
+  it('fences all project access evidence before a rolled back mutation', async () => {
+    const f = fixture();
+    const input = {
+      projectId: f.scope.kind === 'project' ? f.scope.projectId : '',
+      signal: new AbortController().signal,
+    };
+    const capture = await f.service.reviewedSource.captureAccess(input);
+    f.before.mockImplementation(() => {
+      expect(() => f.service.reviewedSource.assertAccessCurrentSync(capture)).toThrow();
+      return undefined;
+    });
+    f.rollback();
+    await expect(
+      f.service.local.review(f.scope, { requestId: randomUUID(), targetRef: f.record.ref }),
+    ).rejects.toMatchObject({ code: 'memory-persistence-error' });
+    expect(() => f.service.reviewedSource.assertAccessCurrentSync(capture)).toThrow();
+    expect(await f.service.reviewedSource.captureAccess(input)).toMatchObject({ liveEpoch: 1 });
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      f.service.reviewedSource.captureAccess({ ...input, signal: controller.signal }),
+    ).rejects.toMatchObject({ code: 'memory-cancelled' });
+  });
+});

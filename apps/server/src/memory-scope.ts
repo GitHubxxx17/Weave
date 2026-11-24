@@ -112,8 +112,16 @@ export function createMemoryScopeResolver(options: MemoryScopeResolverOptions) {
   async function resolveAgentScope(
     caller: AgentToolInvocationAuthority,
   ): Promise<MemoryScopeEvidence> {
+    return captureAgentProjectMembership(caller, () => memoryCallerAuthority(caller));
+  }
+
+  // Each host tool bridge supplies its own exact caller validation.
+  async function captureAgentProjectMembership(
+    caller: AgentToolInvocationAuthority,
+    requireCaller: () => ReturnType<typeof memoryCallerAuthority>,
+  ): Promise<MemoryScopeEvidence> {
     try {
-      const token = memoryCallerAuthority(caller);
+      const token = requireCaller();
       const identity = describeAgentToolAuthority(token).identity;
       const parentSessionId = agentToolAuthorityParent(token);
       if (identity !== caller.identity) throw forbidden();
@@ -188,7 +196,7 @@ export function createMemoryScopeResolver(options: MemoryScopeResolverOptions) {
           throw forbidden();
       }
       const assertCurrentSync = () => {
-        if (memoryCallerAuthority(caller) !== token) throw forbidden();
+        if (requireCaller() !== token) throw forbidden();
         evidence.assertCurrentSync();
         parentEvidence?.assertCurrentSync();
       };
@@ -201,6 +209,7 @@ export function createMemoryScopeResolver(options: MemoryScopeResolverOptions) {
   }
   return {
     captureMemorySessionScope,
+    captureAgentProjectMembership,
     withMemoryMembershipMutation,
     resolveLocalScope,
     resolveAgentScope,

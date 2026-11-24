@@ -10,6 +10,8 @@ import {
   type PanelAppOptions,
 } from './plugin-panel-api.js';
 import { Hono } from 'hono';
+import { registerRetrievalRoutes, type RetrievalRouteOptions } from './retrieval-routes.js';
+import { registerRetrievalGuard } from './retrieval-guard.js';
 import { registerMemoryRoutes, type MemoryAppOptions } from './memory-api.js';
 import { cors } from 'hono/cors';
 import { z } from 'zod';
@@ -62,6 +64,8 @@ export interface AppOptions
     SkillAppOptions,
     PanelAppOptions,
     MemoryAppOptions {
+  readonly retrievalService?: RetrievalRouteOptions['service'];
+  readonly retrievalEmbedding?: RetrievalRouteOptions['embedding'];
   /**
    * Exact browser origin allowed to call the local control plane.
    *
@@ -89,6 +93,7 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
     await next();
   });
 
+  registerRetrievalGuard(app, studioOrigin);
   registerAgentExecutionGuards(app, studioOrigin, ['/memory', '/memory/*']);
   registerPanelGuards(app, options ?? {});
   registerAgentExecutionGuards(app, studioOrigin);
@@ -119,6 +124,10 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
     return context.json(body, running ? 200 : 503);
   });
 
+  registerRetrievalRoutes(app, {
+    service: options?.retrievalService,
+    embedding: options?.retrievalEmbedding,
+  });
   registerMemoryRoutes(app, options ?? {});
   registerApprovalRoutes(app, runtime, options ?? {});
   registerWorkspaceRoutes(app, workspaceOptions);

@@ -133,6 +133,15 @@ export interface ReviewedMemoryCapture {
     readonly content: MemoryContent;
   }[];
 }
+
+/** Host-only evidence for filtering indexed memory before ranking. */
+export interface ReviewedMemoryAccessCapture {
+  readonly projectId: string;
+  readonly level: MemoryAccessLevel;
+  readonly settingRevision: number;
+  readonly liveEpoch: number;
+}
+
 export interface ReviewedMemorySource {
   capture(input: {
     readonly projectId: string;
@@ -140,6 +149,11 @@ export interface ReviewedMemorySource {
     readonly signal: AbortSignal;
   }): Promise<ReviewedMemoryCapture>;
   assertCurrentSync(capture: ReviewedMemoryCapture): void;
+  captureAccess(input: {
+    readonly projectId: string;
+    readonly signal: AbortSignal;
+  }): Promise<ReviewedMemoryAccessCapture>;
+  assertAccessCurrentSync(capture: ReviewedMemoryAccessCapture): void;
 }
 
 export interface MemoryServiceOptions {

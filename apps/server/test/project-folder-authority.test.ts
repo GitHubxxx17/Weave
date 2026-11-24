@@ -219,3 +219,97 @@ describe('Project folder authority', () => {
     expect(secondRejected).toBe(true);
   });
 });
+
+describe('Project-only folder authority', () => {
+  it('admits an existing Project without a Session and pins its canonical root', async () => {
+    const { store, project, a } = await fixture();
+    const authority = createProjectFolderAuthority(store);
+    const binding = await authority.captureProject(project.id);
+    expect(authority.projectRoot(binding)).toBe(await realpath(a));
+    expect(authority.snapshot(binding)).toMatchObject({ projectId: project.id, folderRevision: 0 });
+    await authority.checkpointProject(binding);
+    await expect(authority.withProjectAuthority(binding, () => 'admitted')).resolves.toBe(
+      'admitted',
+    );
+  });
+
+  it('rejects an unknown Project, a missing folder and fabricated bindings', async () => {
+    const { authority, project } = await fixture(false);
+    await expect(authority.captureProject(project.id)).rejects.toMatchObject({
+      code: 'task-project-authority-unavailable',
+    });
+    await expect(
+      authority.captureProject('00000000-0000-4000-8000-000000000000'),
+    ).rejects.toMatchObject({ code: 'task-project-authority-unavailable' });
+    await expect(authority.checkpointProject({} as ProjectFolderBinding)).rejects.toMatchObject({
+      code: 'task-project-authority-invalid',
+    });
+  });
+
+  it('does not interchange Session and Project bindings', async () => {
+    const { authority, project } = await fixture();
+    const local = await authority.captureProject(project.id);
+    const session = await authority.capture('parent');
+    await expect(authority.checkpointProject(session)).rejects.toMatchObject({
+      code: 'task-project-authority-invalid',
+    });
+    await expect(authority.resolve(local, 'child')).rejects.toMatchObject({
+      code: 'task-project-authority-invalid',
+    });
+    await expect(
+      authority.withAuthority(local, 'parent', async () => undefined),
+    ).rejects.toMatchObject({ code: 'task-project-authority-invalid' });
+    expect(() => authority.assertCapturedFor(local, 'parent')).toThrow();
+    await expect(authority.checkpointProject({ ...local })).rejects.toMatchObject({
+      code: 'task-project-authority-invalid',
+    });
+  });
+
+  it('keeps independent bindings alive until each release and fences both on folder changes', async () => {
+    const { authority, project, a, b } = await fixture();
+    const preview = await authority.captureProject(project.id);
+    const job = await authority.captureProject(project.id);
+    authority.release(preview);
+    await authority.checkpointProject(job);
+    await authority.updateFolder(project.id, b);
+    await authority.updateFolder(project.id, a);
+    expect(authority.signal(job).aborted).toBe(true);
+    await expect(authority.checkpointProject(job)).rejects.toMatchObject({
+      code: 'task-project-folder-changed',
+    });
+    expect(authority.snapshot(await authority.captureProject(project.id)).folderRevision).toBe(2);
+  });
+
+  it('detects direct folder revisions and root replacement while retaining renames', async () => {
+    const { authority, store, project, a } = await fixture();
+    const binding = await authority.captureProject(project.id);
+    await store.renameProject(project.id, 'Renamed');
+    await authority.checkpointProject(binding);
+    await store.updateProjectFolder(project.id, a);
+    await expect(authority.checkpointProject(binding)).rejects.toMatchObject({
+      code: 'task-project-folder-changed',
+    });
+    const next = await authority.captureProject(project.id);
+    await rename(a, a + '-old');
+    await mkdir(a);
+    await expect(authority.withProjectAuthority(next, () => 'effect')).rejects.toMatchObject({
+      code: 'task-project-root-changed',
+    });
+  });
+
+  it('rejects asynchronous admission callbacks and serializes behind a folder update', async () => {
+    const { authority, project, b } = await fixture();
+    const binding = await authority.captureProject(project.id);
+    await expect(
+      authority.withProjectAuthority(binding, () => Promise.resolve('bad')),
+    ).rejects.toMatchObject({ code: 'task-project-authority-invalid' });
+    const mutation = authority.updateFolder(project.id, b);
+    let effect = false;
+    const admission = authority.withProjectAuthority(binding, () => {
+      effect = true;
+    });
+    await mutation;
+    await expect(admission).rejects.toMatchObject({ code: 'task-project-folder-changed' });
+    expect(effect).toBe(false);
+  });
+});
