@@ -438,7 +438,10 @@ Shutdown stops accepting HTTP connections and aborts/drains the facade before
 closing stores, so cancellation can still persist terminal Session facts while
 an SSE response or Approval is pending.
 
-Approval control requests follow a separate path:
+Approval control requests follow a separate path. `GET /approvals/stream` is
+`Cache-Control: no-store`, sends an SSE comment heartbeat (`: keep-alive`) every
+15 seconds, and Studio ignores comment frames, reconnects with exponential
+backoff (300 ms doubling, capped at 5 s) and drops frames over 1 MiB:
 
 ```mermaid
 flowchart LR

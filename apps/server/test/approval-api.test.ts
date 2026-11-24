@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createRuntime, type ApprovalBroker, type ApprovalDecision } from '@weave/runtime';
 import { createApp } from '../src/app.js';
 import { approvalBrokerService, createServerRuntime } from '../src/runtime.js';
@@ -211,7 +211,7 @@ describe('Approval HTTP API', () => {
 
       expect(response.status).toBe(200);
       expect(response.headers.get('content-type')).toContain('text/event-stream');
-      expect(response.headers.get('cache-control')).toBe('no-cache');
+      expect(response.headers.get('cache-control')).toBe('no-store');
       expect(response.headers.get('connection')).toBe('keep-alive');
 
       const reader = response.body?.getReader();
@@ -260,6 +260,29 @@ describe('Approval HTTP API', () => {
       await expect(pending.decision).rejects.toMatchObject({ code: 'approval-cancelled' });
     } finally {
       await stop();
+    }
+  });
+
+  it('sends SSE comment heartbeats and clears the timer when the reader is cancelled', async () => {
+    vi.useFakeTimers();
+    const { app, stop } = await createApprovalApp();
+    try {
+      const response = await app.request('/approvals/stream');
+      const reader = response.body?.getReader();
+      if (reader === undefined) {
+        throw new Error('Expected an SSE response body');
+      }
+      await readStreamChunk(reader);
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      await expect(readStreamChunk(reader)).resolves.toBe(': keep-alive\n\n');
+
+      await reader.cancel();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      await stop();
+      vi.useRealTimers();
     }
   });
 

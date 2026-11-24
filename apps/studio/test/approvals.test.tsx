@@ -114,6 +114,75 @@ describe('Approval API client', () => {
     expect(updates).toEqual([{ ...pendingWrite, status: 'approved' }]);
   });
 
+  it('ignores SSE comment heartbeats between frames', async () => {
+    const controller = new AbortController();
+    const snapshots: (readonly ApprovalRequest[])[] = [];
+    const fetchMock = vi.fn(async () =>
+      sseResponse([
+        ': keep-alive\n\n',
+        `event: approval.snapshot\ndata: ${JSON.stringify({ approvals: [pendingWrite] })}\n\n`,
+        ': keep-alive\n\n',
+      ]),
+    );
+    const done = subscribeApprovals(
+      {
+        onSnapshot: (approvals) => {
+          snapshots.push(approvals);
+          controller.abort();
+        },
+        onUpdate: () => undefined,
+      },
+      { signal: controller.signal, fetch: fetchMock, retryDelayMs: 1 },
+    );
+    await done;
+    expect(snapshots).toEqual([[pendingWrite]]);
+  });
+
+  it('backs off exponentially up to 5 seconds and resets after a successful connection', async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const delays: number[] = [];
+      let calls = 0;
+      let lastAt = Date.now();
+      const fetchMock = vi.fn(async () => {
+        const now = Date.now();
+        if (calls > 0) delays.push(now - lastAt);
+        lastAt = now;
+        calls += 1;
+        if (calls === 9) controller.abort();
+        if (calls === 7) return sseResponse([]);
+        throw new TypeError('offline');
+      });
+      const done = subscribeApprovals(
+        { onSnapshot: () => undefined, onUpdate: () => undefined },
+        { signal: controller.signal, fetch: fetchMock },
+      );
+      await vi.advanceTimersByTimeAsync(60_000);
+      await done;
+      expect(delays.slice(0, 6)).toEqual([300, 600, 1200, 2400, 4800, 5000]);
+      expect(delays[6]).toBe(300);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reconnects instead of buffering without bound on an oversized frame', async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    const big = 'x'.repeat(2 * 1024 * 1024);
+    const fetchMock = vi.fn(async () => {
+      calls += 1;
+      if (calls >= 2) controller.abort();
+      return sseResponse([`event: approval.snapshot\ndata: ${big}`]);
+    });
+    await subscribeApprovals(
+      { onSnapshot: () => undefined, onUpdate: () => undefined },
+      { signal: controller.signal, fetch: fetchMock, retryDelayMs: 1 },
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('posts a decision to the desktop Server URL and validates the response', async () => {
     window.weaveDesktop = { isDesktop: true, serverUrl: 'http://127.0.0.1:46321' };
     const fetchMock = vi.fn(

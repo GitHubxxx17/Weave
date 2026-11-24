@@ -9,6 +9,8 @@ import {
   type RuntimeService,
 } from '@weave/runtime';
 
+/** Interval of the SSE comment heartbeat on `GET /approvals/stream`. */
+const approvalHeartbeatMs = 15_000;
 const approvalIdSchema = z.string().min(1);
 const decisionBodySchema = z
   .object({
@@ -135,12 +137,17 @@ export function registerApprovalRoutes(
     let abortHandler: (() => void) | undefined;
     let cleanedUp = false;
     let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
 
     const cleanup = (): void => {
       if (cleanedUp) {
         return;
       }
       cleanedUp = true;
+      if (heartbeat !== undefined) {
+        clearInterval(heartbeat);
+        heartbeat = undefined;
+      }
       unsubscribe();
       unsubscribe = (): void => undefined;
       if (abortHandler !== undefined) {
@@ -185,7 +192,16 @@ export function registerApprovalRoutes(
           );
         } catch {
           close();
+          return;
         }
+        // SSE comment lines keep idle connections alive through proxies; clients ignore them.
+        heartbeat = setInterval(() => {
+          try {
+            controller.enqueue(encoder.encode(': keep-alive\n\n'));
+          } catch {
+            close();
+          }
+        }, approvalHeartbeatMs);
       },
       cancel(): void {
         cleanup();
@@ -194,7 +210,7 @@ export function registerApprovalRoutes(
 
     return new Response(stream, {
       headers: {
-        'Cache-Control': 'no-cache',
+        'Cache-Control': 'no-store',
         Connection: 'keep-alive',
         'Content-Type': 'text/event-stream',
       },

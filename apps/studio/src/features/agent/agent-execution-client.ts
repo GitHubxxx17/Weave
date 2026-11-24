@@ -31,17 +31,19 @@ function checkAbort(signal?: AbortSignal): void {
   if (signal?.aborted) throw new DOMException('Observation stopped', 'AbortError');
 }
 
+/** Exponential backoff: `baseMs` doubling per attempt, capped at 5 seconds. */
+export function executionRetryDelayMs(attempt: number, baseMs = 300): number {
+  return Math.min(baseMs * 2 ** Math.min(attempt, 5), 5000);
+}
+
 /** Abortable backoff controls only the local observer, never the execution. */
 export function waitForExecutionRetry(attempt: number, signal?: AbortSignal): Promise<void> {
   checkAbort(signal);
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => {
-        signal?.removeEventListener('abort', abort);
-        resolve();
-      },
-      Math.min(300 * 2 ** Math.min(attempt, 5), 5000),
-    );
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    }, executionRetryDelayMs(attempt));
     const abort = (): void => {
       clearTimeout(timer);
       reject(new DOMException('Observation stopped', 'AbortError'));

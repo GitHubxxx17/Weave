@@ -1,7 +1,11 @@
 import { z } from 'zod';
 
 import { parseSseFrame } from '../agent/agent-stream.js';
+import { executionRetryDelayMs } from '../agent/agent-execution-client.js';
 import { runtimeApiUrl } from '../runtime/runtime-bridge.js';
+
+/** Largest single SSE frame (or unterminated buffer) accepted from the Server. */
+const maxFrameChars = 1024 * 1024;
 
 /** Approval snapshot as exposed by `GET /approvals/stream`. */
 export const approvalRequestSchema = z.object({
@@ -36,7 +40,7 @@ export interface ApprovalStreamHandlers {
 export interface ApprovalStreamOptions {
   readonly signal: AbortSignal;
   readonly fetch?: typeof globalThis.fetch;
-  /** Delay before reconnecting after the stream ends or fails. */
+  /** Base reconnect delay; doubles per failed attempt up to 5 seconds. */
   readonly retryDelayMs?: number;
 }
 
@@ -95,7 +99,8 @@ export async function subscribeApprovals(
   options: ApprovalStreamOptions,
 ): Promise<void> {
   const fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
-  const retryDelayMs = options.retryDelayMs ?? 2000;
+  const retryBaseMs = options.retryDelayMs ?? 300;
+  let attempt = 0;
 
   while (!options.signal.aborted) {
     try {
@@ -104,28 +109,42 @@ export async function subscribeApprovals(
         signal: options.signal,
       });
       if (response.ok && response.body !== null) {
+        attempt = 0;
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
-        for (;;) {
-          const chunk = await reader.read();
-          if (chunk.done) {
-            break;
+        try {
+          for (;;) {
+            const chunk = await reader.read();
+            if (chunk.done) {
+              break;
+            }
+            buffer += decoder.decode(chunk.value, { stream: true });
+            let match = /\r?\n\r?\n/.exec(buffer);
+            while (match !== null) {
+              if (match.index > maxFrameChars) {
+                throw new Error('approval stream frame too large');
+              }
+              dispatch(buffer.slice(0, match.index), handlers);
+              buffer = buffer.slice(match.index + match[0].length);
+              match = /\r?\n\r?\n/.exec(buffer);
+            }
+            if (buffer.length > maxFrameChars) {
+              throw new Error('approval stream frame too large');
+            }
           }
-          buffer += decoder.decode(chunk.value, { stream: true });
-          let index = buffer.search(/\r?\n\r?\n/);
-          while (index !== -1) {
-            const delimiter = buffer.slice(index).match(/^\r?\n\r?\n/)?.[0] ?? '\n\n';
-            dispatch(buffer.slice(0, index), handlers);
-            buffer = buffer.slice(index + delimiter.length);
-            index = buffer.search(/\r?\n\r?\n/);
-          }
+        } finally {
+          await reader.cancel().catch(() => undefined);
         }
       }
     } catch {
-      // Network errors and aborts fall through to the retry or exit below.
+      // Network errors, protocol errors and aborts fall through to the retry or exit below.
     }
-    await waitFor(retryDelayMs, options.signal);
+    if (options.signal.aborted) {
+      return;
+    }
+    await waitFor(executionRetryDelayMs(attempt, retryBaseMs), options.signal);
+    attempt += 1;
   }
 }
 
