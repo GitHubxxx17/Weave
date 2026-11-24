@@ -86,6 +86,7 @@ export const panelDescriptors: readonly PanelDescriptor[] = [
         onSetFolder={context.onSetFolder}
         onAddFile={context.onAddFile}
         selectedFiles={context.selectedFiles}
+        onViewerFileChange={context.onViewerFileChange}
       />
     ),
   },
