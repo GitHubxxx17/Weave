@@ -227,6 +227,10 @@ export function PluginTrustDialog({
       )}
       <section aria-label="插件声明">
         <h3>它声明了</h3>
+        <p className="plugin-declaration-note">
+          这些是插件自己声明的用途。除服务访问外，Weave
+          不会在运行时强制限制；信任插件等于信任它的全部代码。
+        </p>
         <ul className="plugin-declaration-list" aria-label="钩子与权限影响">
           {rows.map((row) => (
             <li

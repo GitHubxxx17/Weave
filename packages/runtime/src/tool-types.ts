@@ -76,9 +76,10 @@ export interface ToolDefinition<TInput = unknown, TOutput = unknown> {
   /** Runtime validator for parsed JSON arguments. */
   readonly inputSchema: z.ZodType<TInput>;
   /**
-   * Whether the tool only reads state. Read-only runs expose and execute only
-   * tools with `readOnly: true`; the default is `false` so an undeclared
-   * plugin tool is never treated as safe.
+   * Whether the tool only reads state. It is currently used only to grant
+   * read-only access to delegated sub-tasks; permission modes do not filter
+   * tools by it. The default is `false` so an undeclared plugin tool is never
+   * treated as safe.
    */
   readonly readOnly?: boolean | undefined;
   /** Optional approval gate evaluated before `execute` is called. */
@@ -107,7 +108,8 @@ export interface ToolExecutionRequest {
   readonly signal?: AbortSignal | undefined;
   /** Request-specific timeout in milliseconds. */
   readonly timeoutMs?: number | undefined;
-  /** Permission mode of the calling run; defaults to `workspace`. */
+  /** Permission mode of the calling run; defaults to `ask`. All modes expose
+   * every tool; the mode only decides which protected calls need Approval. */
   readonly permissionMode?: ToolPermissionMode | undefined;
 }
 

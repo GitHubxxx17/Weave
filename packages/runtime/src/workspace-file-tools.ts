@@ -462,7 +462,8 @@ export function createWorkspaceFileTools(options: WorkspaceFileToolOptions): Wor
     description:
       'Create a new UTF-8 text file inside the project folder; missing parent directories ' +
       'are created. To replace an existing file entirely pass overwrite: true, but prefer ' +
-      'edit_file for changes to existing files. Every write waits for user approval.',
+      'edit_file for changes to existing files. Depending on the session permission mode, ' +
+      'the user may be asked to approve the write.',
     parameters: {
       type: 'object',
       properties: {
@@ -510,8 +511,8 @@ export function createWorkspaceFileTools(options: WorkspaceFileToolOptions): Wor
     description:
       'Replace exact text in an existing file inside the project folder. oldText must match ' +
       'the file verbatim, including indentation and line breaks, and must occur once unless ' +
-      'replaceAll is true; copy it from read_file output. Every edit waits for user approval, ' +
-      'which shows the diff.',
+      'replaceAll is true; copy it from read_file output. Depending on the session permission mode, ' +
+      'the user may be asked to approve the edit; the approval shows the diff.',
     parameters: {
       type: 'object',
       properties: {

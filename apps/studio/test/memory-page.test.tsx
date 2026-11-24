@@ -104,7 +104,7 @@ describe('Memory management page', () => {
     const f = setup();
     fireEvent.click(await screen.findByRole('button', { name: '查看 Team preference' }));
     await screen.findByRole('heading', { name: 'Team preference' });
-    expect(screen.getByText(/已停用使用/)).toBeDefined();
+    expect(screen.getByText(/已停用：Agent 不能读取或写入/)).toBeDefined();
     expect(screen.getByRole('button', { name: '编辑记忆' })).toBeDefined();
     expect(document.querySelector('script')).toBeNull();
     expect(document.querySelector('a[href^="file:"]')).toBeNull();
