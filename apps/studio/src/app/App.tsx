@@ -470,12 +470,6 @@ const viewLabels: Record<
   },
 };
 
-const contextOptions = [
-  ['当前文件', Files],
-  ['Git 变更', GitBranch],
-  ['项目目录', FolderOpen],
-] as const satisfies readonly (readonly [string, LucideIcon])[];
-
 type PermissionOption = {
   readonly value: 'ask' | 'trust' | 'yolo';
   readonly label: string;
@@ -735,7 +729,7 @@ function StudioApp(): ReactElement {
   const [selectedModel, setSelectedModel] = useState(
     fallbackProviderSettings.providers[0]?.defaultModel ?? '',
   );
-  const [selectedContexts, setSelectedContexts] = useState<readonly string[]>([]);
+  const [viewerFilePath, setViewerFilePath] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [providerForm, setProviderForm] = useState<ProviderFormState | null>(null);
   const [providerFormError, setProviderFormError] = useState<string | null>(null);
@@ -3144,8 +3138,11 @@ function StudioApp(): ReactElement {
     setNotice(null);
   }
 
-  function chooseContext(context: string): void {
-    setSelectedContexts((current) => (current.includes(context) ? current : [...current, context]));
+  function addViewerFileContext(): void {
+    if (viewerFilePath !== null) {
+      const result = composerDraft.addFile(composerDraft.owner, viewerFilePath);
+      if (result === 'full') setNotice('最多添加 8 个文件，请先移除文件。');
+    }
     setOpenMenu(null);
   }
 
@@ -4058,22 +4055,40 @@ function StudioApp(): ReactElement {
                         role="menu"
                         aria-label="添加上下文"
                       >
-                        {contextOptions.map(([label, Icon]) => (
-                          <button
-                            type="button"
-                            role="menuitem"
-                            key={label}
-                            onClick={() => chooseContext(label)}
-                          >
-                            <span className="menu-icon">
-                              <Icon aria-hidden="true" />
-                            </span>
-                            {label}
-                            {selectedContexts.includes(label) ? (
-                              <Check className="menu-check" aria-hidden="true" />
-                            ) : null}
-                          </button>
-                        ))}
+                        <button
+                          type="button"
+                          role="menuitem"
+                          disabled={
+                            viewerFilePath === null ||
+                            composerDraft.draft.files.length >= 8 ||
+                            composerDraft.draft.files.some((file) => file.path === viewerFilePath)
+                          }
+                          title={viewerFilePath ?? '先在文件面板打开文件'}
+                          onClick={addViewerFileContext}
+                        >
+                          <span className="menu-icon">
+                            <Files aria-hidden="true" />
+                          </span>
+                          当前文件
+                          {viewerFilePath !== null &&
+                          composerDraft.draft.files.some((file) => file.path === viewerFilePath) ? (
+                            <Check className="menu-check" aria-hidden="true" />
+                          ) : null}
+                        </button>
+                        <button type="button" role="menuitem" disabled>
+                          <span className="menu-icon">
+                            <GitBranch aria-hidden="true" />
+                          </span>
+                          Git 变更
+                          <small>即将推出</small>
+                        </button>
+                        <button type="button" role="menuitem" disabled>
+                          <span className="menu-icon">
+                            <FolderOpen aria-hidden="true" />
+                          </span>
+                          项目目录
+                          <small>即将推出</small>
+                        </button>
                       </div>
                     ) : null}
                   </div>
@@ -4156,22 +4171,6 @@ function StudioApp(): ReactElement {
                       event.target.value = '';
                     }}
                   />
-                  {selectedContexts.map((context) => (
-                    <span className="context-chip" key={context}>
-                      {context}
-                      <button
-                        type="button"
-                        aria-label={`移除${context}`}
-                        onClick={() =>
-                          setSelectedContexts((current) =>
-                            current.filter((item) => item !== context),
-                          )
-                        }
-                      >
-                        <X aria-hidden="true" />
-                      </button>
-                    </span>
-                  ))}
                 </div>
                 <div className="composer-controls">
                   <ConnectedContextMeter
@@ -4664,6 +4663,7 @@ function StudioApp(): ReactElement {
         onCollapse={() => setIsActivityPanelOpen(false)}
         context={{
           fileOwnerKey: JSON.stringify(composerDraft.owner),
+          onViewerFileChange: setViewerFilePath,
           selectedFiles: composerDraft.draft.files.map(({ path }) => path),
           ...(canCompose
             ? {

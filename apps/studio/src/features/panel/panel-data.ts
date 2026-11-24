@@ -44,6 +44,7 @@ export interface PanelContext {
   readonly onAddFile?: ((path: string) => void) | undefined;
   readonly selectedFiles?: readonly string[] | undefined;
   readonly fileOwnerKey?: string | undefined;
+  readonly onViewerFileChange?: ((path: string | null) => void) | undefined;
   readonly onJumpToMessage: (messageId: string) => void;
 }
 

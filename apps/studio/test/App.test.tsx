@@ -4487,8 +4487,14 @@ describe('Studio Agent Chat', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '添加上下文' }));
     expect(screen.getByRole('menu', { name: '添加上下文' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Git 变更' }));
-    expect(screen.getByText('Git 变更')).toBeTruthy();
+    for (const name of [/Git 变更/, /项目目录/]) {
+      const item = screen.getByRole('menuitem', { name }) as HTMLButtonElement;
+      expect(item.disabled).toBe(true);
+      expect(item.textContent).toContain('即将推出');
+    }
+    expect((screen.getByRole('menuitem', { name: '当前文件' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
   });
 
   it('ignores late events and errors after a settled run is replaced', async () => {
@@ -5659,6 +5665,34 @@ describe('explicit project file context', () => {
     fireEvent.click(screen.getByRole('button', { name: '移除文件 a.ts' }));
     fireEvent.click(screen.getByRole('button', { name: '添加到消息 a.ts' }));
     expect(screen.getAllByRole('button', { name: '移除文件 a.ts' })).toHaveLength(1);
+  });
+  it('adds the file open in the viewer as a file ref via the context menu and sends it', async () => {
+    fileRoutes();
+    streamAgentRunMock.mockResolvedValue(undefined);
+    await renderApp();
+    fireEvent.click(screen.getByRole('tab', { name: '文件' }));
+    fireEvent.click(await screen.findByRole('treeitem', { name: 'a.ts' }));
+    await screen.findByRole('button', { name: '添加到消息 a.ts' });
+    fireEvent.click(screen.getByRole('button', { name: '添加上下文' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '当前文件' }));
+    expect(screen.getAllByRole('button', { name: '移除文件 a.ts' })).toHaveLength(1);
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: 'see file' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(streamAgentRunMock).toHaveBeenCalledOnce());
+    expect(streamAgentRunMock.mock.calls[0]?.[0].files).toEqual([{ path: 'a.ts' }]);
+    await waitFor(() => expect(screen.queryByRole('button', { name: '移除文件 a.ts' })).toBeNull());
+  });
+  it('does not send files when the current-file context was not chosen', async () => {
+    fileRoutes();
+    streamAgentRunMock.mockResolvedValue(undefined);
+    await renderApp();
+    fireEvent.click(screen.getByRole('tab', { name: '文件' }));
+    fireEvent.click(await screen.findByRole('treeitem', { name: 'a.ts' }));
+    await screen.findByRole('button', { name: '添加到消息 a.ts' });
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: 'plain' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(streamAgentRunMock).toHaveBeenCalledOnce());
+    expect(streamAgentRunMock.mock.calls[0]?.[0].files).toBeUndefined();
   });
   it('sends ordinary @path text without adding any logical file ref', async () => {
     fileRoutes();

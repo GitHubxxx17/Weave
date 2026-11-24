@@ -74,6 +74,8 @@ export interface FileTreePanelProps {
   readonly onSetFolder: () => void;
   readonly onAddFile?: ((path: string) => void) | undefined;
   readonly selectedFiles?: readonly string[] | undefined;
+  /** Reports the file currently open in the viewer (`null` when none). */
+  readonly onViewerFileChange?: ((path: string | null) => void) | undefined;
 }
 
 /**
@@ -88,6 +90,7 @@ export function FileTreePanel({
   onSetFolder,
   onAddFile,
   selectedFiles = [],
+  onViewerFileChange,
 }: FileTreePanelProps): ReactElement {
   const [model, setModel] = useState<FileTreeModel>(() => createFileTreeModel([]));
   const [treeRevision, setTreeRevision] = useState(0);
@@ -106,6 +109,12 @@ export function FileTreePanel({
   const [filter, setFilter] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
   const [contentSelectionRevision, setContentSelectionRevision] = useState(0);
+  const viewerChangeRef = useRef(onViewerFileChange);
+  viewerChangeRef.current = onViewerFileChange;
+  useEffect(() => {
+    viewerChangeRef.current?.(selected);
+  }, [selected]);
+  useEffect(() => () => viewerChangeRef.current?.(null), []);
   const [content, setContent] = useState<FileContent | null>(null);
   const [contentStatus, setContentStatus] = useState<LoadStatus>('idle');
   const [contentError, setContentError] = useState('');

@@ -304,6 +304,10 @@ refs, and projects only exact started user-message summaries. Runtime owns the
 bounded rooted capture helper and the core `captureFiles` admission port; Server
 resolves authoritative Project/Session membership and composes that port. Exact
 request replay precedes capture, and queue promotion never rereads accepted files.
+The Composer “添加上下文” menu's “当前文件” item adds the file open in the file
+panel to these same refs; “Git 变更” and “项目目录” stay disabled until a
+[separate design](../superpowers/specs/2026-11-24-composer-context-attachments-design.md)
+adds frozen contexts.
 
 The Runner validates the durable claimed execution and exact input inside Turn
 admission before starting any captured request, then renders saved file content
