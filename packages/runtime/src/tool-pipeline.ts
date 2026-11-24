@@ -586,8 +586,16 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
         }
         // A policy that asks makes Approval mandatory: for a tool without its own
         // Approval metadata, and in any permission mode.
+        // `appliesTo` lets a tool protect only some inputs; a call it skips is
+        // treated as a tool without Approval metadata.
+        const ownApproval = toolWithApproval.approval;
         const approval =
-          toolWithApproval.approval ?? (forceApproval ? policyApproval(request) : undefined);
+          ownApproval !== undefined &&
+          (ownApproval.appliesTo === undefined || ownApproval.appliesTo(inputResult.data))
+            ? ownApproval
+            : forceApproval
+              ? policyApproval(request)
+              : undefined;
         let approved = false;
         if (
           approval !== undefined &&
