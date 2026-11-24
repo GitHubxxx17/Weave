@@ -37,6 +37,22 @@ export function resolvePreviewUrl(input: string): ResolvedUrl {
   return { url: parsed.toString() };
 }
 
+const crossOriginSandbox = 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals';
+const sameOriginSandbox = 'allow-scripts allow-forms allow-popups allow-modals';
+
+/**
+ * Same-origin pages must not get `allow-same-origin` together with
+ * `allow-scripts`: that pair removes the sandbox and exposes Studio's DOM,
+ * storage and the desktop bridge to the embedded page.
+ */
+export function isSameOriginPreview(url: string, currentOrigin: string): boolean {
+  try {
+    return new URL(url).origin === currentOrigin;
+  } catch {
+    return true;
+  }
+}
+
 function readStoredUrl(storageKey: string): string {
   try {
     return globalThis.localStorage?.getItem(storageKey) ?? '';
@@ -76,6 +92,8 @@ export function PreviewPanel({ instanceId }: { readonly instanceId: string }): R
     }
   }
 
+  const isolated = loaded !== '' && isSameOriginPreview(loaded, globalThis.location.origin);
+
   return (
     <div className="preview-panel" role="region" aria-label="预览">
       <form className="preview-toolbar" onSubmit={submit}>
@@ -110,6 +128,11 @@ export function PreviewPanel({ instanceId }: { readonly instanceId: string }): R
           {error}
         </p>
       )}
+      {isolated ? (
+        <p className="preview-error" role="status" data-testid="preview-isolation-notice">
+          出于安全原因，与 Studio 同源的页面以隔离模式预览（不共享存储与桌面能力）。
+        </p>
+      ) : null}
       {loaded === '' ? (
         <div className="preview-empty">
           <span className="preview-empty-icon" aria-hidden="true">
@@ -125,7 +148,7 @@ export function PreviewPanel({ instanceId }: { readonly instanceId: string }): R
           title="网页预览"
           src={loaded}
           referrerPolicy="no-referrer"
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+          sandbox={isolated ? sameOriginSandbox : crossOriginSandbox}
         />
       )}
     </div>
