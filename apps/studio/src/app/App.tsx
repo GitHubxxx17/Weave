@@ -65,6 +65,8 @@ import {
 } from '../features/agent/agent-execution-types.js';
 import { ExecutionQueueList } from '../features/agent/execution-queue-list.js';
 import { useExecutionQueues } from '../features/agent/use-execution-queues.js';
+import { executionLaunchUnreachableCode } from '../features/agent/agent-stream-error.js';
+import { usePermissionMode } from './composer-preferences.js';
 import { useSessionSkills } from '../features/skills/use-session-skills.js';
 import { SkillPicker } from '../features/skills/skill-picker.js';
 import { sameSkill, skillRef } from '../features/skills/skill-types.js';
@@ -168,6 +170,16 @@ import { useWorkspaceNavigation } from './use-workspace-navigation.js';
 const workspaceApi = createWorkspaceApi();
 
 /** Studio's first local Agent workspace, combining chat state and stream events. */
+/** A send that never reached the Server; "重试" resends the frozen request with the same requestId. */
+type SendFailure = {
+  readonly sessionId: string;
+  readonly submission: AgentSubmissionSnapshot;
+  readonly requestId: string;
+  readonly submittedDraft: DraftCapture;
+  readonly selectedRevision: number;
+  readonly migrationTicket: DraftMigrationTicket | null;
+};
+
 export function App(): ReactElement {
   const [pluginStore] = useState(createPluginCatalogStore);
   return (
@@ -213,8 +225,10 @@ function StudioApp(): ReactElement {
   const [panelWidth, setPanelWidth] = useSidePanelWidth();
   const shellRef = useRef<HTMLElement>(null);
   const chatColumnRef = useRef<HTMLElement>(null);
-  const [permissionMode, setPermissionMode] = useState<'ask' | 'trust' | 'yolo'>('ask');
+  const { permissionMode, setPermissionMode, rememberPermissionMode } =
+    usePermissionMode(activeSessionId);
   const [notice, setNotice] = useState<string | null>(null);
+  const [sendFailure, setSendFailure] = useState<SendFailure | null>(null);
   const {
     providerSettings,
     selectedProviderId,
@@ -224,6 +238,7 @@ function StudioApp(): ReactElement {
     selectedProvider,
     reasoningEffort,
     setReasoningEffort,
+    setReasoningEffortFor,
     providerForm,
     providerFormError,
     providerMutation,
@@ -1591,9 +1606,12 @@ function StudioApp(): ReactElement {
    * Sends a message. A retry snapshot creates a new Turn
    * (the previous Turn stays in history) without touching the draft input.
    */
-  async function submitMessage(retry?: AgentSubmissionSnapshot): Promise<void> {
+  async function submitMessage(
+    retry?: AgentSubmissionSnapshot,
+    resend?: SendFailure,
+  ): Promise<void> {
     if (!canCompose) return;
-    const submittedDraft = composerDraft.capture();
+    const submittedDraft = resend?.submittedDraft ?? composerDraft.capture();
     const typed = messageInput.trim();
     // A draft that invokes a slash command is sent as the command's prompt, so
     // the message shown and stored is the text the model receives.
@@ -1613,7 +1631,7 @@ function StudioApp(): ReactElement {
     const files = retry === undefined ? composerDraft.draft.files : (retry.files ?? []);
     const contexts = retry === undefined ? composerDraft.draft.contexts : (retry.contexts ?? []);
     const selectedSkills = retry === undefined ? [...sessionSkills.draft.selected] : [];
-    const selectedRevision = sessionSkills.draft.revision;
+    const selectedRevision = resend?.selectedRevision ?? sessionSkills.draft.revision;
     const selectedSessionId = activeSessionId;
     const copiedInput = composerDraft.draft.sampling;
     const settings =
@@ -1668,6 +1686,7 @@ function StudioApp(): ReactElement {
     }
     const { projectId, sessionId } = sessionContext;
     if (runHandles.current.has(sessionId)) return;
+    if (retry === undefined) rememberPermissionMode(sessionId, permissionMode);
     const submission: AgentSubmissionSnapshot = structuredClone(
       retry ?? {
         sessionId,
@@ -1705,6 +1724,9 @@ function StudioApp(): ReactElement {
     const liveTurnId = liveTurnIdFor(assistantId);
     const runId = createId('run');
     const requestController = new AbortController();
+    // A resend after an unreachable Server reuses the id so the Server can deduplicate.
+    const requestId = resend?.requestId ?? crypto.randomUUID();
+    setSendFailure(null);
     const occurredAt = new Date().toISOString();
     const queuedAdmission =
       (queueController.getState(sessionId)?.active !== null &&
@@ -1723,7 +1745,7 @@ function StudioApp(): ReactElement {
       controller: requestController,
       assistantId,
       tools: [],
-      requestId: crypto.randomUUID(),
+      requestId,
     });
     setAdmitting((current) => ({ ...current, [sessionId]: true }));
     timelineRef.current?.scrollToBottom();
@@ -1806,11 +1828,15 @@ function StudioApp(): ReactElement {
       if (accepted || !mounted.current) return;
       accepted = true;
       if (!receiptObserved) ensureOptimistic();
-      if (retry === undefined) {
+      if (retry === undefined || resend !== undefined) {
         sessionSkills.clearSent(sessionId, selectedRevision, submission.skills);
         composerDraft.clearSubmittedDraftIfCurrent(
           submittedDraft,
-          'migrationTicket' in sessionContext ? (sessionContext.migrationTicket ?? null) : null,
+          resend !== undefined
+            ? resend.migrationTicket
+            : 'migrationTicket' in sessionContext
+              ? (sessionContext.migrationTicket ?? null)
+              : null,
         );
       }
     };
@@ -1873,7 +1899,7 @@ function StudioApp(): ReactElement {
         },
         {
           signal: requestController.signal,
-          requestId: runHandles.current.get(sessionId)?.requestId,
+          requestId,
         },
       );
       if (receiptObserved) return;
@@ -1898,6 +1924,30 @@ function StudioApp(): ReactElement {
         void resumeExecution(projectId, sessionId, runId);
         return;
       }
+      if (error instanceof AgentStreamError && error.code === executionLaunchUnreachableCode) {
+        updateSessionMessages(projectId, sessionId, (current) =>
+          current.filter((message) => message.turnId !== liveTurnId),
+        );
+        updateSessionTurns(projectId, sessionId, (current) =>
+          current.filter((turn) => turn.turnId !== liveTurnId),
+        );
+        if (!queuedAdmission) setSessionRunState(sessionId, idleRunState);
+        setNotice('无法连接到本地 Server，消息未发送，草稿已保留。');
+        setSendFailure({
+          sessionId,
+          submission,
+          requestId,
+          submittedDraft,
+          selectedRevision,
+          migrationTicket:
+            resend !== undefined
+              ? resend.migrationTicket
+              : 'migrationTicket' in sessionContext
+                ? (sessionContext.migrationTicket ?? null)
+                : null,
+        });
+        return;
+      }
       if (
         error instanceof AgentStreamError &&
         ['execution-queue-full', 'execution-queue-conflict', 'execution-request-conflict'].includes(
@@ -1913,7 +1963,7 @@ function StudioApp(): ReactElement {
         if (!queuedAdmission) setSessionRunState(sessionId, idleRunState);
         setNotice(
           error.code === 'execution-queue-full'
-            ? '待执行队列已满，请稍后再试。草稿已保留。'
+            ? '排队消息已满（每个会话最多 10 条，全局最多 100 条），请等待前面的消息完成后再发送。草稿已保留。'
             : '待执行队列已变化，请确认后重新发送。草稿已保留。',
         );
         void queueController.refresh(projectId, sessionId).catch(() => undefined);
@@ -2325,7 +2375,11 @@ function StudioApp(): ReactElement {
     setSelectedProviderId(snapshot.input.provider);
     setSelectedModel(snapshot.input.model);
     setPermissionMode(snapshot.input.permissionMode);
-    setReasoningEffort(snapshot.input.reasoningEffort ?? 'medium');
+    setReasoningEffortFor(
+      snapshot.input.provider,
+      snapshot.input.model,
+      snapshot.input.reasoningEffort ?? 'medium',
+    );
     const { provider, model, useProviderDefaults, temperature, maxTokens } = {
       ...snapshot.input,
       ...snapshot.effectiveSettings,
@@ -3843,7 +3897,26 @@ function StudioApp(): ReactElement {
       {notice !== null ? (
         <div className="studio-notice" role="status">
           {notice}
-          <button type="button" aria-label="关闭提示" onClick={() => setNotice(null)}>
+          {sendFailure !== null ? (
+            <button
+              type="button"
+              onClick={() => {
+                const failure = sendFailure;
+                setNotice(null);
+                void submitMessage(failure.submission, failure);
+              }}
+            >
+              重试
+            </button>
+          ) : null}
+          <button
+            type="button"
+            aria-label="关闭提示"
+            onClick={() => {
+              setNotice(null);
+              setSendFailure(null);
+            }}
+          >
             <X aria-hidden="true" />
           </button>
         </div>
