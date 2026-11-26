@@ -15,6 +15,7 @@ import { managementWriteGuard } from './plugin-write-guard.js';
 export interface McpAppOptions {
   readonly mcpManager?: ServerMcpManager | undefined;
   readonly studioOrigin?: string | undefined;
+  readonly trustedHost?: string | undefined;
 }
 
 const errorResponseSchema = z.object({ error: mcpIssueSchema });
@@ -86,7 +87,7 @@ function serverId(context: Context): string {
 
 /** Cached reads and guarded writes delegate all authority and launch work to the manager. */
 export function registerMcpRoutes(app: Hono, options: McpAppOptions): void {
-  const guard = managementWriteGuard(options.studioOrigin);
+  const guard = managementWriteGuard(options.studioOrigin, options.trustedHost);
   app.use('/mcp', guard);
   app.use('/mcp/*', guard);
   const manager = (context: Context): ServerMcpManager | Response => {

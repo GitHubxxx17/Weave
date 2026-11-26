@@ -10,6 +10,7 @@ export interface SkillAppOptions {
   readonly skillCatalogService?: SkillCatalogService | undefined;
   readonly sessionService?: SessionService | undefined;
   readonly studioOrigin?: string | undefined;
+  readonly trustedHost?: string | undefined;
 }
 const previewSchema = z.strictObject({ skill: skillRefSchema });
 function failure(context: Context, error: unknown): Response {
@@ -43,7 +44,10 @@ function failure(context: Context, error: unknown): Response {
 }
 /** Thin inert Skill adapters: no discovery, activation or Agent behavior in handlers. */
 export function registerSkillRoutes(app: Hono, options: SkillAppOptions): void {
-  app.use('/sessions/:id/skills/*', managementWriteGuard(options.studioOrigin));
+  app.use(
+    '/sessions/:id/skills/*',
+    managementWriteGuard(options.studioOrigin, options.trustedHost),
+  );
   const available = async (sessionId: string): Promise<SkillCatalogService> => {
     if (options.skillCatalogService === undefined || options.sessionService === undefined)
       throw new SkillError('skill-unavailable', 'Skills are unavailable');

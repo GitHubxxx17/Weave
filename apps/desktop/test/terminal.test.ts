@@ -58,7 +58,11 @@ function createHarness() {
     shell: '/bin/bash',
     env: { PATH: '/usr/bin', WEAVE_API_KEY: 'sk-secret', MY_API_TOKEN: 'user-var' },
   });
-  const trustedEvent = { senderFrame: { url: `${studioOrigin}/`, origin: studioOrigin } };
+  const trustedFrame = { url: `${studioOrigin}/`, origin: studioOrigin };
+  const trustedEvent = {
+    senderFrame: trustedFrame,
+    sender: { getURL: () => `${studioOrigin}/`, mainFrame: trustedFrame },
+  };
   return { handlers, listeners, sent, spawned, fake, spawn, host, trustedEvent, webContents };
 }
 
@@ -110,6 +114,26 @@ describe('terminal host', () => {
       { cols: 80, rows: 24 },
     )) as { error?: string };
     expect(result.error).toBe('untrusted-origin');
+    expect(h.spawn).not.toHaveBeenCalled();
+  });
+
+  it('rejects a same-origin child frame and a window that navigated elsewhere', async () => {
+    const h = createHarness();
+    const create = h.handlers.get(terminalChannels.create)!;
+    const child = { url: `${studioOrigin}/embed`, origin: studioOrigin };
+    const main = { url: `${studioOrigin}/`, origin: studioOrigin };
+    const asChild = {
+      senderFrame: child,
+      sender: { getURL: () => `${studioOrigin}/`, mainFrame: main },
+    };
+    const navigatedAway = {
+      senderFrame: main,
+      sender: { getURL: () => 'https://evil.example/', mainFrame: main },
+    };
+    expect(await create(asChild, { cols: 80, rows: 24 })).toEqual({ error: 'untrusted-origin' });
+    expect(await create(navigatedAway, { cols: 80, rows: 24 })).toEqual({
+      error: 'untrusted-origin',
+    });
     expect(h.spawn).not.toHaveBeenCalled();
   });
 

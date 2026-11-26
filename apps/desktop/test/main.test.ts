@@ -64,17 +64,27 @@ vi.mock('@weave/server/main', () => ({
 const {
   createDesktopFetch,
   createMainWindow,
+  describeMissingStudio,
   getWindowChrome,
   handlePickDirectory,
   registerSingleInstance,
   renderStartupError,
+  resolveStudioTarget,
   startDesktopApplication,
   startDesktopServer,
   watchRendererLifecycle,
 } = await import('../src/main.js');
 
+// Development shape: the window loads the Vite server named by WEAVE_STUDIO_URL.
 const config = createDesktopConfig({
   userDataDirectory: '/tmp/weave-user-data',
+  environment: { WEAVE_STUDIO_URL: 'http://127.0.0.1:5173' },
+});
+
+// Default shape: the embedded Server hosts the built Studio.
+const hostedConfig = createDesktopConfig({
+  userDataDirectory: '/tmp/weave-user-data',
+  studioDirectory: '/app/studio/dist',
   environment: {},
 });
 
@@ -114,7 +124,10 @@ describe('desktop main process', () => {
     async (override) => {
       const configWithOverride = createDesktopConfig({
         userDataDirectory: config.userDataDirectory,
-        environment: { WEAVE_PLUGINS_DIR: override },
+        environment: {
+          WEAVE_PLUGINS_DIR: override,
+          WEAVE_STUDIO_URL: 'http://127.0.0.1:5173',
+        },
       });
       mocks.startServer.mockResolvedValueOnce({ port: 46321, stop: vi.fn() });
 
@@ -178,6 +191,71 @@ describe('desktop main process', () => {
     expect(openHandler?.({ url: 'http://127.0.0.1:5173/help' })).toEqual({ action: 'deny' });
   });
 
+  it('hosts Studio from the embedded Server and trusts only its origin', async () => {
+    mocks.startServer.mockResolvedValueOnce({ port: 46321, stop: vi.fn() });
+    await startDesktopServer(hostedConfig, providerSecretCodec);
+    const options = mocks.startServer.mock.lastCall?.[1];
+    expect(options).toMatchObject({ studioDirectory: '/app/studio/dist' });
+    expect(options).not.toHaveProperty('studioOrigin');
+    expect(options).not.toHaveProperty('host');
+
+    const target = resolveStudioTarget(hostedConfig, 'http://127.0.0.1:46321');
+    expect(target).toEqual({ url: 'http://127.0.0.1:46321/', origin: 'http://127.0.0.1:46321' });
+
+    createMainWindow(hostedConfig, 'http://127.0.0.1:46321', 'native');
+    const instance = mocks.FakeBrowserWindow.instances[0];
+    expect(instance?.loadURL).toHaveBeenCalledWith('http://127.0.0.1:46321/');
+    const navigate = instance?.webContents.on.mock.calls.find(
+      ([name]) => name === 'will-navigate',
+    )?.[1] as ((event: { preventDefault: () => void }, url: string) => void) | undefined;
+    const allowed = vi.fn();
+    navigate?.({ preventDefault: allowed }, 'http://127.0.0.1:46321/projects');
+    expect(allowed).not.toHaveBeenCalled();
+    const blocked = vi.fn();
+    navigate?.({ preventDefault: blocked }, 'http://127.0.0.1:5173/');
+    expect(blocked).toHaveBeenCalledOnce();
+  });
+
+  it('passes --host to the Server and loads the page with the access token', async () => {
+    const hostConfig = createDesktopConfig({
+      userDataDirectory: '/tmp/weave-user-data',
+      studioDirectory: '/app/studio/dist',
+      argv: ['--host', '0.0.0.0'],
+      environment: {},
+    });
+    mocks.startServer.mockResolvedValueOnce({ port: 46321, stop: vi.fn(), accessToken: 'tok' });
+
+    const server = await startDesktopServer(hostConfig, providerSecretCodec);
+
+    expect(mocks.startServer.mock.lastCall?.[1]).toMatchObject({ host: '0.0.0.0' });
+    expect(server.accessToken).toBe('tok');
+    expect(resolveStudioTarget(hostConfig, 'http://127.0.0.1:46321', 'tok')).toEqual({
+      url: 'http://127.0.0.1:46321/?token=tok',
+      origin: 'http://127.0.0.1:46321',
+    });
+  });
+
+  it('keeps WEAVE_STUDIO_URL as the page and trusted origin for development', () => {
+    expect(resolveStudioTarget(config, 'http://127.0.0.1:46321')).toEqual({
+      url: 'http://127.0.0.1:5173',
+      origin: 'http://127.0.0.1:5173',
+    });
+  });
+
+  it('reports a missing Studio build and renders an error page instead of loading', () => {
+    expect(describeMissingStudio(config)).toBeUndefined();
+    const message = describeMissingStudio(hostedConfig);
+    expect(message).toContain('/app/studio/dist');
+
+    createMainWindow(hostedConfig, 'http://127.0.0.1:46321', 'native', {
+      startupError: new Error(message),
+    });
+    const instance = mocks.FakeBrowserWindow.instances[0];
+    expect(instance?.loadURL).toHaveBeenCalledOnce();
+    expect(instance?.loadURL).toHaveBeenCalledWith(expect.stringMatching(/^data:text\/html/));
+    expect(instance?.loadURL).not.toHaveBeenCalledWith('http://127.0.0.1:46321/');
+  });
+
   it('hides the macOS title bar and tells the Renderer about it', () => {
     expect(getWindowChrome('darwin')).toBe('hidden-inset');
     expect(getWindowChrome('win32')).toBe('native');
@@ -214,7 +292,7 @@ describe('desktop main process', () => {
   it('shows the Server error for an empty plugin directory override before opening a window', async () => {
     const serverError = 'pluginsDirectory must not be empty';
     vi.stubEnv('WEAVE_PLUGINS_DIR', '');
-    vi.stubEnv('WEAVE_STUDIO_URL', undefined);
+    vi.stubEnv('WEAVE_STUDIO_URL', 'http://127.0.0.1:5173');
     mocks.startServer.mockRejectedValueOnce(new Error(serverError));
 
     try {
@@ -323,7 +401,10 @@ describe('desktop folder picker IPC', () => {
   });
 
   function invokeEvent(senderFrame: { url: string; origin?: string } | null) {
-    return { senderFrame, sender: {} } as never;
+    return {
+      senderFrame,
+      sender: { getURL: () => senderFrame?.url ?? '', mainFrame: senderFrame },
+    } as never;
   }
 
   it.each([{ args: [] }, { args: ['project'] }])(

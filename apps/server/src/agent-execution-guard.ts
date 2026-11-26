@@ -1,10 +1,6 @@
 import type { Hono, MiddlewareHandler } from 'hono';
 
-const loopback = /^(localhost|127\.0\.0\.1|\[::1\])(?::([0-9]{1,5}))?$/;
-function isLoopback(value: string): boolean {
-  const match = loopback.exec(value);
-  return match !== null && (match[2] === undefined || Number(match[2]) <= 65535);
-}
+import { isTrustedAuthority } from './local-authority.js';
 
 export class ExecutionHttpError extends Error {
   constructor(
@@ -34,11 +30,12 @@ export function registerAgentExecutionGuards(
       message: 'Execution control requires application/json',
     },
   },
+  trustedHost?: string,
 ): void {
   const guard: MiddlewareHandler = async (context, next) => {
     context.header('Cache-Control', 'no-store');
     let allowed =
-      isLoopback(context.req.header('Host') ?? '') &&
+      isTrustedAuthority(context.req.header('Host') ?? '', trustedHost) &&
       context.req.header('Sec-Fetch-Site')?.trim().toLowerCase() !== 'cross-site';
     const origin = context.req.header('Origin');
     if (origin !== undefined) {
@@ -47,7 +44,9 @@ export function registerAgentExecutionGuards(
         allowed &&=
           (value.protocol === 'http:' || value.protocol === 'https:') &&
           value.origin === origin &&
-          (studioOrigin === undefined ? isLoopback(value.host) : origin === studioOrigin);
+          (studioOrigin === undefined
+            ? isTrustedAuthority(value.host, trustedHost)
+            : origin === studioOrigin);
       } catch {
         allowed = false;
       }

@@ -482,7 +482,8 @@ flowchart LR
 
 At startup, `apps/server/src/main.ts` validates the port with Zod, creates the
 server Runtime, opens the Project Store and Session Event Store, starts its
-services, and binds Hono to `127.0.0.1`. The default database path is resolved
+services, and binds Hono to `127.0.0.1` (or the `--host` / `WEAVE_HOST` address, which
+enables an access token). The default database path is resolved
 by platform: macOS uses `~/Library/Application Support/Weave`, Windows uses
 `%APPDATA%/Weave`, and Linux uses `$XDG_DATA_HOME/weave` or
 `~/.local/share/weave`. Explicit `databaseFile` and `dataDirectory` options
@@ -493,9 +494,12 @@ shape, and returns `200` only when the Runtime is running; otherwise it returns
 `503`.
 
 The desktop composition root is `apps/desktop`. Electron Main calls
-`startServer(0, { databaseFile, dataDirectory, studioOrigin, providerSecretCodec })`, so the operating system
-chooses an available local port and the Server can allow the exact Studio
-origin through CORS. The Renderer never opens SQLite or reads an API Key. Its
+`startServer(0, { databaseFile, dataDirectory, studioDirectory, providerSecretCodec })`, so the operating system
+chooses an available local port and the Server itself hosts the built Studio
+(`apps/studio/dist`) on the same origin; the window loads
+`http://127.0.0.1:<port>/`. `WEAVE_STUDIO_URL` still points the window at a
+development Vite server, in which case `studioOrigin` allows that exact origin
+through CORS. The Renderer never opens SQLite or reads an API Key. Its
 Workspace, Provider, and Agent clients use the same `runtimeApiUrl()` helper in
 browser and desktop modes: the browser uses Vite-relative paths, while the
 desktop Preload supplies the local Server base URL.
@@ -526,7 +530,10 @@ and output over the Preload `window.weaveDesktop.terminal` bridge.
 
 Desktop IPC sender checks share `isTrustedSender` (`sender-origin.ts`): both
 the frame `origin` and the origin parsed from the frame URL must equal the
-Studio origin, and a missing frame, opaque origin or invalid URL is rejected.
+trusted origin (the embedded Server's origin, or the `WEAVE_STUDIO_URL` origin),
+the frame must be the window's main frame, and `webContents.getURL()` must be on
+the same origin. A missing frame or sender, opaque origin, child frame or invalid
+URL is rejected.
 The terminal environment drops `WEAVE_*` variables (the Server's own
 configuration) and keeps every other user variable. A main-frame navigation or
 Renderer crash kills the window's ptys through `disposeSessions()`; the Desktop
@@ -1262,6 +1269,16 @@ POST/PUT/PATCH/DELETE requests that carry a body or a `Content-Type` must use
 undo) keep their specific error codes and run first; plugin and MCP management
 writes keep `managementWriteGuard` and its codes, while their reads fall under
 the global guard.
+
+**LAN access.** `--host <address>` (or `WEAVE_HOST`) makes the Server listen
+beyond loopback. It then also hosts Studio for browsers and requires an access
+token on every request except `/health`: a `weave_access_token` cookie
+(`HttpOnly; SameSite=Strict`, set when a page request carries `?token=` and
+redirected to the URL without it) or `Authorization: Bearer`, compared with
+`timingSafeEqual`; otherwise `401 access-token-required`. The admission guards
+additionally accept the configured `<address>:<port>` as `Host` and the same
+origin as `Origin`. Loopback listeners get neither a token nor any relaxed
+check. See the [distribution design](../superpowers/specs/2026-11-24-desktop-studio-distribution-design.md).
 
 ### Removed legacy Agent HTTP adapter
 
