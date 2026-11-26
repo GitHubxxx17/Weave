@@ -11,8 +11,10 @@ import type { PluginCatalog, PluginMutationResponse, PluginReloadResult } from '
 import {
   fetchManagedCatalog,
   prepareManagedRequest,
+  prepareManagedUpdateRequest,
   previewGithubManagedPlugin,
   previewManagedPlugin,
+  previewManagedUpdate,
   sendManagedRequest,
 } from './managed-plugin-api.js';
 import type {
@@ -24,6 +26,8 @@ import type {
   ManagedMutationResponse,
   ManagedPreview,
   ManagedReview,
+  ManagedUpdatePreview,
+  ManagedUpdateReview,
   PreparedManagedRequest,
 } from './managed-plugin-types.js';
 import {
@@ -121,6 +125,8 @@ export interface PluginCatalogStore {
     signal?: AbortSignal,
   ): Promise<GithubManagedPreview>;
   submitManaged(review: ManagedReview): Promise<ManagedAttemptOutcome>;
+  previewManagedUpdate(pluginId: string, signal?: AbortSignal): Promise<ManagedUpdatePreview>;
+  submitManagedUpdate(review: ManagedUpdateReview): Promise<ManagedAttemptOutcome>;
   retryManaged(): Promise<ManagedAttemptOutcome>;
   stopTrackingManaged(): Promise<void>;
   trust(id: string, digest: string): Promise<void>;
@@ -199,6 +205,7 @@ function rejectionRecovery(
   { code, status }: PluginApiError,
   command: PreparedManagedRequest['target']['kind'],
   retry: boolean,
+  update = false,
 ): ManagedRejection['recovery'] | undefined {
   if (
     (status === 400 && code === 'plugin-invalid-request') ||
@@ -211,6 +218,16 @@ function rejectionRecovery(
   if (status === 404 && code === 'plugin-authority-not-found' && command !== 'import')
     return 'review';
   if (status !== 409) return undefined;
+  // An update confirmation that no longer matches the reviewed preview is never replayed; the
+  // user reviews the current state again.
+  if (
+    update &&
+    (code === 'plugin-preview-stale' ||
+      code === 'plugin-authority-conflict' ||
+      code === 'plugin-artifact-unavailable' ||
+      code === 'plugin-managed-id-conflict')
+  )
+    return 'review';
   switch (code) {
     case 'plugin-authority-request-conflict':
       return 'none';
@@ -591,7 +608,12 @@ export function createPluginCatalogStore(): PluginCatalogStore {
     } catch (reason) {
       const error = toManagedError(reason);
       const context = { pluginId: prepared.pluginId, target: prepared.target, error };
-      const recovery = rejectionRecovery(error, prepared.target.kind, retry);
+      const recovery = rejectionRecovery(
+        error,
+        prepared.target.kind,
+        retry,
+        prepared.flow === 'update',
+      );
       if (recovery === undefined) {
         unresolvedRequest = prepared;
         publish({ ...snapshot, managedUnresolved: Object.freeze(context) });
@@ -635,6 +657,44 @@ export function createPluginCatalogStore(): PluginCatalogStore {
       return sendManaged(prepared, false);
     });
   }
+  async function previewUpdate(
+    pluginId: string,
+    signal?: AbortSignal,
+  ): Promise<ManagedUpdatePreview> {
+    const blocked = writeBlock();
+    if (blocked !== undefined) throw blocked;
+    if (snapshot.sharedManagementBlocked)
+      throw new PluginApiError('catalog-unavailable', '请先重新读取一致的目录', 0);
+    requireManaged();
+    return previewManagedUpdate(pluginId, signal);
+  }
+  function submitManagedUpdate(review: ManagedUpdateReview): Promise<ManagedAttemptOutcome> {
+    const blocked = writeBlock();
+    if (blocked !== undefined) return Promise.resolve({ kind: 'not-sent', error: blocked });
+    return reserve(
+      { source: 'managed', kind: 'activate', id: review.pluginId },
+      async (olderRead) => {
+        let prepared: PreparedManagedRequest;
+        try {
+          await prepareOrdinaryWrite(olderRead);
+          const { heads } = requireManaged();
+          if (
+            review.expectedInstallSequence !== heads.installSequence ||
+            review.expectedTrustSequence !== heads.trustSequence
+          )
+            throw new PluginApiError(
+              'plugin-managed-review-stale',
+              '本次审查已失效，请重新审查',
+              0,
+            );
+          prepared = prepareManagedUpdateRequest(review, crypto.randomUUID());
+        } catch (reason) {
+          return { kind: 'not-sent', error: toManagedError(reason) };
+        }
+        return sendManaged(prepared, false);
+      },
+    );
+  }
   function retryManaged(): Promise<ManagedAttemptOutcome> {
     const blocked = writeBlock(true);
     if (blocked !== undefined) return Promise.resolve({ kind: 'not-sent', error: blocked });
@@ -675,6 +735,8 @@ export function createPluginCatalogStore(): PluginCatalogStore {
     previewManaged,
     previewGithubManaged,
     submitManaged,
+    previewManagedUpdate: previewUpdate,
+    submitManagedUpdate,
     retryManaged,
     stopTrackingManaged,
     trust: (id, digest) =>

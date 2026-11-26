@@ -166,7 +166,7 @@ describe('Studio managed plugins', () => {
     });
     renderPanel();
     const row = await managedRow();
-    const history = within(row.getByRole('region', { name: '候选历史' }));
+    const history = within(row.getByRole('region', { name: '候选版本' }));
     expect(history.getByText('Skills 文本包')).toBeTruthy();
     expect(history.getByText('无可执行入口')).toBeTruthy();
     expect(network.writes()).toHaveLength(0);
@@ -336,17 +336,22 @@ describe('Studio managed plugins', () => {
     expect(network.writes()).toHaveLength(0);
   });
 
-  it.each(['activate', 'rollback'] as const)(
+  it('offers no local rollback and points to reinstalling from the source', async () => {
+    installFetch();
+    renderPanel();
+    const row = await managedRow();
+    expect(row.queryByRole('button', { name: '回退' })).toBeNull();
+    expect(row.getByText(/需要旧版本时，请从来源重新安装/)).toBeTruthy();
+  });
+
+  it.each(['activate'] as const)(
     'reviews %s before sending with the captured prior selection',
     async (intent) => {
-      const previousSelection = intent === 'activate' ? null : secondDigest;
-      const current =
-        intent === 'activate'
-          ? {
-              ...managedCatalog,
-              plugins: [{ ...managedPlugin, selection: null, trust: null, active: null }],
-            }
-          : managedCatalog;
+      const previousSelection = null;
+      const current = {
+        ...managedCatalog,
+        plugins: [{ ...managedPlugin, selection: null, trust: null, active: null }],
+      };
       const network = installFetch({
         managed: () => current,
         handle: (path, init) => {
@@ -368,7 +373,7 @@ describe('Studio managed plugins', () => {
       const candidate = within(
         row.getByText(firstDigest, { selector: '.managed-candidate code' }).closest('li')!,
       );
-      const action = intent === 'activate' ? '激活' : '回退';
+      const action = '激活';
       const trigger = candidate.getByRole('button', { name: action });
       trigger.focus();
       fireEvent.click(trigger);
@@ -1054,5 +1059,128 @@ describe('GitHub managed plugin source', () => {
     expect(row.getByText(githubSource.repository)).toBeTruthy();
     expect(row.getByText(githubSource.commit)).toBeTruthy();
     expect(row.getByText(/本地目录/)).toBeTruthy();
+  });
+});
+
+describe('Studio managed plugin updates', () => {
+  const source = {
+    repository: 'https://github.com/weave/notes',
+    commit: 'c'.repeat(40),
+    subdirectory: '',
+  };
+  const updateDigest = 'c'.repeat(64);
+  const updatable: ManagedCatalog = {
+    ...managedCatalog,
+    plugins: [{ ...managedPlugin, update: { version: '3.0.0', source } }],
+  };
+  const updatePreview = {
+    previewId: 'update-preview',
+    expiresAt: '2099-01-01T00:00:00.000Z',
+    expectedInstallSequence: managedCatalog.heads.installSequence,
+    expectedTrustSequence: managedCatalog.heads.trustSequence,
+    pluginId: managedPluginId,
+    previousSelection: secondDigest,
+    current: { digest: secondDigest, manifest: secondCandidate.manifest },
+    candidate: {
+      digest: updateDigest,
+      manifest: {
+        ...secondCandidate.manifest,
+        version: '3.0.0',
+        capabilities: ['tool', 'command'],
+        permissions: ['workspace:write', 'network:request'],
+      },
+      files: 3,
+      bytes: 2048,
+    },
+    update: { version: '3.0.0', source },
+    github: source,
+  };
+
+  function updateNetwork(confirm: (body: { requestId: string }) => Response) {
+    return installFetch({
+      managed: () => updatable,
+      handle: (path, init) => {
+        if (path === `/plugins/managed/${managedPluginId}/update/preview`) {
+          return Response.json(updatePreview);
+        }
+        if (path === `/plugins/managed/${managedPluginId}/update`) {
+          return confirm(JSON.parse(String(init.body)) as { requestId: string });
+        }
+        return undefined;
+      },
+    });
+  }
+
+  it('shows the new version and confirms once with the reviewed candidate and revisions', async () => {
+    const network = updateNetwork(({ requestId }) =>
+      Response.json({
+        kind: 'replayed',
+        decision: {
+          ...managedDecision({ kind: 'activate', digest: updateDigest, intent: 'activate' }),
+          requestId,
+        },
+        current: updatable,
+        application: { status: 'unknown' },
+      } satisfies ManagedMutationResponse),
+    );
+    renderPanel();
+    const row = await managedRow();
+    expect(row.getByText('有新版本 v3.0.0')).toBeTruthy();
+    fireEvent.click(row.getByRole('button', { name: '更新到 v3.0.0' }));
+    const dialog = within(
+      await screen.findByRole('dialog', { name: `更新插件「${managedPluginId}」` }),
+    );
+    expect(dialog.getByText('v3.0.0', { exact: false })).toBeTruthy();
+    const changes = within(dialog.getByRole('region', { name: '声明与权限变化' }));
+    expect(changes.getByText('network:request')).toBeTruthy();
+    expect(changes.getAllByText('新增').length).toBeGreaterThan(0);
+    // The new version drops the `event` capability the installed one declared.
+    expect(changes.getByText('移除')).toBeTruthy();
+    expect(changes.getByText('event')).toBeTruthy();
+    expect(network.writes()).toHaveLength(1);
+    expect(JSON.parse(String(network.writes()[0]?.[1].body))).toEqual({});
+
+    fireEvent.click(dialog.getByRole('button', { name: '确认更新' }));
+    await screen.findByText('决定已保存');
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(network.writes()).toHaveLength(2);
+    expect(JSON.parse(String(network.writes()[1]?.[1].body))).toMatchObject({
+      previewId: 'update-preview',
+      candidateDigest: updateDigest,
+      previousSelection: secondDigest,
+      expectedInstallSequence: managedCatalog.heads.installSequence,
+      expectedTrustSequence: managedCatalog.heads.trustSequence,
+    });
+  });
+
+  it('sends nothing when the review is cancelled', async () => {
+    const network = updateNetwork(() => failure(500, 'plugin-management-failed'));
+    renderPanel();
+    const row = await managedRow();
+    fireEvent.click(row.getByRole('button', { name: '更新到 v3.0.0' }));
+    const dialog = within(await screen.findByRole('dialog'));
+    fireEvent.click(dialog.getByRole('button', { name: '取消' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(network.writes()).toHaveLength(1);
+  });
+
+  it('closes the review and asks for a new one when the confirmation is stale', async () => {
+    updateNetwork(() => failure(409, 'plugin-preview-stale'));
+    renderPanel();
+    const row = await managedRow();
+    fireEvent.click(row.getByRole('button', { name: '更新到 v3.0.0' }));
+    const dialog = within(await screen.findByRole('dialog'));
+    fireEvent.click(dialog.getByRole('button', { name: '确认更新' }));
+    await screen.findByText(/被拒绝/);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByText(/plugin-preview-stale/)).toBeTruthy();
+  });
+
+  it('does not offer an update for a plugin without one', async () => {
+    installFetch();
+    renderPanel();
+    const row = await managedRow();
+    expect(row.queryByRole('button', { name: /更新到/ })).toBeNull();
+    expect(row.queryByText(/有新版本/)).toBeNull();
   });
 });

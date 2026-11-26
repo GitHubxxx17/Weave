@@ -74,6 +74,13 @@ export interface PluginArtifactStore {
   preview(options: PreviewPluginArtifactOptions): Promise<PluginArtifactSourceIdentity>;
   stage(options: StagePluginArtifactOptions): Promise<PluginArtifact>;
   read(digest: string, options?: ReadPluginArtifactOptions): Promise<PluginArtifact>;
+  /** Lists the digests of every published artifact directory, including orphans. */
+  list(options?: ReadPluginArtifactOptions): Promise<readonly string[]>;
+  /**
+   * Removes one published artifact. Returns false when it is already absent.
+   * The caller decides that no consumer still references the digest.
+   */
+  remove(digest: string, options?: ReadPluginArtifactOptions): Promise<boolean>;
 }
 
 export type PluginArtifactErrorCode =

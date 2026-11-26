@@ -260,9 +260,11 @@ it('commits the root binding before taking the lifetime lock and registers main 
     'assertHeldSync',
     'binding',
     'close',
+    'list',
     'preview',
     'quiesce',
     'read',
+    'remove',
     'stage',
   ]);
   expect(storeFactory).toHaveBeenCalledTimes(1);

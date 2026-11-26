@@ -52,7 +52,7 @@ export function managedRecoveryText(recovery: ManagedRejection['recovery']): str
   }
 }
 
-const contributionLabels = [
+export const contributionLabels = [
   ['tools', '工具'],
   ['providers', '模型提供方'],
   ['promptSections', '提示词片段'],
@@ -165,7 +165,7 @@ export type ManagedDraft =
       readonly github?: GithubPluginSource;
     };
 
-function usePreviewExpired(expiresAt: string | undefined): boolean {
+export function usePreviewExpired(expiresAt: string | undefined): boolean {
   const [expired, setExpired] = useState(
     () => expiresAt !== undefined && Date.parse(expiresAt) <= Date.now(),
   );

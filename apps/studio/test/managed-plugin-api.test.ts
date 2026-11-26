@@ -3,7 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   fetchManagedCatalog,
   prepareManagedRequest,
+  prepareManagedUpdateRequest,
   previewManagedPlugin,
+  previewManagedUpdate,
   sendManagedRequest,
 } from '../src/features/plugins/managed-plugin-api.js';
 import { managedManifestSchema } from '../src/features/plugins/managed-plugin-types.js';
@@ -664,4 +666,72 @@ it('retains governed Skill declarations when reviewing managed candidates', () =
     contributes: { skills: ['team-review'] },
   });
   expect(result.contributes.skills).toEqual(['team-review']);
+});
+
+describe('managed one-click update requests', () => {
+  const update = {
+    pluginId: managedPluginId,
+    previewId: 'update-preview',
+    candidateDigest: 'c'.repeat(64),
+    previousSelection: secondDigest,
+    ...expectations,
+  };
+
+  it('prepares one confirmation that names the reviewed candidate, selection and revisions', () => {
+    const prepared = prepareManagedUpdateRequest(update, requestId);
+    expect(prepared.url).toBe(`${managedPath}/${managedPluginId}/update`);
+    expect(prepared.flow).toBe('update');
+    expect(JSON.parse(prepared.body)).toEqual({
+      requestId,
+      previewId: 'update-preview',
+      candidateDigest: 'c'.repeat(64),
+      previousSelection: secondDigest,
+      ...expectations,
+    });
+    // The server records an update as an activation of the candidate.
+    expect(prepared.target).toEqual({
+      kind: 'activate',
+      digest: 'c'.repeat(64),
+      intent: 'activate',
+    });
+  });
+
+  it('rejects a head that is not a safe sequence before any request', () => {
+    expect(() =>
+      prepareManagedUpdateRequest({ ...update, expectedTrustSequence: -1 }, requestId),
+    ).toThrow(PluginApiError);
+  });
+
+  it('rejects a preview answer for another plugin', async () => {
+    const source = {
+      repository: 'https://github.com/weave/notes',
+      commit: 'c'.repeat(40),
+      subdirectory: '',
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        Response.json({
+          previewId: 'update-preview',
+          expiresAt: '2099-01-01T00:00:00.000Z',
+          expectedInstallSequence: 3,
+          expectedTrustSequence: 4,
+          pluginId: 'other',
+          previousSelection: secondDigest,
+          current: { digest: secondDigest, manifest: secondCandidate.manifest },
+          candidate: {
+            digest: 'c'.repeat(64),
+            manifest: secondCandidate.manifest,
+            files: 1,
+            bytes: 1,
+          },
+          update: { version: '3.0.0', source },
+          github: source,
+        }),
+      ),
+    );
+    await expect(previewManagedUpdate(managedPluginId)).rejects.toMatchObject({
+      code: 'plugin-invalid-response',
+    });
+  });
 });

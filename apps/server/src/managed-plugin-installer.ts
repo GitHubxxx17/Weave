@@ -13,6 +13,10 @@ import {
 import type { ExtensionCoordinator, ManagedRuntimeObservation } from './extension-coordinator.js';
 import { localExtensionSourceId } from './local-extension-source.js';
 import {
+  createManagedArtifactReclaimer,
+  type ManagedArtifactReclaimResult,
+} from './managed-artifact-reclaimer.js';
+import {
   commitManagedCommandSync,
   invalidateManagedCommandAuthoritySync,
 } from './managed-command-commit.js';
@@ -73,6 +77,10 @@ export interface ManagedPluginInstaller {
   ): Promise<ManagedGithubImportPreview>;
   import(request: ManagedImportRequest, signal?: AbortSignal): Promise<ManagedImportResult>;
   readonly applySelection: ApplyManagedSelection;
+  /** Deletes retired artifacts that no retained Generation uses. Never throws. */
+  reclaimArtifacts(): Promise<ManagedArtifactReclaimResult>;
+  /** Schedules a background reclaim pass, for startup orphan cleanup. */
+  requestReclaim(): void;
   snapshot(): {
     authority: PluginAuthoritySnapshot;
     observed: ManagedRuntimeObservation;
@@ -85,7 +93,9 @@ export interface ManagedPluginInstallerOptions {
   readonly coordinator: ExtensionCoordinator;
   readonly authority: Pick<PluginAuthorityDatabase, 'lookupSync' | 'commitSync' | 'snapshotSync'>;
   readonly store: Pick<OwnedPluginArtifactStore, 'preview' | 'stage'> &
-    Partial<Pick<OwnedPluginArtifactStore, 'binding'>>;
+    Partial<Pick<OwnedPluginArtifactStore, 'binding' | 'list' | 'remove'>>;
+  readonly reclaimRetryDelayMs?: number;
+  readonly onReclaimError?: (error: unknown) => void;
   readonly githubAcquirer?: GithubPluginAcquirer;
   readonly composition: Pick<
     ReturnType<typeof createManagedPluginComposition>,
@@ -173,6 +183,27 @@ export function createManagedPluginInstaller(
   const loss = composition.managedAuthority.ownershipLossSignal;
   let pending = false;
   const pendingOperations = new Set<Promise<void>>();
+  const { list, remove } = store;
+  const reclaimer =
+    list === undefined || remove === undefined
+      ? undefined
+      : createManagedArtifactReclaimer({
+          coordinator,
+          authority,
+          store: {
+            list: (listOptions) => list.call(store, listOptions),
+            remove: (digest, removeOptions) => remove.call(store, digest, removeOptions),
+          },
+          ...(options.reclaimRetryDelayMs === undefined
+            ? {}
+            : { retryDelayMs: options.reclaimRetryDelayMs }),
+          ...(options.onReclaimError === undefined ? {} : { onError: options.onReclaimError }),
+        });
+  const applySelection: ApplyManagedSelection = async (input, signal) => {
+    const result = await options.applySelection(input, signal);
+    if (result.kind === 'committed') reclaimer?.request();
+    return result;
+  };
 
   function tracked<T>(operation: () => Promise<T>): Promise<T> {
     let resolve!: () => void;
@@ -188,11 +219,13 @@ export function createManagedPluginInstaller(
 
   async function drain() {
     while (pendingOperations.size > 0) await Promise.all([...pendingOperations]);
+    await reclaimer?.drain();
   }
 
   function closeSync() {
     loss.removeEventListener('abort', closeSync);
     previews.clear();
+    reclaimer?.close();
     lifetime.abort(loss.aborted ? loss.reason : undefined);
   }
 
@@ -553,7 +586,13 @@ export function createManagedPluginInstaller(
     preview,
     previewGithub,
     import: (request, signal) => tracked(() => importReviewed(request, signal)),
-    applySelection: options.applySelection,
+    applySelection,
+    reclaimArtifacts: async () =>
+      (await reclaimer?.reclaim().catch((error: unknown) => {
+        options.onReclaimError?.(error);
+        return undefined;
+      })) ?? { removed: [], deferred: [], failed: [] },
+    requestReclaim: () => reclaimer?.request(),
     snapshot() {
       const cachedAuthority = composition.cachedAuthoritySync();
       const { generation, members } = coordinator.snapshot();

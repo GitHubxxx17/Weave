@@ -130,7 +130,10 @@ const official = [
 
 export const maxPluginMarketplaceBytes = 512 * 1024;
 
-function compatible(manifest: PluginManifest, hostVersion: string): 'compatible' | 'incompatible' {
+export function marketplaceCompatibility(
+  manifest: PluginManifest,
+  hostVersion: string,
+): 'compatible' | 'incompatible' {
   if (
     manifest.apiVersion !== pluginApiVersion ||
     !['in-process', 'declarative'].includes(manifest.host ?? 'in-process')
@@ -144,7 +147,7 @@ function compatible(manifest: PluginManifest, hostVersion: string): 'compatible'
   }
 }
 
-function compareVersions(left: string, right: string): number {
+export function compareMarketplaceVersions(left: string, right: string): number {
   // Decimal strings avoid precision loss for valid manifest versions above 2^53.
   const leftParts = left.split('.').map((part) => part.replace(/^0+(?=\d)/, ''));
   const rightParts = right.split('.').map((part) => part.replace(/^0+(?=\d)/, ''));
@@ -237,8 +240,11 @@ export function projectPluginMarketplace(
           kind: 'github',
           category: classification.category,
           releases: [...plugin.releases]
-            .sort((a, b) => compareVersions(a.manifest.version, b.manifest.version))
-            .map((item) => ({ ...item, compatibility: compatible(item.manifest, hostVersion) })),
+            .sort((a, b) => compareMarketplaceVersions(a.manifest.version, b.manifest.version))
+            .map((item) => ({
+              ...item,
+              compatibility: marketplaceCompatibility(item.manifest, hostVersion),
+            })),
         };
       }),
     ],
