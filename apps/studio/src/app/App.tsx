@@ -4,10 +4,7 @@ import {
   DraftContextAttachments,
   DraftFileAttachments,
 } from '../features/file-context/file-attachments.js';
-import { fetchContextAvailability } from '../features/file-context/context-availability-api.js';
-import type { ExecutionContextKind } from '../features/file-context/execution-context-types.js';
 import {
-  type ClipboardEvent as ReactClipboardEvent,
   type CSSProperties,
   FormEvent,
   KeyboardEvent as ReactKeyboardEvent,
@@ -142,7 +139,6 @@ import {
   formatModelLabel,
   getSessionLabel,
   liveTurnIdFor,
-  readImageFile,
   safeErrorMessage,
   toStudioProject,
   toStudioSession,
@@ -165,6 +161,7 @@ import {
   type ToolActivity,
 } from './app-types.js';
 import { FormSelect } from './form-select.js';
+import { useComposerAttachments } from './use-composer-attachments.js';
 import { useProviderSettings } from './use-provider-settings.js';
 import { useWorkspaceNavigation } from './use-workspace-navigation.js';
 
@@ -217,12 +214,6 @@ function StudioApp(): ReactElement {
   const shellRef = useRef<HTMLElement>(null);
   const chatColumnRef = useRef<HTMLElement>(null);
   const [permissionMode, setPermissionMode] = useState<'ask' | 'trust' | 'yolo'>('ask');
-  const [viewerFilePath, setViewerFilePath] = useState<string | null>(null);
-  // Whether the active project can supply Git changes; read when the context menu opens.
-  const [gitChangesAvailability, setGitChangesAvailability] = useState<{
-    readonly projectId: string;
-    readonly state: 'available' | 'unavailable' | 'unknown';
-  } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const {
     providerSettings,
@@ -2229,35 +2220,22 @@ function StudioApp(): ReactElement {
     setNotice(null);
   }
 
-  useEffect(() => {
-    if (openMenu !== 'context' || activeProjectId === '') return undefined;
-    const controller = new AbortController();
-    void fetchContextAvailability(activeProjectId, { signal: controller.signal })
-      .then((availability) =>
-        setGitChangesAvailability({
-          projectId: activeProjectId,
-          state: availability.gitChanges.available ? 'available' : 'unavailable',
-        }),
-      )
-      .catch(() => {
-        if (!controller.signal.aborted)
-          setGitChangesAvailability({ projectId: activeProjectId, state: 'unknown' });
-      });
-    return () => controller.abort();
-  }, [openMenu, activeProjectId]);
-
-  function addComposerContext(kind: ExecutionContextKind): void {
-    composerDraft.addContext(composerDraft.owner, kind);
-    setOpenMenu(null);
-  }
-
-  function addViewerFileContext(): void {
-    if (viewerFilePath !== null) {
-      const result = composerDraft.addFile(composerDraft.owner, viewerFilePath);
-      if (result === 'full') setNotice('最多添加 8 个文件，请先移除文件。');
-    }
-    setOpenMenu(null);
-  }
+  const {
+    viewerFilePath,
+    setViewerFilePath,
+    gitChangesAvailability,
+    addComposerContext,
+    addViewerFileContext,
+    addImageFiles,
+    removePendingImage,
+    handleComposerPaste,
+  } = useComposerAttachments({
+    composerDraft,
+    openMenu,
+    activeProjectId,
+    setOpenMenu,
+    onNotice: setNotice,
+  });
 
   function fillSuggestion(text: string): void {
     if (!canCompose) return;
@@ -2382,43 +2360,6 @@ function StudioApp(): ReactElement {
 
     event.preventDefault();
     void submitMessage();
-  }
-
-  /** Reads image files from an attach picker or paste into the staged list. */
-  async function addImageFiles(files: FileList | null): Promise<void> {
-    if (files === null || files.length === 0) {
-      return;
-    }
-    const imageFiles = Array.from(files).filter((file) => file.type.startsWith('image/'));
-    if (imageFiles.length === 0) {
-      return;
-    }
-    const imageOwner = composerDraft.owner;
-    const read = await Promise.all(
-      imageFiles.map(async (file) => {
-        const { mediaType, data } = await readImageFile(file);
-        return { id: createId('img'), name: file.name, mediaType, data };
-      }),
-    );
-    if (!composerDraft.isOwnerCurrent(imageOwner)) return;
-    const added = read.filter((image) => image.data !== '');
-    if (added.length === 0) {
-      return;
-    }
-    setPendingImages((current) => [...current, ...added]);
-  }
-
-  function removePendingImage(id: string): void {
-    setPendingImages((current) => current.filter((image) => image.id !== id));
-  }
-
-  function handleComposerPaste(event: ReactClipboardEvent<HTMLTextAreaElement>): void {
-    const files = event.clipboardData.files;
-    if (files.length === 0 || !Array.from(files).some((file) => file.type.startsWith('image/'))) {
-      return;
-    }
-    event.preventDefault();
-    void addImageFiles(files);
   }
 
   function cancelRun(): void {
