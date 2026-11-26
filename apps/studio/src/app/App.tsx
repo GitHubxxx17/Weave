@@ -20,7 +20,6 @@ import {
   useRef,
   useState,
 } from 'react';
-import { createPortal } from 'react-dom';
 import {
   Archive,
   Bot,
@@ -29,7 +28,6 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
-  Handshake,
   Files,
   FolderOpen,
   FolderCog,
@@ -53,9 +51,7 @@ import {
   Trash2,
   RotateCcw,
   X,
-  Zap,
 } from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
 
 import { AgentStreamError, streamAgentRun } from '../features/agent/agent-stream.js';
 import type { AgentRuntimeEvent } from '../features/agent/agent-types.js';
@@ -80,15 +76,11 @@ import { ConversationPane } from '../features/conversation/conversation-pane.js'
 import { createConversationStore } from '../features/conversation/conversation-store.js';
 import { usePendingConversationReveal } from '../features/conversation/use-pending-conversation-reveal.js';
 import {
-  conversationRows,
-  projectConversation,
   getConversationRow,
   getConversationRetry,
 } from '../features/conversation/conversation-model.js';
 import type {
-  CapturedSubmission,
   ConversationAction,
-  ConversationRow,
   TimelineHandle,
   LiveOwner,
 } from '../features/conversation/conversation-types.js';
@@ -117,7 +109,7 @@ import { sumUsage } from '../features/conversation/turn-stats.js';
 import { ApprovalPanel, useApprovals } from '../features/approvals/approval-panel.js';
 import { AgentTaskPanel, isSettledTask } from '../features/tasks/task-panel.js';
 import { useAgentTasks } from '../features/tasks/use-agent-tasks.js';
-import type { AgentTaskResultPointer, AgentTaskView } from '../features/tasks/task-types.js';
+import type { AgentTaskView } from '../features/tasks/task-types.js';
 import type { ApprovalRequest } from '../features/approvals/approval-api.js';
 import {
   CommandPickerList,
@@ -133,541 +125,55 @@ import {
   providerPresets,
 } from '../features/providers/provider-presets.js';
 import type { ProviderDescriptor, ProviderSettings } from '../features/providers/provider-types.js';
-import { createWorkspaceApi, WorkspaceApiError } from '../features/workspace/workspace-api.js';
+import { createWorkspaceApi } from '../features/workspace/workspace-api.js';
 import type {
-  ProjectWithSessions,
   SessionDetail,
-  SessionSummary,
   TurnSummary,
   TurnUsage,
 } from '../features/workspace/workspace-types.js';
-
-type RunStatus = 'idle' | 'streaming' | 'completed' | 'error' | 'cancelled';
-
-/** Reactive run state kept per session so switching sessions never disturbs a run. */
-type SessionRunState = {
-  readonly status: RunStatus;
-  readonly errorMessage: string | null;
-  readonly connection?: 'connecting' | 'connected' | 'reconnecting' | undefined;
-  readonly stopping?: boolean | undefined;
-};
-
-/** Non-reactive bookkeeping for the single in-flight run of one session. */
-type SessionRunHandle = {
-  runId: string;
-  observationEpoch: number;
-  controller: AbortController;
-  assistantId: string;
-  tools: readonly ToolActivity[];
-  projectId?: string;
-  sessionId?: string;
-  observing?: boolean;
-  reconciling?: boolean;
-  execution?: AgentExecutionSnapshot;
-  requestId?: string;
-  pendingCancel?: boolean;
-  cancelInFlight?: boolean;
-};
-
-const idleRunState: SessionRunState = { status: 'idle', errorMessage: null };
-
-type ProductView =
-  | 'studio'
-  | 'projects'
-  | 'history'
-  | 'archived'
-  | 'settings'
-  | 'marketplace'
-  | 'memory'
-  | 'retrieval';
-type OpenMenu = 'project' | 'more' | 'context' | 'permission' | 'model' | null;
-
-type AgentSubmissionSnapshot = CapturedSubmission;
-type ChatMessage = ConversationRow;
-
-type StudioSession = {
-  readonly id: string;
-  readonly title: string;
-  readonly lastUsedLabel: string;
-  readonly archivedAt: string | null;
-  readonly messages: readonly ChatMessage[];
-  readonly turns: readonly TurnSummary[];
-  readonly detailKnown: boolean;
-  readonly durableSequence?: number;
-  readonly taskOrigin?: SessionDetail['taskOrigin'];
-};
-
-type TaskTranscriptTarget =
-  | { readonly sessionId: string; readonly result: AgentTaskResultPointer }
-  | { readonly sessionId: string; readonly toolCallId: string; readonly turnId: string };
-
-type StudioProject = {
-  readonly id: string;
-  readonly name: string;
-  readonly folderName: string;
-  readonly folderPath?: string | undefined;
-  readonly sessions: readonly StudioSession[];
-};
-
-type ProjectDirectory = {
-  readonly name: string;
-};
-
-/** An image staged in the composer before it is sent, base64-encoded. */
-type PendingImage = {
-  readonly id: string;
-  readonly name: string;
-  readonly mediaType: string;
-  readonly data: string;
-};
-
-type DirectoryPickerWindow = Window &
-  typeof globalThis & {
-    readonly showDirectoryPicker?: () => Promise<ProjectDirectory>;
-  };
-
-type ToolActivity = {
-  readonly toolCallId: string;
-  readonly name: string;
-  readonly arguments: string;
-  readonly status: 'called' | 'executing' | 'completed' | 'failed';
-  readonly result?: string;
-};
-
-type ProviderFormState = {
-  readonly mode: 'create' | 'edit';
-  readonly editingId: string | null;
-  readonly providerPresetId: string;
-  readonly modelPresetId: string;
-  readonly id: string;
-  readonly label: string;
-  readonly baseUrl: string;
-  readonly apiKey: string;
-  readonly defaultModel: string;
-  readonly makeDefault: boolean;
-  readonly clearApiKey: boolean;
-  readonly contextWindowTokens: string;
-  readonly temperature: string;
-  readonly maxTokens: string;
-};
-
-type FormSelectOption = {
-  readonly value: string;
-  readonly label: string;
-};
-
-type FormSelectProps = {
-  readonly label: string;
-  readonly value: string;
-  readonly placeholder: string;
-  readonly options: readonly FormSelectOption[];
-  readonly onChange: (value: string) => void;
-};
-
-type FormSelectMenuPosition = {
-  readonly top: number;
-  readonly left: number;
-  readonly width: number;
-  readonly maxHeight: number;
-};
-
-/** Result of parsing one optional numeric Provider field from its input string. */
-type ParsedNumberField =
-  { readonly ok: true; readonly value: number | undefined } | { readonly ok: false };
-
-/**
- * Parses an optional numeric Provider field: an empty string means "unset",
- * otherwise the value must be a finite number in range (temperature 0–2, or a
- * positive integer).
- */
-function parseProviderNumberField(
-  raw: string,
-  kind: 'temperature' | 'positiveInt',
-): ParsedNumberField {
-  const trimmed = raw.trim();
-  if (trimmed === '') {
-    return { ok: true, value: undefined };
-  }
-  const value = Number(trimmed);
-  if (!Number.isFinite(value)) {
-    return { ok: false };
-  }
-  if (kind === 'temperature') {
-    return value >= 0 && value <= 2 ? { ok: true, value } : { ok: false };
-  }
-  return Number.isInteger(value) && value > 0 ? { ok: true, value } : { ok: false };
-}
-
-/**
- * Renders a keyboard-friendly select menu that matches the Studio visual
- * language instead of relying on the operating system's native select popup.
- */
-function FormSelect({
-  label,
-  value,
-  placeholder,
-  options,
-  onChange,
-}: FormSelectProps): ReactElement {
-  const [isOpen, setIsOpen] = useState(false);
-  const [menuPosition, setMenuPosition] = useState<FormSelectMenuPosition | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const selectedOption = options.find((option) => option.value === value);
-
-  useEffect(() => {
-    if (!isOpen) {
-      setMenuPosition(null);
-      return;
-    }
-
-    function updateMenuPosition(): void {
-      const trigger = triggerRef.current;
-      if (trigger === null) {
-        return;
-      }
-
-      const triggerRect = trigger.getBoundingClientRect();
-      const viewportPadding = 12;
-      const optionHeight = 42;
-      const desiredHeight = Math.min(240, options.length * optionHeight + 10);
-      const spaceBelow = window.innerHeight - triggerRect.bottom - viewportPadding;
-      const spaceAbove = triggerRect.top - viewportPadding;
-      const shouldOpenAbove = spaceBelow < desiredHeight && spaceAbove > spaceBelow;
-      const maxHeight = Math.max(
-        120,
-        Math.min(desiredHeight, shouldOpenAbove ? spaceAbove : spaceBelow),
-      );
-      const left = Math.min(
-        triggerRect.left,
-        Math.max(viewportPadding, window.innerWidth - triggerRect.width - viewportPadding),
-      );
-
-      setMenuPosition({
-        top: shouldOpenAbove
-          ? Math.max(viewportPadding, triggerRect.top - maxHeight - 6)
-          : triggerRect.bottom + 6,
-        left,
-        width: triggerRect.width,
-        maxHeight,
-      });
-    }
-
-    function handlePointerDown(event: PointerEvent): void {
-      const target = event.target as Node;
-      if (
-        containerRef.current?.contains(target) !== true &&
-        menuRef.current?.contains(target) !== true
-      ) {
-        setIsOpen(false);
-      }
-    }
-
-    function handleKeyDown(event: globalThis.KeyboardEvent): void {
-      if (event.key === 'Escape') {
-        setIsOpen(false);
-      }
-    }
-
-    updateMenuPosition();
-    window.addEventListener('resize', updateMenuPosition);
-    window.addEventListener('scroll', updateMenuPosition, true);
-    document.addEventListener('pointerdown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('resize', updateMenuPosition);
-      window.removeEventListener('scroll', updateMenuPosition, true);
-      document.removeEventListener('pointerdown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isOpen, options.length]);
-
-  function handleButtonKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>): void {
-    if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      setIsOpen(true);
-    }
-  }
-
-  return (
-    <div className={`form-select${isOpen ? ' form-select-open' : ''}`} ref={containerRef}>
-      <button
-        className="form-select-trigger"
-        type="button"
-        ref={triggerRef}
-        aria-label={label}
-        aria-expanded={isOpen}
-        aria-haspopup="menu"
-        onClick={() => setIsOpen((current) => !current)}
-        onKeyDown={handleButtonKeyDown}
-      >
-        <span className={selectedOption === undefined ? 'form-select-placeholder' : undefined}>
-          {selectedOption?.label ?? placeholder}
-        </span>
-        <ChevronDown aria-hidden="true" />
-      </button>
-      {isOpen && menuPosition !== null
-        ? createPortal(
-            <div
-              className="form-select-menu"
-              ref={menuRef}
-              role="menu"
-              aria-label={label}
-              onPointerDown={(event) => event.stopPropagation()}
-              style={{
-                top: menuPosition.top,
-                left: menuPosition.left,
-                width: menuPosition.width,
-                maxHeight: menuPosition.maxHeight,
-              }}
-            >
-              {options.map((option) => (
-                <button
-                  className={`form-select-option${option.value === value ? ' form-select-option-selected' : ''}`}
-                  type="button"
-                  role="menuitem"
-                  key={option.value}
-                  onClick={() => {
-                    onChange(option.value);
-                    setIsOpen(false);
-                  }}
-                >
-                  <span>{option.label}</span>
-                  {option.value === value ? <Check aria-hidden="true" /> : null}
-                </button>
-              ))}
-            </div>,
-            document.body,
-          )
-        : null}
-    </div>
-  );
-}
-
-const statusLabels: Record<RunStatus, string> = {
-  idle: '就绪',
-  streaming: '运行中',
-  completed: '已完成',
-  error: '出错',
-  cancelled: '已取消',
-};
-
-const viewLabels: Record<
-  Exclude<ProductView, 'studio' | 'marketplace' | 'memory' | 'retrieval'>,
-  { title: string; description: string }
-> = {
-  projects: {
-    title: '项目',
-    description: '每个项目对应一个本地文件夹，并包含多个 Agent 会话',
-  },
-  history: {
-    title: '历史',
-    description: '运行记录和会话时间线将在这里统一展示',
-  },
-  archived: {
-    title: '归档',
-    description: '已归档的会话可以恢复，也可以在这里删除',
-  },
-  settings: {
-    title: '设置',
-    description: '模型、权限和插件配置将在这里集中管理',
-  },
-};
-
-type PermissionOption = {
-  readonly value: 'ask' | 'trust' | 'yolo';
-  readonly label: string;
-  readonly description: string;
-  readonly icon: LucideIcon;
-  readonly danger?: boolean;
-};
-
-const permissionOptions: readonly PermissionOption[] = [
-  {
-    value: 'ask',
-    label: '常规',
-    description: '每次写文件或运行命令都要你确认',
-    icon: ShieldCheck,
-  },
-  {
-    value: 'trust',
-    label: '信任',
-    description: '本会话自动执行，仅高风险操作才确认',
-    icon: Handshake,
-  },
-  {
-    value: 'yolo',
-    label: '完全访问',
-    description: '全程不确认、直接执行，请谨慎',
-    icon: Zap,
-    danger: true,
-  },
-];
-
-/** Model reasoning-effort options; the empty value sends no hint (provider default). */
-const reasoningEffortOptions = [
-  { value: 'low', label: '低' },
-  { value: 'medium', label: '中' },
-  { value: 'high', label: '高' },
-] as const;
-
-const fallbackProviderSettings: ProviderSettings = {
-  providers: [
-    {
-      id: 'mock',
-      label: '本地模型',
-      type: 'mock',
-      defaultModel: 'weave-local-demo',
-      hasApiKey: false,
-      editable: false,
-    },
-  ],
-  defaultProvider: 'mock',
-  canManage: false,
-};
-
-let nextId = 0;
+import {
+  fallbackProviderSettings,
+  permissionOptions,
+  reasoningEffortOptions,
+  statusLabels,
+  viewLabels,
+} from './app-constants.js';
+import {
+  createId,
+  createSessionTitle,
+  emptyTurns,
+  formatMessageTime,
+  formatModelLabel,
+  getSessionLabel,
+  liveTurnIdFor,
+  readImageFile,
+  safeErrorMessage,
+  toStudioProject,
+  toStudioSession,
+  updateToolActivity,
+  workspaceErrorMessage,
+} from './app-helpers.js';
+import {
+  idleRunState,
+  type AgentSubmissionSnapshot,
+  type ChatMessage,
+  type DirectoryPickerWindow,
+  type OpenMenu,
+  type PendingImage,
+  type ProductView,
+  type ProviderFormState,
+  type RunStatus,
+  type SessionRunHandle,
+  type SessionRunState,
+  type StudioProject,
+  type StudioSession,
+  type TaskTranscriptTarget,
+  type ToolActivity,
+} from './app-types.js';
+import { FormSelect, parseProviderNumberField } from './form-select.js';
 
 const providerApi = createProviderApi();
 const workspaceApi = createWorkspaceApi();
-
-function createId(prefix: string): string {
-  nextId += 1;
-  return `${prefix}-${nextId}`;
-}
-
-function getSessionLabel(sessionId: string): string {
-  return sessionId.startsWith('session-') ? sessionId.slice('session-'.length) : sessionId;
-}
-
-/** "DeepSeek · deepseek-chat", or only the model when the Provider is named after it. */
-function formatModelLabel(providerLabel: string, model: string): string {
-  return providerLabel.trim().toLowerCase() === model.trim().toLowerCase()
-    ? model
-    : `${providerLabel} · ${model}`;
-}
-
-function createSessionTitle(text: string): string {
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  return normalized.length > 24 ? `${normalized.slice(0, 24)}…` : normalized;
-}
-
-function safeErrorMessage(error: unknown): string {
-  if (error instanceof AgentStreamError) {
-    const separator = error.message.indexOf(': ');
-    return separator === -1 ? error.message : error.message.slice(separator + 2);
-  }
-
-  return 'Agent run failed';
-}
-
-function updateToolActivity(
-  activities: readonly ToolActivity[],
-  toolCallId: string,
-  update: (activity: ToolActivity | undefined) => ToolActivity,
-): ToolActivity[] {
-  const existing = activities.find((activity) => activity.toolCallId === toolCallId);
-  const updated = update(existing);
-
-  if (existing === undefined) {
-    return [...activities, updated];
-  }
-
-  return activities.map((activity) => (activity.toolCallId === toolCallId ? updated : activity));
-}
-
-const emptyTurns: readonly TurnSummary[] = [];
-
-/** Temporary Turn id used while a run streams, replaced by the durable id on completion. */
-function liveTurnIdFor(assistantMessageId: string): string {
-  return `live-${assistantMessageId}`;
-}
-
-/** Reads an image File as base64 (without the `data:` prefix). */
-function readImageFile(file: File): Promise<{ mediaType: string; data: string }> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(reader.error ?? new Error('image read failed'));
-    reader.onload = () => {
-      const result = typeof reader.result === 'string' ? reader.result : '';
-      const comma = result.indexOf(',');
-      resolve({
-        mediaType: file.type !== '' ? file.type : 'image/png',
-        data: comma === -1 ? '' : result.slice(comma + 1),
-      });
-    };
-    reader.readAsDataURL(file);
-  });
-}
-
-function formatMessageTime(occurredAt: string): string {
-  const date = new Date(occurredAt);
-  if (Number.isNaN(date.getTime())) {
-    return '时间未知';
-  }
-
-  const now = new Date();
-  const sameDay =
-    date.getFullYear() === now.getFullYear() &&
-    date.getMonth() === now.getMonth() &&
-    date.getDate() === now.getDate();
-  const time = new Intl.DateTimeFormat('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(date);
-
-  return sameDay ? time : `${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
-}
-
-function toStudioSession(session: SessionSummary | SessionDetail): StudioSession {
-  return {
-    id: session.id,
-    title: session.title,
-    lastUsedLabel: '最近使用',
-    archivedAt: session.archivedAt ?? null,
-    messages: 'messages' in session ? conversationRows(projectConversation(session)) : [],
-    turns: 'turns' in session ? session.turns : [],
-    detailKnown: 'messages' in session,
-    durableSequence: session.lastSequence,
-    ...('taskOrigin' in session ? { taskOrigin: session.taskOrigin } : {}),
-  };
-}
-
-function toStudioProject(project: ProjectWithSessions): StudioProject {
-  return {
-    id: project.id,
-    name: project.name,
-    folderName: project.folderName,
-    folderPath: project.folderPath,
-    // The server returns sessions in creation order; show newest first.
-    sessions: [...project.sessions].reverse().map(toStudioSession),
-  };
-}
-
-function workspaceErrorMessage(error: unknown): string {
-  if (!(error instanceof WorkspaceApiError)) {
-    return '工作区服务暂时不可用，请稍后重试';
-  }
-
-  switch (error.code) {
-    case 'workspace-project-not-found':
-      return '项目不存在，请重新加载工作区';
-    case 'session-not-found':
-      return '会话不存在，请重新加载工作区';
-    case 'session-deleted':
-      return '会话已经删除';
-    case 'session-archived':
-      return '归档会话不能执行当前操作';
-    case 'workspace-api-network':
-      return '无法连接到本地服务，请确认后端已经启动';
-    case 'project-folder-invalid':
-      return '文件夹路径无效，请填写本机已存在的文件夹绝对路径';
-    default:
-      return error.message;
-  }
-}
 
 /** Studio's first local Agent workspace, combining chat state and stream events. */
 export function App(): ReactElement {
