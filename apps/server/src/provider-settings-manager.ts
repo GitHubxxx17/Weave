@@ -31,7 +31,8 @@ export type ProviderSettingsManagerErrorCode =
   | 'provider-settings-secret-invalid'
   | 'provider-settings-provider-invalid'
   | 'provider-settings-api-key-required'
-  | 'provider-settings-storage';
+  | 'provider-settings-storage'
+  | 'provider-settings-busy';
 
 export class ProviderSettingsManagerError extends Error {
   readonly code: ProviderSettingsManagerErrorCode;
@@ -126,9 +127,13 @@ function mapStoreError(error: unknown): never {
         cause: error,
       });
     }
-    throw new ProviderSettingsManagerError('provider-settings-storage', error.message, {
-      cause: error,
-    });
+    throw new ProviderSettingsManagerError(
+      error.code === 'provider-settings-busy'
+        ? 'provider-settings-busy'
+        : 'provider-settings-storage',
+      error.message,
+      { cause: error },
+    );
   }
   throw error;
 }

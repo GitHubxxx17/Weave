@@ -4,6 +4,7 @@ export type McpAuthorityErrorCode =
   | 'mcp-conflict'
   | 'mcp-authority-protocol'
   | 'mcp-authority-storage'
+  | 'mcp-authority-busy'
   | 'mcp-closed'
   | 'mcp-content-changed'
   | 'mcp-content-too-large'
@@ -15,6 +16,7 @@ const messages: Readonly<Record<McpAuthorityErrorCode, string>> = {
   'mcp-conflict': 'MCP authority changed or the operation conflicts with current trust',
   'mcp-authority-protocol': 'MCP authority contains invalid persisted data',
   'mcp-authority-storage': 'MCP authority storage operation failed',
+  'mcp-authority-busy': 'MCP authority database is temporarily busy',
   'mcp-closed': 'MCP authority is closed',
   'mcp-content-changed': '内容已变更，需要重新信任',
   'mcp-content-too-large':

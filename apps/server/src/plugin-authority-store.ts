@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { lstatSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, sep } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync } from 'node:sqlite';
 import type { PluginTrustStore } from '@weave/plugin-host';
 import { z } from 'zod';
+import { openSharedDatabase } from './sqlite-busy-timeout.js';
 import {
   canonicalJson,
   canonicalizeManagedRequest,
@@ -191,7 +192,7 @@ export function createSqlitePluginAuthorityDatabase(
   }
   let database: DatabaseSync;
   try {
-    database = new DatabaseSync(filename);
+    database = openSharedDatabase(filename);
   } catch (error: unknown) {
     throw authorityError(error);
   }

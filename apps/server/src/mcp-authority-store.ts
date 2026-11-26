@@ -1,4 +1,5 @@
-import { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync } from 'node:sqlite';
+import { isSqliteBusyError, openSharedDatabase } from './sqlite-busy-timeout.js';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import {
@@ -423,7 +424,9 @@ function storage<T>(operation: () => T): T {
     return operation();
   } catch (error) {
     if (error instanceof McpAuthorityError) throw error;
-    throw new McpAuthorityError('mcp-authority-storage');
+    throw new McpAuthorityError(
+      isSqliteBusyError(error) ? 'mcp-authority-busy' : 'mcp-authority-storage',
+    );
   }
 }
 
@@ -439,7 +442,7 @@ export function createSqliteMcpAuthorityStore(options: {
     throw new McpAuthorityError('mcp-invalid');
   }
   const database = storage(() => {
-    const opened = new DatabaseSync(parsedOptions.filename);
+    const opened = openSharedDatabase(parsedOptions.filename);
     try {
       opened.exec(
         'CREATE TABLE IF NOT EXISTS mcp_authority_events (sequence INTEGER NOT NULL PRIMARY KEY, occurred_at TEXT NOT NULL, scope TEXT NOT NULL, event_json TEXT NOT NULL)',
