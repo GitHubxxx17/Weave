@@ -15,7 +15,6 @@ import {
   useState,
 } from 'react';
 import {
-  Archive,
   Bot,
   Check,
   ChevronDown,
@@ -23,12 +22,9 @@ import {
   Copy,
   Files,
   FolderOpen,
-  FolderCog,
   FolderKanban,
   GitBranch,
-  History,
   ImagePlus,
-  MessageSquarePlus,
   MoreHorizontal,
   PanelRightOpen,
   Pencil,
@@ -121,6 +117,10 @@ import { FormSelect } from './form-select.js';
 import { useComposerAttachments } from './use-composer-attachments.js';
 import { useProviderSettings } from './use-provider-settings.js';
 import { useSessionExecutions } from './use-session-executions.js';
+import { ArchivedView } from './archived-view.js';
+import { HistoryView } from './history-view.js';
+import { ProjectsView } from './projects-view.js';
+import { ProviderSettingsView } from './provider-settings-view.js';
 import { SessionRail } from './session-rail.js';
 import { SettingsSidebar } from './settings-sidebar.js';
 import { WorkspaceNav } from './workspace-nav.js';
@@ -1602,309 +1602,36 @@ function StudioApp(): ReactElement {
         >
           <div className={activeView === 'settings' ? 'product-view-content' : 'page-content'}>
             {activeView === 'projects' ? (
-              <>
-                <header className="page-header">
-                  <div className="page-header-copy">
-                    <h2>项目</h2>
-                    <p>每个项目对应一个本地文件夹，Agent 只在该文件夹内读写文件。</p>
-                  </div>
-                  <div className="page-header-actions">
-                    <button className="primary-button" type="button" onClick={openProjectDialog}>
-                      <Plus aria-hidden="true" />
-                      创建项目
-                    </button>
-                  </div>
-                </header>
-                <div className="page-section-heading">
-                  <span>全部项目</span>
-                  <small>{projects.length} 个</small>
-                </div>
-                <div className="project-overview-list" aria-label="项目列表">
-                  {projects.map((project) => {
-                    const isActive = project.id === activeProjectId;
-                    const sessionCount = project.sessions.filter(
-                      (session) => session.archivedAt === null,
-                    ).length;
-                    return (
-                      <article
-                        className={`project-overview-item${isActive ? ' project-overview-item-active' : ''}`}
-                        key={project.id}
-                      >
-                        <button
-                          className="project-overview-main"
-                          type="button"
-                          aria-label={`打开项目 ${project.name}`}
-                          onClick={() => openProject(project.id)}
-                          disabled={sessionHasWork}
-                        >
-                          <span className="project-overview-avatar" aria-hidden="true">
-                            {project.name.slice(0, 1).toLocaleUpperCase()}
-                          </span>
-                          <span className="project-overview-copy">
-                            <span className="project-overview-title">
-                              <strong>{project.name}</strong>
-                              {isActive ? (
-                                <span className="project-current-badge">当前</span>
-                              ) : null}
-                            </span>
-                            <span className="project-overview-path">
-                              <small className="project-folder-name">
-                                {project.folderPath ?? project.folderName}
-                              </small>
-                              {project.folderPath === undefined ? (
-                                <small className="project-folder-missing">未设置文件夹路径</small>
-                              ) : null}
-                            </span>
-                          </span>
-                          <span className="project-overview-meta">{sessionCount} 个会话</span>
-                        </button>
-                        <div
-                          className="project-overview-actions"
-                          role="group"
-                          aria-label={`管理项目 ${project.name}`}
-                        >
-                          <button
-                            className="project-action-button"
-                            type="button"
-                            aria-label={`在 ${project.name} 中新建会话`}
-                            title="新建会话"
-                            onClick={() => void createSessionForProject(project.id)}
-                            disabled={sessionHasWork}
-                          >
-                            <MessageSquarePlus aria-hidden="true" />
-                          </button>
-                          <button
-                            className="project-action-button"
-                            type="button"
-                            aria-label={`重命名项目 ${project.name}`}
-                            title="重命名"
-                            onClick={() => openProjectRename(project)}
-                            disabled={sessionHasWork}
-                          >
-                            <Pencil aria-hidden="true" />
-                          </button>
-                          <button
-                            className="project-action-button"
-                            type="button"
-                            aria-label={`设置项目 ${project.name} 的文件夹`}
-                            title="设置文件夹"
-                            onClick={() => openFolderDialog(project)}
-                            disabled={sessionHasWork}
-                          >
-                            <FolderCog aria-hidden="true" />
-                          </button>
-                        </div>
-                      </article>
-                    );
-                  })}
-                </div>
-              </>
+              <ProjectsView
+                projects={projects}
+                activeProjectId={activeProjectId}
+                sessionHasWork={sessionHasWork}
+                openProjectDialog={openProjectDialog}
+                openProject={openProject}
+                createSessionForProject={createSessionForProject}
+                openProjectRename={openProjectRename}
+                openFolderDialog={openFolderDialog}
+              />
             ) : activeView === 'archived' ? (
-              <>
-                <header className="page-header">
-                  <div className="page-header-copy">
-                    <h2>归档</h2>
-                    <p>归档会话不会出现在项目树中，可以恢复或删除。</p>
-                  </div>
-                </header>
-                <div className="archive-overview-list" aria-label="归档会话列表">
-                  {archivedProjects.length > 0 ? (
-                    archivedProjects.map((project) => (
-                      <section className="archive-project-section" key={project.id}>
-                        <div className="archive-project-heading">
-                          <FolderOpen aria-hidden="true" />
-                          <strong>{project.name}</strong>
-                          <small>{project.sessions.length} 个归档会话</small>
-                        </div>
-                        <div className="archive-session-list">
-                          {project.sessions.map((session) => (
-                            <article className="archive-session-item" key={session.id}>
-                              <div>
-                                <strong>{session.title}</strong>
-                                <small>
-                                  {session.archivedAt === null
-                                    ? '已归档'
-                                    : `归档于 ${formatMessageTime(session.archivedAt)}`}
-                                </small>
-                              </div>
-                              <div className="archive-session-actions">
-                                <button
-                                  className="secondary-button"
-                                  type="button"
-                                  aria-label={`恢复会话 ${session.title}`}
-                                  onClick={() => void restoreSession(project.id, session.id)}
-                                  disabled={sessionHasWork}
-                                >
-                                  <RotateCcw aria-hidden="true" />
-                                  恢复
-                                </button>
-                                <button
-                                  className="danger-button"
-                                  type="button"
-                                  aria-label={`删除会话 ${session.title}`}
-                                  onClick={() =>
-                                    setSessionToDelete({
-                                      projectId: project.id,
-                                      sessionId: session.id,
-                                      title: session.title,
-                                    })
-                                  }
-                                  disabled={sessionHasWork}
-                                >
-                                  <Trash2 aria-hidden="true" />
-                                  删除
-                                </button>
-                              </div>
-                            </article>
-                          ))}
-                        </div>
-                      </section>
-                    ))
-                  ) : (
-                    <div className="page-empty">
-                      <span className="page-empty-icon" aria-hidden="true">
-                        <Archive />
-                      </span>
-                      <strong>暂无归档会话</strong>
-                      <p>在左侧会话列表中归档的会话会显示在这里。</p>
-                    </div>
-                  )}
-                </div>
-              </>
+              <ArchivedView
+                archivedProjects={archivedProjects}
+                sessionHasWork={sessionHasWork}
+                restoreSession={restoreSession}
+                setSessionToDelete={setSessionToDelete}
+              />
             ) : activeView === 'settings' ? (
-              <div className="provider-settings-view">
-                <div className="product-view-heading provider-settings-heading">
-                  <div>
-                    <p>配置</p>
-                    <h2>模型服务</h2>
-                    <span>管理 Weave 使用的 AI 服务和默认模型。</span>
-                  </div>
-                  {providerSettings.canManage ? (
-                    <button
-                      className="primary-button"
-                      type="button"
-                      onClick={() => openProviderForm()}
-                      disabled={providerMutation !== 'idle'}
-                    >
-                      <Plus aria-hidden="true" />
-                      添加 AI 服务
-                    </button>
-                  ) : null}
-                </div>
-                <div className="provider-settings-section-heading">
-                  <div>
-                    <h3>已配置的服务</h3>
-                    <span>{providerSettings.providers.length} 个服务</span>
-                  </div>
-                  <span className="provider-settings-section-status">
-                    <span className="connection-dot" aria-hidden="true" />
-                    本地配置
-                  </span>
-                </div>
-                <div className="provider-settings-list" aria-label="Provider 列表">
-                  {providerSettings.providers.map((provider) => (
-                    <article
-                      className={`provider-settings-item${provider.id === providerSettings.defaultProvider ? ' provider-settings-item-default' : ''}`}
-                      key={provider.id}
-                    >
-                      <div className="provider-settings-main">
-                        <div className="provider-settings-icon" aria-hidden="true">
-                          <Bot />
-                        </div>
-                        <div className="provider-settings-copy">
-                          <strong>{provider.label}</strong>
-                          <span>{provider.id}</span>
-                        </div>
-                      </div>
-                      <div className="provider-settings-details">
-                        <div className="provider-detail-row">
-                          <span>模型</span>
-                          <strong>{provider.defaultModel ?? '未设置默认模型'}</strong>
-                        </div>
-                        <div className="provider-detail-row">
-                          <span>接口</span>
-                          <strong>{provider.baseUrl ?? '本地运行时'}</strong>
-                        </div>
-                      </div>
-                      <div className="provider-settings-side">
-                        <div className="provider-settings-status">
-                          <span
-                            className={
-                              provider.hasApiKey
-                                ? 'provider-status-ready'
-                                : 'provider-status-warning'
-                            }
-                          >
-                            <span className="provider-status-dot" aria-hidden="true" />
-                            {provider.hasApiKey ? '可用' : '需要配置 API Key'}
-                          </span>
-                          {provider.id === providerSettings.defaultProvider ? (
-                            <span className="provider-default-mark">
-                              <Check aria-hidden="true" />
-                              默认
-                            </span>
-                          ) : null}
-                        </div>
-                        {providerSettings.canManage && provider.editable ? (
-                          <div className="provider-settings-actions">
-                            {provider.id !== providerSettings.defaultProvider ? (
-                              <button
-                                className="provider-action-button"
-                                type="button"
-                                onClick={() => void setDefaultProvider(provider.id)}
-                                disabled={providerMutation !== 'idle' || !provider.hasApiKey}
-                              >
-                                设为默认
-                              </button>
-                            ) : null}
-                            <button
-                              className="provider-action-button"
-                              type="button"
-                              aria-label={`编辑 Provider ${provider.label}`}
-                              onClick={() => openProviderForm(provider)}
-                              disabled={providerMutation !== 'idle'}
-                            >
-                              <Pencil aria-hidden="true" />
-                              编辑
-                            </button>
-                            <button
-                              className="provider-action-button provider-action-button-danger"
-                              type="button"
-                              aria-label={`删除 Provider ${provider.label}`}
-                              onClick={() => setProviderToDelete(provider)}
-                              disabled={providerMutation !== 'idle'}
-                            >
-                              <Trash2 aria-hidden="true" />
-                              删除
-                            </button>
-                          </div>
-                        ) : null}
-                      </div>
-                    </article>
-                  ))}
-                </div>
-                <p className="provider-settings-note">
-                  {providerSettings.canManage
-                    ? 'API Key 只保存在本机的系统密钥存储中，页面不会回显已保存的密钥。'
-                    : '浏览器开发模式下，Provider 通过 .env 只读配置；需要管理 API Key 时请使用 Desktop。'}
-                </p>
-              </div>
+              <ProviderSettingsView
+                providerSettings={providerSettings}
+                providerMutation={providerMutation}
+                openProviderForm={openProviderForm}
+                setDefaultProvider={setDefaultProvider}
+                setProviderToDelete={setProviderToDelete}
+              />
             ) : (
-              <>
-                <header className="page-header">
-                  <div className="page-header-copy">
-                    <h2>{viewLabels[activeView].title}</h2>
-                    <p>{viewLabels[activeView].description}。</p>
-                  </div>
-                </header>
-                <div className="page-empty">
-                  <span className="page-empty-icon" aria-hidden="true">
-                    <History />
-                  </span>
-                  <strong>暂无历史记录</strong>
-                  <p>跨项目的运行记录与会话时间线还在开发中。</p>
-                </div>
-              </>
+              <HistoryView
+                title={viewLabels[activeView].title}
+                description={viewLabels[activeView].description}
+              />
             )}
           </div>
         </section>
