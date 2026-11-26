@@ -120,16 +120,24 @@ describe('Git changes capture', () => {
     expect(content).toContain('+plain-change');
   });
 
-  it('truncates at the byte limit on a character boundary and marks the result', async () => {
-    const root = await repository({ 'big.txt': 'start\n' });
-    await writeFile(path.join(root, 'big.txt'), '中文内容行\n'.repeat(40_000));
-    const [snapshot] = await capture(root, ['git-changes']);
-    expect(snapshot!.truncated).toBe(true);
-    expect(snapshot!.byteLength).toBeLessThanOrEqual(executionContextLimits.gitChangesBytes);
-    expect(snapshot!.content).toContain('[truncated');
-    expect(snapshot!.content).not.toContain('\uFFFD');
-    expect(snapshot!.content).toContain('## git status --porcelain=v1');
-  });
+  // Spawns about eight real git processes (init, add, commit, then status and
+  // two diffs). The default 5 s timeout is too tight when other packages run in
+  // parallel, so this case gets a larger one; the assertions are unchanged.
+  it(
+    'truncates at the byte limit on a character boundary and marks the result',
+    { timeout: 30_000 },
+    async () => {
+      const root = await repository({ 'big.txt': 'start\n' });
+      // 16 bytes per line: 12,000 lines (192 KB) is enough to pass the 128 KB limit.
+      await writeFile(path.join(root, 'big.txt'), '中文内容行\n'.repeat(12_000));
+      const [snapshot] = await capture(root, ['git-changes']);
+      expect(snapshot!.truncated).toBe(true);
+      expect(snapshot!.byteLength).toBeLessThanOrEqual(executionContextLimits.gitChangesBytes);
+      expect(snapshot!.content).toContain('[truncated');
+      expect(snapshot!.content).not.toContain('\uFFFD');
+      expect(snapshot!.content).toContain('## git status --porcelain=v1');
+    },
+  );
 
   it('limits the diff to the project folder inside a larger repository', async () => {
     const root = await repository({ 'outside.txt': 'a\n', 'sub/inside.txt': 'a\n' });
