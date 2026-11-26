@@ -740,14 +740,17 @@ test.each([
   [
     '2,001 entries',
     async (directory: string) => {
-      for (let index = 0; index < 1999; index += 1) await mkdir(path.join(directory, `d${index}`));
+      await Promise.all(
+        Array.from({ length: 1999 }, (_, index) => mkdir(path.join(directory, `d${index}`))),
+      );
     },
   ],
   [
     '1,001 files',
     async (directory: string) => {
-      for (let index = 0; index < 999; index += 1)
-        await writeFile(path.join(directory, `f${index}`), '');
+      await Promise.all(
+        Array.from({ length: 999 }, (_, index) => writeFile(path.join(directory, `f${index}`), '')),
+      );
     },
   ],
   [
@@ -758,15 +761,21 @@ test.each([
       await truncate(target, 20 * 1024 * 1024);
     },
   ],
-])('rejects a source with %s', async (_label, createFiles) => {
-  const { managedRoot, sourceDirectory } = await fixture();
-  await createFiles(sourceDirectory);
-  const store = host.createPluginArtifactStore({ directory: managedRoot });
-  await expect(store.stage({ sourceDirectory })).rejects.toMatchObject({
-    code: 'plugin-artifact-too-large',
-  });
-  await expectNoPublication(managedRoot);
-});
+  // Thousands of real filesystem entries: about 0.5 s when idle, but the
+  // sequential version exceeded the default 5 s on loaded CI runners.
+])(
+  'rejects a source with %s',
+  async (_label, createFiles) => {
+    const { managedRoot, sourceDirectory } = await fixture();
+    await createFiles(sourceDirectory);
+    const store = host.createPluginArtifactStore({ directory: managedRoot });
+    await expect(store.stage({ sourceDirectory })).rejects.toMatchObject({
+      code: 'plugin-artifact-too-large',
+    });
+    await expectNoPublication(managedRoot);
+  },
+  30_000,
+);
 
 test('rejects a source edited while the staging copy is in progress', async () => {
   const { managedRoot, sourceDirectory } = await fixture();
