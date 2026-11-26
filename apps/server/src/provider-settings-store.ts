@@ -1,4 +1,5 @@
-import { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync } from 'node:sqlite';
+import { isSqliteBusyError, openSharedDatabase } from './sqlite-busy-timeout.js';
 import { z } from 'zod';
 import {
   providerSettingsRecordSchema,
@@ -55,6 +56,7 @@ const notFoundMessage = 'Provider configuration does not exist';
 
 export type ProviderSettingsStoreErrorCode =
   | 'provider-settings-storage'
+  | 'provider-settings-busy'
   | 'provider-settings-invalid'
   | 'provider-settings-closed'
   | 'provider-settings-protocol'
@@ -161,9 +163,13 @@ function withStorageError<T>(operation: () => T): T {
     if (error instanceof ProviderSettingsStoreError) {
       throw error;
     }
-    throw new ProviderSettingsStoreError('provider-settings-storage', storageMessage, {
-      cause: error,
-    });
+    throw new ProviderSettingsStoreError(
+      isSqliteBusyError(error) ? 'provider-settings-busy' : 'provider-settings-storage',
+      storageMessage,
+      {
+        cause: error,
+      },
+    );
   }
 }
 
@@ -184,7 +190,7 @@ export function createSqliteProviderSettingsStore(options: {
   }
 
   const database = withStorageError(() => {
-    const created = new DatabaseSync(parsedOptions.data.filename);
+    const created = openSharedDatabase(parsedOptions.data.filename);
     created.exec(createTableSql);
     migrateProviderSettingsSchema(created);
     return created;

@@ -31,6 +31,7 @@ const statusByCode: Record<ProviderSettingsManagerError['code'], number> = {
   'provider-settings-provider-invalid': 422,
   'provider-settings-api-key-required': 400,
   'provider-settings-storage': 500,
+  'provider-settings-busy': 503,
 };
 
 function canManage(options: ProviderAppOptions): boolean {
