@@ -18,16 +18,13 @@ import {
   Bot,
   Check,
   ChevronDown,
-  ChevronRight,
   Copy,
   Files,
   FolderOpen,
-  FolderKanban,
   GitBranch,
   ImagePlus,
   MoreHorizontal,
   PanelRightOpen,
-  Pencil,
   Plus,
   SendHorizontal,
   Square,
@@ -83,11 +80,6 @@ import {
   commandPickerListId,
 } from '../features/commands/command-picker-list.js';
 import { useCommandPicker } from '../features/commands/use-command-picker.js';
-import {
-  customProviderPresetId,
-  findProviderPreset,
-  providerPresets,
-} from '../features/providers/provider-presets.js';
 import type { ProviderDescriptor } from '../features/providers/provider-types.js';
 import { createWorkspaceApi } from '../features/workspace/workspace-api.js';
 import {
@@ -113,7 +105,6 @@ import {
   type StudioProject,
   type TaskTranscriptTarget,
 } from './app-types.js';
-import { FormSelect } from './form-select.js';
 import { useComposerAttachments } from './use-composer-attachments.js';
 import { useProviderSettings } from './use-provider-settings.js';
 import { useSessionExecutions } from './use-session-executions.js';
@@ -121,6 +112,11 @@ import { ArchivedView } from './archived-view.js';
 import { HistoryView } from './history-view.js';
 import { ProjectsView } from './projects-view.js';
 import { ProviderSettingsView } from './provider-settings-view.js';
+import { ImagePreviewDialog } from './image-preview-dialog.js';
+import { ProviderDeleteDialog, ProviderFormDialog } from './provider-dialogs.js';
+import { CreateProjectDialog, FolderDialog, RenameProjectDialog } from './project-dialogs.js';
+import { QueuedCopyDialog } from './queued-copy-dialog.js';
+import { DeleteSessionDialog, EditSessionDialog } from './session-dialogs.js';
 import { SessionRail } from './session-rail.js';
 import { SettingsSidebar } from './settings-sidebar.js';
 import { WorkspaceNav } from './workspace-nav.js';
@@ -1691,34 +1687,11 @@ function StudioApp(): ReactElement {
         }}
       />
       {canCompose && copyRequest !== null ? (
-        <div className="modal-backdrop">
-          <section
-            className="queue-copy-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-label="复制队列消息"
-          >
-            <h2>保留当前草稿</h2>
-            <p>请选择追加或替换；原消息仍在队列中。</p>
-            <div className="queue-copy-dialog-actions">
-              <button
-                type="button"
-                onClick={() => applyQueuedCopy(copyRequest.snapshot, copyRequest.owner, true)}
-              >
-                追加到草稿
-              </button>
-              <button
-                type="button"
-                onClick={() => applyQueuedCopy(copyRequest.snapshot, copyRequest.owner, false)}
-              >
-                替换草稿
-              </button>
-              <button type="button" onClick={() => setCopyRequest(null)}>
-                取消复制
-              </button>
-            </div>
-          </section>
-        </div>
+        <QueuedCopyDialog
+          copyRequest={copyRequest}
+          applyQueuedCopy={applyQueuedCopy}
+          setCopyRequest={setCopyRequest}
+        />
       ) : null}
       {notice !== null ? (
         <div className="studio-notice" role="status">
@@ -1748,771 +1721,76 @@ function StudioApp(): ReactElement {
         </div>
       ) : null}
       {providerForm !== null ? (
-        <div
-          className="dialog-backdrop"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              closeProviderForm();
-            }
-          }}
-        >
-          <section
-            className="project-dialog provider-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="provider-dialog-title"
-          >
-            <header className="project-dialog-header">
-              <div>
-                <p>模型服务</p>
-                <h2 id="provider-dialog-title">
-                  {providerForm.mode === 'create' ? '添加 AI 服务' : '编辑 Provider'}
-                </h2>
-              </div>
-              <button
-                className="icon-button"
-                type="button"
-                aria-label="关闭 Provider 表单"
-                onClick={closeProviderForm}
-                disabled={providerMutation === 'saving'}
-              >
-                <X aria-hidden="true" />
-              </button>
-            </header>
-            <form className="project-dialog-form" onSubmit={(event) => void saveProvider(event)}>
-              <label className="provider-form-field">
-                <span>供应商</span>
-                <FormSelect
-                  label="供应商"
-                  value={providerForm.providerPresetId}
-                  placeholder="选择常见供应商"
-                  options={[
-                    ...providerPresets.map((preset) => ({
-                      value: preset.id,
-                      label: preset.label,
-                    })),
-                    { value: customProviderPresetId, label: '自定义供应商' },
-                  ]}
-                  onChange={chooseProviderPreset}
-                />
-              </label>
-              <div className="provider-form-grid">
-                <label className="provider-form-field">
-                  <span>
-                    {providerForm.providerPresetId === customProviderPresetId
-                      ? '自定义供应商名称'
-                      : '显示名称'}
-                  </span>
-                  <input
-                    aria-label={
-                      providerForm.providerPresetId === customProviderPresetId
-                        ? '自定义供应商名称'
-                        : '显示名称'
-                    }
-                    value={providerForm.label}
-                    onChange={(event) => updateProviderForm('label', event.target.value)}
-                    placeholder="例如 DeepSeek"
-                    autoFocus
-                  />
-                </label>
-                <label className="provider-form-field">
-                  <span>Provider ID</span>
-                  <input
-                    aria-label="Provider ID"
-                    value={providerForm.id}
-                    onChange={(event) => updateProviderForm('id', event.target.value)}
-                    placeholder="例如 deepseek"
-                    disabled={providerForm.mode === 'edit'}
-                  />
-                </label>
-              </div>
-              <label className="provider-form-field">
-                <span>API 地址</span>
-                <input
-                  aria-label="API 地址"
-                  type="url"
-                  value={providerForm.baseUrl}
-                  onChange={(event) => updateProviderForm('baseUrl', event.target.value)}
-                  placeholder="https://api.deepseek.com"
-                />
-              </label>
-              <label className="provider-form-field">
-                <span>API Key</span>
-                <input
-                  aria-label="API Key"
-                  type="password"
-                  value={providerForm.apiKey}
-                  onChange={(event) => updateProviderForm('apiKey', event.target.value)}
-                  placeholder={
-                    providerForm.mode === 'edit' ? '留空表示保持当前密钥' : '输入 API Key'
-                  }
-                  autoComplete="new-password"
-                />
-              </label>
-              {findProviderPreset(providerForm.providerPresetId) !== undefined ? (
-                <label className="provider-form-field">
-                  <span>默认模型</span>
-                  <FormSelect
-                    label="默认模型"
-                    value={providerForm.modelPresetId}
-                    placeholder="选择默认模型"
-                    options={[
-                      ...(findProviderPreset(providerForm.providerPresetId)?.models ?? []).map(
-                        (model) => ({
-                          value: model,
-                          label: model,
-                        }),
-                      ),
-                      { value: customProviderPresetId, label: '自定义模型' },
-                    ]}
-                    onChange={chooseModelPreset}
-                  />
-                </label>
-              ) : null}
-              {findProviderPreset(providerForm.providerPresetId) !== undefined &&
-              providerForm.modelPresetId === customProviderPresetId ? (
-                <label className="provider-form-field">
-                  <span>自定义模型</span>
-                  <input
-                    aria-label="自定义模型"
-                    value={providerForm.defaultModel}
-                    onChange={(event) => updateProviderForm('defaultModel', event.target.value)}
-                    placeholder="输入模型名称"
-                  />
-                </label>
-              ) : null}
-              {findProviderPreset(providerForm.providerPresetId) === undefined ? (
-                <label className="provider-form-field">
-                  <span>
-                    {providerForm.providerPresetId === customProviderPresetId
-                      ? '自定义模型'
-                      : '默认模型'}
-                  </span>
-                  <input
-                    aria-label={
-                      providerForm.providerPresetId === customProviderPresetId
-                        ? '自定义模型'
-                        : '默认模型'
-                    }
-                    value={providerForm.defaultModel}
-                    onChange={(event) => updateProviderForm('defaultModel', event.target.value)}
-                    placeholder="例如 deepseek-flash"
-                  />
-                </label>
-              ) : null}
-              <div className="provider-form-grid">
-                <label className="provider-form-field">
-                  <span>Temperature（可选）</span>
-                  <input
-                    aria-label="Temperature"
-                    type="number"
-                    min={0}
-                    max={2}
-                    step={0.1}
-                    value={providerForm.temperature}
-                    onChange={(event) => updateProviderForm('temperature', event.target.value)}
-                    placeholder="默认 1.0"
-                  />
-                </label>
-                <label className="provider-form-field">
-                  <span>最大输出 token（可选）</span>
-                  <input
-                    aria-label="最大输出 token"
-                    type="number"
-                    min={1}
-                    step={1}
-                    value={providerForm.maxTokens}
-                    onChange={(event) => updateProviderForm('maxTokens', event.target.value)}
-                    placeholder="默认 4096"
-                  />
-                </label>
-              </div>
-              <label className="provider-form-field">
-                <span>上下文窗口 token（可选）</span>
-                <input
-                  aria-label="上下文窗口 token"
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={providerForm.contextWindowTokens}
-                  onChange={(event) =>
-                    updateProviderForm('contextWindowTokens', event.target.value)
-                  }
-                  placeholder="默认 128000"
-                />
-              </label>
-              <p className="project-dialog-note">
-                留空即用默认：温度与最大输出跟随模型（常见 1.0 / 4096），上下文窗口为
-                128000；设置后仅作用于该 Provider，对话未显式指定时才生效。
-              </p>
-              <label className="provider-checkbox-field">
-                <input
-                  type="checkbox"
-                  checked={providerForm.makeDefault}
-                  onChange={(event) => updateProviderForm('makeDefault', event.target.checked)}
-                />
-                <span>设为默认 Provider</span>
-              </label>
-              {providerForm.mode === 'edit' ? (
-                <label className="provider-checkbox-field provider-checkbox-danger">
-                  <input
-                    type="checkbox"
-                    checked={providerForm.clearApiKey}
-                    onChange={(event) => updateProviderForm('clearApiKey', event.target.checked)}
-                  />
-                  <span>清除当前密钥</span>
-                </label>
-              ) : null}
-              {providerForm.mode === 'edit' ? (
-                <p className="project-dialog-note">
-                  留空表示保持当前密钥，修改 API 地址时需要重新填写；清除密钥后 Provider
-                  将不能用于对话。
-                </p>
-              ) : null}
-              {providerFormError !== null ? (
-                <p className="provider-form-error" role="alert">
-                  {providerFormError}
-                </p>
-              ) : null}
-              <footer className="project-dialog-actions">
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={closeProviderForm}
-                  disabled={providerMutation === 'saving'}
-                >
-                  取消
-                </button>
-                <button
-                  className="primary-button"
-                  type="submit"
-                  disabled={providerMutation === 'saving'}
-                >
-                  {providerMutation === 'saving' ? '保存中...' : '保存 Provider'}
-                </button>
-              </footer>
-            </form>
-          </section>
-        </div>
+        <ProviderFormDialog
+          providerForm={providerForm}
+          providerFormError={providerFormError}
+          providerMutation={providerMutation}
+          chooseProviderPreset={chooseProviderPreset}
+          chooseModelPreset={chooseModelPreset}
+          closeProviderForm={closeProviderForm}
+          updateProviderForm={updateProviderForm}
+          saveProvider={saveProvider}
+        />
       ) : null}
       {providerToDelete !== null ? (
-        <div
-          className="dialog-backdrop"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setProviderToDelete(null);
-            }
-          }}
-        >
-          <section
-            className="project-dialog session-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="delete-provider-dialog-title"
-          >
-            <header className="project-dialog-header">
-              <div>
-                <p>删除确认</p>
-                <h2 id="delete-provider-dialog-title">删除 Provider</h2>
-              </div>
-              <button
-                className="icon-button"
-                type="button"
-                aria-label="关闭删除确认"
-                onClick={() => setProviderToDelete(null)}
-                disabled={providerMutation === 'deleting'}
-              >
-                <X aria-hidden="true" />
-              </button>
-            </header>
-            <div className="project-dialog-form">
-              <p className="delete-session-warning">
-                确定删除「{providerToDelete.label}」吗？已保存的密钥和配置会从本机移除。
-              </p>
-              <footer className="project-dialog-actions">
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => setProviderToDelete(null)}
-                  disabled={providerMutation === 'deleting'}
-                >
-                  取消
-                </button>
-                <button
-                  className="danger-button"
-                  type="button"
-                  onClick={() => void deleteProvider()}
-                  disabled={providerMutation === 'deleting'}
-                >
-                  <Trash2 aria-hidden="true" />
-                  {providerMutation === 'deleting' ? '删除中...' : '确认删除'}
-                </button>
-              </footer>
-            </div>
-          </section>
-        </div>
+        <ProviderDeleteDialog
+          providerToDelete={providerToDelete}
+          providerMutation={providerMutation}
+          deleteProvider={deleteProvider}
+          setProviderToDelete={setProviderToDelete}
+        />
       ) : null}
       {editingSession !== null ? (
-        <div
-          className="dialog-backdrop"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setEditingSession(null);
-            }
-          }}
-        >
-          <section
-            className="project-dialog session-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="edit-session-dialog-title"
-          >
-            <header className="project-dialog-header">
-              <div>
-                <p>会话设置</p>
-                <h2 id="edit-session-dialog-title">编辑会话</h2>
-              </div>
-              <button
-                className="icon-button"
-                type="button"
-                aria-label="关闭编辑会话"
-                onClick={() => setEditingSession(null)}
-              >
-                <X aria-hidden="true" />
-              </button>
-            </header>
-            <form
-              className="project-dialog-form"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void saveSessionTitle();
-              }}
-            >
-              <label className="project-name-field">
-                <span>会话标题</span>
-                <div>
-                  <Pencil aria-hidden="true" />
-                  <input
-                    type="text"
-                    aria-label="会话标题"
-                    value={sessionTitleInput}
-                    onChange={(event) => setSessionTitleInput(event.target.value)}
-                    autoFocus
-                  />
-                </div>
-              </label>
-              <footer className="project-dialog-actions">
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => setEditingSession(null)}
-                >
-                  取消
-                </button>
-                <button
-                  className="primary-button"
-                  type="submit"
-                  aria-label="保存标题"
-                  disabled={sessionTitleInput.trim() === ''}
-                >
-                  保存
-                </button>
-              </footer>
-            </form>
-          </section>
-        </div>
+        <EditSessionDialog
+          sessionTitleInput={sessionTitleInput}
+          setSessionTitleInput={setSessionTitleInput}
+          setEditingSession={setEditingSession}
+          saveSessionTitle={saveSessionTitle}
+        />
       ) : null}
       {renamingProjectId !== null ? (
-        <div
-          className="dialog-backdrop"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setRenamingProjectId(null);
-            }
-          }}
-        >
-          <section
-            className="project-dialog session-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="rename-project-dialog-title"
-          >
-            <header className="project-dialog-header">
-              <div>
-                <p>项目设置</p>
-                <h2 id="rename-project-dialog-title">重命名项目</h2>
-              </div>
-              <button
-                className="icon-button"
-                type="button"
-                aria-label="关闭重命名项目"
-                onClick={() => setRenamingProjectId(null)}
-              >
-                <X aria-hidden="true" />
-              </button>
-            </header>
-            <form
-              className="project-dialog-form"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void saveProjectName();
-              }}
-            >
-              <label className="project-name-field">
-                <span>项目名称</span>
-                <div>
-                  <FolderKanban aria-hidden="true" />
-                  <input
-                    type="text"
-                    aria-label="新的项目名称"
-                    value={projectRenameInput}
-                    onChange={(event) => setProjectRenameInput(event.target.value)}
-                    autoFocus
-                  />
-                </div>
-              </label>
-              <p className="project-dialog-note">只修改显示名称，项目文件夹和会话保持不变。</p>
-              <footer className="project-dialog-actions">
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => setRenamingProjectId(null)}
-                >
-                  取消
-                </button>
-                <button
-                  className="primary-button"
-                  type="submit"
-                  aria-label="保存项目名称"
-                  disabled={projectRenameInput.trim() === ''}
-                >
-                  保存
-                </button>
-              </footer>
-            </form>
-          </section>
-        </div>
+        <RenameProjectDialog
+          projectRenameInput={projectRenameInput}
+          setProjectRenameInput={setProjectRenameInput}
+          setRenamingProjectId={setRenamingProjectId}
+          saveProjectName={saveProjectName}
+        />
       ) : null}
       {sessionToDelete !== null ? (
-        <div
-          className="dialog-backdrop"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setSessionToDelete(null);
-            }
-          }}
-        >
-          <section
-            className="project-dialog session-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="delete-session-dialog-title"
-          >
-            <header className="project-dialog-header">
-              <div>
-                <p>归档会话</p>
-                <h2 id="delete-session-dialog-title">删除会话</h2>
-              </div>
-              <button
-                className="icon-button"
-                type="button"
-                aria-label="关闭删除确认"
-                onClick={() => setSessionToDelete(null)}
-              >
-                <X aria-hidden="true" />
-              </button>
-            </header>
-            <div className="project-dialog-form">
-              <p className="delete-session-warning">
-                确定要删除“{sessionToDelete.title}
-                ”吗？删除后无法在界面中恢复。会话的历史记录仍保留在本机数据文件中。
-              </p>
-              <footer className="project-dialog-actions">
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => setSessionToDelete(null)}
-                >
-                  取消
-                </button>
-                <button
-                  className="danger-button"
-                  type="button"
-                  aria-label="确认删除"
-                  onClick={() => void permanentlyDeleteSession()}
-                >
-                  <Trash2 aria-hidden="true" />
-                  删除
-                </button>
-              </footer>
-            </div>
-          </section>
-        </div>
+        <DeleteSessionDialog
+          sessionToDelete={sessionToDelete}
+          setSessionToDelete={setSessionToDelete}
+          permanentlyDeleteSession={permanentlyDeleteSession}
+        />
       ) : null}
       {folderDialogProjectId === null ? null : (
-        <div
-          className="dialog-backdrop"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setFolderDialogProjectId(null);
-            }
-          }}
-        >
-          <section
-            className="project-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-label="设置项目文件夹"
-          >
-            <header className="project-dialog-header">
-              <div>
-                <p>本地项目</p>
-                <h2>设置项目文件夹</h2>
-              </div>
-              <button
-                className="icon-button"
-                type="button"
-                aria-label="关闭设置项目文件夹"
-                onClick={() => setFolderDialogProjectId(null)}
-              >
-                <X aria-hidden="true" />
-              </button>
-            </header>
-            <form
-              className="project-dialog-form"
-              onSubmit={(event) => {
-                event.preventDefault();
-                const folderPath = folderDialogPath.trim();
-                if (folderPath !== '') {
-                  void saveProjectFolder(folderPath);
-                }
-              }}
-            >
-              {window.weaveDesktop?.pickDirectory === undefined ? (
-                <label className="project-name-field">
-                  <span>文件夹绝对路径</span>
-                  <div>
-                    <FolderOpen aria-hidden="true" />
-                    <input
-                      type="text"
-                      aria-label="项目文件夹绝对路径"
-                      placeholder="例如 /Users/me/projects/demo"
-                      value={folderDialogPath}
-                      onChange={(event) => setFolderDialogPath(event.target.value)}
-                    />
-                  </div>
-                </label>
-              ) : (
-                <div className="project-folder-field">
-                  <span>项目文件夹</span>
-                  <button
-                    className={`folder-picker${folderDialogPath === '' ? '' : ' folder-picker-selected'}`}
-                    type="button"
-                    aria-label="选择项目文件夹"
-                    onClick={() => void pickFolderForDialog()}
-                  >
-                    <span className="folder-picker-icon" aria-hidden="true">
-                      <FolderOpen />
-                    </span>
-                    <span>
-                      <strong className="selected-folder-name">
-                        {folderDialogPath === '' ? '选择本地文件夹' : folderDialogPath}
-                      </strong>
-                      <small>Agent 将在该文件夹中读写文件</small>
-                    </span>
-                    <ChevronRight aria-hidden="true" />
-                  </button>
-                </div>
-              )}
-              <p className="project-dialog-note">
-                Agent 可以读取该文件夹中的文本文件；写入文件前会请你确认。
-              </p>
-              {folderDialogError === null ? null : (
-                <p className="project-dialog-note approval-card-error" role="alert">
-                  {folderDialogError}
-                </p>
-              )}
-              <footer className="project-dialog-actions">
-                {projects.find((project) => project.id === folderDialogProjectId)?.folderPath ===
-                undefined ? null : (
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={() => void saveProjectFolder(null)}
-                  >
-                    清除文件夹
-                  </button>
-                )}
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => setFolderDialogProjectId(null)}
-                >
-                  取消
-                </button>
-                <button
-                  className="primary-button"
-                  type="submit"
-                  disabled={folderDialogPath.trim() === ''}
-                >
-                  保存
-                </button>
-              </footer>
-            </form>
-          </section>
-        </div>
+        <FolderDialog
+          folderDialogProjectId={folderDialogProjectId}
+          folderDialogPath={folderDialogPath}
+          folderDialogError={folderDialogError}
+          setFolderDialogPath={setFolderDialogPath}
+          setFolderDialogProjectId={setFolderDialogProjectId}
+          pickFolderForDialog={pickFolderForDialog}
+          saveProjectFolder={saveProjectFolder}
+          projects={projects}
+        />
       )}
       {isProjectDialogOpen ? (
-        <div
-          className="dialog-backdrop"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setIsProjectDialogOpen(false);
-            }
-          }}
-        >
-          <section
-            className="project-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="project-dialog-title"
-          >
-            <header className="project-dialog-header">
-              <div>
-                <p>本地项目</p>
-                <h2 id="project-dialog-title">创建项目</h2>
-              </div>
-              <button
-                className="icon-button"
-                type="button"
-                aria-label="关闭创建项目"
-                onClick={() => setIsProjectDialogOpen(false)}
-              >
-                <X aria-hidden="true" />
-              </button>
-            </header>
-            <form
-              className="project-dialog-form"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void createProject();
-              }}
-            >
-              <label className="project-name-field">
-                <span>项目名称</span>
-                <div>
-                  <FolderKanban aria-hidden="true" />
-                  <input
-                    type="text"
-                    aria-label="项目名称"
-                    placeholder="选择文件夹后自动生成"
-                    value={projectName}
-                    onChange={(event) => setProjectName(event.target.value)}
-                  />
-                </div>
-              </label>
-              <div className="project-folder-field">
-                <span>项目文件夹</span>
-                <button
-                  className={`folder-picker${selectedFolderName === '' ? '' : ' folder-picker-selected'}`}
-                  type="button"
-                  aria-label="选择文件夹"
-                  onClick={() => void chooseProjectFolder()}
-                >
-                  <span className="folder-picker-icon" aria-hidden="true">
-                    <FolderOpen />
-                  </span>
-                  {selectedFolderName === '' ? (
-                    <span>
-                      <strong>选择本地文件夹</strong>
-                      <small>项目将使用该文件夹作为工作目录</small>
-                    </span>
-                  ) : (
-                    <span>
-                      <strong className="selected-folder-name">{selectedFolderName}</strong>
-                      <small>已选择本地文件夹</small>
-                    </span>
-                  )}
-                  <ChevronRight aria-hidden="true" />
-                </button>
-                <input
-                  {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
-                  className="sr-only"
-                  ref={directoryInputRef}
-                  type="file"
-                  aria-label="选择项目文件夹"
-                  multiple
-                  onChange={chooseFallbackFolder}
-                />
-              </div>
-              {window.weaveDesktop?.pickDirectory === undefined ? (
-                <label className="project-name-field">
-                  <span>文件夹绝对路径（可选）</span>
-                  <div>
-                    <FolderOpen aria-hidden="true" />
-                    <input
-                      type="text"
-                      aria-label="文件夹绝对路径"
-                      placeholder="例如 /Users/me/projects/demo，填写后 Agent 可读写其中文件"
-                      value={selectedFolderPath}
-                      onChange={(event) => setSelectedFolderPath(event.target.value)}
-                    />
-                  </div>
-                </label>
-              ) : selectedFolderPath === '' ? null : (
-                <p className="project-dialog-note project-folder-path">{selectedFolderPath}</p>
-              )}
-              <p className="project-dialog-note">
-                {selectedFolderPath.trim() === ''
-                  ? '未设置文件夹路径时，Agent 不能读写项目文件。'
-                  : 'Agent 可以读取该文件夹中的文本文件；写入文件前会请你确认。'}
-              </p>
-              <footer className="project-dialog-actions">
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => setIsProjectDialogOpen(false)}
-                >
-                  取消
-                </button>
-                <button
-                  className="primary-button"
-                  type="submit"
-                  disabled={projectName.trim() === '' || selectedFolderName === ''}
-                >
-                  创建项目
-                </button>
-              </footer>
-            </form>
-          </section>
-        </div>
+        <CreateProjectDialog
+          projectName={projectName}
+          setProjectName={setProjectName}
+          selectedFolderName={selectedFolderName}
+          selectedFolderPath={selectedFolderPath}
+          setSelectedFolderPath={setSelectedFolderPath}
+          setIsProjectDialogOpen={setIsProjectDialogOpen}
+          chooseProjectFolder={chooseProjectFolder}
+          chooseFallbackFolder={chooseFallbackFolder}
+          createProject={createProject}
+          directoryInputRef={directoryInputRef}
+        />
       ) : null}
       {previewImage !== null ? (
-        <div
-          className="image-preview-backdrop"
-          role="dialog"
-          aria-modal="true"
-          aria-label="图片预览"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setPreviewImage(null);
-            }
-          }}
-        >
-          <button
-            className="image-preview-close"
-            type="button"
-            aria-label="关闭预览"
-            onClick={() => setPreviewImage(null)}
-          >
-            <X aria-hidden="true" />
-          </button>
-          <img
-            className="image-preview-image"
-            src={`data:${previewImage.mediaType};base64,${previewImage.data}`}
-            alt="图片预览"
-          />
-        </div>
+        <ImagePreviewDialog previewImage={previewImage} setPreviewImage={setPreviewImage} />
       ) : null}
     </main>
   );
