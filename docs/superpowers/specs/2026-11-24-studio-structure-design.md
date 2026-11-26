@@ -116,6 +116,67 @@
 
 每步合并后在 PR 记录 `App.tsx` 行数。
 
+#### 3.1.2 执行与会话流转的拆分设计（领域 B 剩余部分与领域 C、D 的发送部分）
+
+基线 `17fd308`，`App.tsx` 4693 行。#136 到 #140 已抽出 `useProviderSettings`、`useWorkspaceNavigation`、`useComposerAttachments`。本节只覆盖剩余的执行与会话流转，行号为基线定义位置，合并后会漂移。所有步骤不改变可见行为，以 `apps/studio/test/App.test.tsx` 及相关 feature 测试为回归。
+
+**归属**
+
+| 单元 | 持有的 state / ref | 命令与派生值 |
+| --- | --- | --- |
+| `useSessionExecutions`（新） | `runStateBySession`(262)、`runHandles`、`observationEpoch`、`sessionActivityVersions`、`deletedSessionIds`、`appliedDurableSequences`、`settledExecutionSequences`(263–270)、`admitting`、`mounted`(284)；卸载清理 effect 与切换会话时分离非活动 handle 的 effect | 只读：`runStateBySession`、`admitting`、`sessionRunStatus`、`isSessionStreaming`、`activeRunState`。命令：`setSessionRunState`、`clearActiveRunState`、`applySessionDetail`、`loadSessionDetail`、`attachExecution`、`requestExecutionCancel`、`reconcileExecution`、`resumeExecution`、`recoverSessionExecution`、`cancelRun`、`releaseSessionRuntime(sessionId)`（新增，见下）、`hasRunHandle(sessionId)`、`beginAdmission`/`endAdmission`、`registerRunHandle`/`removeRunHandle`（供发送逻辑使用，不暴露 `Map` 本身）。内部：`updateSessionMessages`、`updateSessionTurns`、`finishLiveTurn`、`executionHandlers`、`handleEvent` |
+| `useSessionLifecycle`（新，B 的剩余部分） | `sessionToDelete`、`activeSessionIdRef`、`navigationTicket`、`activeProjectId`、`activeSessionId`、`expandedProjectIds`、`taskTranscriptTarget` 的归属留待步骤 2 确认（见风险） | `activateSession`、`selectProjectSession`、`createSessionForProject`、`createSession`、`archiveSession`、`restoreSession`、`permanentlyDeleteSession`、`selectProject`、`openProject`、`toggleProjectExpanded`、`findNextRunnableSession`；`ensureSessionForMessage` 也放在这里，因为它只创建项目与会话 |
+| `useMessageSubmission`（新，D 与 C 的发送部分） | `copyRequest` | `submitMessage`、`handleSubmit`、`handleMessageKeyDown`、`copyQueuedMessage`、`applyQueuedCopy`、`retryTurn`（依赖 `submissionForTurn`） |
+| 留在 `App.tsx` | `projects`/`setProjects`（`useWorkspaceNavigation` 已接收）、`activeView`、`openMenu`、`notice`、Composer 与 Provider hook 的调用 | 组合各 hook，并把回调接线 |
+
+`useExecutionQueues`（已有）继续由 `App.tsx` 创建，因为它的 `onActive` 要调用 `attachExecution`，而 `useSessionExecutions` 需要读 `queueController.states`。解法：`useSessionExecutions` 接收 `queueController` 作为参数，`onActive` 在 `App.tsx` 里写成对 `executions.attachExecution` 的转发，通过 ref 解决创建顺序（与现有 `conversationActionHandler` 的写法一致）。
+
+**依赖方向**（只允许单向，避免循环）
+
+`useProviderSettings`、Composer hook → `useSessionExecutions` ← `useSessionLifecycle` ← `useMessageSubmission`。
+
+- `useSessionExecutions` 不读取项目列表，也不读取活动会话以外的导航状态。它需要的 `projects`、`activeSessionId`、`activeProjectId`、`setProjects`、`conversationStore`、`fileReviewStore`、`onNotice`、`queueController` 全部通过参数传入。
+- `useSessionLifecycle` 只通过 `useSessionExecutions` 的命令操作运行：`sessionRunStatus(sessionId)`、`releaseSessionRuntime(sessionId)`、`applySessionDetail`、`loadSessionDetail`、`recoverSessionExecution`。它不直接碰 `runHandles`、`sessionActivityVersions` 等 ref。
+- `useMessageSubmission` 读 Provider 与权限模式（`selectedProviderId`、`selectedModel`、`selectedProvider`、`reasoningEffort`、`permissionMode`）、Composer 草稿（`composerDraft`、`commandPicker`、`sessionSkills`、`filePicker`）、`projects`、`canCompose`，调用 `useSessionLifecycle.ensureSessionForMessage` 与 `useSessionExecutions` 的运行命令。
+
+**生命周期 handler 与执行的交互**
+
+- 永久删除（`permanentlyDeleteSession`）：必须按现有顺序执行：`workspaceApi.deleteSession` 成功后，才把 ID 加入 `deletedSessionIds`、递增 `sessionActivityVersions`、中止并移除该会话的全部 handle、清 `runStateBySession`、`conversationStore.removeSession`、`fileReviewStore.removeSession`、清两张序号表。这一整段移入 `useSessionExecutions.releaseSessionRuntime(sessionId, projectId)`，由 `permanentlyDeleteSession` 在 API 成功后调用一次；之后 `useSessionLifecycle` 再处理项目列表、`sessionSkills.forget`、活动会话切换与 `taskTranscriptTarget` 清理。执行前的守卫（`sessionRunStatus(...) === 'streaming'` 时直接返回）保持在生命周期侧。
+- 归档（`archiveSession`）：只读 `sessionRunStatus`，不释放运行（现状即如此）。`applySessionDetail` 经 `useSessionExecutions` 调用。
+- 恢复（`restoreSession`）：只调用 `applySessionDetail`，不触碰运行。
+- 切换会话（`selectProjectSession`、`selectProject`）：`activateSession` 之后调用 `resetTransientState` 与 `loadSessionDetail`。切换会话时分离非活动 handle 的 effect 留在 `useSessionExecutions`，依赖 `activeSessionId`。`resetTransientState` 属于执行 hook（它只清展开的过程面板，状态 `expandedMessageIds` 一并移入），生命周期 hook 通过参数拿到它。
+- 新建会话（`createSessionForProject`）：创建会话后调用 `applySessionDetail`/`setProjects` 与 `activateSession`，不涉及 handle。
+- 工作区加载 effect（`workspaceLoadKey`）调用 `applySessionDetail` 与 `recoverSessionExecution`：随 `useWorkspaceNavigation` 之外的剩余导航状态一起留在 `App.tsx` 或进入 `useSessionLifecycle`，以步骤 2 时的依赖为准；不得拆开 `disposed` 标志的闭包。
+
+**`submitMessage` 的输入与调用**
+
+输入（均为参数，不在 hook 内新增 state）：
+- 草稿：`composerDraft`（`capture`、`draft`、`clearSubmittedDraftIfCurrent`）、`messageInput`、`pendingImages`、`commandPicker.expand`、`sessionSkills`（`draft`、`clearSent`）。
+- 上下文：`activeSessionId`、`activeProjectId`、`projects`、`canCompose`、`getActiveSessionContext`。
+- Provider 与权限：`selectedProviderId`、`selectedModel`、`selectedProvider`、`reasoningEffort`、`permissionMode`、`rememberPermissionMode`。
+- 通知：`setNotice`。
+
+调用的执行命令：`admitting` 读取、`beginAdmission`/`endAdmission`、`hasRunHandle`、`registerRunHandle`/`removeRunHandle`（对应现有 `runHandles.current.set/get/delete`）、`bumpSessionActivity`、`setSessionRunState`、`attachExecution`、`queueController.refresh/getState`、`ensureSessionForMessage`。`submitMessage` 内约 410 行逻辑不重写，只把对 `runHandles.current`、`sessionActivityVersions.current` 的直接访问换成上述命令。命令必须与原语句一一对应、同步执行，不引入新的 `await` 点或 `setState` 批处理差异。
+
+**拆分步骤与回归**
+
+0. 本设计（`docs:`）。
+1. 抽出 `useSessionExecutions`：先搬 state、ref 与卸载、分离 effect，再搬 `applySessionDetail` 到 `cancelRun` 之间的函数。`App.tsx` 保留对其他 hook 的组合。新增 `use-session-executions.test.tsx`（`renderHook`）：卸载时中止并清空 handle；切换活动会话时分离非活动 handle；`releaseSessionRuntime` 删除 handle、清运行状态、递增活动版本；删除后的 ID 使 `applySessionDetail` 返回 `false`；较旧的 `lastSequence` 不回滚。回归：`App.test.tsx`、`conversation-isolation.test.tsx`、`agent-execution-*.test.ts`、`execution-queue-list.test.tsx`。
+2. 抽出 `useSessionLifecycle`（或并入 `useWorkspaceNavigation`，以并入后文件不超过约 700 行为准，否则新建）：搬归档、恢复、永久删除、新建、切换、`ensureSessionForMessage`。新增 hook 测试：永久删除成功后调用 `releaseSessionRuntime` 且在 API 失败时不调用；流式运行中拒绝归档与删除；删除当前会话后切换到下一个可运行会话。回归：`App.test.tsx`、`conversation-isolation.test.tsx`。
+3. 抽出 `useMessageSubmission`：搬 `submitMessage`、`handleSubmit`、`handleMessageKeyDown`、`copyQueuedMessage`、`applyQueuedCopy`、`retryTurn`。新增 hook 测试：空草稿不发送、`admitting` 期间不重复发送、Enter 与 Shift+Enter 与输入法组合键的处理、重试不改草稿。回归：`App.test.tsx`、`composer-draft.test.tsx`、`file-context-flow.test.tsx`、`command-api.test.ts` 相关用例。
+4. JSX 拆分，按区块分为若干 PR（每个 PR 只搬一类区块，props 用分组对象，不为减少 props 而引入 context）：(a) 导航列与会话栏；(b) 聊天列（头部、时间线、Composer、队列）；(c) 右侧面板；(d) 项目、历史、归档、设置视图；(e) 弹窗（项目、文件夹、改名、删除确认、预览图）。每个 PR 只改渲染位置，事件处理函数原样透传。回归：`App.test.tsx` 与对应区块的 feature 测试。
+
+每步合并后在 PR 记录 `App.tsx` 行数。
+
+**风险与停止条件**
+
+- 依赖循环：`useExecutionQueues` 的 `onActive` 回调要调用 `attachExecution`，而执行 hook 要读队列状态。用 ref 转发解决；若出现必须改变调用时序的情况，停止并在报告中说明。
+- 状态归属：`activeSessionId`、`activeProjectId`、`activeSessionIdRef`、`navigationTicket`、`taskTranscriptTarget` 同时被执行、生命周期、任务入口（`openAgentTask`）读写。步骤 1 先保持它们留在 `App.tsx`，经参数传入；步骤 2 再判断是否下沉。
+- 同步语义：`submitMessage` 与 `handleEvent` 依赖 `runHandles` 的同步读写顺序和闭包内的 `runId` 校验。任何把 ref 访问改为 state、或把同步命令改为异步的做法都不允许。
+- StrictMode：卸载清理使用 `queueMicrotask` 判断是否真正卸载，搬移时必须保留 `mounted` 的置位与清理次序，并保留 `App.test.tsx` 中相关用例。
+- 停止条件：任何一步需要改变可见行为，或需要修改 `App.test.tsx` 的断言（不含导入路径与测试辅助函数），则停止该步，在报告中说明原因，不继续后续步骤。
+- 步骤 4 的 JSX 拆分依赖步骤 1 到 3 的返回值形状；若前面任一步被停止，步骤 4 只做不依赖该领域的区块。
+
 ### 3.2 U2：共享 schema
 
 **方案 D：Studio 直接依赖 `@weave/protocol`。**
