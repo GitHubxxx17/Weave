@@ -17,7 +17,6 @@ import {
 import {
   Archive,
   Bot,
-  BookOpen,
   Check,
   ChevronDown,
   ChevronRight,
@@ -34,11 +33,7 @@ import {
   PanelRightOpen,
   Pencil,
   Plus,
-  Puzzle,
-  Search,
   SendHorizontal,
-  Settings,
-  ShieldCheck,
   Square,
   Sparkles,
   TerminalSquare,
@@ -75,7 +70,6 @@ import { usePluginPanels } from '../features/panel/use-plugin-panels.js';
 import { createPluginCatalogStore } from '../features/plugins/plugin-catalog-store.js';
 import {
   PluginCatalogProvider,
-  PluginPendingBadge,
   usePluginCatalogStore,
 } from '../features/plugins/plugin-catalog-context.js';
 import { PluginMarketplacePage } from '../features/plugins/plugin-marketplace-page.js';
@@ -127,6 +121,9 @@ import { FormSelect } from './form-select.js';
 import { useComposerAttachments } from './use-composer-attachments.js';
 import { useProviderSettings } from './use-provider-settings.js';
 import { useSessionExecutions } from './use-session-executions.js';
+import { SessionRail } from './session-rail.js';
+import { SettingsSidebar } from './settings-sidebar.js';
+import { WorkspaceNav } from './workspace-nav.js';
 import { useMessageSubmission } from './use-message-submission.js';
 import { useSessionLifecycle } from './use-session-lifecycle.js';
 import { useWorkspaceNavigation } from './use-workspace-navigation.js';
@@ -894,345 +891,36 @@ function StudioApp(): ReactElement {
           onClick={() => setOpenMenu(null)}
         />
       ) : null}
-      <aside className="workspace-nav" aria-label="工作区导航">
-        <span className="brand-mark" aria-hidden="true">
-          W
-        </span>
-        <nav className="workspace-nav-list" aria-label="主导航">
-          <button
-            className={`workspace-nav-button${activeView === 'studio' ? ' workspace-nav-button-active' : ''}`}
-            type="button"
-            aria-current={activeView === 'studio' ? 'page' : undefined}
-            onClick={() => selectProductView('studio')}
-          >
-            <Sparkles aria-hidden="true" />
-            <small>工作台</small>
-          </button>
-          <button
-            className={`workspace-nav-button${activeView === 'projects' ? ' workspace-nav-button-active' : ''}`}
-            type="button"
-            aria-current={activeView === 'projects' ? 'page' : undefined}
-            onClick={() => selectProductView('projects')}
-          >
-            <FolderKanban aria-hidden="true" />
-            <small>项目</small>
-          </button>
-          <button
-            className={`workspace-nav-button${activeView === 'retrieval' ? ' workspace-nav-button-active' : ''}`}
-            type="button"
-            aria-current={activeView === 'retrieval' ? 'page' : undefined}
-            onClick={() => selectProductView('retrieval')}
-          >
-            <Search aria-hidden="true" />
-            <small>搜索</small>
-          </button>
-          <button
-            className={`workspace-nav-button workspace-nav-marketplace${activeView === 'marketplace' ? ' workspace-nav-button-active' : ''}`}
-            type="button"
-            aria-label="插件市场"
-            aria-current={activeView === 'marketplace' ? 'page' : undefined}
-            data-plugin-navigation=""
-            onClick={() => selectProductView('marketplace')}
-          >
-            <Puzzle aria-hidden="true" />
-            <small>插件市场</small>
-            <PluginPendingBadge />
-          </button>
-          <button
-            className={`workspace-nav-button${activeView === 'memory' ? ' workspace-nav-button-active' : ''}`}
-            type="button"
-            aria-current={activeView === 'memory' ? 'page' : undefined}
-            onClick={() => selectProductView('memory')}
-          >
-            <BookOpen aria-hidden="true" />
-            <small>记忆</small>
-          </button>
-          <button
-            className={`workspace-nav-button${activeView === 'history' ? ' workspace-nav-button-active' : ''}`}
-            type="button"
-            aria-current={activeView === 'history' ? 'page' : undefined}
-            onClick={() => selectProductView('history')}
-          >
-            <History aria-hidden="true" />
-            <small>历史</small>
-          </button>
-          <button
-            className={`workspace-nav-button${activeView === 'archived' ? ' workspace-nav-button-active' : ''}`}
-            type="button"
-            aria-current={activeView === 'archived' ? 'page' : undefined}
-            onClick={() => selectProductView('archived')}
-          >
-            <Archive aria-hidden="true" />
-            <small>归档</small>
-          </button>
-        </nav>
-        <button
-          className={`workspace-nav-button workspace-nav-settings${activeView === 'settings' ? ' workspace-nav-button-active' : ''}`}
-          type="button"
-          aria-current={activeView === 'settings' ? 'page' : undefined}
-          onClick={() => selectProductView('settings')}
-        >
-          <Settings aria-hidden="true" />
-          <small>设置</small>
-        </button>
-      </aside>
+      <WorkspaceNav activeView={activeView} onSelectView={selectProductView} />
 
       {activeView === 'settings' ? (
-        <aside className="settings-sidebar" aria-label="设置分类">
-          <header className="settings-sidebar-header">
-            <Settings aria-hidden="true" />
-            <h2>设置</h2>
-          </header>
-          <div className="settings-sidebar-search">
-            <Search aria-hidden="true" />
-            <span>搜索设置</span>
-          </div>
-          <nav className="settings-sidebar-nav" aria-label="设置分类导航">
-            <p className="settings-sidebar-label">配置</p>
-            <button className="settings-sidebar-item settings-sidebar-item-active" type="button">
-              <Bot aria-hidden="true" />
-              <span>模型服务</span>
-            </button>
-            <button className="settings-sidebar-item" type="button" disabled>
-              <ShieldCheck aria-hidden="true" />
-              <span>运行权限</span>
-              <small>即将推出</small>
-            </button>
-            <p className="settings-sidebar-label">系统</p>
-            <button className="settings-sidebar-item" type="button" disabled>
-              <FolderOpen aria-hidden="true" />
-              <span>数据存储</span>
-              <small>即将推出</small>
-            </button>
-            <button className="settings-sidebar-item" type="button" disabled>
-              <Settings aria-hidden="true" />
-              <span>界面外观</span>
-              <small>即将推出</small>
-            </button>
-          </nav>
-          <div className="settings-sidebar-footer">
-            <span className="connection-dot" aria-hidden="true" />
-            <span>本地运行时</span>
-            <small>已连接</small>
-          </div>
-        </aside>
+        <SettingsSidebar />
       ) : (
-        <aside
-          className="session-rail"
-          aria-label="会话列表"
-          hidden={
-            activeView === 'marketplace' || activeView === 'memory' || activeView === 'retrieval'
-          }
-          inert={
-            activeView === 'marketplace' || activeView === 'memory' || activeView === 'retrieval'
-          }
-        >
-          <div className={`menu-anchor${openMenu === 'project' ? ' menu-anchor-open' : ''}`}>
-            <button
-              className="project-switcher"
-              type="button"
-              aria-label={`${activeProject?.name ?? '当前'} 项目`}
-              aria-expanded={openMenu === 'project'}
-              onClick={() => toggleMenu('project')}
-            >
-              <span className="project-avatar" aria-hidden="true">
-                {(activeProject?.name ?? 'W').slice(0, 1).toLocaleUpperCase()}
-              </span>
-              <span className="project-switcher-copy">
-                <small>当前项目</small>
-                <strong>{activeProject?.name ?? 'Weave'}</strong>
-                <span className="project-folder-name">{activeProject?.folderName ?? 'weave'}</span>
-              </span>
-              <span className="project-chevron" aria-hidden="true">
-                <ChevronDown aria-hidden="true" />
-              </span>
-            </button>
-            {openMenu === 'project' ? (
-              <div
-                className="popup-menu popup-menu-rail project-menu"
-                role="menu"
-                aria-label="切换项目"
-              >
-                <p className="menu-section-label">项目</p>
-                {projects.map((project) => (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    key={project.id}
-                    onClick={() => selectProject(project.id)}
-                  >
-                    <span className="menu-icon">
-                      <FolderOpen aria-hidden="true" />
-                    </span>
-                    <span>
-                      <strong>{project.name}</strong>
-                      <small>{project.folderName}</small>
-                    </span>
-                  </button>
-                ))}
-                <div className="menu-divider" />
-                {activeProject === undefined ? null : (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => openFolderDialog(activeProject)}
-                  >
-                    <span className="menu-icon">
-                      <FolderOpen aria-hidden="true" />
-                    </span>
-                    <span>
-                      <strong>设置文件夹</strong>
-                      <small>{activeProject.folderPath ?? '未设置，Agent 不能读写文件'}</small>
-                    </span>
-                  </button>
-                )}
-                <button type="button" role="menuitem" onClick={openProjectDialog}>
-                  <span className="menu-icon menu-icon-accent">
-                    <Plus aria-hidden="true" />
-                  </span>
-                  创建项目
-                </button>
-              </div>
-            ) : null}
-          </div>
-          <button className="new-session-button" type="button" onClick={() => void createSession()}>
-            <Plus aria-hidden="true" />
-            新建会话
-          </button>
-          {isSearchOpen ? (
-            <div className="session-search">
-              <Search aria-hidden="true" />
-              <input
-                type="search"
-                aria-label="搜索会话"
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                autoFocus
-              />
-              <button
-                type="button"
-                aria-label="关闭搜索"
-                onClick={() => {
-                  setIsSearchOpen(false);
-                  setSearchQuery('');
-                }}
-              >
-                <X aria-hidden="true" />
-              </button>
-            </div>
-          ) : (
-            <button className="search-sessions" type="button" onClick={() => setIsSearchOpen(true)}>
-              <Search aria-hidden="true" />
-              搜索会话
-              <kbd>⌘ K</kbd>
-            </button>
-          )}
-          <nav className="project-tree" aria-label="项目树" role="tree">
-            <p className="section-label">项目</p>
-            {visibleProjects.map((project) => {
-              const isExpanded =
-                normalizedSearchQuery !== '' || expandedProjectIds.includes(project.id);
-
-              return (
-                <div className="project-tree-node" role="treeitem" key={project.id}>
-                  <div className="project-tree-row">
-                    <button
-                      className="project-tree-toggle"
-                      type="button"
-                      aria-label={`${isExpanded ? '收起' : '展开'}项目 ${project.name}`}
-                      aria-expanded={isExpanded}
-                      onClick={() => toggleProjectExpanded(project.id)}
-                    >
-                      {isExpanded ? (
-                        <ChevronDown aria-hidden="true" />
-                      ) : (
-                        <ChevronRight aria-hidden="true" />
-                      )}
-                    </button>
-                    <button
-                      className="project-tree-project"
-                      type="button"
-                      aria-label={`项目：${project.name}`}
-                      onClick={() => selectProject(project.id)}
-                    >
-                      <FolderOpen aria-hidden="true" />
-                      <span>
-                        <strong>{project.name}</strong>
-                        <small>{project.folderName}</small>
-                      </span>
-                      <small className="project-session-count">
-                        {project.sessions.length} 个会话
-                      </small>
-                    </button>
-                  </div>
-                  {isExpanded ? (
-                    <div className="project-tree-sessions" role="group">
-                      {project.sessions.length > 0 ? (
-                        project.sessions.map((session) => (
-                          <div
-                            className={`session-tree-item${session.id === activeSessionId && project.id === activeProjectId ? ' session-tree-item-active' : ''}`}
-                            key={session.id}
-                          >
-                            <button
-                              className="session-item"
-                              type="button"
-                              aria-label={`会话：${session.title}`}
-                              onClick={() => selectProjectSession(project.id, session.id)}
-                            >
-                              <span>
-                                <strong>{session.title}</strong>
-                                <small>{session.lastUsedLabel}</small>
-                              </span>
-                            </button>
-                            {isSessionStreaming(session.id) ? (
-                              <span
-                                className="session-running-dot"
-                                aria-label="运行中"
-                                title="运行中"
-                              />
-                            ) : session.id === activeSessionId && project.id === activeProjectId ? (
-                              <span className="session-dot" aria-hidden="true" />
-                            ) : null}
-                            <div className="session-actions" role="group" aria-label="会话操作">
-                              <button
-                                className="session-action-button"
-                                type="button"
-                                aria-label="编辑会话"
-                                title="编辑会话标题"
-                                onClick={() => openSessionEditor(project.id, session.id)}
-                                disabled={isSessionStreaming(session.id)}
-                              >
-                                <Pencil aria-hidden="true" />
-                              </button>
-                              <button
-                                className="session-action-button session-action-button-danger"
-                                type="button"
-                                aria-label="归档会话"
-                                title="归档会话"
-                                onClick={() => void archiveSession(project.id, session.id)}
-                                disabled={isSessionStreaming(session.id)}
-                              >
-                                <Archive aria-hidden="true" />
-                              </button>
-                            </div>
-                          </div>
-                        ))
-                      ) : (
-                        <p className="session-empty">暂无聊天</p>
-                      )}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
-            {visibleProjects.length === 0 ? <p className="session-empty">没有匹配的会话</p> : null}
-          </nav>
-          <div className="rail-footer">
-            <span className="connection-dot" aria-hidden="true" />
-            <span>本地运行时</span>
-            <small>已连接</small>
-          </div>
-        </aside>
+        <SessionRail
+          activeView={activeView}
+          openMenu={openMenu}
+          projects={projects}
+          visibleProjects={visibleProjects}
+          activeProject={activeProject}
+          activeProjectId={activeProjectId}
+          activeSessionId={activeSessionId}
+          expandedProjectIds={expandedProjectIds}
+          normalizedSearchQuery={normalizedSearchQuery}
+          isSearchOpen={isSearchOpen}
+          searchQuery={searchQuery}
+          setIsSearchOpen={setIsSearchOpen}
+          setSearchQuery={setSearchQuery}
+          isSessionStreaming={isSessionStreaming}
+          toggleMenu={toggleMenu}
+          selectProject={selectProject}
+          openFolderDialog={openFolderDialog}
+          openProjectDialog={openProjectDialog}
+          createSession={createSession}
+          toggleProjectExpanded={toggleProjectExpanded}
+          selectProjectSession={selectProjectSession}
+          openSessionEditor={openSessionEditor}
+          archiveSession={archiveSession}
+        />
       )}
 
       <section
