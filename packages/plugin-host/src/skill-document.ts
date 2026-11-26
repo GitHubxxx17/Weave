@@ -26,6 +26,23 @@ const schema = z
   })
   .catchall(scalarText(1024));
 
+const knownFields = new Set([
+  'name',
+  'description',
+  'license',
+  'compatibility',
+  'metadata',
+  'disable-model-invocation',
+  'user-invocable',
+]);
+const maxIgnoredFields = 32;
+const maxFieldNameLength = 100;
+class ListFieldError extends Error {
+  constructor(readonly field: string) {
+    super('list field');
+  }
+}
+
 /** Parse bounded YAML data without interpreting tags, aliases, scripts or tool declarations. */
 export function parseSkillDocument(text: string, expectedName: string): ParsedSkillDocument {
   try {
@@ -42,7 +59,27 @@ export function parseSkillDocument(text: string, expectedName: string): ParsedSk
     });
     if (document.errors.length > 0 || document.warnings.length > 0 || !isMap(document.contents))
       throw new Error('YAML');
+    const ignoredLists = new Set<string>();
     visit(document, (_key, node, ancestors) => {
+      if (isSeq(node)) {
+        // A top-level list of scalars is tolerated only for fields Weave does not interpret.
+        const parent = ancestors[ancestors.length - 1];
+        if (
+          ancestors.length === 3 &&
+          isPair(parent) &&
+          isScalar(parent.key) &&
+          node.anchor === undefined &&
+          node.tag === undefined &&
+          node.items.every(
+            (item) => isScalar(item) && item.anchor === undefined && item.tag === undefined,
+          )
+        ) {
+          const field = String(parent.key.value);
+          if (knownFields.has(field)) throw new ListFieldError(field.slice(0, maxFieldNameLength));
+          ignoredLists.add(field);
+          return visit.SKIP;
+        }
+      }
       if (
         isAlias(node) ||
         (typeof node === 'object' &&
@@ -56,7 +93,14 @@ export function parseSkillDocument(text: string, expectedName: string): ParsedSk
       if (isMap(node) && ancestors.filter(isMap).length > 1) throw new Error('nested YAML');
       if (isPair(node) && !isScalar(node.key)) throw new Error('complex YAML key');
     });
-    const data = schema.parse(document.toJS({ maxAliasCount: 0 }));
+    const raw = document.toJS({ maxAliasCount: 0 }) as Record<string, unknown>;
+    for (const field of ignoredLists) delete raw[field];
+    const data = schema.parse(raw);
+    const ignoredFields = document.contents.items
+      .map((pair) => String((pair.key as { value: unknown }).value))
+      .filter((field) => !knownFields.has(field))
+      .slice(0, maxIgnoredFields)
+      .map((field) => field.slice(0, maxFieldNameLength));
     const instructions = source.slice(delimiters[0].length);
     if (data.name !== expectedName || instructions.trim() === '') throw new Error('name or body');
     return Object.freeze({
@@ -70,8 +114,12 @@ export function parseSkillDocument(text: string, expectedName: string): ParsedSk
       ...(data.license === undefined ? {} : { license: data.license }),
       ...(data.compatibility === undefined ? {} : { compatibility: data.compatibility }),
       ...(data.metadata === undefined ? {} : { metadata: Object.freeze(data.metadata) }),
+      ...(ignoredFields.length === 0 ? {} : { ignoredFields: Object.freeze(ignoredFields) }),
     });
   } catch (cause: unknown) {
-    throw new SkillHostError('skill-invalid-document', { cause });
+    throw new SkillHostError('skill-invalid-document', {
+      cause,
+      ...(cause instanceof ListFieldError ? { field: cause.field } : {}),
+    });
   }
 }
