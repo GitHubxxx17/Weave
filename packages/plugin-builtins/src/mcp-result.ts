@@ -125,14 +125,38 @@ function structuredJson(value: unknown, secrets: readonly string[]): string {
   return output.join('');
 }
 
-function errorSummary(text: string, secrets: readonly string[]): string {
-  const maxBytes = 4096;
-  const encoded = Buffer.from(text);
-  if (encoded.byteLength <= maxBytes) return text;
+const maxErrorBytes = 4096;
+
+function newBoundary(context: McpResultContext): string {
+  return `${boundaryMarker}${(context.boundarySuffix ?? (() => randomBytes(16).toString('hex')))()}`;
+}
+
+/** A result cannot forge a boundary: any text that looks like the marker is defused. */
+function defuseBoundary(text: string): string {
+  return text.replaceAll(boundaryMarker, 'WEAVE-MCP-DATA\u200b-');
+}
+
+/**
+ * Error summary with the same declaration and random boundary as a success result. The whole
+ * text stays within 4 KB: only the content is truncated, never the declaration or boundaries.
+ */
+function errorSummary(
+  attribution: string,
+  content: string,
+  context: McpResultContext,
+  secrets: readonly string[],
+): string {
+  const boundary = newBoundary(context);
+  const head = `${redactMcpText(attribution, secrets)}\n${resultDeclaration}\n<<<${boundary}\n`;
+  const tail = `\n${boundary}>>>`;
+  const body = defuseBoundary(redactMcpText(content, secrets));
+  const encoded = Buffer.from(body);
+  const budget = maxErrorBytes - Buffer.byteLength(head) - Buffer.byteLength(tail);
+  if (encoded.byteLength <= budget) return head + body + tail;
   const marker = redactMcpText('\n[truncated]', secrets);
-  let end = maxBytes - Buffer.byteLength(marker);
+  let end = Math.max(0, budget - Buffer.byteLength(marker));
   while (end > 0 && (encoded[end]! & 0xc0) === 0x80) end--;
-  return encoded.subarray(0, end).toString('utf8') + marker;
+  return head + encoded.subarray(0, end).toString('utf8') + marker + tail;
 }
 
 const omittedTypes = ['image', 'audio', 'resource_link', 'resource', 'unknown'] as const;
@@ -161,10 +185,7 @@ export function formatMcpResult(result: McpCallResult, context: McpResultContext
     const message = result.isError
       ? 'MCP tool failed: the service returned an invalid error summary.'
       : 'The MCP service returned no supported result content.';
-    throw new McpToolError(
-      code,
-      errorSummary(redactMcpText(`${attribution}\n${message}`, secrets), secrets),
-    );
+    throw new McpToolError(code, errorSummary(attribution, message, context, secrets));
   }
   const usable = texts.some((text) => text.trim().length > 0) || structured !== undefined;
   const body = [texts.join('\n'), structured].filter((part) => part !== undefined && part !== '');
@@ -180,12 +201,11 @@ export function formatMcpResult(result: McpCallResult, context: McpResultContext
     throw new McpToolError(
       'mcp-tool-error',
       errorSummary(
-        redactMcpText(
-          [attribution, `MCP tool failed: ${summary}`, omittedSummary]
-            .filter((part) => part !== undefined)
-            .join('\n'),
-          secrets,
-        ),
+        attribution,
+        [`MCP tool failed: ${summary}`, omittedSummary]
+          .filter((part) => part !== undefined)
+          .join('\n'),
+        context,
         secrets,
       ),
     );
@@ -194,19 +214,17 @@ export function formatMcpResult(result: McpCallResult, context: McpResultContext
     throw new McpToolError(
       'mcp-unsupported-result',
       errorSummary(
-        redactMcpText(
-          `${attribution}\nThe MCP service returned no supported result content.`,
-          secrets,
-        ),
+        attribution,
+        'The MCP service returned no supported result content.',
+        context,
         secrets,
       ),
     );
   }
   if (omittedSummary !== undefined) body.push(omittedSummary);
   const redacted = redactMcpText(body.join('\n'), secrets);
-  const boundary = `${boundaryMarker}${(context.boundarySuffix ?? (() => randomBytes(16).toString('hex')))()}`;
-  // A result cannot forge a boundary: any text that looks like the marker is defused.
-  const escaped = redacted.replaceAll(boundaryMarker, 'WEAVE-MCP-DATA\u200b-');
+  const boundary = newBoundary(context);
+  const escaped = defuseBoundary(redacted);
   return [
     redactMcpText(attribution, secrets),
     resultDeclaration,

@@ -8,6 +8,11 @@ import {
 } from '../features/providers/provider-presets.js';
 import type { ProviderDescriptor, ProviderSettings } from '../features/providers/provider-types.js';
 import { fallbackProviderSettings } from './app-constants.js';
+import {
+  readReasoningEffort,
+  reasoningEffortSchema,
+  writeReasoningEffort,
+} from './composer-preferences.js';
 import type { ProviderFormState } from './app-types.js';
 import { parseProviderNumberField } from './form-select.js';
 
@@ -48,7 +53,9 @@ export function providerErrorMessage(error: unknown): string {
  * and the add/edit/delete Provider form state. Loads the list once on mount.
  */
 export function useProviderSettings({ onNotice }: UseProviderSettingsOptions) {
-  const [reasoningEffort, setReasoningEffort] = useState('medium');
+  const [reasoningOverrides, setReasoningOverrides] = useState<Readonly<Record<string, string>>>(
+    {},
+  );
   const [providerSettings, setProviderSettings] =
     useState<ProviderSettings>(fallbackProviderSettings);
   const [selectedProviderId, setSelectedProviderId] = useState(
@@ -65,6 +72,24 @@ export function useProviderSettings({ onNotice }: UseProviderSettingsOptions) {
   const selectedProvider =
     providerSettings.providers.find((provider) => provider.id === selectedProviderId) ??
     providerSettings.providers[0];
+
+  const reasoningKey = `${selectedProviderId}\u0000${selectedModel}`;
+  const reasoningEffort =
+    reasoningOverrides[reasoningKey] ?? readReasoningEffort(selectedProviderId, selectedModel);
+
+  /** Remembers the effort for one Provider + model, whether or not it is selected now. */
+  function setReasoningEffortFor(provider: string, model: string, value: string): void {
+    const parsed = reasoningEffortSchema.safeParse(value);
+    if (!parsed.success) return;
+    writeReasoningEffort(provider, model, parsed.data);
+    setReasoningOverrides((current) => ({
+      ...current,
+      [`${provider}\u0000${model}`]: parsed.data,
+    }));
+  }
+  function setReasoningEffort(value: string): void {
+    setReasoningEffortFor(selectedProviderId, selectedModel, value);
+  }
 
   function applyProviderSettings(settings: ProviderSettings): void {
     setProviderSettings(settings);
@@ -336,6 +361,7 @@ export function useProviderSettings({ onNotice }: UseProviderSettingsOptions) {
     selectedProvider,
     reasoningEffort,
     setReasoningEffort,
+    setReasoningEffortFor,
     providerForm,
     providerFormError,
     providerMutation,

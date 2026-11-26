@@ -325,6 +325,129 @@ describe('marketplace index sources', () => {
     expect(screen.queryByRole('button', { name: '查看 已移除源工具' })).toBeNull();
   });
 
+  describe('reordering', () => {
+    const other = { ...team, id: 'other', name: '开发者目录', url: 'https://other.example/i.json' };
+    const reorderBody = (fetch: ReturnType<typeof setup>) =>
+      JSON.parse(
+        String(
+          fetch.mock.calls.find(([path]) => path === '/plugins/marketplace/sources/reorder')![1]
+            .body,
+        ),
+      ) as unknown;
+    const open = async () => {
+      await screen.findByRole('combobox', { name: '插件索引源' });
+      fireEvent.click(screen.getByRole('button', { name: '管理索引源' }));
+    };
+    const listed = (path: string, init: RequestInit) =>
+      path === '/plugins/marketplace/sources' && init.method === 'GET'
+        ? Response.json(sourceEnvelope([builtin, team, other]))
+        : undefined;
+
+    it('sends the swapped remote order with the current revision for move up and down', async () => {
+      const fetch = setup((path, init) => {
+        if (path === '/plugins/marketplace/sources/reorder')
+          return Response.json(sourceEnvelope([builtin, other, team], 4));
+        return listed(path, init);
+      });
+      await open();
+      fireEvent.click(screen.getByRole('button', { name: '上移 开发者目录' }));
+      await waitFor(() =>
+        expect(reorderBody(fetch)).toEqual({ ids: ['other', 'team'], revision: 3 }),
+      );
+      await waitFor(() =>
+        expect(
+          screen
+            .getAllByRole('button', { name: /^(上移|下移) / })
+            .map((button) => button.getAttribute('aria-label')),
+        ).toEqual(['上移 开发者目录', '下移 开发者目录', '上移 团队目录', '下移 团队目录']),
+      );
+      await waitFor(() =>
+        expect(
+          (screen.getByRole('button', { name: '上移 开发者目录' }) as HTMLButtonElement).disabled,
+        ).toBe(true),
+      );
+      fireEvent.click(screen.getByRole('button', { name: '下移 开发者目录' }));
+      await waitFor(() =>
+        expect(
+          fetch.mock.calls.filter(([path]) => path === '/plugins/marketplace/sources/reorder'),
+        ).toHaveLength(2),
+      );
+      const last = fetch.mock.calls.filter(
+        ([path]) => path === '/plugins/marketplace/sources/reorder',
+      )[1]![1];
+      expect(JSON.parse(String(last.body))).toEqual({ ids: ['team', 'other'], revision: 4 });
+    });
+
+    it('disables moving the first remote source up and the last one down', async () => {
+      setup(listed);
+      await open();
+      const button = (name: string) => screen.getByRole('button', { name }) as HTMLButtonElement;
+      expect(button('上移 团队目录').disabled).toBe(true);
+      expect(button('下移 团队目录').disabled).toBe(false);
+      expect(button('上移 开发者目录').disabled).toBe(false);
+      expect(button('下移 开发者目录').disabled).toBe(true);
+    });
+
+    it('re-reads the list and reports a revision conflict', async () => {
+      let reads = 0;
+      setup((path, init) => {
+        if (path === '/plugins/marketplace/sources' && init.method === 'GET') {
+          reads += 1;
+          return Response.json(sourceEnvelope([builtin, team, other], reads === 1 ? 3 : 4));
+        }
+        if (path === '/plugins/marketplace/sources/reorder')
+          return Response.json(
+            { error: { code: 'plugin-marketplace-revision-conflict', message: 'conflict' } },
+            { status: 409 },
+          );
+        return undefined;
+      });
+      await open();
+      fireEvent.click(screen.getByRole('button', { name: '下移 团队目录' }));
+      expect(await screen.findByText(/已被其他窗口修改/)).toBeDefined();
+      await waitFor(() => expect(reads).toBe(2));
+    });
+
+    it('keeps the original order and shows an error when the request fails', async () => {
+      setup((path, init) =>
+        path === '/plugins/marketplace/sources/reorder'
+          ? new Response('Unavailable', { status: 503 })
+          : listed(path, init),
+      );
+      await open();
+      const names = () =>
+        screen.getAllByRole('listitem').map((item) => within(item).getByRole('strong').textContent);
+      const before = names();
+      fireEvent.click(screen.getByRole('button', { name: '下移 团队目录' }));
+      expect(await screen.findByRole('alert')).toBeDefined();
+      expect(names()).toEqual(before);
+      expect(before).toEqual(['Weave 目录', '团队目录', '开发者目录']);
+    });
+
+    it('disables the move buttons while a reorder is in flight', async () => {
+      let finish!: (response: Response) => void;
+      const pending = new Promise<Response>((resolve) => {
+        finish = resolve;
+      });
+      setup((path, init) =>
+        path === '/plugins/marketplace/sources/reorder' ? pending : listed(path, init),
+      );
+      await open();
+      fireEvent.click(screen.getByRole('button', { name: '下移 团队目录' }));
+      await waitFor(() =>
+        expect(
+          (screen.getByRole('button', { name: '上移 开发者目录' }) as HTMLButtonElement).disabled,
+        ).toBe(true),
+      );
+      expect(
+        (screen.getByRole('button', { name: '下移 团队目录' }) as HTMLButtonElement).disabled,
+      ).toBe(true);
+      await act(async () => {
+        finish(Response.json(sourceEnvelope([builtin, other, team], 4)));
+      });
+    });
+  });
+
   it('keeps the displayed version aligned with the reviewed release after catalog refresh', async () => {
     let refreshed = false;
     setup((path) => {

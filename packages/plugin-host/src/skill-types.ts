@@ -10,11 +10,14 @@ export type SkillHostErrorCode =
 export class SkillHostError extends Error {
   constructor(
     readonly code: SkillHostErrorCode,
-    options?: ErrorOptions,
+    options?: ErrorOptions & { readonly field?: string },
   ) {
-    super(code, options);
+    super(options?.field === undefined ? code : `${code}: ${options.field}`, options);
     this.name = 'SkillHostError';
+    if (options?.field !== undefined) this.field = options.field;
   }
+  /** The frontmatter field that made the document invalid; never a path or native message. */
+  readonly field?: string;
 }
 
 export interface SkillRootInput {
@@ -41,12 +44,15 @@ export interface ParsedSkillDocument {
   readonly license?: string;
   readonly compatibility?: string;
   readonly metadata?: Readonly<Record<string, string>>;
+  /** Frontmatter fields Weave does not interpret; they never change Skill behavior. */
+  readonly ignoredFields?: readonly string[];
 }
 export interface DiscoveredSkillBundle {
   readonly handle: DiskSkillHandle;
   readonly name: string;
   readonly description: string;
   readonly invocation: { readonly user: boolean; readonly model: boolean };
+  readonly ignoredFields?: readonly string[];
   readonly resources: readonly SkillResourceIdentity[];
 }
 export interface SkillDiscoveryResult {
@@ -57,6 +63,7 @@ export interface SkillDiscoveryResult {
     readonly code:
       'unreadable' | 'invalid-document' | 'unsafe-entry' | 'source-changed' | 'limit-exceeded';
     readonly name?: string;
+    readonly field?: string;
   }[];
 }
 export interface PinnedSkillBundle {

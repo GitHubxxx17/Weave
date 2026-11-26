@@ -5,6 +5,7 @@ import {
   fetchPluginMarketplaceSources,
   refreshPluginMarketplaceSource,
   removePluginMarketplaceSource,
+  reorderPluginMarketplaceSources,
 } from './plugin-marketplace-api.js';
 import type { PluginMarketplace, PluginMarketplaceSources } from './plugin-marketplace-types.js';
 import { PluginApiError } from './plugin-api.js';
@@ -174,6 +175,20 @@ export function useMarketplaceSources() {
     );
   }
 
+  /** Only remote sources are ordered; built-in and local sources keep their fixed positions. */
+  function moveSource(id: string, direction: 'up' | 'down'): Promise<boolean> {
+    const remote = (sources?.sources ?? []).filter(({ kind }) => kind === 'remote');
+    const from = remote.findIndex((source) => source.id === id);
+    const to = direction === 'up' ? from - 1 : from + 1;
+    if (from < 0 || to < 0 || to >= remote.length) return Promise.resolve(false);
+    const ids = remote.map((source) => source.id);
+    [ids[from], ids[to]] = [ids[to]!, ids[from]!];
+    return run(
+      (signal) => reorderPluginMarketplaceSources(ids, sources?.revision ?? 0, signal),
+      () => undefined,
+    );
+  }
+
   function refresh(): void {
     if (effectiveSourceId === undefined || sources === undefined) {
       setCatalogRevision((value) => value + 1);
@@ -201,6 +216,7 @@ export function useMarketplaceSources() {
     selectSource,
     addSource,
     removeSource,
+    moveSource,
     refresh,
     reloadSources: () => {
       if (action.current !== undefined) return;

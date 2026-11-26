@@ -428,3 +428,29 @@ it('rejects duplicate context kinds before any request is sent', async () => {
   ).rejects.toThrow();
   expect(fetcher).not.toHaveBeenCalled();
 });
+
+it('stops retrying an unreachable Server after the window and a manual retry reuses the requestId and body', async () => {
+  vi.useFakeTimers();
+  const fetcher = vi.fn().mockRejectedValue(new TypeError('offline'));
+  vi.stubGlobal('fetch', fetcher);
+  const handlers = { onEvent: vi.fn(), onReceipt: vi.fn() };
+  const failed = expect(
+    streamAgentRun(input, handlers, { requestId: 'request-1' }),
+  ).rejects.toMatchObject({ code: 'execution-launch-unreachable' });
+  await vi.advanceTimersByTimeAsync(120_000);
+  await failed;
+  const attempts = fetcher.mock.calls.length;
+  expect(attempts).toBeGreaterThan(1);
+  expect(attempts).toBeLessThan(30);
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(fetcher).toHaveBeenCalledTimes(attempts);
+  expect(handlers.onReceipt).not.toHaveBeenCalled();
+
+  fetcher.mockResolvedValueOnce(
+    Response.json({ ...snapshot, status: 'cancelled', durableThroughSequence: 10 }),
+  );
+  await streamAgentRun(input, handlers, { requestId: 'request-1' });
+  const bodies = new Set(fetcher.mock.calls.map(([, init]) => init?.body as string));
+  expect(bodies.size).toBe(1);
+  expect(JSON.parse([...bodies][0]!).requestId).toBe('request-1');
+});

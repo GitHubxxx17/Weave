@@ -67,7 +67,7 @@ describe('guarded Memory HTTP management', () => {
     const scopes = await f.get('/memory/scopes');
     expect(scopes.status).toBe(200);
     expect(await scopes.json()).toMatchObject({
-      scopes: [{ name: 'Project A' }, { name: 'Project B' }, { scope: { kind: 'user' } }],
+      scopes: [{ scope: { kind: 'user' } }, { name: 'Project A' }, { name: 'Project B' }],
     });
     const access = await f.get(`/memory/access?${f.query}`);
     expect(await access.json()).toMatchObject({
@@ -220,13 +220,66 @@ describe('guarded Memory HTTP management', () => {
       expect(response.status).toBe(status);
     }
   });
-  it('rejects a scope listing whose complete JSON envelope exceeds the HTTP response budget', async () => {
+  it('rejects a scope page whose complete JSON envelope exceeds the HTTP response budget', async () => {
     const f = await fixture();
     await f.projects.renameProject(f.project.id, 'P'.repeat(65536));
     const response = await f.get('/memory/scopes');
     expect(response.status).toBe(413);
-    expect(await response.json()).toEqual({
-      error: { code: 'memory-limit', message: 'Memory request could not be completed.' },
+    expect(await response.json()).toMatchObject({ error: { code: 'memory-limit' } });
+    const first = await (await f.get('/memory/scopes?limit=1')).json();
+    const single = await f.get(`/memory/scopes?limit=1&cursor=${first.nextCursor}`);
+    expect(single.status).toBe(413);
+    expect(await single.json()).toEqual({
+      error: {
+        code: 'memory-limit',
+        message: 'A single Memory scope entry exceeds the response size limit.',
+      },
     });
+  });
+  it('paginates hundreds of projects with signed cursors and a first-page default', async () => {
+    const f = await fixture();
+    for (let index = 0; index < 400; index += 1)
+      await f.projects.createProject({ name: `Bulk ${index}`, folderName: `bulk-${index}` });
+    const total = 403;
+    const legacy = await (await f.get('/memory/scopes')).json();
+    expect(legacy.scopes).toHaveLength(100);
+    expect(legacy.scopes[0].scope).toEqual({ kind: 'user' });
+    expect(typeof legacy.nextCursor).toBe('string');
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const url: string = `/memory/scopes?limit=200${cursor === undefined ? '' : `&cursor=${cursor}`}`;
+      const response = await f.get(url);
+      expect(response.status).toBe(200);
+      const page = await response.json();
+      expect(page.scopes.length).toBeLessThanOrEqual(200);
+      for (const item of page.scopes)
+        seen.push(item.scope.kind === 'user' ? 'user' : item.scope.projectId);
+      cursor = page.nextCursor;
+    } while (cursor !== undefined);
+    expect(seen).toHaveLength(total);
+    expect(new Set(seen).size).toBe(total);
+    expect(seen[0]).toBe('user');
+  });
+  it('rejects tampered scope cursors and invalid paging parameters', async () => {
+    const f = await fixture();
+    const first = await (await f.get('/memory/scopes?limit=1')).json();
+    const [body, signature] = String(first.nextCursor).split('.') as [string, string];
+    const forged = Buffer.from(JSON.stringify({ v: 1, op: 'scopes', after: f.other.id })).toString(
+      'base64url',
+    );
+    for (const cursor of [
+      `${body}.${'A'.repeat(signature.length)}`,
+      `${forged}.${signature}`,
+      'x.y',
+    ]) {
+      const response = await f.get(`/memory/scopes?cursor=${cursor}`);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { code: 'memory-invalid-cursor' } });
+    }
+    for (const query of ['limit=0', 'limit=201', 'limit=abc', 'extra=1'])
+      expect((await f.get(`/memory/scopes?${query}`)).status).toBe(400);
+    const second = await (await f.get(`/memory/scopes?limit=1&cursor=${first.nextCursor}`)).json();
+    expect(second.scopes).toHaveLength(1);
   });
 });

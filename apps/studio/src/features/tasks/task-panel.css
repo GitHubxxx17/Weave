@@ -127,6 +127,10 @@
   font-size: 11px;
   color: #b45309;
 }
+.task-item-warning {
+  font-weight: 600;
+  color: var(--danger, #b91c1c);
+}
 .task-item-note svg {
   width: 14px;
 }

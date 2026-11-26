@@ -37,6 +37,7 @@ const issues = {
     message: 'MCP authority contains invalid persisted data.',
   },
   'mcp-authority-storage': { status: 500, message: 'MCP authority persistence is unavailable.' },
+  'mcp-authority-busy': { status: 503, message: 'MCP authority is temporarily busy.' },
   'mcp-closed': { status: 500, message: 'MCP management is closed.' },
   'mcp-content-changed': { status: 409, message: '内容已变更，需要重新信任。' },
   'mcp-content-too-large': {

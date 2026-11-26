@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AgentStreamError, streamAgentRun } from '../src/features/agent/agent-stream.js';
+import { executionLaunchUnreachableCode } from '../src/features/agent/agent-stream-error.js';
 import { App } from '../src/app/App.js';
 import type { AgentExecutionSnapshot } from '../src/features/agent/agent-execution-types.js';
 import type { AgentStreamHandlers } from '../src/features/agent/agent-types.js';
@@ -624,6 +625,7 @@ describe('Agent Tasks in Studio', () => {
     childTurnId: '00000000-0000-4000-8000-000000000004',
     title: '检查变更',
     access: 'read-only',
+    permissionMode: 'ask',
     acceptedAt: '2026-11-23T00:00:00.000Z',
     status: 'running',
     resultKind: 'none',
@@ -1890,6 +1892,65 @@ describe('Studio Agent Chat', () => {
       expect.objectContaining({ reasoningEffort: 'high' }),
       expect.anything(),
       expect.anything(),
+    );
+  });
+
+  it('restores the permission mode per Session and starts new Sessions at the default', async () => {
+    const first = render(<App />);
+    await waitFor(() => expect(screen.getByRole('region', { name: '智能对话' })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /常规/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /完全访问/ }));
+    expect(screen.getByRole('button', { name: /完全访问/ })).toBeTruthy();
+    expect(localStorage.getItem(`weave.studio.permissionMode.v1:${sessionIds.local}`)).toBe('yolo');
+    first.unmount();
+
+    await renderApp();
+    expect(await screen.findByRole('button', { name: /完全访问/ })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '新建会话' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /^常规/ })).toBeTruthy());
+    expect(screen.queryByRole('button', { name: /^完全访问/ })).toBeNull();
+  });
+
+  it('falls back to the default for an invalid stored permission mode', async () => {
+    localStorage.setItem(`weave.studio.permissionMode.v1:${sessionIds.local}`, 'root');
+    await renderApp();
+    expect(screen.getByRole('button', { name: /^常规/ })).toBeTruthy();
+  });
+
+  it('restores the reasoning effort per Provider and model after a reload', async () => {
+    const first = render(<App />);
+    await waitFor(() => expect(screen.getByRole('region', { name: '智能对话' })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: '模型与强度' }));
+    fireEvent.change(screen.getByRole('slider'), { target: { value: '2' } });
+    first.unmount();
+
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: '模型与强度' }));
+    expect((screen.getByRole('slider') as HTMLInputElement).value).toBe('2');
+  });
+
+  it('keeps the draft and resends the same requestId and request after the Server was unreachable', async () => {
+    streamAgentRunMock.mockRejectedValueOnce(
+      new AgentStreamError(executionLaunchUnreachableCode, '无法连接到本地 Server'),
+    );
+    streamAgentRunMock.mockImplementation(async (_request, handlers) => {
+      handlers.onEvent({ type: 'completed', turnId: 'turn-resend' });
+    });
+    await renderApp();
+    fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '离线草稿' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await screen.findByText('无法连接到本地 Server，消息未发送，草稿已保留。');
+    expect((screen.getByLabelText('发送消息') as HTMLTextAreaElement).value).toBe('离线草稿');
+
+    fireEvent.click(screen.getByRole('button', { name: '重试' }));
+    await waitFor(() => expect(streamAgentRunMock).toHaveBeenCalledTimes(2));
+    const [firstCall, secondCall] = streamAgentRunMock.mock.calls;
+    expect(secondCall?.[0]).toEqual(firstCall?.[0]);
+    expect(firstCall?.[2]?.requestId).toBeTruthy();
+    expect(secondCall?.[2]?.requestId).toBe(firstCall?.[2]?.requestId);
+    await waitFor(() =>
+      expect((screen.getByLabelText('发送消息') as HTMLTextAreaElement).value).toBe(''),
     );
   });
 
@@ -3370,7 +3431,9 @@ describe('Studio Agent Chat', () => {
     ).length;
     fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: 'keep queued draft' } });
     fireEvent.click(screen.getByRole('button', { name: '加入队列' }));
-    await screen.findByText('待执行队列已满，请稍后再试。草稿已保留。');
+    await screen.findByText(
+      '排队消息已满（每个会话最多 10 条，全局最多 100 条），请等待前面的消息完成后再发送。草稿已保留。',
+    );
     expect((screen.getByLabelText('发送消息') as HTMLTextAreaElement).value).toBe(
       'keep queued draft',
     );

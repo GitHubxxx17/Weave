@@ -43,4 +43,6 @@ export interface ConnectMcpOptions {
   readonly signal: AbortSignal;
   readonly onStale?: () => void;
   readonly onClosed?: () => void;
+  /** Per-call timeout in milliseconds, 1 s to 10 min. Defaults to 120 s. */
+  readonly callTimeoutMs?: number;
 }

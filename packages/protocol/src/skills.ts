@@ -53,6 +53,8 @@ export const skillSummarySchema = skillRefSchema
     description: z.string().trim().min(1).max(1024),
     source: skillSourceSchema,
     invocation: z.object({ user: z.boolean(), model: z.boolean() }).strict(),
+    /** Frontmatter fields Weave does not support; they were ignored and never affect behavior. */
+    ignoredFields: z.array(z.string().min(1).max(100)).max(32).optional(),
   })
   .strict()
   .refine((skill) => {
@@ -74,6 +76,8 @@ export const skillIssueSchema = z
       'limit-exceeded',
     ]),
     skillId: idSchema.optional(),
+    /** Frontmatter field that made the document invalid. */
+    field: z.string().min(1).max(100).optional(),
   })
   .strict();
 export type SkillIssue = z.infer<typeof skillIssueSchema>;

@@ -1,5 +1,5 @@
 import { useId, useState, type ReactElement } from 'react';
-import { Globe, Plus, Settings2, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, Globe, Plus, Settings2, Trash2 } from 'lucide-react';
 import type { useMarketplaceSources } from './use-marketplace-sources.js';
 
 type SourcesState = ReturnType<typeof useMarketplaceSources>;
@@ -22,6 +22,9 @@ export function MarketplaceSources({
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
   const id = useId();
+  const remoteIds = (state.sources?.sources ?? [])
+    .filter(({ kind }) => kind === 'remote')
+    .map(({ id: sourceId }) => sourceId);
   const selected = state.selectedSource;
   const error = selected?.errorCode === undefined ? undefined : sourceErrors[selected.errorCode];
   return (
@@ -107,17 +110,41 @@ export function MarketplaceSources({
                   </span>
                 </div>
                 {source.removable ? (
-                  <button
-                    className="icon-button"
-                    type="button"
-                    disabled={state.busy}
-                    aria-label={`移除 ${source.name}`}
-                    onClick={() => {
-                      void state.removeSource(source.id);
-                    }}
-                  >
-                    <Trash2 aria-hidden="true" />
-                  </button>
+                  <div className="marketplace-source-actions">
+                    <button
+                      className="icon-button"
+                      type="button"
+                      disabled={state.busy || source.id === remoteIds[0]}
+                      aria-label={`上移 ${source.name}`}
+                      onClick={() => {
+                        void state.moveSource(source.id, 'up');
+                      }}
+                    >
+                      <ArrowUp aria-hidden="true" />
+                    </button>
+                    <button
+                      className="icon-button"
+                      type="button"
+                      disabled={state.busy || source.id === remoteIds[remoteIds.length - 1]}
+                      aria-label={`下移 ${source.name}`}
+                      onClick={() => {
+                        void state.moveSource(source.id, 'down');
+                      }}
+                    >
+                      <ArrowDown aria-hidden="true" />
+                    </button>
+                    <button
+                      className="icon-button"
+                      type="button"
+                      disabled={state.busy}
+                      aria-label={`移除 ${source.name}`}
+                      onClick={() => {
+                        void state.removeSource(source.id);
+                      }}
+                    >
+                      <Trash2 aria-hidden="true" />
+                    </button>
+                  </div>
                 ) : (
                   <span className="marketplace-help">预置</span>
                 )}

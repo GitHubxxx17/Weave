@@ -34,6 +34,7 @@ const view: AgentTaskView = {
   childTurnId: turn,
   title: 'Read source',
   access: 'read-only',
+  permissionMode: 'ask',
   acceptedAt: '2026-11-23T00:00:00.000Z',
   status: 'running',
   resultKind: 'none',

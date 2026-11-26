@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -75,6 +76,57 @@ describe('MCP content digest', () => {
     await writeFile(file, 'a');
     expect(mcpConfigDigestV2({ ...config, contentPaths: [file] }, content)).not.toBe(
       mcpConfigDigestV2(config, content),
+    );
+  });
+
+  it('keeps the policy 2 digest unchanged when callTimeoutMs is absent and binds it when present', async () => {
+    const { command, directory, config } = await workspace();
+    const content = await computeMcpContentDigest(config);
+    // Hand-built canonical JSON of the pre-callTimeoutMs policy 2 shape (keys sorted).
+    const legacy = createHash('sha256')
+      .update(
+        JSON.stringify({
+          args: [],
+          command,
+          contentDigest: content,
+          contentPaths: [],
+          cwd: directory,
+          env: {},
+          id: 'notes',
+          policyVersion: 2,
+          schemaVersion: 1,
+          transport: 'stdio',
+        }),
+        'utf8',
+      )
+      .digest('hex');
+    expect(mcpConfigDigestV2(config, content)).toBe(legacy);
+    expect(mcpConfigDigestV2({ ...config, callTimeoutMs: undefined }, content)).toBe(legacy);
+    const withTimeout = mcpConfigDigestV2({ ...config, callTimeoutMs: 5000 }, content);
+    expect(withTimeout).not.toBe(legacy);
+    expect(mcpConfigDigestV2({ ...config, callTimeoutMs: 5000 }, content)).toBe(withTimeout);
+    expect(mcpConfigDigestV2({ ...config, callTimeoutMs: 6000 }, content)).not.toBe(withTimeout);
+    // An explicit value equal to the default is still a different configuration.
+    expect(mcpConfigDigestV2({ ...config, callTimeoutMs: 120_000 }, content)).not.toBe(legacy);
+  });
+
+  it('validates callTimeoutMs: integer from 1 second to 10 minutes', async () => {
+    const { config } = await workspace();
+    const accepts = (value: unknown) =>
+      mcpServerConfigSchema.safeParse({ ...config, callTimeoutMs: value }).success;
+    expect(accepts(1000)).toBe(true);
+    expect(accepts(600_000)).toBe(true);
+    expect(accepts(999)).toBe(false);
+    expect(accepts(600_001)).toBe(false);
+    expect(accepts(1500.5)).toBe(false);
+    expect(accepts('5000')).toBe(false);
+    expect(accepts(Number.NaN)).toBe(false);
+    expect(mcpServerConfigSchema.safeParse(config).success).toBe(true);
+    await expect(normalizeMcpServerConfig({ ...config, callTimeoutMs: 0 })).rejects.toMatchObject({
+      code: 'mcp-invalid',
+    });
+    expect((await normalizeMcpServerConfig({ ...config, callTimeoutMs: 5000 })).callTimeoutMs).toBe(
+      5000,
     );
   });
 
@@ -163,6 +215,28 @@ describe('MCP authority replay across policy versions', () => {
       validateMcpAuthorityLog({
         sequence: 1,
         events: [{ ...v2, configDigest: mcpConfigDigest(config) }],
+        records: [],
+      }),
+    ).toThrowError();
+  });
+
+  it('rejects a policy 1 event that carries callTimeoutMs, which policy 1 cannot bind', async () => {
+    const { config } = await workspace();
+    const withTimeout = { ...config, callTimeoutMs: 5000 };
+    expect(() =>
+      validateMcpAuthorityLog({
+        sequence: 1,
+        events: [
+          {
+            kind: 'configured',
+            config: withTimeout,
+            configDigest: mcpConfigDigest(withTimeout),
+            schemaVersion: 1,
+            sequence: 1,
+            occurredAt: '2026-11-24T00:00:00.000Z',
+            scope: 'user',
+          },
+        ],
         records: [],
       }),
     ).toThrowError();

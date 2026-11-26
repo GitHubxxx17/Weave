@@ -351,6 +351,7 @@ describe('Agent task admission and materialization', () => {
       allowCreate.resolve();
     }
     await vi.waitFor(() => expect(tasks.snapshot('root')[0]?.status).toBe('completed'));
+    expect(tasks.snapshot('root')[0]?.permissionMode).toBe(parentInput.permissionMode);
     expect(
       (await original.read('root')).filter((event) => event.type === 'turn.started'),
     ).toHaveLength(1);

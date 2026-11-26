@@ -34,31 +34,69 @@ export function MemoryPage({
   const [choice, setChoice] = useState(selectedProjectId ? `project:${selectedProjectId}` : 'user');
   const [error, setError] = useState<string>();
   const [retry, setRetry] = useState(0);
+  const [nextCursor, setNextCursor] = useState<string>();
+  const [loadingMore, setLoadingMore] = useState(false);
   useEffect(() => {
     if (selectedProjectId) setChoice(`project:${selectedProjectId}`);
   }, [selectedProjectId]);
+  const loadPage = useRef<AbortController | undefined>(undefined);
   useEffect(() => {
     const controller = new AbortController();
     let current = true;
     setError(undefined);
-    void client
-      .scopes(controller.signal)
-      .then((value) => {
+    setScopes(undefined);
+    setNextCursor(undefined);
+    void (async () => {
+      let loaded: MemoryScopeDescriptor[] = [];
+      let cursor: string | undefined;
+      const wanted = selectedProjectId ? `project:${selectedProjectId}` : 'user';
+      do {
+        const page = await client.scopes(cursor, controller.signal);
         if (!current || controller.signal.aborted) return;
-        setScopes(value);
-        setChoice((key) =>
-          value.some((item) => memoryScopeKey(item.scope) === key) ? key : 'user',
-        );
-      })
-      .catch((cause: unknown) => {
-        if (current && !controller.signal.aborted)
-          setError(cause instanceof Error ? cause.message : '无法加载记忆范围');
-      });
+        loaded = [...loaded, ...page.scopes];
+        cursor = page.nextCursor;
+        // 已选项目不在已加载页内时继续翻页，直到找到或没有更多。
+      } while (
+        cursor !== undefined &&
+        !loaded.some((item) => memoryScopeKey(item.scope) === wanted)
+      );
+      setScopes(loaded);
+      setNextCursor(cursor);
+      setChoice((key) =>
+        loaded.some((item) => memoryScopeKey(item.scope) === key) ? key : 'user',
+      );
+    })().catch((cause: unknown) => {
+      if (current && !controller.signal.aborted)
+        setError(cause instanceof Error ? cause.message : '无法加载记忆范围');
+    });
     return () => {
       current = false;
       controller.abort();
     };
   }, [client, retry]);
+  const loadMoreScopes = (): void => {
+    if (nextCursor === undefined || loadingMore) return;
+    loadPage.current?.abort();
+    const controller = new AbortController();
+    loadPage.current = controller;
+    setLoadingMore(true);
+    setError(undefined);
+    client
+      .scopes(nextCursor, controller.signal)
+      .then((page) => {
+        if (controller.signal.aborted) return;
+        setScopes((value) => [...(value ?? []), ...page.scopes]);
+        setNextCursor(page.nextCursor);
+      })
+      .catch((cause: unknown) => {
+        if (!controller.signal.aborted)
+          setError(cause instanceof Error ? cause.message : '无法加载更多记忆范围');
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoadingMore(false);
+      });
+  };
+  useEffect(() => () => loadPage.current?.abort(), []);
   const selected = scopes?.find((item) => memoryScopeKey(item.scope) === choice);
   return (
     <section className="memory-page" aria-label="长期记忆">
@@ -83,6 +121,11 @@ export function MemoryPage({
               </option>
             ))}
           </select>
+          {nextCursor === undefined ? null : (
+            <button type="button" disabled={loadingMore} onClick={loadMoreScopes}>
+              {loadingMore ? '正在加载…' : '加载更多范围'}
+            </button>
+          )}
         </label>
       </header>
       {error === undefined ? null : (

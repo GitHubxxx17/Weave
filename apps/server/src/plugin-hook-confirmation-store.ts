@@ -1,5 +1,6 @@
-import { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
+import { openSharedDatabase } from './sqlite-busy-timeout.js';
 
 const filenameSchema = z.string().min(1);
 const digestSchema = z.string().regex(/^[0-9a-f]{64}$/);
@@ -54,9 +55,8 @@ export function createSqlitePluginHookConfirmationStore(options: {
   const now = options.now ?? (() => new Date());
 
   function withDatabase<T>(operation: (database: DatabaseSync) => T): T {
-    const database = new DatabaseSync(filename);
+    const database = openSharedDatabase(filename);
     try {
-      database.exec('PRAGMA busy_timeout = 5000');
       database.exec(createTableSql);
       return operation(database);
     } finally {

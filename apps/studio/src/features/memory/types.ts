@@ -226,7 +226,9 @@ export const memoryScopesResponseSchema = z.strictObject({
       })
       .refine((value) => memoryScopeKey(value.scope) === memoryScopeKey(value.access.scope)),
   ),
+  nextCursor: z.string().min(1).max(2048).optional(),
 });
+export type MemoryScopesPage = z.infer<typeof memoryScopesResponseSchema>;
 export type MemoryScopeDescriptor = z.infer<typeof memoryScopesResponseSchema>['scopes'][number];
 export const memoryPageSchema = z.strictObject({
   records: z.array(memorySummarySchema).max(50),

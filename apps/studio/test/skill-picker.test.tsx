@@ -164,3 +164,24 @@ it('discards old instruction previews when the same Session changes project root
   view.rerender(<Harness sessionId="A" root="two" />);
   expect(screen.queryByText('旧根的预览')).toBeNull();
 });
+it('shows ignored frontmatter fields and list-invalid field diagnostics', () => {
+  const catalog = skillCatalogSchema.parse({
+    ...skillCatalog([{ ...planningSkill, ignoredFields: ['allowed-tools', 'model'] }]),
+    complete: false,
+    issues: [{ source: 'User', code: 'invalid-document', field: 'license' }],
+  });
+  render(
+    <SkillPicker
+      sessionId="A"
+      catalog={catalog}
+      loading={false}
+      error={undefined}
+      selected={[]}
+      onToggle={() => undefined}
+      onRefresh={() => undefined}
+      onClose={() => undefined}
+    />,
+  );
+  expect(screen.getByText(/以下字段 Weave 不支持，已忽略：allowed-tools、model/)).toBeTruthy();
+  expect(screen.getByText(/字段 license 不能写成列表/)).toBeTruthy();
+});
