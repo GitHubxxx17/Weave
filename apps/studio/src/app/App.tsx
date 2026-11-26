@@ -7,7 +7,6 @@ import {
 import { fetchContextAvailability } from '../features/file-context/context-availability-api.js';
 import type { ExecutionContextKind } from '../features/file-context/execution-context-types.js';
 import {
-  ChangeEvent,
   type ClipboardEvent as ReactClipboardEvent,
   type CSSProperties,
   FormEvent,
@@ -154,7 +153,6 @@ import {
   idleRunState,
   type AgentSubmissionSnapshot,
   type ChatMessage,
-  type DirectoryPickerWindow,
   type OpenMenu,
   type PendingImage,
   type ProductView,
@@ -168,6 +166,7 @@ import {
 } from './app-types.js';
 import { FormSelect } from './form-select.js';
 import { useProviderSettings } from './use-provider-settings.js';
+import { useWorkspaceNavigation } from './use-workspace-navigation.js';
 
 const workspaceApi = createWorkspaceApi();
 
@@ -213,15 +212,6 @@ function StudioApp(): ReactElement {
   const [workspaceLoadKey, setWorkspaceLoadKey] = useState(0);
   const [activeView, setActiveView] = useState<ProductView>('studio');
   const [openMenu, setOpenMenu] = useState<OpenMenu>(null);
-  const [isProjectDialogOpen, setIsProjectDialogOpen] = useState(false);
-  const [folderDialogProjectId, setFolderDialogProjectId] = useState<string | null>(null);
-  const [folderDialogPath, setFolderDialogPath] = useState('');
-  const [folderDialogError, setFolderDialogError] = useState<string | null>(null);
-  const [projectName, setProjectName] = useState('');
-  const [selectedFolderName, setSelectedFolderName] = useState('');
-  const [selectedFolderPath, setSelectedFolderPath] = useState('');
-  const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
   const [isActivityPanelOpen, setIsActivityPanelOpen] = useState(true);
   const [panelWidth, setPanelWidth] = useSidePanelWidth();
   const shellRef = useRef<HTMLElement>(null);
@@ -257,13 +247,6 @@ function StudioApp(): ReactElement {
     setDefaultProvider,
     deleteProvider,
   } = useProviderSettings({ onNotice: setNotice });
-  const [editingSession, setEditingSession] = useState<{
-    readonly projectId: string;
-    readonly sessionId: string;
-  } | null>(null);
-  const [sessionTitleInput, setSessionTitleInput] = useState('');
-  const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null);
-  const [projectRenameInput, setProjectRenameInput] = useState('');
   const [sessionToDelete, setSessionToDelete] = useState<{
     readonly projectId: string;
     readonly sessionId: string;
@@ -346,6 +329,60 @@ function StudioApp(): ReactElement {
   const messageInputRef = useRef<HTMLTextAreaElement | null>(null);
   const composerIsComposing = useRef(false);
   const directoryInputRef = useRef<HTMLInputElement | null>(null);
+  const {
+    isProjectDialogOpen,
+    setIsProjectDialogOpen,
+    folderDialogProjectId,
+    setFolderDialogProjectId,
+    folderDialogPath,
+    setFolderDialogPath,
+    folderDialogError,
+    projectName,
+    setProjectName,
+    selectedFolderName,
+    selectedFolderPath,
+    setSelectedFolderPath,
+    isSearchOpen,
+    setIsSearchOpen,
+    searchQuery,
+    setSearchQuery,
+    editingSession,
+    setEditingSession,
+    sessionTitleInput,
+    setSessionTitleInput,
+    renamingProjectId,
+    setRenamingProjectId,
+    projectRenameInput,
+    setProjectRenameInput,
+    openSessionEditor,
+    saveSessionTitle,
+    openProjectRename,
+    saveProjectName,
+    openProjectDialog,
+    chooseProjectFolder,
+    chooseFallbackFolder,
+    createProject,
+    openFolderDialog,
+    pickFolderForDialog,
+    saveProjectFolder,
+  } = useWorkspaceNavigation({
+    projects,
+    setProjects,
+    setOpenMenu,
+    onNotice: setNotice,
+    directoryInputRef,
+    getSessionRunStatus: sessionRunStatus,
+    applySessionDetail,
+    onProjectCreated: (project, session) => {
+      setProjects((current) => [...current, project]);
+      setExpandedProjectIds((current) => [...current, project.id]);
+      setActiveProjectId(project.id);
+      activeSessionIdRef.current = session.id;
+      setActiveSessionId(session.id);
+      setActiveView('studio');
+      resetTransientState();
+    },
+  });
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const activeProject = projects.find((project) => project.id === activeProjectId);
   const sessions = activeProject?.sessions ?? [];
@@ -1998,38 +2035,6 @@ function StudioApp(): ReactElement {
     );
   }
 
-  function openSessionEditor(projectId: string, sessionId: string): void {
-    if (sessionRunStatus(sessionId) === 'streaming') {
-      return;
-    }
-
-    const session = projects
-      .find((project) => project.id === projectId)
-      ?.sessions.find((candidate) => candidate.id === sessionId);
-    if (session === undefined || session.archivedAt !== null) {
-      return;
-    }
-
-    setEditingSession({ projectId, sessionId });
-    setSessionTitleInput(session.title);
-  }
-
-  async function saveSessionTitle(): Promise<void> {
-    const editing = editingSession;
-    const title = sessionTitleInput.trim();
-    if (editing === null || title === '' || sessionRunStatus(editing.sessionId) === 'streaming') {
-      return;
-    }
-
-    try {
-      const detail = await workspaceApi.renameSession(editing.sessionId, title);
-      applySessionDetail(editing.projectId, detail);
-      setEditingSession(null);
-    } catch (error: unknown) {
-      setNotice(workspaceErrorMessage(error));
-    }
-  }
-
   async function archiveSession(projectId: string, sessionId: string): Promise<void> {
     if (sessionRunStatus(sessionId) === 'streaming') {
       return;
@@ -2207,171 +2212,6 @@ function StudioApp(): ReactElement {
       current.includes(projectId) ? current : [...current, projectId],
     );
     resetTransientState();
-  }
-
-  function openProjectRename(project: StudioProject): void {
-    setOpenMenu(null);
-    setRenamingProjectId(project.id);
-    setProjectRenameInput(project.name);
-  }
-
-  async function saveProjectName(): Promise<void> {
-    const projectId = renamingProjectId;
-    const name = projectRenameInput.trim();
-    if (projectId === null || name === '') {
-      return;
-    }
-    try {
-      const updated = await workspaceApi.renameProject(projectId, name);
-      setProjects((current) =>
-        current.map((project) =>
-          project.id === projectId ? { ...project, name: updated.name } : project,
-        ),
-      );
-      setRenamingProjectId(null);
-    } catch (error: unknown) {
-      setNotice(workspaceErrorMessage(error));
-    }
-  }
-
-  function openProjectDialog(): void {
-    setOpenMenu(null);
-    setProjectName('');
-    setSelectedFolderName('');
-    setSelectedFolderPath('');
-    setIsProjectDialogOpen(true);
-  }
-
-  function applySelectedFolder(folderName: string): void {
-    const normalized = folderName.trim();
-    if (normalized === '') {
-      return;
-    }
-
-    setSelectedFolderName(normalized);
-    setProjectName(normalized);
-  }
-
-  /**
-   * Desktop uses the system dialog and receives an absolute path. The browser
-   * picker only exposes a folder name, so the path must be typed separately.
-   */
-  async function chooseProjectFolder(): Promise<void> {
-    const desktopPicker = window.weaveDesktop?.pickDirectory;
-    if (desktopPicker !== undefined) {
-      try {
-        const picked = await desktopPicker();
-        if (picked !== null) {
-          applySelectedFolder(picked.name);
-          setSelectedFolderPath(picked.path);
-        }
-      } catch {
-        setNotice('无法打开文件夹选择框，请重试');
-      }
-      return;
-    }
-
-    const picker = (window as DirectoryPickerWindow).showDirectoryPicker;
-    if (picker === undefined) {
-      directoryInputRef.current?.click();
-      return;
-    }
-
-    try {
-      const directory = await picker();
-      applySelectedFolder(directory.name);
-    } catch (error: unknown) {
-      if (!(error instanceof DOMException && error.name === 'AbortError')) {
-        setNotice('无法读取所选文件夹，请重试');
-      }
-    }
-  }
-
-  function chooseFallbackFolder(event: ChangeEvent<HTMLInputElement>): void {
-    const firstFile = event.target.files?.[0];
-    if (firstFile === undefined) {
-      return;
-    }
-
-    const relativePath = firstFile.webkitRelativePath;
-    applySelectedFolder(relativePath.split('/')[0] || firstFile.name);
-    event.target.value = '';
-  }
-
-  async function createProject(): Promise<void> {
-    const name = projectName.trim();
-    const folderName = selectedFolderName.trim();
-    if (name === '' || folderName === '') {
-      return;
-    }
-
-    try {
-      const folderPath = selectedFolderPath.trim();
-      const project = await workspaceApi.createProject({
-        name,
-        folderName,
-        ...(folderPath === '' ? {} : { folderPath }),
-      });
-      const session = await workspaceApi.createSession(project.id);
-      const nextProject: StudioProject = {
-        ...toStudioProject({ ...project, sessions: [] }),
-        sessions: [toStudioSession(session)],
-      };
-      setProjects((current) => [...current, nextProject]);
-      setExpandedProjectIds((current) => [...current, project.id]);
-      setActiveProjectId(project.id);
-      activeSessionIdRef.current = session.id;
-      setActiveSessionId(session.id);
-      setActiveView('studio');
-      setIsProjectDialogOpen(false);
-      setSearchQuery('');
-      resetTransientState();
-    } catch (error: unknown) {
-      setNotice(workspaceErrorMessage(error));
-    }
-  }
-
-  function openFolderDialog(project: StudioProject): void {
-    setOpenMenu(null);
-    setFolderDialogProjectId(project.id);
-    setFolderDialogPath(project.folderPath ?? '');
-    setFolderDialogError(null);
-  }
-
-  async function pickFolderForDialog(): Promise<void> {
-    const desktopPicker = window.weaveDesktop?.pickDirectory;
-    if (desktopPicker === undefined) {
-      return;
-    }
-    try {
-      const picked = await desktopPicker();
-      if (picked !== null) {
-        setFolderDialogPath(picked.path);
-        setFolderDialogError(null);
-      }
-    } catch {
-      setFolderDialogError('无法打开文件夹选择框，请重试');
-    }
-  }
-
-  /** Saves or clears the folder of an existing Project; the Server validates the path. */
-  async function saveProjectFolder(folderPath: string | null): Promise<void> {
-    const projectId = folderDialogProjectId;
-    if (projectId === null) {
-      return;
-    }
-    try {
-      const updated = await workspaceApi.updateProjectFolder(projectId, folderPath);
-      setProjects((current) =>
-        current.map((project) =>
-          project.id === projectId ? { ...project, folderPath: updated.folderPath } : project,
-        ),
-      );
-      setFolderDialogProjectId(null);
-      setNotice(folderPath === null ? '已清除项目文件夹' : '项目文件夹已更新');
-    } catch (error: unknown) {
-      setFolderDialogError(workspaceErrorMessage(error));
-    }
   }
 
   /** Switches the visible Studio product area without changing session state. */
