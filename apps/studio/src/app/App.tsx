@@ -1,9 +1,4 @@
 import { useFilePicker } from '../features/file-context/use-file-picker.js';
-import { FilePicker } from '../features/file-context/file-picker.js';
-import {
-  DraftContextAttachments,
-  DraftFileAttachments,
-} from '../features/file-context/file-attachments.js';
 import {
   type CSSProperties,
   type ReactElement,
@@ -14,34 +9,13 @@ import {
   useRef,
   useState,
 } from 'react';
-import {
-  Bot,
-  Check,
-  ChevronDown,
-  Copy,
-  Files,
-  FolderOpen,
-  GitBranch,
-  ImagePlus,
-  MoreHorizontal,
-  PanelRightOpen,
-  Plus,
-  SendHorizontal,
-  Square,
-  Sparkles,
-  TerminalSquare,
-  Trash2,
-  RotateCcw,
-  X,
-} from 'lucide-react';
+import { Sparkles, TerminalSquare, RotateCcw, X } from 'lucide-react';
 
 import { type AgentExecutionSnapshot } from '../features/agent/agent-execution-types.js';
-import { ExecutionQueueList } from '../features/agent/execution-queue-list.js';
 import { useExecutionQueues } from '../features/agent/use-execution-queues.js';
 import { usePermissionMode } from './composer-preferences.js';
 import { useSessionSkills } from '../features/skills/use-session-skills.js';
-import { SkillPicker } from '../features/skills/skill-picker.js';
-import { sameSkill, skillRef } from '../features/skills/skill-types.js';
+import { skillRef } from '../features/skills/skill-types.js';
 import { ConversationPane } from '../features/conversation/conversation-pane.js';
 import { createConversationStore } from '../features/conversation/conversation-store.js';
 import { usePendingConversationReveal } from '../features/conversation/use-pending-conversation-reveal.js';
@@ -54,10 +28,7 @@ import type {
   TimelineHandle,
 } from '../features/conversation/conversation-types.js';
 import { createTurnFileReviewStore } from '../features/file-undo/turn-file-review-store.js';
-import {
-  ConnectedContextMeter,
-  ConnectedConversationPanels,
-} from '../features/conversation/connected-conversation-panels.js';
+import { ConnectedConversationPanels } from '../features/conversation/connected-conversation-panels.js';
 import { useComposerDraft } from '../features/composer/use-composer-draft.js';
 import { usePluginPanels } from '../features/panel/use-plugin-panels.js';
 import { createPluginCatalogStore } from '../features/plugins/plugin-catalog-store.js';
@@ -69,25 +40,14 @@ import { PluginMarketplacePage } from '../features/plugins/plugin-marketplace-pa
 import { MemoryPage } from '../features/memory/MemoryPage.js';
 import { SearchPage } from '../features/retrieval/SearchPage.js';
 import { useSidePanelWidth } from '../features/panel/panel-resizer.js';
-import { ApprovalPanel, useApprovals } from '../features/approvals/approval-panel.js';
-import { AgentTaskPanel, isSettledTask } from '../features/tasks/task-panel.js';
+import { useApprovals } from '../features/approvals/approval-panel.js';
 import { useAgentTasks } from '../features/tasks/use-agent-tasks.js';
 import type { AgentTaskView } from '../features/tasks/task-types.js';
 import type { ApprovalRequest } from '../features/approvals/approval-api.js';
-import {
-  CommandPickerList,
-  commandOptionId,
-  commandPickerListId,
-} from '../features/commands/command-picker-list.js';
 import { useCommandPicker } from '../features/commands/use-command-picker.js';
 import type { ProviderDescriptor } from '../features/providers/provider-types.js';
 import { createWorkspaceApi } from '../features/workspace/workspace-api.js';
-import {
-  permissionOptions,
-  reasoningEffortOptions,
-  statusLabels,
-  viewLabels,
-} from './app-constants.js';
+import { statusLabels, viewLabels } from './app-constants.js';
 import {
   emptyTurns,
   formatMessageTime,
@@ -117,7 +77,10 @@ import { ProviderDeleteDialog, ProviderFormDialog } from './provider-dialogs.js'
 import { CreateProjectDialog, FolderDialog, RenameProjectDialog } from './project-dialogs.js';
 import { QueuedCopyDialog } from './queued-copy-dialog.js';
 import { DeleteSessionDialog, EditSessionDialog } from './session-dialogs.js';
+import { ChatHeader } from './chat-header.js';
+import { Composer } from './composer.js';
 import { SessionRail } from './session-rail.js';
+import { TaskDisclosure } from './task-disclosure.js';
 import { SettingsSidebar } from './settings-sidebar.js';
 import { WorkspaceNav } from './workspace-nav.js';
 import { useMessageSubmission } from './use-message-submission.js';
@@ -926,123 +889,30 @@ function StudioApp(): ReactElement {
         hidden={activeView !== 'studio'}
         inert={activeView !== 'studio'}
       >
-        <header className="chat-header">
-          <div className="breadcrumb">
-            <span>{activeProject?.folderName ?? 'weave'}</span>
-            <span className="breadcrumb-divider" aria-hidden="true">
-              /
-            </span>
-            {activeSession?.taskOrigin !== undefined ? (
-              <>
-                <button
-                  className="task-parent-link"
-                  type="button"
-                  onClick={() => selectProjectSession(activeProjectId, activeTaskRoot)}
-                >
-                  返回父会话
-                </button>
-                <span className="breadcrumb-divider" aria-hidden="true">
-                  /
-                </span>
-              </>
-            ) : null}
-            <strong>{activeSession?.title ?? '未命名会话'}</strong>
-          </div>
-          <div className="header-actions">
-            {activeChildTask !== undefined && !isSettledTask(activeChildTask) ? (
-              <button
-                className="icon-button"
-                type="button"
-                aria-label="停止子任务"
-                title="停止子任务"
-                disabled={
-                  taskState.pending.has(activeChildTask.taskId) ||
-                  activeChildTask.status === 'cancelling'
-                }
-                onClick={() => void taskState.stop(activeChildTask.taskId)}
-              >
-                <Square aria-hidden="true" />
-              </button>
-            ) : null}
-            <div className={`menu-anchor${openMenu === 'more' ? ' menu-anchor-open' : ''}`}>
-              <button
-                className="icon-button"
-                type="button"
-                aria-label="更多操作"
-                title="更多操作"
-                aria-expanded={openMenu === 'more'}
-                onClick={() => toggleMenu('more')}
-              >
-                <MoreHorizontal aria-hidden="true" />
-              </button>
-              {openMenu === 'more' ? (
-                <div className="popup-menu popup-menu-right" role="menu" aria-label="会话操作">
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => showNotice(`会话标识：${activeSessionId}`)}
-                  >
-                    <span className="menu-icon">
-                      <Copy aria-hidden="true" />
-                    </span>
-                    复制会话标识
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      clearActiveRunState();
-                      showNotice('运行状态已清空');
-                    }}
-                  >
-                    <span className="menu-icon">
-                      <Trash2 aria-hidden="true" />
-                    </span>
-                    清空运行状态
-                  </button>
-                </div>
-              ) : null}
-            </div>
-            {!isActivityPanelOpen ? (
-              <button
-                className="icon-button"
-                type="button"
-                aria-label="显示上下文"
-                title="显示上下文"
-                onClick={() => setIsActivityPanelOpen(true)}
-              >
-                <PanelRightOpen aria-hidden="true" />
-              </button>
-            ) : null}
-          </div>
-        </header>
+        <ChatHeader
+          activeProject={activeProject}
+          activeProjectId={activeProjectId}
+          activeSession={activeSession}
+          activeSessionId={activeSessionId}
+          activeTaskRoot={activeTaskRoot}
+          activeChildTask={activeChildTask}
+          taskState={taskState}
+          openMenu={openMenu}
+          isActivityPanelOpen={isActivityPanelOpen}
+          setIsActivityPanelOpen={setIsActivityPanelOpen}
+          toggleMenu={toggleMenu}
+          showNotice={showNotice}
+          clearActiveRunState={clearActiveRunState}
+          selectProjectSession={selectProjectSession}
+        />
 
         {!isChildSession && activeTaskRoot !== '' ? (
-          <details className="task-disclosure" key={activeTaskRoot}>
-            <summary>
-              并行子任务
-              {taskState.snapshot === undefined ? '' : `（${taskState.snapshot.totalCount}）`}
-              {taskState.tasks.some((task) => task.pendingApprovalCount > 0) ? ' · 有待审批' : ''}
-              {taskState.reconnecting && taskState.snapshot !== undefined ? ' · 正在重连…' : ''}
-            </summary>
-            <AgentTaskPanel
-              tasks={taskState.tasks}
-              pending={taskState.pending}
-              totalCount={taskState.snapshot?.totalCount}
-              loadingPage={taskState.loadingPage}
-              hasMore={taskState.nextCursor !== undefined}
-              onLoadMore={() => void taskState.loadMore()}
-              onStop={(taskId) => void taskState.stop(taskId)}
-              onOpen={(task, result) =>
-                void openAgentTask(
-                  task,
-                  result === undefined ? undefined : { sessionId: task.childSessionId, result },
-                )
-              }
-              error={taskState.error}
-              onPrepare={prepareTaskDraft}
-            />
-          </details>
+          <TaskDisclosure
+            activeTaskRoot={activeTaskRoot}
+            taskState={taskState}
+            openAgentTask={openAgentTask}
+            prepareTaskDraft={prepareTaskDraft}
+          />
         ) : null}
 
         <ConversationPane
@@ -1060,509 +930,58 @@ function StudioApp(): ReactElement {
           emptyContent={emptyConversation}
         />
 
-        <form className="composer" onSubmit={handleSubmit}>
-          {canCompose && activeQueue !== undefined ? (
-            <ExecutionQueueList
-              state={activeQueue}
-              pending={queueController.pending[activeSessionId] ?? false}
-              onCancel={(id) => void queueController.cancel(activeSessionId, id)}
-              onMove={(id) => void queueController.move(activeSessionId, id)}
-              onCopy={(id) => void copyQueuedMessage(id)}
-            />
-          ) : null}
-          <ApprovalPanel
-            pending={approvals.pending.filter(
-              (approval) =>
-                approval.sessionId === activeSessionId ||
-                (canCompose && approval.sessionId === undefined) ||
-                (activeTaskRoot === activeSessionId && taskForApproval(approval) !== undefined),
-            )}
-            onDecide={approvals.decide}
-            onInspectApproval={inspectApproval}
-            taskTitleForApproval={(approval) => taskForApproval(approval)?.title}
-          />
-          {!canCompose ? (
-            <p className="composer-readonly-note" role="status">
-              {isChildSession ? '子会话只读。返回父会话继续发送。' : '正在读取会话详情…'}
-              {isChildSession && taskState.error !== undefined ? ` ${taskState.error}` : ''}
-            </p>
-          ) : (
-            <div className="composer-box">
-              {sessionSkills.open && !commandPicker.open && activeSessionId !== '' ? (
-                <SkillPicker
-                  key={`${activeSessionId}:${activeProject?.folderPath ?? ''}`}
-                  sessionId={activeSessionId}
-                  catalog={sessionSkills.catalogState.catalog}
-                  loading={sessionSkills.catalogState.loading}
-                  error={sessionSkills.catalogState.error}
-                  selected={sessionSkills.draft.selected}
-                  onToggle={sessionSkills.toggle}
-                  onRefresh={() => void sessionSkills.refresh()}
-                  onClose={sessionSkills.close}
-                />
-              ) : null}
-              <FilePicker picker={filePicker} />
-              {commandPicker.open ? (
-                <CommandPickerList
-                  commands={commandPicker.items}
-                  activeIndex={commandPicker.activeIndex}
-                  onSelect={commandPicker.select}
-                  onHover={commandPicker.setActiveIndex}
-                />
-              ) : null}
-              <label className="sr-only" htmlFor="message-input">
-                发送消息
-              </label>
-              <textarea
-                id="message-input"
-                name="message"
-                rows={2}
-                ref={messageInputRef}
-                value={messageInput}
-                onChange={(event) => {
-                  setMessageInput(event.target.value);
-                  if (
-                    !composerIsComposing.current &&
-                    !(event.nativeEvent as InputEvent).isComposing
-                  )
-                    filePicker.updateSelection(
-                      event.target.value,
-                      event.target.selectionStart,
-                      event.target.selectionEnd,
-                    );
-                }}
-                onSelect={(event) =>
-                  !composerIsComposing.current &&
-                  filePicker.updateSelection(
-                    event.currentTarget.value,
-                    event.currentTarget.selectionStart,
-                    event.currentTarget.selectionEnd,
-                  )
-                }
-                onCompositionStart={() => {
-                  composerIsComposing.current = true;
-                  filePicker.close();
-                }}
-                onCompositionEnd={(event) => {
-                  composerIsComposing.current = false;
-                  filePicker.updateSelection(
-                    event.currentTarget.value,
-                    event.currentTarget.selectionStart,
-                    event.currentTarget.selectionEnd,
-                  );
-                }}
-                onKeyDown={handleMessageKeyDown}
-                onPaste={handleComposerPaste}
-                placeholder="给 Agent 分配一个任务…"
-                {...(filePicker.open && !filePicker.buttonMode
-                  ? {
-                      'aria-controls': filePicker.listId,
-                      ...(filePicker.items.length === 0
-                        ? {}
-                        : { 'aria-activedescendant': filePicker.optionId(filePicker.activeIndex) }),
-                    }
-                  : {})}
-                {...(commandPicker.open
-                  ? {
-                      'aria-controls': commandPickerListId,
-                      'aria-activedescendant': commandOptionId(
-                        commandPicker.items[commandPicker.activeIndex]?.name ?? '',
-                      ),
-                    }
-                  : {})}
-              />
-              {composerDraft.draft.literalSend ? (
-                <p className="composer-prepared-status" role="status">
-                  已准备文本，请检查并点击发送
-                </p>
-              ) : null}
-              <DraftFileAttachments
-                files={composerDraft.draft.files}
-                onRemove={composerDraft.removeFile}
-              />
-              <DraftContextAttachments
-                contexts={composerDraft.draft.contexts}
-                onRemove={composerDraft.removeContext}
-              />
-              {pendingImages.length > 0 ? (
-                <div className="composer-attachments" aria-label="待发送图片">
-                  {pendingImages.map((image) => (
-                    <span className="composer-attachment" key={image.id}>
-                      <img
-                        className="composer-attachment-thumb"
-                        src={`data:${image.mediaType};base64,${image.data}`}
-                        alt={image.name}
-                      />
-                      <button
-                        type="button"
-                        aria-label={`移除图片 ${image.name}`}
-                        onClick={() => removePendingImage(image.id)}
-                      >
-                        <X aria-hidden="true" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-              {sessionSkills.draft.selected.length > 0 ? (
-                <div className="skill-chips" aria-label="待发送技能">
-                  {sessionSkills.draft.selected.map((skill) => {
-                    const latest = sessionSkills.catalogState.catalog?.entries.find(
-                      (entry) => entry.id === skill.id,
-                    );
-                    const stale =
-                      latest !== undefined
-                        ? !sameSkill(latest, skill)
-                        : sessionSkills.catalogState.catalog?.complete === true;
-                    return (
-                      <span
-                        className={`skill-chip${stale ? ' skill-warning' : ''}`}
-                        key={skill.id}
-                        title={`${skill.source.label} · ${skill.id}`}
-                      >
-                        <span>
-                          {skill.name}
-                          {stale ? ' · 内容已变化，请重新选择' : ''}
-                        </span>
-                        <button
-                          type="button"
-                          aria-label={`移除技能 ${skill.name}`}
-                          onClick={() => sessionSkills.remove(skill.id)}
-                        >
-                          ×
-                        </button>
-                      </span>
-                    );
-                  })}
-                </div>
-              ) : null}
-              <div className="composer-toolbar">
-                <div className="composer-tools">
-                  <button
-                    className="composer-tool-button"
-                    type="button"
-                    aria-label="选择技能"
-                    title={activeSessionId === '' ? '请先新建会话以选择技能' : '为本轮选择技能'}
-                    disabled={activeSessionId === ''}
-                    aria-expanded={sessionSkills.open}
-                    onClick={() => {
-                      filePicker.close();
-                      commandPicker.close();
-                      if (sessionSkills.open) sessionSkills.close();
-                      else sessionSkills.show();
-                    }}
-                  >
-                    <Sparkles aria-hidden="true" />
-                  </button>
-                  <div
-                    className={`menu-anchor${openMenu === 'context' ? ' menu-anchor-open' : ''}`}
-                  >
-                    <button
-                      className="composer-tool-button"
-                      type="button"
-                      aria-label="添加上下文"
-                      aria-expanded={openMenu === 'context'}
-                      onClick={() => toggleMenu('context')}
-                    >
-                      <Plus aria-hidden="true" />
-                    </button>
-                    {openMenu === 'context' ? (
-                      <div
-                        className="popup-menu popup-menu-composer"
-                        role="menu"
-                        aria-label="添加上下文"
-                      >
-                        <button
-                          type="button"
-                          role="menuitem"
-                          disabled={
-                            viewerFilePath === null ||
-                            composerDraft.draft.files.length >= 8 ||
-                            composerDraft.draft.files.some((file) => file.path === viewerFilePath)
-                          }
-                          title={viewerFilePath ?? '先在文件面板打开文件'}
-                          onClick={addViewerFileContext}
-                        >
-                          <span className="menu-icon">
-                            <Files aria-hidden="true" />
-                          </span>
-                          当前文件
-                          {viewerFilePath !== null &&
-                          composerDraft.draft.files.some((file) => file.path === viewerFilePath) ? (
-                            <Check className="menu-check" aria-hidden="true" />
-                          ) : null}
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          disabled={
-                            gitChangesAvailability?.projectId !== activeProjectId ||
-                            gitChangesAvailability.state !== 'available' ||
-                            composerDraft.draft.contexts.some(({ kind }) => kind === 'git-changes')
-                          }
-                          title={
-                            gitChangesAvailability?.projectId === activeProjectId &&
-                            gitChangesAvailability.state === 'unavailable'
-                              ? '项目不是 Git 仓库，或还没有任何提交'
-                              : gitChangesAvailability?.projectId === activeProjectId &&
-                                  gitChangesAvailability.state === 'unknown'
-                                ? '无法检查 Git 状态'
-                                : undefined
-                          }
-                          onClick={() => addComposerContext('git-changes')}
-                        >
-                          <span className="menu-icon">
-                            <GitBranch aria-hidden="true" />
-                          </span>
-                          Git 变更
-                          {composerDraft.draft.contexts.some(
-                            ({ kind }) => kind === 'git-changes',
-                          ) ? (
-                            <Check className="menu-check" aria-hidden="true" />
-                          ) : gitChangesAvailability?.projectId === activeProjectId &&
-                            gitChangesAvailability.state === 'unavailable' ? (
-                            <small>需要有提交的 Git 仓库</small>
-                          ) : gitChangesAvailability?.projectId === activeProjectId &&
-                            gitChangesAvailability.state === 'unknown' ? (
-                            <small>无法检查 Git 状态</small>
-                          ) : null}
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          disabled={
-                            activeProjectId === '' ||
-                            composerDraft.draft.contexts.some(({ kind }) => kind === 'project-tree')
-                          }
-                          onClick={() => addComposerContext('project-tree')}
-                        >
-                          <span className="menu-icon">
-                            <FolderOpen aria-hidden="true" />
-                          </span>
-                          项目目录
-                          {composerDraft.draft.contexts.some(
-                            ({ kind }) => kind === 'project-tree',
-                          ) ? (
-                            <Check className="menu-check" aria-hidden="true" />
-                          ) : null}
-                        </button>
-                      </div>
-                    ) : null}
-                  </div>
-                  <div
-                    className={`menu-anchor${openMenu === 'permission' ? ' menu-anchor-open' : ''}`}
-                  >
-                    <button
-                      className="permission-button"
-                      type="button"
-                      aria-expanded={openMenu === 'permission'}
-                      onClick={() => toggleMenu('permission')}
-                    >
-                      {permissionOptions.find((option) => option.value === permissionMode)?.label ??
-                        '常规'}
-                      <ChevronDown aria-hidden="true" />
-                    </button>
-                    {openMenu === 'permission' ? (
-                      <div
-                        className="popup-menu popup-menu-composer"
-                        role="menu"
-                        aria-label="权限模式"
-                      >
-                        {permissionOptions.map((option) => (
-                          <button
-                            type="button"
-                            role="menuitem"
-                            key={option.value}
-                            className={
-                              option.danger === true ? 'permission-option-danger' : undefined
-                            }
-                            onClick={() => {
-                              setPermissionMode(option.value);
-                              setOpenMenu(null);
-                            }}
-                          >
-                            <span className="menu-icon">
-                              <option.icon aria-hidden="true" />
-                            </span>
-                            <span className="provider-menu-copy">
-                              <strong>{option.label}</strong>
-                              <small>{option.description}</small>
-                            </span>
-                            {permissionMode === option.value ? (
-                              <Check className="menu-check" aria-hidden="true" />
-                            ) : null}
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                  <button
-                    className="composer-tool-button"
-                    type="button"
-                    aria-label="添加项目文件"
-                    onClick={() => {
-                      commandPicker.close();
-                      sessionSkills.close();
-                      filePicker.openFromButton();
-                    }}
-                  >
-                    <Files aria-hidden="true" />
-                  </button>
-                  <button
-                    className="composer-tool-button"
-                    type="button"
-                    aria-label="添加图片"
-                    onClick={() => imageInputRef.current?.click()}
-                  >
-                    <ImagePlus aria-hidden="true" />
-                  </button>
-                  <input
-                    className="sr-only"
-                    ref={imageInputRef}
-                    type="file"
-                    accept="image/*"
-                    aria-label="选择图片文件"
-                    multiple
-                    onChange={(event) => {
-                      void addImageFiles(event.target.files);
-                      event.target.value = '';
-                    }}
-                  />
-                </div>
-                <div className="composer-controls">
-                  <ConnectedContextMeter
-                    store={conversationStore}
-                    sessionId={activeSessionId}
-                    onOpen={() => setIsActivityPanelOpen(true)}
-                  />
-                  <div className={`menu-anchor${openMenu === 'model' ? ' menu-anchor-open' : ''}`}>
-                    <button
-                      className="model-button"
-                      type="button"
-                      aria-expanded={openMenu === 'model'}
-                      aria-label="模型与强度"
-                      onClick={() => toggleMenu('model')}
-                    >
-                      <span className="model-button-label">
-                        {selectedProvider?.label ?? selectedModel}
-                      </span>
-                      <span className="model-button-strength">
-                        ·{' '}
-                        {reasoningEffortOptions.find((option) => option.value === reasoningEffort)
-                          ?.label ?? '默认'}
-                      </span>
-                      <ChevronDown aria-hidden="true" />
-                    </button>
-                    {openMenu === 'model' ? (
-                      <div
-                        className="popup-menu popup-menu-composer popup-menu-right"
-                        role="menu"
-                        aria-label="选择模型"
-                      >
-                        {providerSettings.providers.map((provider) => (
-                          <button
-                            type="button"
-                            role="menuitem"
-                            aria-label={provider.label}
-                            key={provider.id}
-                            onClick={() => chooseProvider(provider)}
-                          >
-                            <span className="menu-icon">
-                              <Bot aria-hidden="true" />
-                            </span>
-                            <span className="provider-menu-copy">
-                              <strong>{provider.label}</strong>
-                              {provider.defaultModel !== undefined ? (
-                                <small>{provider.defaultModel}</small>
-                              ) : null}
-                            </span>
-                            {selectedProviderId === provider.id ? (
-                              <Check className="menu-check" aria-hidden="true" />
-                            ) : null}
-                          </button>
-                        ))}
-                        <div className="menu-divider" />
-                        <div className="model-strength" role="group" aria-label="模型强度">
-                          <div className="model-strength-head">
-                            <span>强度</span>
-                            <small>
-                              {reasoningEffortOptions.find(
-                                (option) => option.value === reasoningEffort,
-                              )?.label ?? '默认'}
-                            </small>
-                          </div>
-                          <input
-                            type="range"
-                            className="model-strength-slider"
-                            min={0}
-                            max={reasoningEffortOptions.length - 1}
-                            step={1}
-                            value={Math.max(
-                              0,
-                              reasoningEffortOptions.findIndex(
-                                (option) => option.value === reasoningEffort,
-                              ),
-                            )}
-                            aria-label="模型强度"
-                            onChange={(event) =>
-                              setReasoningEffort(
-                                reasoningEffortOptions[Number(event.target.value)]?.value ??
-                                  'medium',
-                              )
-                            }
-                          />
-                          <div className="model-strength-scale" aria-hidden="true">
-                            <span>更快</span>
-                            <span>更聪明</span>
-                          </div>
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                  {status === 'streaming' ? (
-                    <span className="execution-connection-status" role="status">
-                      {activeRunState.stopping
-                        ? '正在停止…'
-                        : activeRunState.connection === 'reconnecting'
-                          ? '连接已断开，正在重连…'
-                          : activeRunState.connection === 'connecting'
-                            ? '正在连接…'
-                            : '运行中'}
-                    </span>
-                  ) : null}
-                  {status === 'streaming' ? (
-                    <button
-                      className="send-button send-button-cancel"
-                      type="button"
-                      onClick={cancelRun}
-                      aria-label="停止本轮及派生任务"
-                      title="停止本轮及派生任务"
-                    >
-                      <Square aria-hidden="true" />
-                    </button>
-                  ) : null}
-                  <button
-                    className="send-button"
-                    type="submit"
-                    disabled={
-                      admitting[activeSessionId] ||
-                      (messageInput.trim() === '' &&
-                        pendingImages.length === 0 &&
-                        composerDraft.draft.files.length === 0)
-                    }
-                    aria-label={
-                      status === 'streaming' || (activeQueue?.queued.length ?? 0) > 0
-                        ? '加入队列'
-                        : '发送'
-                    }
-                  >
-                    <SendHorizontal aria-hidden="true" />
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-        </form>
+        <Composer
+          activeProject={activeProject}
+          activeProjectId={activeProjectId}
+          activeSessionId={activeSessionId}
+          activeTaskRoot={activeTaskRoot}
+          isChildSession={isChildSession}
+          canCompose={canCompose}
+          status={status}
+          activeRunState={activeRunState}
+          admitting={admitting}
+          activeQueue={activeQueue}
+          queueController={queueController}
+          conversationStore={conversationStore}
+          taskState={taskState}
+          approvals={approvals}
+          taskForApproval={taskForApproval}
+          inspectApproval={inspectApproval}
+          composerDraft={composerDraft}
+          messageInput={messageInput}
+          setMessageInput={setMessageInput}
+          pendingImages={pendingImages}
+          commandPicker={commandPicker}
+          filePicker={filePicker}
+          sessionSkills={sessionSkills}
+          messageInputRef={messageInputRef}
+          imageInputRef={imageInputRef}
+          composerIsComposing={composerIsComposing}
+          viewerFilePath={viewerFilePath}
+          gitChangesAvailability={gitChangesAvailability}
+          addComposerContext={addComposerContext}
+          addViewerFileContext={addViewerFileContext}
+          addImageFiles={addImageFiles}
+          removePendingImage={removePendingImage}
+          handleComposerPaste={handleComposerPaste}
+          providerSettings={providerSettings}
+          selectedProvider={selectedProvider}
+          selectedProviderId={selectedProviderId}
+          selectedModel={selectedModel}
+          reasoningEffort={reasoningEffort}
+          setReasoningEffort={setReasoningEffort}
+          chooseProvider={chooseProvider}
+          permissionMode={permissionMode}
+          setPermissionMode={setPermissionMode}
+          openMenu={openMenu}
+          setOpenMenu={setOpenMenu}
+          toggleMenu={toggleMenu}
+          setIsActivityPanelOpen={setIsActivityPanelOpen}
+          handleSubmit={handleSubmit}
+          handleMessageKeyDown={handleMessageKeyDown}
+          cancelRun={cancelRun}
+          copyQueuedMessage={copyQueuedMessage}
+        />
       </section>
       {activeView === 'retrieval' ? (
         <SearchPage selectedProjectId={activeProjectId} projects={projects} />
