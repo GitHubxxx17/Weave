@@ -267,6 +267,10 @@ function ApprovalCard({
               </button>
             )}
           </p>
+          <p className="approval-card-hint">
+            拒绝：不执行这一步，Agent
+            会换一种做法继续。取消：点击输入框旁的“停止”会取消这条审批并结束整个回合。
+          </p>
           {error === null ? null : (
             <p className="approval-card-error" role="alert">
               {error}

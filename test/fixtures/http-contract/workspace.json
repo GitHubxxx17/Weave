@@ -107,7 +107,7 @@
         "content": [
           {
             "type": "text",
-            "text": "{\"tasks\":[{\"taskId\":\"00000000-0000-4000-8000-000000000008\",\"rootSessionId\":\"00000000-0000-4000-8000-000000000002\",\"parentSessionId\":\"00000000-0000-4000-8000-000000000002\",\"parentTurnId\":\"00000000-0000-4000-8000-000000000006\",\"childSessionId\":\"00000000-0000-4000-8000-000000000003\",\"childExecutionId\":\"00000000-0000-4000-8000-000000000009\",\"childTurnId\":\"00000000-0000-4000-8000-000000000010\",\"title\":\"Workspace review\",\"access\":\"workspace\",\"acceptedAt\":\"2026-11-24T00:00:00.000Z\",\"status\":\"preparing\",\"resultKind\":\"none\",\"preview\":\"\",\"previewTruncated\":false,\"pendingApprovalIds\":[],\"pendingApprovalCount\":0}],\"cursor\":\"CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC.SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS\",\"truncated\":false}"
+            "text": "{\"tasks\":[{\"taskId\":\"00000000-0000-4000-8000-000000000008\",\"rootSessionId\":\"00000000-0000-4000-8000-000000000002\",\"parentSessionId\":\"00000000-0000-4000-8000-000000000002\",\"parentTurnId\":\"00000000-0000-4000-8000-000000000006\",\"childSessionId\":\"00000000-0000-4000-8000-000000000003\",\"childExecutionId\":\"00000000-0000-4000-8000-000000000009\",\"childTurnId\":\"00000000-0000-4000-8000-000000000010\",\"title\":\"Workspace review\",\"access\":\"workspace\",\"permissionMode\":\"ask\",\"acceptedAt\":\"2026-11-24T00:00:00.000Z\",\"status\":\"preparing\",\"resultKind\":\"none\",\"preview\":\"\",\"previewTruncated\":false,\"pendingApprovalIds\":[],\"pendingApprovalCount\":0}],\"cursor\":\"CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC.SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS\",\"truncated\":false}"
           }
         ],
         "messageId": "00000000-0000-4000-8000-000000000011",
@@ -146,8 +146,8 @@
         "model": "contract",
         "context": {
           "windowTokens": 128000,
-          "sentTokens": 5977,
-          "ratio": 0.0466953125,
+          "sentTokens": 5983,
+          "ratio": 0.0467421875,
           "trimmed": false,
           "categories": {
             "system": 900,
@@ -156,7 +156,7 @@
             "assistantText": 4,
             "assistantReasoning": 0,
             "toolCalls": 27,
-            "toolResults": 237,
+            "toolResults": 243,
             "skeleton": 0
           }
         },
@@ -186,8 +186,8 @@
             "completedAt": "2026-11-24T00:00:00.000Z",
             "context": {
               "windowTokens": 128000,
-              "sentTokens": 5977,
-              "ratio": 0.0466953125,
+              "sentTokens": 5983,
+              "ratio": 0.0467421875,
               "trimmed": false,
               "categories": {
                 "system": 900,
@@ -196,7 +196,7 @@
                 "assistantText": 4,
                 "assistantReasoning": 0,
                 "toolCalls": 27,
-                "toolResults": 237,
+                "toolResults": 243,
                 "skeleton": 0
               }
             }

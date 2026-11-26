@@ -281,6 +281,13 @@ describe('ApprovalPanel', () => {
     expect((screen.getByRole('button', { name: '拒绝' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it('explains the difference between rejecting and cancelling', () => {
+    render(<ApprovalPanel pending={[pendingWrite]} onDecide={vi.fn(async () => undefined)} />);
+
+    expect(screen.getByText(/拒绝：不执行这一步，Agent 会换一种做法继续/)).toBeTruthy();
+    expect(screen.getByText(/取消：.*停止.*结束整个回合/)).toBeTruthy();
+  });
+
   it('forwards a rejection', async () => {
     const onDecide = vi.fn(async () => undefined);
     render(<ApprovalPanel pending={[pendingWrite]} onDecide={onDecide} />);

@@ -15,6 +15,7 @@ const task: AgentTaskView = {
   childTurnId: '00000000-0000-4000-8000-000000000004',
   title: '检查变更',
   access: 'read-only',
+  permissionMode: 'ask',
   acceptedAt: '2026-11-23T00:00:00.000Z',
   status: 'running',
   resultKind: 'none',
@@ -65,6 +66,22 @@ it('exposes task status, scoped stop and a distinct stop-all control', () => {
   fireEvent.click(screen.getByRole('button', { name: '停止任务：检查变更' }));
   fireEvent.click(screen.getByRole('button', { name: '停止全部子任务' }));
   expect(onStop.mock.calls).toEqual([[task.taskId], []]);
+});
+
+it('shows each task permission mode and warns on full access', () => {
+  const props = { onOpen: vi.fn(), onStop: vi.fn(), pending: new Set<string>() };
+  const { rerender } = render(<AgentTaskPanel {...props} tasks={[task]} />);
+  expect(screen.getByText('权限：常规')).toBeDefined();
+  expect(screen.queryByRole('note')).toBeNull();
+
+  rerender(
+    <AgentTaskPanel
+      {...props}
+      tasks={[{ ...task, access: 'workspace', permissionMode: 'yolo' }]}
+    />,
+  );
+  expect(screen.getByText('权限：完全访问')).toBeDefined();
+  expect(screen.getByRole('note').textContent).toContain('写入和命令都不经审批');
 });
 
 it('labels step-limited output as partial and prepares read-only or explicit workspace drafts', () => {

@@ -63,6 +63,7 @@ export const agentTaskViewSchema = z
         (value) => Array.from(value).length <= 120 && new TextEncoder().encode(value).length <= 480,
       ),
     access: taskAccessSchema,
+    permissionMode: z.enum(['ask', 'trust', 'yolo']),
     acceptedAt: z.iso.datetime(),
     settledAt: z.iso.datetime().optional(),
     status: agentTaskViewStatusSchema,

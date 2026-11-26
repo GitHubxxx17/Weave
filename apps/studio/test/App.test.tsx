@@ -624,6 +624,7 @@ describe('Agent Tasks in Studio', () => {
     childTurnId: '00000000-0000-4000-8000-000000000004',
     title: '检查变更',
     access: 'read-only',
+    permissionMode: 'ask',
     acceptedAt: '2026-11-23T00:00:00.000Z',
     status: 'running',
     resultKind: 'none',
