@@ -20,7 +20,7 @@ const dangerousCommandPattern =
 /**
  * Allow list for `trust` mode, matched on program plus subcommand (token
  * prefix). Further arguments are accepted unless they hit
- * `unsafeAllowListArguments`.
+ * `unsafeAllowListArguments` or may point outside the project folder.
  */
 const allowListedCommands: readonly (readonly string[])[] = [
   ['ls'],
@@ -53,6 +53,25 @@ const unsafeAllowListArguments = /^(--pre(=.*)?|--output(=.*)?|--ext-diff|--text
  */
 const shellMetacharacterPattern = /;|&|\||>|<|\$\(|`|\n|\r|\beval\b|\b(sh|bash)\s+-c\b/;
 
+/**
+ * Whether one argument may point outside the project folder: an absolute path,
+ * a home path, a `..` segment, or a variable that expands to one. The project
+ * root is not known where the allow list is evaluated, so every absolute path
+ * counts as outside. An option value (`--file=/etc/x`) is checked as well.
+ */
+function mayEscapeProjectRoot(token: string): boolean {
+  const bare = token.replace(/['"]/g, '');
+  if (bare.includes('$')) {
+    return true;
+  }
+  const equals = bare.indexOf('=');
+  const candidates = equals === -1 ? [bare] : [bare, bare.slice(equals + 1)];
+  return candidates.some(
+    (value) =>
+      /^([/\\~]|[A-Za-z]:[/\\])/.test(value) || value.split(/[/\\]/).some((part) => part === '..'),
+  );
+}
+
 /** Whether a command line is a plain allow-listed command. */
 export function isAllowListedCommand(command: string): boolean {
   if (shellMetacharacterPattern.test(command)) {
@@ -62,7 +81,12 @@ export function isAllowListedCommand(command: string): boolean {
   if (tokens.some((token) => unsafeAllowListArguments.test(token))) {
     return false;
   }
-  return allowListedCommands.some((entry) => entry.every((word, index) => tokens[index] === word));
+  const entry = allowListedCommands.find((candidate) =>
+    candidate.every((word, index) => tokens[index] === word),
+  );
+  // Arguments that reach outside the project folder (for example
+  // `cat /etc/hosts`) fall back to the risk the model declared.
+  return entry !== undefined && !tokens.slice(entry.length).some(mayEscapeProjectRoot);
 }
 
 /**

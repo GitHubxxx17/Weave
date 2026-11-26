@@ -604,8 +604,9 @@ describe('Workspace File Tools with a per-Session resolver', () => {
     await expect(readFile(join(second, 'notes.md'), 'utf8')).rejects.toMatchObject({
       code: 'ENOENT',
     });
+    // The read resolves its Workspace twice: once for the secret-file check, once to read.
     // The write resolves its Workspace twice: once for the Approval summary, once to write.
-    expect(seenSessions).toEqual(['session-b', 'session-a', 'session-a']);
+    expect(seenSessions).toEqual(['session-b', 'session-b', 'session-a', 'session-a']);
   });
 
   it('fails with workspace-file-unavailable when the Session has no Workspace', async () => {

@@ -205,6 +205,22 @@ describe('Workspace search tools', () => {
     expect(ticks).toBeGreaterThan(5);
   });
 
+  it('never greps a secret file through a symbolic link', async () => {
+    for (const git of [false, true]) {
+      const root = await createProject({ git });
+      await symlink('.env', join(root, 'link-to-env'));
+      if (git) {
+        execFileSync('git', ['add', '-f', 'link-to-env'], { cwd: root });
+      }
+      const { run } = createPipeline(root);
+
+      await expect(run('grep', { pattern: 'secret' })).resolves.toMatch(/^没有找到匹配的内容/);
+      await expect(run('grep', { pattern: 'secret', path: 'link-to-env' })).resolves.toMatch(
+        /^没有找到匹配的内容/,
+      );
+    }
+  });
+
   it('does not follow symlinks that leave the Workspace', async () => {
     const root = await createProject({ git: false });
     const outside = await mkdtemp(join(tmpdir(), 'weave-search-outside-'));
