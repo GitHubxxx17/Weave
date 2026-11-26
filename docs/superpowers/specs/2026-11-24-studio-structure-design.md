@@ -67,6 +67,55 @@
 
 **推荐**：方案 A，每次只动一个领域，每步独立 PR；在开始前做一次区块盘点（按领域列出 state、effect、handler 与对应行范围），以此排序。优先抽取依赖最少、与会话渲染无耦合的领域（如 Provider 设置、MCP 与插件入口），把耦合最深的执行与会话流转放在最后。每步以 `App.test.tsx` 及相关 feature 测试为回归，不改变可见行为。
 
+#### 3.1.1 区块盘点（基线 `b80976d`，`App.tsx` 共 5614 行）
+
+行号均指 `apps/studio/src/app/App.tsx`，按基线粗略统计，后续每步合并后会漂移。
+
+**文件结构**
+
+| 行范围 | 内容 |
+| --- | --- |
+| 1–144 | 导入 |
+| 145–282 | 类型：`RunStatus`、`SessionRunState`、`SessionRunHandle`、`ProductView`、`OpenMenu`、`StudioSession`、`StudioProject`、`ProviderFormState`、`FormSelect*` 等 |
+| 283–447 | `parseProviderNumberField`、`FormSelect`（自带 5 个 hook 与 1 个 effect，无外部状态） |
+| 448–672 | 常量表（`statusLabels`、`viewLabels`、`permissionOptions`、`reasoningEffortOptions`、`fallbackProviderSettings`）、模块级 `providerApi`/`workspaceApi`、`createId`、`getSessionLabel`、`formatModelLabel`、`createSessionTitle`、`safeErrorMessage`、`updateToolActivity`、`liveTurnIdFor`、`readImageFile`、`formatMessageTime`、`toStudioSession`、`toStudioProject`、`workspaceErrorMessage` |
+| 673–681 | `App` 包装（创建 `pluginStore`） |
+| 682–3375 | `StudioApp`：状态、effect 与 handler（约 2700 行） |
+| 3376–3410 | 加载中与加载失败的提前返回 |
+| 3412–5612 | JSX（约 2200 行）：导航列 3426–3507，主区 3767–4411，`ConnectedConversationPanels` 4754 起 |
+
+**领域盘点**（state、effect、handler；行号为定义位置）
+
+| 领域 | state / ref | effect | handler | 说明 |
+| --- | --- | --- | --- | --- |
+| A. 模型服务设置 | `providerSettings`(729)、`selectedProviderId`、`selectedModel`(731–736)、`providerForm`、`providerFormError`、`providerMutation`、`providerToDelete`(744–749)、`reasoningEffort`(728) | 1167–1203 加载 Provider 列表 | `applyProviderSettings`(1072)、`refreshProviderSettings`(1084)、`openProviderForm`(2935)、`closeProviderForm`、`updateProviderForm`、`chooseProviderPreset`、`chooseModelPreset`、`providerErrorMessage`(3042)、`saveProvider`(3064)、`setDefaultProvider`(3130)、`deleteProvider`(3144)、`chooseProvider`(3204) | 依赖最少。向外读：`showNotice`；被外部读：`selectedProvider`/`selectedModel`/`reasoningEffort`（`submitMessage`、Composer、设置页）。 |
+| B. 项目与会话列表 | `projects`(688)、`activeProjectId`、`expandedProjectIds`、`activeSessionId`(706–708)、`isLoadingWorkspace`、`workspaceError`、`workspaceLoadKey`(709–711)、项目弹窗与文件夹弹窗（714–720）、搜索（721–722）、会话改名与删除（750–761）、`activeSessionIdRef`、`navigationTicket`、`deletedSessionIds` | 1090–1166 加载工作区 | `activateSession`(1939)、`createSessionForProject`(2022)、`selectProjectSession`(2526)、`toggleProjectExpanded`、`openSessionEditor`、`saveSessionTitle`、`archiveSession`、`restoreSession`、`permanentlyDeleteSession`(2623)、`createSession`、`selectProject`、`openProject`、`openProjectRename`、`saveProjectName`、`openProjectDialog`、`applySelectedFolder`、`chooseProjectFolder`、`chooseFallbackFolder`、`createProject`、`openFolderDialog`、`pickFolderForDialog`、`saveProjectFolder`(2906) | 与 C 强耦合：`permanentlyDeleteSession`、`archiveSession` 读写 `runHandles`、`runStateBySession`、`sessionActivityVersions`；`selectProjectSession` 调 `loadSessionDetail`、`resetTransientState`。 |
+| C. 执行与会话流转 | `runStateBySession`(763)、`runHandles`、`observationEpoch`、`sessionActivityVersions`、`appliedDurableSequences`、`settledExecutionSequences`(764–771)、`admitting`(772)、`copyRequest`(773)、`expandedMessageIds`(762)、`mounted` | 786–822 卸载清理（中止 handle、销毁 store）、827–835 切换会话时分离非活动 handle | `updateSessionMessages`(1226)、`updateSessionTurns`、`finishLiveTurn`、`applySessionDetail`(1307)、`loadSessionDetail`(1334)、`attachExecution`(1412)、`executionHandlers`(1500)、`requestExecutionCancel`(1562)、`reconcileExecution`(1611)、`resumeExecution`(1700)、`recoverSessionExecution`(1748)、`handleEvent`(1782)、`ensureSessionForMessage`(2081)、`submitMessage`(2114–2525，约 410 行)、`copyQueuedMessage`(3216)、`applyQueuedCopy`、`cancelRun`(3359) | 耦合最深：读写 B 的 `projects`、`activeSessionId`，读 A 的 `selectedProvider`，读 D 的 Composer 草稿，调用 `useExecutionQueues`(777)。 |
+| D. Composer 与上下文 | `messageInputRef`、`composerIsComposing`、`directoryInputRef`、`imageInputRef`(836–839)、`pendingImages`、`permissionMode`(727)、`viewerFilePath`(737)、`gitChangesAvailability`(739) | 889–891 命令面板与技能互斥、908–910 根目录变化提示、3167–3183 上下文菜单可用性 | `addComposerContext`(3184)、`addViewerFileContext`、`fillSuggestion`、`handleSubmit`(3297)、`handleMessageKeyDown`、`addImageFiles`(3323)、`removePendingImage`、`handleComposerPaste`；已有 hook：`useComposerDraft`(868)、`useCommandPicker`(878)、`useSessionSkills`(885)、`useFilePicker`(894) | 与 C 交叉：`submitMessage` 读草稿并清空，`handleSubmit` 调 C。 |
+| E. 面板布局与全局 UI | `activeView`(712)、`openMenu`(713)、`isActivityPanelOpen`(723)、`panelWidth`(`useSidePanelWidth`，724)、`shellRef`、`chatColumnRef`、`previewImage`(684)、`notice`(743)、`timelineRef`(691) | 1204–1224 全局键盘（Esc、Cmd/Ctrl+K） | `selectProductView`(2926)、`toggleMenu`(3162)、`showNotice`(3211) | 全局 Esc 同时重置 B 的弹窗与 `previewImage`。`selectProductView` 递增 `navigationTicket`、清 `taskTranscriptTarget`。 |
+| F. 插件、MCP、市场、记忆入口与任务 | `pluginStore`(674/683)、`taskTranscriptTarget`(826)、`lastVerifiedTaskRoot`(825) | 无独立 effect | `prepareTaskDraft`(1953)、`openAgentTask`(1962)、`inspectApproval`(2008)；已有 hook：`usePluginCatalogStore`、`usePluginPanels`(884)、`useAgentTasks`(858)、`useApprovals`(915) | App 级状态很少，大部分在已有 hook 内；`openAgentTask` 调 B 的 `activateSession` 与 C 的 `loadSessionDetail`。 |
+| G. 会话存储接线 | `conversationStore`(689)、`fileReviewStore`(690) | 692–705 把 `projects` 灌入 `conversationStore`（layout effect） | `onConversationAction`(995)、`emptyConversation`、`pendingConversationTarget` | 依赖 B 的 `projects`；销毁逻辑在 C 的 786 effect 中。 |
+
+**领域依赖（谁读谁）**
+
+- A 只向外依赖 `showNotice`（E），是最独立的领域。
+- E 的 `selectProductView` 与全局 Esc 写 B、F 的状态，反向被几乎所有领域调用 `showNotice`。
+- B 读写 C 的 ref 与 `runStateBySession`（删除、归档、切换会话时清理 handle 与活动版本）。
+- C 读 A（所选 Provider 与模型）、B（`projects`、活动 ID）、D（草稿、图片、权限模式）。
+- D 的 `handleSubmit` 调 C 的 `submitMessage`。
+- F 的 `openAgentTask` 调 B、C。
+
+**拆分顺序依据**
+
+1. A（`useProviderSettings`）：状态自洽，只需 `showNotice` 回调，返回 `selectedProvider`、`selectedModel`、`reasoningEffort` 给 C、D。
+2. B（`useWorkspaceNavigation`）：先只抽 B 自身的 state 与不触碰 C 的 handler（项目弹窗、文件夹弹窗、搜索、改名）；删除与归档要用的 C 的 ref，通过参数传入一个 `releaseSessionRuntime(sessionId)` 回调，避免 B 直接持有 C 的 ref。
+3. E（面板布局）：状态很少，视盘点后并入 hook 或保持原位。
+4. F：App 级状态少，可能只是把 `openAgentTask` 之类的 handler 并入 B 或 C 的 hook，不单独成 PR。
+5. D：已有 `useComposerDraft`，只迁移 `handleSubmit`、图片与键盘处理、上下文可用性 effect；`submitMessage` 留在 C。
+6. C：风险最高（`submitMessage` 410 行、`handleEvent`、ref 间的顺序约束、StrictMode 下的卸载清理）。放最后，是否执行视前面各步后的剩余形状再定。
+
+每步合并后在 PR 记录 `App.tsx` 行数。
+
 ### 3.2 U2：共享 schema
 
 **方案 D：Studio 直接依赖 `@weave/protocol`。**
