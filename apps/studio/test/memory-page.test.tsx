@@ -428,7 +428,12 @@ describe('Memory management page', () => {
       name: 'Agent 与检索使用权限',
     });
     fireEvent.change(access, { target: { value: 'read-write' } });
-    await waitFor(() => expect(access.value).toBe('read-write'));
+    // 下拉框在提交期间被禁用；等到设置写入完成（重新可用且为新值）后，再放行延迟的旧快照。
+    await waitFor(() => {
+      expect(access.disabled).toBe(false);
+      expect(access.value).toBe('read-write');
+    });
+    await waitFor(() => expect(finishAccess).toBeDefined());
     await act(async () => {
       finishAccess(Response.json({ access: { scope, level: 'disabled', settingRevision: 0 } }));
     });

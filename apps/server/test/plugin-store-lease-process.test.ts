@@ -31,7 +31,6 @@ const fixtureFile = fileURLToPath(
   new URL('./support/plugin-store-owner-child.mjs', import.meta.url),
 );
 const execFileAsync = promisify(execFile);
-const buildTimeout = 90_000;
 const compileTimeout = 60_000;
 const eventTimeout = 8_000;
 const testTimeout = 90_000;
@@ -88,39 +87,38 @@ let compiledModules: { authorityModule: string; storeModule: string };
 const liveChildren = new Set<ReturnType<typeof startOwnerChild>>();
 const testDirectories = new Set<string>();
 
-beforeAll(
-  async () => {
-    await execFileAsync('pnpm', ['--filter', '@weave/server^...', 'build'], {
-      cwd: repositoryRoot,
-      timeout: buildTimeout,
-    });
-    const cache = join(serverRoot, 'node_modules/.cache');
-    await mkdir(cache, { recursive: true });
-    outputRoot = await mkdtemp(join(cache, 'weave-owner-test-'));
-    try {
-      const destination = join(outputRoot, 'server');
-      const typescript = createRequire(import.meta.url).resolve('typescript/bin/tsc');
-      await execFileAsync(
-        process.execPath,
-        [typescript, '-p', join(serverRoot, 'tsconfig.json'), '--outDir', destination],
-        { cwd: repositoryRoot, timeout: compileTimeout },
-      );
-      await writeFile(join(outputRoot, 'package.json'), '{"type":"module"}');
-      const authorityModule = join(destination, 'plugin-authority-store.js');
-      const storeModule = join(destination, 'owned-plugin-artifact-store.js');
-      await Promise.all([access(authorityModule), access(storeModule)]);
-      compiledModules = {
-        authorityModule: pathToFileURL(authorityModule).href,
-        storeModule: pathToFileURL(storeModule).href,
-      };
-    } catch (error: unknown) {
-      await rm(outputRoot, { recursive: true, force: true });
-      outputRoot = undefined;
-      throw error;
-    }
-  },
-  buildTimeout + compileTimeout + 10_000,
-);
+beforeAll(async () => {
+  // 不在测试里重新构建依赖包：并行运行的其他包测试（如 plugin-cli）会读取这些 dist，
+  // 重写会让它们读到不完整的声明。依赖由 turbo 的 test -> ^build 保证；
+  // 单独运行本文件前先执行 `pnpm turbo run build --filter=@weave/server^...`。
+  await access(join(repositoryRoot, 'packages/protocol/dist/index.js')).catch(() => {
+    throw new Error('依赖包尚未构建，请先运行 pnpm turbo run build --filter=@weave/server^...');
+  });
+  const cache = join(serverRoot, 'node_modules/.cache');
+  await mkdir(cache, { recursive: true });
+  outputRoot = await mkdtemp(join(cache, 'weave-owner-test-'));
+  try {
+    const destination = join(outputRoot, 'server');
+    const typescript = createRequire(import.meta.url).resolve('typescript/bin/tsc');
+    await execFileAsync(
+      process.execPath,
+      [typescript, '-p', join(serverRoot, 'tsconfig.json'), '--outDir', destination],
+      { cwd: repositoryRoot, timeout: compileTimeout },
+    );
+    await writeFile(join(outputRoot, 'package.json'), '{"type":"module"}');
+    const authorityModule = join(destination, 'plugin-authority-store.js');
+    const storeModule = join(destination, 'owned-plugin-artifact-store.js');
+    await Promise.all([access(authorityModule), access(storeModule)]);
+    compiledModules = {
+      authorityModule: pathToFileURL(authorityModule).href,
+      storeModule: pathToFileURL(storeModule).href,
+    };
+  } catch (error: unknown) {
+    await rm(outputRoot, { recursive: true, force: true });
+    outputRoot = undefined;
+    throw error;
+  }
+}, compileTimeout + 10_000);
 
 afterAll(
   async () => {
