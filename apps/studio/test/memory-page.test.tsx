@@ -461,13 +461,16 @@ describe('Memory management page', () => {
     const access = await screen.findByRole<HTMLSelectElement>('combobox', {
       name: 'Agent 与检索使用权限',
     });
+    // 下拉框在 DOM 中出现时，挂载 effect 可能尚未执行（页面在 effect 里才建立写入用的
+    // AbortController，之前的更改会被静默忽略）。旧快照的 GET 与该 controller 在同一次
+    // effect 刷新中发出，所以等到 GET 已发出再操作，才保证写入路径已就绪。
+    await waitFor(() => expect(finishAccess).toBeDefined());
     fireEvent.change(access, { target: { value: 'read-write' } });
     // 下拉框在提交期间被禁用；等到设置写入完成（重新可用且为新值）后，再放行延迟的旧快照。
     await waitFor(() => {
       expect(access.disabled).toBe(false);
       expect(access.value).toBe('read-write');
     });
-    await waitFor(() => expect(finishAccess).toBeDefined());
     await act(async () => {
       finishAccess(Response.json({ access: { scope, level: 'disabled', settingRevision: 0 } }));
     });
