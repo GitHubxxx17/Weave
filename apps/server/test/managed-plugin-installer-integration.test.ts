@@ -466,6 +466,9 @@ describe('owned managed installer over HTTP', () => {
     expect(f.authority().lookupSync(request)).toEqual({ kind: 'absent' });
   });
 
+  // Long multi-step flow (install, update, pinned turn, uninstall, re-import and
+  // reclamation polling). It takes about 0.4 s locally but exceeded the default
+  // 5 s on loaded CI runners; each wait inside still has its own 4 s bound.
   it('publishes exact selection identities, preserves pinned files and records reviewed destructive decisions', async () => {
     const f = await fixture();
     const turns = turnGate();
@@ -608,7 +611,7 @@ describe('owned managed installer over HTTP', () => {
       await f.http('/plugins/notes/trust', { digest: v1.candidate.digest }, 409),
       'plugin-managed-review-required',
     );
-  });
+  }, 30_000);
 
   it('cancels a retired pin once for a fresh immediate no-op while replay leaves later turns running', async () => {
     const f = await fixture();
