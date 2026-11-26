@@ -163,6 +163,13 @@
 .marketplace-source-list button {
   flex-shrink: 0;
 }
+.marketplace-source-list li > .marketplace-source-actions {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
 .marketplace-source-form {
   display: grid;
   align-items: end;

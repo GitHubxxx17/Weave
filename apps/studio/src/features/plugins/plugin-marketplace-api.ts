@@ -93,6 +93,14 @@ export function removePluginMarketplaceSource(
 ): Promise<PluginMarketplaceSources> {
   return mutateSource('sources/remove', { id, revision }, signal);
 }
+/** `ids` must list every remote source exactly once, in the new order. */
+export function reorderPluginMarketplaceSources(
+  ids: readonly string[],
+  revision: number,
+  signal?: AbortSignal,
+): Promise<PluginMarketplaceSources> {
+  return mutateSource('sources/reorder', { ids, revision }, signal);
+}
 export function refreshPluginMarketplaceSource(
   sourceId: string,
   signal?: AbortSignal,
