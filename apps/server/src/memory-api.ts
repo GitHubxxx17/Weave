@@ -1,3 +1,4 @@
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Context, Hono } from 'hono';
 import type { MemoryService } from '@weave/runtime';
 import type { ProjectStore } from '@weave/workspace';
@@ -39,6 +40,17 @@ const listQuery = z.strictObject({
     .transform((value) => value === 'true')
     .optional(),
 });
+const scopesQuery = z.strictObject({
+  limit: integer.pipe(z.number().int().min(1).max(200)).optional(),
+  cursor,
+});
+const scopesCursorPayload = z.strictObject({
+  v: z.literal(1),
+  op: z.literal('scopes'),
+  after: z.string().min(1).max(64),
+});
+const SCOPES_DEFAULT_LIMIT = 100;
+const SCOPES_MAX_BYTES = 65536;
 const historyQuery = z.strictObject({
   limit: integer.pipe(z.number().int().min(1).max(20)).optional(),
   cursor,
@@ -146,26 +158,79 @@ export function registerMemoryRoutes(app: Hono, options: MemoryAppOptions): void
         return failure(context, error);
       }
     };
+  const cursorSecret = randomBytes(32);
+  const sign = (body: string) => createHmac('sha256', cursorSecret).update(body).digest();
+  const invalidCursor = () =>
+    new ExecutionHttpError(400, 'memory-invalid-cursor', 'Memory cursor is invalid');
+  const encodeScopesCursor = (after: string): string => {
+    const body = Buffer.from(JSON.stringify({ v: 1, op: 'scopes', after })).toString('base64url');
+    return `${body}.${sign(body).toString('base64url')}`;
+  };
+  const decodeScopesCursor = (value: string): string => {
+    try {
+      if (!/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(value)) throw new Error();
+      const [body, signature] = value.split('.') as [string, string];
+      const actual = Buffer.from(signature, 'base64url');
+      const expected = sign(body);
+      if (actual.length !== expected.length || !timingSafeEqual(actual, expected))
+        throw new Error();
+      return scopesCursorPayload.parse(
+        JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as unknown,
+      ).after;
+    } catch {
+      throw invalidCursor();
+    }
+  };
   app.get(
     '/memory/scopes',
     handle(async (context, service) => {
-      z.strictObject({}).parse(Object.fromEntries(new URL(context.req.url).searchParams));
+      const params = new Map<string, string>();
+      for (const [key, value] of new URL(context.req.url).searchParams) {
+        if (params.has(key) || key === '__proto__') throw invalidCursor();
+        params.set(key, value);
+      }
+      const input = scopesQuery.parse(Object.fromEntries(params));
       if (options.projectStore === undefined)
         return failure(context, { code: 'memory-persistence-error' });
       const projects = await options.projectStore.listProjects();
+      // 个人记忆固定排在第一页首位，项目很多时也始终可见。
       const named = [
+        { key: 'user', scope: { kind: 'user' as const }, name: '个人记忆' },
         ...projects.map((project) => ({
+          key: project.id,
           scope: { kind: 'project' as const, projectId: project.id },
           name: project.name,
         })),
-        { scope: { kind: 'user' as const }, name: '个人记忆' },
       ];
+      let start = 0;
+      if (input.cursor !== undefined) {
+        const after = decodeScopesCursor(input.cursor);
+        const index = named.findIndex((item) => item.key === after);
+        if (index < 0) return failure(context, { code: 'memory-stale-cursor' });
+        start = index + 1;
+      }
+      const page = named.slice(start, start + (input.limit ?? SCOPES_DEFAULT_LIMIT));
       const scopes = await Promise.all(
-        named.map(async (item) => ({ ...item, access: await service.local.getAccess(item.scope) })),
+        page.map(async ({ scope, name }) => ({
+          scope,
+          name,
+          access: await service.local.getAccess(scope),
+        })),
       );
-      const body = { scopes };
-      if (Buffer.byteLength(JSON.stringify(body)) > 65536)
-        return failure(context, { code: 'memory-limit' });
+      const last = page.at(-1);
+      const nextCursor =
+        last !== undefined && start + page.length < named.length
+          ? encodeScopesCursor(last.key)
+          : undefined;
+      const body = { scopes, ...(nextCursor === undefined ? {} : { nextCursor }) };
+      if (Buffer.byteLength(JSON.stringify(body)) > SCOPES_MAX_BYTES)
+        throw new ExecutionHttpError(
+          413,
+          'memory-limit',
+          scopes.length > 1
+            ? 'Memory scope page is too large. Request a smaller limit.'
+            : 'A single Memory scope entry exceeds the response size limit.',
+        );
       return context.json(body);
     }),
   );

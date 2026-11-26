@@ -26,7 +26,7 @@ import {
   type MemoryRecordInput,
   type MemoryRef,
   type MemoryScope,
-  type MemoryScopeDescriptor,
+  type MemoryScopesPage,
 } from './types.js';
 
 export class MemoryApiError extends Error {
@@ -110,7 +110,7 @@ function assertReceipt(scope: MemoryScope, receipt: MemoryReceipt): MemoryReceip
   return receipt;
 }
 export interface MemoryClient {
-  scopes(signal?: AbortSignal): Promise<MemoryScopeDescriptor[]>;
+  scopes(cursor?: string, signal?: AbortSignal): Promise<MemoryScopesPage>;
   access(scope: MemoryScope, signal?: AbortSignal): Promise<MemoryAccess>;
   setAccess(
     scope: MemoryScope,
@@ -149,8 +149,13 @@ export interface MemoryClient {
 /** Browser-only DTO validators mirror the guarded HTTP contract without workspace imports. */
 export function createMemoryClient(): MemoryClient {
   return {
-    async scopes(signal) {
-      return (await request('/memory/scopes', memoryScopesResponseSchema, signal)).scopes;
+    async scopes(cursor, signal) {
+      const query = new URLSearchParams(cursor === undefined ? {} : { cursor });
+      return request(
+        query.size === 0 ? '/memory/scopes' : `/memory/scopes?${query}`,
+        memoryScopesResponseSchema,
+        signal,
+      );
     },
     async access(scope, signal) {
       const { access } = await request(

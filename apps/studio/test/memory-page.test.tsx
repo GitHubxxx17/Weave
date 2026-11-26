@@ -111,6 +111,40 @@ describe('Memory management page', () => {
     fireEvent.click(screen.getByRole('button', { name: '打开来源会话' }));
     expect(f.props.onNavigateSession).toHaveBeenCalledWith('verified-session');
   });
+  it('shows a load-more button and appends the next scope page', async () => {
+    const other = '33333333-3333-4333-8333-333333333333';
+    const otherScope = { kind: 'project' as const, projectId: other };
+    const user = {
+      scope: { kind: 'user' },
+      name: '个人记忆',
+      access: { scope: { kind: 'user' }, level: 'disabled', settingRevision: 0 },
+    };
+    const wanted = {
+      scope,
+      name: 'Project A',
+      access: { scope, level: 'disabled', settingRevision: 0 },
+    };
+    const extra = {
+      scope: otherScope,
+      name: 'Project Z',
+      access: { scope: otherScope, level: 'disabled', settingRevision: 0 },
+    };
+    const cursors: Array<string | null> = [];
+    setup((url) => {
+      if (url.pathname !== '/memory/scopes') return undefined;
+      const cursor = url.searchParams.get('cursor');
+      cursors.push(cursor);
+      if (cursor === null) return Response.json({ scopes: [user], nextCursor: 'c1' });
+      if (cursor === 'c1') return Response.json({ scopes: [wanted], nextCursor: 'c2' });
+      return Response.json({ scopes: [extra] });
+    });
+    const more = await screen.findByRole('button', { name: '加载更多范围' });
+    expect(screen.queryByRole('option', { name: 'Project Z · 项目' })).toBeNull();
+    fireEvent.click(more);
+    await screen.findByRole('option', { name: 'Project Z · 项目' });
+    expect(cursors).toEqual([null, 'c1', 'c2']);
+    expect(screen.queryByRole('button', { name: '加载更多范围' })).toBeNull();
+  });
   it('preserves a conflict draft and retries an unchanged failed save with the same requestId', async () => {
     const writes: Array<Record<string, unknown>> = [];
     let conflict = false;
