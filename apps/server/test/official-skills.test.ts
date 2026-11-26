@@ -263,7 +263,9 @@ describe('actual Weave-maintained Skills content and delivery', () => {
       ],
     );
     expect(await f.import(request)).toMatchObject({ kind: 'replayed' });
-  });
+    // 该用例要完成导入、四个真实 Skill 的 HTTP/SSE 投递、删除源目录和重启，单跑约 1 秒；
+    // 与其他重 I/O 测试并行时会超过默认 5 秒，所以单独放宽。
+  }, 30_000);
 
   it('retains admitted real resources while update makes old refs stale, with rollback/disable/revoke and same-name project isolation', async () => {
     const { f, source } = await fixture();
