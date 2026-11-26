@@ -229,6 +229,7 @@ export function createGenerationSkillCatalog(
             !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(issue.name)
               ? {}
               : { skillId: `${prefix}/${issue.name}` }),
+            ...(issue.field === undefined ? {} : { field: issue.field }),
           });
         }
         for (const bundle of discovered.bundles) {
@@ -240,6 +241,9 @@ export function createGenerationSkillCatalog(
             bundleSha256: bundle.handle.bundleSha256,
             source: Object.freeze({ kind, label: root.label }),
             invocation: bundle.invocation,
+            ...(bundle.ignoredFields === undefined
+              ? {}
+              : { ignoredFields: [...bundle.ignoredFields] }),
           });
           const handle: DiskSkillHandle = bundle.handle;
           definitions.set(summary.id, {

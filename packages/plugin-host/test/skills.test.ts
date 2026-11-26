@@ -62,7 +62,10 @@ describe('Skill document parser', () => {
     ['YAML alias', document('review', 'Body', 'metadata: &m {a: b}\nother: *m\n')],
     ['YAML tag', document('review', 'Body', 'other: !custom value\n')],
     ['nested metadata', document('review', 'Body', 'metadata:\n  nested:\n    key: value\n')],
-    ['unknown nested value', document('review', 'Body', 'other: [nested]\n')],
+    ['unknown list of maps', document('review', 'Body', 'other:\n  - a: b\n')],
+    ['unknown nested list', document('review', 'Body', 'other: [[a]]\n')],
+    ['list inside metadata', document('review', 'Body', 'metadata:\n  k: [a]\n')],
+    ['anchored list', document('review', 'Body', 'other: &l [a]\n')],
     ['unknown number', document('review', 'Body', 'other: 12\n')],
     ['invalid policy', document('review', 'Body', 'user-invocable: maybe\n')],
     ['blank description', '---\nname: review\ndescription: " "\n---\nBody'],
@@ -74,6 +77,63 @@ describe('Skill document parser', () => {
     expect(() => parseSkillDocument(source, 'review')).toThrowError(
       expect.objectContaining({ code: 'skill-invalid-document' }),
     );
+  });
+
+  it('reports unsupported scalar fields as ignored without changing the document', () => {
+    const plain = parseSkillDocument(document('review', 'Body\n'), 'review');
+    const parsed = parseSkillDocument(
+      document('review', 'Body\n', 'allowed-tools: Read\nlicense: MIT\nmodel: x\n'),
+      'review',
+    );
+    expect(plain.ignoredFields).toBeUndefined();
+    expect(parsed.ignoredFields).toEqual(['allowed-tools', 'model']);
+    expect(parsed).toMatchObject({ instructions: plain.instructions, license: 'MIT' });
+  });
+
+  it('ignores unknown list fields with a diagnostic instead of invalidating the Skill', () => {
+    const parsed = parseSkillDocument(
+      document('review', 'Body\n', 'allowed-tools:\n  - Read\n  - Grep\nother: [a, b]\nnote: hi\n'),
+      'review',
+    );
+    expect(parsed.ignoredFields).toEqual(['allowed-tools', 'other', 'note']);
+    expect(parsed.name).toBe('review');
+  });
+
+  it.each(['name', 'description', 'license', 'metadata', 'user-invocable'])(
+    'names the known field %s when it is written as a list',
+    (field) => {
+      const base = ['name: review', 'description: Review changes'].filter(
+        (line) => !line.startsWith(`${field}:`),
+      );
+      const source = `---\n${base.join('\n')}\n${field}:\n  - a\n---\nBody\n`;
+      expect(() => parseSkillDocument(source, 'review')).toThrowError(
+        expect.objectContaining({
+          code: 'skill-invalid-document',
+          field,
+          message: expect.stringContaining(field),
+        }),
+      );
+    },
+  );
+
+  it('surfaces ignored and list-invalid fields through discovery', async () => {
+    const root = await fixture();
+    await writeFile(
+      path.join(root.directory, 'review', 'SKILL.md'),
+      document('review', 'Body\n', 'allowed-tools: Read\n'),
+    );
+    await mkdir(path.join(root.directory, 'broken'));
+    await writeFile(
+      path.join(root.directory, 'broken', 'SKILL.md'),
+      document('broken', 'Body\n', 'license:\n  - MIT\n'),
+    );
+    const result = await discoverSkillBundles({ root });
+    expect(result.bundles[0]?.ignoredFields).toEqual(['allowed-tools']);
+    expect(result.issues).toContainEqual({
+      code: 'invalid-document',
+      name: 'broken',
+      field: 'license',
+    });
   });
 
   it('keeps unknown scalar metadata inert and defaults both invocation flags to true', () => {

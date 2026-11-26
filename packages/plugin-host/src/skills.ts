@@ -182,9 +182,14 @@ async function readBundle(
       name,
       description: document.description,
       invocation: document.invocation,
+      ...(document.ignoredFields === undefined ? {} : { ignoredFields: document.ignoredFields }),
       resources: Object.freeze(resources),
     }),
   };
+}
+
+function issueField(error: unknown): { readonly field: string } | Record<string, never> {
+  return error instanceof SkillHostError && error.field !== undefined ? { field: error.field } : {};
 }
 
 function issue(error: unknown): SkillDiscoveryResult['issues'][number]['code'] {
@@ -215,7 +220,7 @@ export async function discoverSkillBundles(input: SkillIoOptions): Promise<Skill
       } catch (error: unknown) {
         checkSkillAbort(input.signal);
         const code = issue(error);
-        if (issues.length < 64) issues.push(Object.freeze({ code, name }));
+        if (issues.length < 64) issues.push(Object.freeze({ code, name, ...issueField(error) }));
         if (code === 'limit-exceeded') {
           truncated = true;
           if (budget.remainingBytes === 0) break;

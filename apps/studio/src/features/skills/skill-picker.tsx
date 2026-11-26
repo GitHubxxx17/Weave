@@ -93,6 +93,14 @@ export function SkillPicker({
       {catalog !== undefined && (!catalog.complete || catalog.truncated) ? (
         <p role="status">目录尚未完整读取；保留原选择，发送时会校验内容。</p>
       ) : null}
+      {catalog?.issues
+        .filter((item) => item.field !== undefined)
+        .map((item) => (
+          <p key={`${item.skillId ?? item.source}:${item.field}`} role="status">
+            {item.skillId === undefined ? item.source : item.skillId.split('/').pop()} 的 SKILL.md
+            无效：字段 {item.field} 不能写成列表。
+          </p>
+        ))}
       <div className="skill-picker-list">
         {entries.map((item) => {
           const picked = selected.find((entry) => entry.id === item.id);
@@ -116,6 +124,11 @@ export function SkillPicker({
               {picked !== undefined && !current ? (
                 <p className="skill-warning">内容已变化，重新选择以更新本轮引用。</p>
               ) : null}
+              {item.ignoredFields === undefined ? null : (
+                <p className="skill-warning">
+                  以下字段 Weave 不支持，已忽略：{item.ignoredFields.join('、')}
+                </p>
+              )}
               {!item.invocation.user ? <p>仅供 Agent 按需使用</p> : null}
               <button
                 type="button"

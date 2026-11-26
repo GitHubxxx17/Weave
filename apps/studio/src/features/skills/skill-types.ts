@@ -36,6 +36,7 @@ export const skillSummarySchema = z
       )
       .readonly(),
     invocation: z.strictObject({ user: z.boolean(), model: z.boolean() }).readonly(),
+    ignoredFields: z.array(z.string().min(1).max(100)).max(32).readonly().optional(),
   })
   .readonly();
 export const skillCatalogSchema = z
@@ -59,6 +60,7 @@ export const skillCatalogSchema = z
               'limit-exceeded',
             ]),
             skillId: id.optional(),
+            field: z.string().min(1).max(100).optional(),
           })
           .readonly(),
       )
