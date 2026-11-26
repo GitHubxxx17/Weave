@@ -1,3 +1,6 @@
+/** Error code raised when the Server stayed unreachable for the whole launch retry window. */
+export const executionLaunchUnreachableCode = 'execution-launch-unreachable';
+
 /** A safe, typed failure surfaced by the browser-side Agent stream client. */
 export class AgentStreamError extends Error {
   readonly code: string;

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { readSseStream, type SseFrame } from '../../lib/sse.js';
 import { runtimeApiUrl } from '../runtime/runtime-bridge.js';
-import { AgentStreamError } from './agent-stream-error.js';
+import { AgentStreamError, executionLaunchUnreachableCode } from './agent-stream-error.js';
 import {
   agentRunRequestSchema,
   agentStreamErrorPayloadSchema,
@@ -31,6 +31,8 @@ function protocolError(): AgentStreamError {
 function checkAbort(signal?: AbortSignal): void {
   if (signal?.aborted) throw new DOMException('Observation stopped', 'AbortError');
 }
+
+const defaultLaunchRetryWindowMs = 60_000;
 
 /** Exponential backoff: `baseMs` doubling per attempt, capped at 5 seconds. */
 export function executionRetryDelayMs(attempt: number, baseMs = 300): number {
@@ -150,7 +152,11 @@ export async function cancelAgentExecution(
 export async function launchAgentExecution(
   request: AgentRunRequestInput,
   handlers: AgentStreamHandlers,
-  options?: ObserveOptions & { readonly requestId?: string | undefined },
+  options?: ObserveOptions & {
+    readonly requestId?: string | undefined;
+    /** How long to keep retrying an unconfirmed launch before giving up. */
+    readonly retryWindowMs?: number | undefined;
+  },
 ): Promise<AgentExecutionSnapshot> {
   const validated = agentRunRequestSchema.parse(request);
   const { sessionId, ...logicalInput } = validated;
@@ -165,6 +171,8 @@ export async function launchAgentExecution(
     .parse(options?.requestId ?? crypto.randomUUID());
   // Freeze the serialized logical request before any await: every ambiguous retry is identical.
   const body = JSON.stringify({ requestId, input });
+  const launchRetryWindowMs = options?.retryWindowMs ?? defaultLaunchRetryWindowMs;
+  const startedAt = Date.now();
   let attempt = 0;
   let snapshot: AgentExecutionSnapshot;
   while (true) {
@@ -183,6 +191,14 @@ export async function launchAgentExecution(
     } catch (error: unknown) {
       checkAbort(options?.signal);
       if (!(error instanceof TypeError)) throw error;
+      // The request was never confirmed. Stop after the window so the caller can
+      // keep the draft and offer an explicit retry with the same requestId.
+      if (Date.now() - startedAt + executionRetryDelayMs(attempt) > launchRetryWindowMs)
+        throw new AgentStreamError(
+          executionLaunchUnreachableCode,
+          '无法连接到本地 Server，消息未发送，草稿已保留',
+          { cause: error },
+        );
       await waitForExecutionRetry(attempt++, options?.signal);
     }
   }
