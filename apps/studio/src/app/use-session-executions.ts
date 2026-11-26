@@ -852,17 +852,41 @@ export function useSessionExecutions({
       void requestExecutionCancel(activeProjectId, sessionId, handle.runId);
   }
 
+  /**
+   * Drops every runtime trace of a permanently deleted session: marks the ID
+   * deleted, invalidates in-flight reads, aborts its handles and clears its
+   * run state, conversation, file review and sequence bookkeeping.
+   */
+  function releaseSessionRuntime(projectId: string, sessionId: string): void {
+    deletedSessionIds.current.add(sessionId);
+    sessionActivityVersions.current.set(
+      sessionId,
+      (sessionActivityVersions.current.get(sessionId) ?? 0) + 1,
+    );
+    for (const [key, handle] of runHandles.current) {
+      if (handle.sessionId !== sessionId && handle.execution?.sessionId !== sessionId) continue;
+      runHandles.current.delete(key);
+      handle.controller.abort();
+    }
+    setRunStateBySession((current) =>
+      Object.fromEntries(Object.entries(current).filter(([id]) => id !== sessionId)),
+    );
+    conversationStore.removeSession(sessionId);
+    fileReviewStore.removeSession(projectId, sessionId);
+    appliedDurableSequences.current.delete(sessionId);
+    settledExecutionSequences.current.delete(sessionId);
+  }
+
   return {
+    releaseSessionRuntime,
     expandedMessageIds,
     setExpandedMessageIds,
     runStateBySession,
-    setRunStateBySession,
     runHandles,
     observationEpoch,
     sessionActivityVersions,
     deletedSessionIds,
     appliedDurableSequences,
-    settledExecutionSequences,
     admitting,
     setAdmitting,
     mounted,
