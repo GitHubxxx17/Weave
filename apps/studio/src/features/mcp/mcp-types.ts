@@ -106,6 +106,12 @@ export const mcpServerConfigSchema = z
     cwd: launchTextSchema.min(1),
     env: envSchema,
     contentPaths: z.array(launchTextSchema.min(1)).max(16).readonly().optional(),
+    callTimeoutMs: z
+      .number()
+      .int()
+      .min(1000)
+      .max(10 * 60 * 1000)
+      .optional(),
   })
   .refine((value) => new TextEncoder().encode(JSON.stringify(value)).length <= 64 * 1024)
   .readonly();

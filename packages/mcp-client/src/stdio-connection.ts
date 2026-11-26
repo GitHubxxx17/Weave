@@ -67,6 +67,7 @@ const launchOptionsSchema = z.object({
   signal: z.instanceof(AbortSignal),
   onStale: z.custom<() => void>((value) => typeof value === 'function').optional(),
   onClosed: z.custom<() => void>((value) => typeof value === 'function').optional(),
+  callTimeoutMs: z.number().int().min(1000).max(600_000).optional(),
 });
 const callResultSchema = z.object({
   content: z.array(z.object({ type: z.string() }).passthrough()),
@@ -212,6 +213,7 @@ export async function connectMcp(launchOptions: ConnectMcpOptions): Promise<McpC
     throw new McpClientError('mcp-connect-failed');
   }
   if (options.signal.aborted) throw new McpClientError('mcp-cancelled');
+  const callTimeoutMs = options.callTimeoutMs ?? MCP_LIMITS.callTimeoutMs;
   const preparedOutputs = new PreparedOutputSchemas();
   const lifecycle = new AbortController();
   let closed = false;
@@ -447,7 +449,7 @@ export async function connectMcp(launchOptions: ConnectMcpOptions): Promise<McpC
           { signal: callSignal, code: 'mcp-cancelled' },
           { signal: lifecycle.signal, code: 'mcp-closed' },
         ],
-        MCP_LIMITS.callTimeoutMs,
+        callTimeoutMs,
       );
       try {
         callScope.check();
@@ -457,8 +459,8 @@ export async function connectMcp(launchOptions: ConnectMcpOptions): Promise<McpC
             {
               toolDefinition: definition,
               signal: callScope.signal,
-              timeout: MCP_LIMITS.callTimeoutMs,
-              maxTotalTimeout: MCP_LIMITS.callTimeoutMs,
+              timeout: callTimeoutMs,
+              maxTotalTimeout: callTimeoutMs,
               resetTimeoutOnProgress: false,
             },
           ),

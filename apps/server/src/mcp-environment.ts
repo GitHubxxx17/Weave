@@ -17,7 +17,13 @@ export interface McpServerConfig {
   readonly env: Readonly<Record<string, { readonly fromHostEnv: string }>>;
   /** Absolute files or directories whose content is bound into the trust digest (policy 2). */
   readonly contentPaths?: readonly string[] | undefined;
+  /** Per-call timeout in milliseconds (1 s to 10 min). Absent means 120 s and is not part of the digest. */
+  readonly callTimeoutMs?: number | undefined;
 }
+
+/** Bounds of `callTimeoutMs`; the upper bound is the tool pipeline limit in runtime.ts. */
+export const minMcpCallTimeoutMs = 1_000;
+export const maxMcpCallTimeoutMs = 10 * 60 * 1000;
 
 /** Most paths a configuration may bind to its trust digest. */
 export const maxMcpContentPaths = 16;
@@ -139,6 +145,7 @@ export function createMcpServerConfigSchema(
         )
         .max(maxMcpContentPaths)
         .optional(),
+      callTimeoutMs: z.number().int().min(minMcpCallTimeoutMs).max(maxMcpCallTimeoutMs).optional(),
     })
     .refine((value) => Buffer.byteLength(canonicalJson(value), 'utf8') <= 64 * 1024);
 }
@@ -216,6 +223,8 @@ export function mcpConfigDigestV2(config: McpServerConfig, contentDigest: string
         env,
         contentPaths: parsed.contentPaths ?? [],
         contentDigest: mcpConfigDigestSchema.parse(contentDigest),
+        // Only present values are hashed, so digests of existing configurations are unchanged.
+        ...(parsed.callTimeoutMs === undefined ? {} : { callTimeoutMs: parsed.callTimeoutMs }),
         policyVersion: 2,
       }),
       'utf8',
