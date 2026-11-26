@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -37,6 +37,10 @@ async function setup() {
   ]) {
     await writeFile(join(root, file), file.includes('env') ? secretContent : 'plain', 'utf8');
   }
+  await symlink('.env', join(root, 'link-to-env'));
+  await symlink('config/.env.local', join(root, 'config-link'));
+  await symlink('README.md', join(root, 'link-to-readme'));
+  await symlink('missing-file', join(root, 'dangling'));
   const approvalBroker = createApprovalBroker();
   const registry = createToolRegistry();
   registry.register(
@@ -112,7 +116,42 @@ describe('read_file approval for secret files', () => {
     expect(approvalBroker.list()).toEqual([]);
   });
 
+  for (const mode of ['ask', 'trust'] as const) {
+    for (const path of ['link-to-env', 'config-link']) {
+      it(`asks before reading symlink ${path} to a secret file in ${mode} mode`, async () => {
+        const { approvalBroker, pipeline } = await setup();
+        const execution = pipeline.execute(readRequest(path, mode));
+        const pending = await pendingApproval(approvalBroker, 'read-1');
+        expect(pending.operation).toBe('workspace.read_secret_file');
+        expect(JSON.stringify(pending)).not.toContain('super-secret-value');
+        approvalBroker.approve(pending.approvalId, '测试批准');
+        await expect(execution).resolves.toMatchObject({
+          content: expect.stringContaining(secretContent),
+        });
+      });
+    }
+  }
+
+  it('reads a symlink to a secret file directly in yolo mode', async () => {
+    const { approvalBroker, pipeline } = await setup();
+    await expect(pipeline.execute(readRequest('link-to-env', 'yolo'))).resolves.toMatchObject({
+      content: expect.stringContaining(secretContent),
+    });
+    expect(approvalBroker.list()).toEqual([]);
+  });
+
   for (const mode of ['ask', 'trust', 'yolo'] as const) {
+    it(`never asks for a symlink to an ordinary file in ${mode} mode`, async () => {
+      const { approvalBroker, pipeline } = await setup();
+      await expect(
+        pipeline.execute(readRequest('link-to-readme', mode, 'read-link')),
+      ).resolves.toMatchObject({ content: expect.stringContaining('plain') });
+      await expect(
+        pipeline.execute(readRequest('dangling', mode, 'read-dangling')),
+      ).rejects.toThrow();
+      expect(approvalBroker.list()).toEqual([]);
+    });
+
     it(`never asks for ordinary files in ${mode} mode`, async () => {
       const { approvalBroker, pipeline } = await setup();
       for (const path of ['README.md', 'env.ts', '.environment', 'config/my.env']) {

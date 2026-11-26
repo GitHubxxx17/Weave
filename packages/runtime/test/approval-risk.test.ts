@@ -52,6 +52,30 @@ describe('classifyApprovalRisk', () => {
     }
   });
 
+  it('does not allow-list arguments that point outside the project folder', () => {
+    for (const command of [
+      'cat /etc/hosts',
+      'cat ../x',
+      'cat a/../../x',
+      'cat ~/x',
+      'rg foo /tmp',
+      'head -n 5 "/etc/passwd"',
+      'grep foo --file=/etc/hosts',
+      'git show /etc/hosts',
+      'git diff --no-index /a /b',
+      'cat $HOME/notes.txt',
+      'cat C:\\Users\\x',
+    ]) {
+      expect(isAllowListedCommand(command)).toBe(false);
+      expect(commandAskReason(command, 'high')).toBe('declared-high');
+      expect(commandAskReason(command, 'low')).toBeNull();
+      expect(commandAskReason(command, undefined)).toBe('undeclared');
+    }
+    for (const command of ['cat README.md', 'rg foo src', 'cat ./a/b.ts', 'git log HEAD^..HEAD']) {
+      expect(isAllowListedCommand(command)).toBe(true);
+    }
+  });
+
   it('does not allow-list commands with shell metacharacters or unsafe arguments', () => {
     for (const command of [
       'ls; echo hi',

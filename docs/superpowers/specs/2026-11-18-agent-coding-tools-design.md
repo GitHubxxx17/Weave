@@ -69,14 +69,16 @@ DeepSeek deepseek-flash）里的真实调用也暴露了问题：
 - 只返回部分内容时追加：`[已显示第 a–b 行，共 n 行。继续读取请传 offset: b+1]`；
   能一次读完时内容与现在一致，不加提示。
 - 二进制检查：前 8KB 含 NUL 字节时报 `workspace-file-binary`。
-- 密钥文件审批（X5）：输入路径的文件名是 `.env` 或以 `.env.` 开头（任意目录层级，区分大小写，
+- 密钥文件审批（X5）：输入路径的文件名，或其符号链接解析后（`realpath`，在工作区边界检查之后）的真实文件名是 `.env` 或以 `.env.` 开头（任意目录层级，区分大小写，
   与检索索引和 `grep` 共用 `isSecretFile`）时，`read_file` 需要审批：`ask`、`trust` 模式都问
   （operation `workspace.read_secret_file`，risk `high`；未知受保护操作在 `trust` 下保守地要求
   审批），`yolo` 不问。摘要为"读取可能包含密钥的文件 <路径>"，`inputSummary` 只含路径，不含内容。
   其他文件的读取不变。
-- 契约新增：`ToolApprovalRequirement.appliesTo?(input) => boolean`。返回 `false` 的调用视为该工具
+- 契约新增：`ToolApprovalRequirement.appliesTo?(input, context) => boolean | Promise<boolean>`（可异步，用于检查文件系统）。返回 `false` 的调用视为该工具
   没有 `approval`（策略投 `ask` 时仍强制审批）；省略则每次调用都受保护。现有插件工具不受影响。
-  限制：只按输入路径的名字判断，指向 `.env` 的符号链接（如 `link -> .env`）不会触发审批。
+  `read_file` 的判断：输入名是密钥文件，或 `realpath` 后的名字是密钥文件（如 `link -> .env`）时审批；
+  文件不存在、路径越界等 `execute` 本身会拒绝的情形不审批；其他解析失败按需要审批处理。
+  `grep` 的目录扫描不读符号链接（worker 用 `lstat` 跳过），直接指定符号链接路径时按解析后的真实路径判断，因此链接到 `.env` 的文件同样被跳过。
 
 ### 4.3 `@weave/runtime`：`edit_file`
 
@@ -189,6 +191,6 @@ DeepSeek deepseek-flash）里的真实调用也暴露了问题：
 - 命令不在沙箱中运行，安全只靠逐条审批；逐条审批会带来审批疲劳（后续"本会话放行"解决）。
 - 工具 10 分钟总超时包含等待审批的时间。
 - 解析 shell 环境会执行一次 `~/.zshrc`；有交互提示或很慢时超时并退回进程环境。
-- `read_file` 读取项目内的 `.env` / `.env.*` 需要审批（`yolo` 除外）；新搜索工具不读取 `.env` 类文件内容。按输入路径名判断，指向 `.env` 的符号链接不会触发审批。
+- `read_file` 读取项目内的 `.env` / `.env.*` 需要审批（`yolo` 除外）；新搜索工具不读取 `.env` 类文件内容。输入名与符号链接解析后的真实文件名都会判断。
 - 到达步数上限后历史以工具结果结尾，下一条为用户消息；DeepSeek 是否接受此顺序待实测。
 - Windows 未实测；desktop 目前只有 `tsc` 构建，将来打包时需确认 worker 文件被包含。

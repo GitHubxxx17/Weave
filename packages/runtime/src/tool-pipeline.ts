@@ -589,9 +589,12 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
         // `appliesTo` lets a tool protect only some inputs; a call it skips is
         // treated as a tool without Approval metadata.
         const ownApproval = toolWithApproval.approval;
-        const approval =
+        const ownApprovalApplies =
           ownApproval !== undefined &&
-          (ownApproval.appliesTo === undefined || ownApproval.appliesTo(inputResult.data))
+          (ownApproval.appliesTo === undefined ||
+            (await ownApproval.appliesTo(inputResult.data, { ...context })));
+        const approval =
+          ownApprovalApplies && ownApproval !== undefined
             ? ownApproval
             : forceApproval
               ? policyApproval(request)

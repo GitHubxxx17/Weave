@@ -116,6 +116,44 @@ async function readTextFile(
   };
 }
 
+/**
+ * Whether reading `inputPath` needs the secret-file Approval. The name typed by
+ * the model and the name of the real file behind any symbolic link are both
+ * checked. A missing file or a path outside the Workspace is left to the read
+ * itself, which fails without exposing content; any other resolution failure
+ * is treated as a secret file.
+ */
+async function readsSecretFile(
+  inputPath: string,
+  context: ToolExecutionContext,
+  options: WorkspaceFileToolOptions,
+): Promise<boolean> {
+  if (isSecretFile(inputPath)) {
+    return true;
+  }
+  try {
+    const workspace = await resolvePolicy(options, context);
+    const candidate = resolveLexicalPath(workspace, inputPath, 'read');
+    const root = await resolveRealRoot(workspace.root);
+    const target = await resolveExistingTarget(root, candidate, 'read');
+    return isSecretFile(target);
+  } catch (error: unknown) {
+    return !(
+      error instanceof WorkspaceFileError &&
+      (
+        [
+          'workspace-file-unavailable',
+          'workspace-file-not-found',
+          'workspace-file-not-directory',
+          'workspace-file-outside-root',
+          'workspace-file-invalid-input',
+          'workspace-file-symlink-outside-root',
+        ] as readonly string[]
+      ).includes(error.code)
+    );
+  }
+}
+
 async function readWorkspaceFile(
   input: ReadFileInput,
   context: ToolExecutionContext,
@@ -460,7 +498,7 @@ export function createWorkspaceFileTools(options: WorkspaceFileToolOptions): Wor
     approval: {
       operation: 'workspace.read_secret_file',
       risk: 'high',
-      appliesTo: (input) => isSecretFile(input.path),
+      appliesTo: (input, context) => readsSecretFile(input.path, context, normalizedOptions),
       // The summary carries only the path, never the file content.
       summarize: (input) => ({
         summary: `读取可能包含密钥的文件 ${input.path}`,

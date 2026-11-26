@@ -19,10 +19,10 @@
 - **新参数**：`run_command` 输入新增必填 `risk: 'low' | 'high'` 与 `riskReason: string`（1 到 200 个字符），由模型声明。工具描述说明：会删除或覆盖数据、联网、改权限、影响工作区外文件的命令必须声明 `high`。
 - **缺失或非法**：按工具参数校验失败处理，返回可恢复的 `tool-invalid-arguments`，模型可重试。取代评审时"视为 `high`"的建议。`ask`、`yolo` 模式下 `risk` 也必须合法，但不参与判定。
 - **判定顺序（仅 `trust`）**：1. 命中黑名单正则：一定询问，不看声明。2. 命中白名单：直接执行。3. 其他：声明 `high` 询问，`low` 直接执行。`approval-risk.ts` 对缺少合法 `risk` 的未知命令返回询问（防御性兜底）。
-- **白名单**：`ls`、`pwd`、`cat`、`head`、`tail`、`wc`、`rg`、`grep`、`git status`、`git diff`、`git log`、`git show`、`pnpm test`、`pnpm lint`、`pnpm typecheck`、`pnpm build`、`npm test`、`npx vitest`、`tsc --noEmit`。按"程序 + 子命令"的 token 前缀精确匹配，其后参数不限。
-- **未命中白名单的情形**：出现 `;`、`&`（含 `&&`）、`|`（含 `||`）、`>`、`<`、`$(`、反引号、换行、`eval`、`sh -c`、`bash -c` 任一；或参数含 `--pre`（rg 可执行外部程序）、`--output`、`--ext-diff`、`--textconv`（git 可写文件或执行程序）。后两类是实现时补充的收紧。
+- **白名单**：`ls`、`pwd`、`cat`、`head`、`tail`、`wc`、`rg`、`grep`、`git status`、`git diff`、`git log`、`git show`、`pnpm test`、`pnpm lint`、`pnpm typecheck`、`pnpm build`、`npm test`、`npx vitest`、`tsc --noEmit`。按"程序 + 子命令"的 token 前缀精确匹配，其后参数不限，但参数含工作区外路径时不命中（见下）。
+- **未命中白名单的情形**：出现 `;`、`&`（含 `&&`）、`|`（含 `||`）、`>`、`<`、`$(`、反引号、换行、`eval`、`sh -c`、`bash -c` 任一；或参数含 `--pre`（rg 可执行外部程序）、`--output`、`--ext-diff`、`--textconv`（git 可写文件或执行程序）。后两类是实现时补充的收紧。另外，任一参数是绝对路径（`/`、`\`、盘符开头）、`~` 开头、含 `..` 路径段或含 `$` 变量（选项 `--x=值` 的值同样检查）时也不命中，回到模型声明的风险判断。判定处拿不到项目根，因此所有绝对路径一律视为工作区外。
 - **审批摘要**：`inputSummary` 增加 `risk`、`riskReason`、`askReason`（`denylist`、`declared-high`，未命中时省略）。Studio 命令卡片展开后显示模型声明的风险、理由和询问原因。
-- **已知局限**：`cat`、`grep` 等白名单命令可读取工作区外文件；本轮不处理。`pnpm test` 等会运行项目脚本，视为用户已接受的风险。`/tool` 本地演示（mock）的示例文本未带 `risk`，真实 Runtime 下会被参数校验拒绝。
+- **已知局限**：白名单命令的参数已排除绝对路径、`~`、`..`，但 shell 的其他间接形式（如符号链接指向工作区外、`git` 子命令读取工作区外的仓库配置）不在检查范围。`pnpm test` 等会运行项目脚本，视为用户已接受的风险。`/tool` 本地演示（mock）的示例文本未带 `risk`，真实 Runtime 下会被参数校验拒绝。
 
 ---
 
