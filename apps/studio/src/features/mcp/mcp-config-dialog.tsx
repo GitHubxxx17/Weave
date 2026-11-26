@@ -31,6 +31,7 @@ const fieldNames: Readonly<Record<string, string>> = {
   cwd: '工作目录',
   env: '环境引用',
   contentPaths: '绑定内容路径',
+  callTimeoutMs: '调用超时',
 };
 const staleMessage = '配置或授权已变化，本次配置已失效。请关闭后重新打开，保留草稿供你复制。';
 
@@ -51,6 +52,9 @@ export function McpConfigDialog({
   const [cwd, setCwd] = useState(() => initial?.cwd ?? '');
   const [argsText, setArgsText] = useState(() => JSON.stringify(initial?.args ?? [], null, 2));
   const [pathsText, setPathsText] = useState(() => (initial?.contentPaths ?? []).join('\n'));
+  const [timeoutText, setTimeoutText] = useState(() =>
+    initial?.callTimeoutMs === undefined ? '' : String(initial.callTimeoutMs / 1000),
+  );
   const [rows, setRows] = useState<readonly EnvironmentRow[]>(() =>
     Object.entries(initial?.env ?? {}).map(([target, value], key) => ({
       key,
@@ -147,6 +151,14 @@ export function McpConfigDialog({
       targets.add(row.target);
     }
     const env = Object.fromEntries(rows.map((row) => [row.target, { fromHostEnv: row.reference }]));
+    const timeoutSeconds = timeoutText.trim() === '' ? undefined : Number(timeoutText.trim());
+    if (
+      timeoutSeconds !== undefined &&
+      (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 600)
+    ) {
+      setError({ field: 'callTimeoutMs', message: '调用超时必须是 1 到 600 之间的整数秒。' });
+      return;
+    }
     const result = mcpServerConfigSchema.safeParse({
       schemaVersion: 1,
       id,
@@ -157,6 +169,7 @@ export function McpConfigDialog({
       cwd,
       env,
       ...(contentPaths.length === 0 ? {} : { contentPaths }),
+      ...(timeoutSeconds === undefined ? {} : { callTimeoutMs: timeoutSeconds * 1000 }),
     });
     if (!result.success) {
       const field = String(result.error.issues[0]?.path[0] ?? '');
@@ -276,6 +289,24 @@ export function McpConfigDialog({
         <small>
           启动程序文件本身总会被绑定。这里可以再加入脚本文件或项目目录（最多 16 项，目录最多 1000
           个文件、20 MB，不能含符号链接）；这些内容变化后，信任失效，需要重新保存并信任。
+        </small>
+        <label>
+          调用超时（秒）
+          <input
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={600}
+            step={1}
+            placeholder="120"
+            value={timeoutText}
+            disabled={busy || submitting}
+            onChange={(event) => setTimeoutText(event.target.value)}
+            {...fieldProps('callTimeoutMs')}
+          />
+        </label>
+        <small>
+          单次工具调用的最长等待时间，1 到 600 秒，留空为 120 秒。修改后需要重新审阅并信任。
         </small>
         {suggestedPaths.length === 0 ? null : (
           <div className="mcp-content-suggestions" aria-label="建议绑定的路径">

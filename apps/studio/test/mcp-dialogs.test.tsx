@@ -430,3 +430,59 @@ describe('MCP content binding in dialogs', () => {
     );
   });
 });
+
+describe('MCP call timeout in dialogs', () => {
+  it('omits the field when blank and saves seconds as milliseconds otherwise', async () => {
+    const onSave = vi.fn(async () => {});
+    render(<McpConfigDialog {...shared} expectedSequence={0} onSave={onSave} initial={config()} />);
+    const input = screen.getByLabelText('调用超时（秒）') as HTMLInputElement;
+    expect(input.value).toBe('');
+    fireEvent.click(screen.getByRole('button', { name: '保存配置' }));
+    await act(async () => {});
+    expect(onSave.mock.calls[0]![0]).not.toHaveProperty('callTimeoutMs');
+    cleanup();
+    const second = vi.fn(async () => {});
+    render(<McpConfigDialog {...shared} expectedSequence={0} onSave={second} initial={config()} />);
+    fireEvent.change(screen.getByLabelText('调用超时（秒）'), { target: { value: '30' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存配置' }));
+    await act(async () => {});
+    expect(second).toHaveBeenCalledWith(expect.objectContaining({ callTimeoutMs: 30_000 }), 0);
+  });
+
+  it('shows the saved value and rejects out-of-range input before saving', async () => {
+    const onSave = vi.fn(async () => {});
+    render(
+      <McpConfigDialog
+        {...shared}
+        expectedSequence={0}
+        onSave={onSave}
+        initial={config({ callTimeoutMs: 45_000 })}
+      />,
+    );
+    const input = screen.getByLabelText('调用超时（秒）') as HTMLInputElement;
+    expect(input.value).toBe('45');
+    for (const bad of ['0', '601', '1.5']) {
+      fireEvent.change(input, { target: { value: bad } });
+      fireEvent.click(screen.getByRole('button', { name: '保存配置' }));
+      await act(async () => {});
+    }
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert').textContent).toContain('1 到 600');
+  });
+
+  it('shows the timeout and its change in the trust dialog', () => {
+    const review = createMcpReview(
+      server({
+        config: config({ callTimeoutMs: 30_000 }),
+        reviewedConfig: config(),
+      }),
+      1,
+      1,
+    );
+    render(<McpTrustDialog {...shared} review={review} onTrust={async () => {}} />);
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.textContent).toContain('调用超时');
+    expect(dialog.textContent).toContain('30 秒');
+    expect(screen.getByLabelText('配置差异').textContent).toContain('120 秒（默认）');
+  });
+});

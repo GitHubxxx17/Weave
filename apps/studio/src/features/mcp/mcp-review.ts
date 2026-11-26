@@ -10,7 +10,7 @@ export interface McpReview {
 }
 
 export interface McpConfigChange {
-  readonly field: 'label' | 'command' | 'args' | 'cwd' | 'env' | 'contentPaths';
+  readonly field: 'label' | 'command' | 'args' | 'cwd' | 'env' | 'contentPaths' | 'callTimeoutMs';
   readonly before: string;
   readonly after: string;
 }
@@ -50,6 +50,15 @@ export function createMcpReview(
   });
 }
 
+export const defaultMcpCallTimeoutSeconds = 120;
+
+/** Human-readable timeout; an absent value is the 120 s default. */
+export function describeCallTimeout(callTimeoutMs: number | undefined): string {
+  return callTimeoutMs === undefined
+    ? `${defaultMcpCallTimeoutSeconds} 秒（默认）`
+    : `${callTimeoutMs / 1000} 秒`;
+}
+
 function envText(config: McpServerConfig): string {
   return JSON.stringify(
     Object.fromEntries(
@@ -73,6 +82,11 @@ export function diffMcpConfig(
       field: 'contentPaths',
       before: JSON.stringify(before.contentPaths ?? []),
       after: JSON.stringify(after.contentPaths ?? []),
+    },
+    {
+      field: 'callTimeoutMs',
+      before: describeCallTimeout(before.callTimeoutMs),
+      after: describeCallTimeout(after.callTimeoutMs),
     },
   ];
   return fields.filter((change) => change.before !== change.after);

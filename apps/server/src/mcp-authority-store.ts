@@ -213,7 +213,8 @@ function foldEvents(events: readonly RecordedMcpAuthorityEvent[]): readonly McpA
     if (event.kind === 'configured') {
       // Policy 1 events replay as before; they cannot carry content paths.
       if (event.contentDigest === undefined) {
-        if (event.config.contentPaths !== undefined) protocol();
+        if (event.config.contentPaths !== undefined || event.config.callTimeoutMs !== undefined)
+          protocol();
         if (mcpConfigDigest(event.config) !== event.configDigest) protocol();
       } else if (mcpConfigDigestV2(event.config, event.contentDigest) !== event.configDigest)
         protocol();

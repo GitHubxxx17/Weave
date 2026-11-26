@@ -3,6 +3,7 @@ import { useEffect, useId, useRef, useState, type ReactElement } from 'react';
 import { PluginDialog, pluginDialogError } from '../plugins/plugin-dialog.js';
 import { McpApiError } from './mcp-api.js';
 import {
+  describeCallTimeout,
   diffMcpConfig,
   isPackageRunner,
   unboundArgumentPaths,
@@ -27,6 +28,7 @@ const fieldNames = {
   cwd: '工作目录',
   env: '环境引用',
   contentPaths: '绑定内容路径',
+  callTimeoutMs: '调用超时',
 } as const;
 const staleMessage = '配置或授权已变化，本次审阅已失效。请关闭后重新审阅。';
 
@@ -126,6 +128,10 @@ export function McpTrustDialog({
             <dd>
               <code>{review.config.cwd}</code>
             </dd>
+          </div>
+          <div>
+            <dt>调用超时</dt>
+            <dd>{describeCallTimeout(review.config.callTimeoutMs)}</dd>
           </div>
           <div>
             <dt>配置摘要</dt>

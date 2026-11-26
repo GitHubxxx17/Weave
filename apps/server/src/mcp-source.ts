@@ -405,6 +405,9 @@ export function createMcpExtensionSource(options: McpExtensionSourceOptions): {
                 cwd: record.config.cwd,
                 env: resolved.env,
                 signal: abort.signal,
+                ...(record.config.callTimeoutMs === undefined
+                  ? {}
+                  : { callTimeoutMs: record.config.callTimeoutMs }),
                 onStale: () => {
                   if (!entry.closed) entry.stale = true;
                 },
