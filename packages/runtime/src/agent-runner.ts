@@ -17,6 +17,7 @@ import {
   projectSession,
   projectAgentExecutions,
   projectMessageFileContexts,
+  projectMessageWorkspaceContexts,
 } from '@weave/session';
 import { renderSessionModelHistory } from './file-context-render.js';
 import {
@@ -401,6 +402,7 @@ function assertBoundTaskTurn(request: AgentRunRequest, events: readonly SessionE
         'permissionMode',
         'skills',
         'files',
+        'contexts',
       ] as const
     ).every((field) => isDeepStrictEqual(effective?.[field], request[field])) ||
     events.some((event) => event.type === 'turn.started')
@@ -731,16 +733,23 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
                 ? undefined
                 : projectAgentExecutions(storedEvents).find(
                     (item) =>
-                      item.fileContext !== undefined &&
+                      (item.fileContext !== undefined || item.workspaceContext !== undefined) &&
                       (item.executionId === validRequest.executionIdentity?.executionId ||
                         item.turnId === validRequest.executionIdentity?.turnId ||
                         item.userMessageId === validRequest.executionIdentity?.userMessageId),
                   );
-            if (validRequest.files !== undefined || accepted?.fileContext !== undefined) {
+            if (
+              validRequest.files !== undefined ||
+              validRequest.contexts !== undefined ||
+              accepted !== undefined
+            ) {
               const effective = accepted?.runInput ?? accepted?.input;
               const expected = validRequest.executionIdentity;
               if (
-                accepted?.fileContext === undefined ||
+                accepted === undefined ||
+                (accepted.fileContext === undefined) !== (validRequest.files === undefined) ||
+                (accepted.workspaceContext === undefined) !==
+                  (validRequest.contexts === undefined) ||
                 accepted.status !== 'accepted' ||
                 expected === undefined ||
                 accepted.executionId !== expected.executionId ||
@@ -749,6 +758,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
                 !(
                   [
                     'files',
+                    'contexts',
                     'userMessage',
                     'skills',
                     'provider',
@@ -853,6 +863,7 @@ export function createAgentRunner(options: AgentRunnerOptions): AgentRunner {
               messages: renderSessionModelHistory(
                 session.messages,
                 projectMessageFileContexts(events),
+                projectMessageWorkspaceContexts(events),
               ),
             };
           };

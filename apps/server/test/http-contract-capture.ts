@@ -123,6 +123,13 @@ function reply(value: string | { readonly name: string; readonly arguments: obje
 function lastUserText(body: { messages: { role: string; content: unknown }[] }): string {
   const last = body.messages.filter((message) => message.role === 'user').at(-1);
   if (typeof last?.content === 'string') return last.content;
+  // A message with attached context carries extra data parts after the typed text.
+  if (Array.isArray(last?.content)) {
+    const first = (last.content as { type?: string; text?: string }[]).find(
+      (part) => part.type === 'text',
+    );
+    if (first?.text !== undefined) return first.text;
+  }
   return JSON.stringify(last?.content);
 }
 
@@ -223,7 +230,11 @@ export async function captureHttpContract(): Promise<HttpContractFixtures> {
     if (response.status !== 200) throw new Error(`${path} ${response.status}`);
     return (await response.json()) as unknown;
   };
-  const launch = async (sessionId: string, text: string) => {
+  const launch = async (
+    sessionId: string,
+    text: string,
+    contexts?: readonly { readonly kind: string }[],
+  ) => {
     const response = await post(`/sessions/${sessionId}/executions`, {
       requestId: randomUUID(),
       input: {
@@ -231,6 +242,7 @@ export async function captureHttpContract(): Promise<HttpContractFixtures> {
         model: 'contract',
         permissionMode: 'ask',
         userMessage: { role: 'user', content: [{ type: 'text', text }] },
+        ...(contexts === undefined ? {} : { contexts }),
       },
     });
     if (response.status !== 202) throw new Error(`launch ${response.status}`);
@@ -267,7 +279,8 @@ export async function captureHttpContract(): Promise<HttpContractFixtures> {
     const second = (await (await post(`/projects/${project.id}/sessions`, {})).json()) as {
       id: string;
     };
-    await launch(second.id, 'block-one');
+    // The active execution carries a frozen project-tree context so the fixtures cover it.
+    await launch(second.id, 'block-one', [{ kind: 'project-tree' }]);
     await poll(() => gates.length === 1);
     await launch(second.id, 'block-two');
     await launch(second.id, 'block-three');
@@ -284,6 +297,9 @@ export async function captureHttpContract(): Promise<HttpContractFixtures> {
     await new Promise((resolve) => setTimeout(resolve, 100));
     gates[0]!();
     const executionFrames = await liveFrames;
+    // Queue promotion is asynchronous: wait until the next entry is running so
+    // the Session summary below does not depend on how fast the host promotes it.
+    await poll(() => gates.length === 2);
 
     const taskId = (tasks as { tasks: { taskId: string }[] }).tasks[0]!.taskId;
     const frames = (texts: readonly string[]) => texts.map(parseFrame);

@@ -1,4 +1,9 @@
 import {
+  executionContextsSchema,
+  type ExecutionContext,
+  type ExecutionContextKind,
+} from '../file-context/execution-context-types.js';
+import {
   fileReferenceSchema,
   fileReferencesSchema,
   type FileReference,
@@ -34,6 +39,7 @@ interface Draft {
   readonly text: string;
   readonly images: readonly unknown[];
   readonly files: readonly FileReference[];
+  readonly contexts: readonly ExecutionContext[];
   readonly literalSend: boolean;
   readonly revision: number;
   readonly owner?: ComposerOwner;
@@ -88,6 +94,7 @@ const emptyDraft = (): Draft => ({
   text: '',
   images: [],
   files: [],
+  contexts: [],
   literalSend: false,
   revision: 0,
 });
@@ -165,7 +172,7 @@ export function useComposerDraft(options: {
   if (rootChanged) current.sequence += 1;
   const active = {
     ...stored,
-    ...(rootChanged ? { files: [], revision: current.sequence } : {}),
+    ...(rootChanged ? { files: [], contexts: [], revision: current.sequence } : {}),
     owner: current.owner,
   };
   current.buckets.delete(draftKey(current.owner));
@@ -220,6 +227,32 @@ export function useComposerDraft(options: {
     (files: readonly FileReference[]): void => {
       const validated = files.length === 0 ? [] : fileReferencesSchema.parse(files);
       update((d) => ({ ...d, files: validated }));
+    },
+    [update],
+  );
+  const addContext = useCallback(
+    (owner: ComposerOwner, kind: ExecutionContextKind): 'added' | 'duplicate' | 'stale' => {
+      const s = state.current;
+      if (!sameComposerOwner(s.owner, owner)) return 'stale';
+      const draft = s.buckets.get(draftKey(s.owner)) ?? emptyDraft();
+      if (draft.contexts.some((entry) => entry.kind === kind)) return 'duplicate';
+      update((d) => ({ ...d, contexts: [...d.contexts, { kind }] }));
+      return 'added';
+    },
+    [update],
+  );
+  const removeContext = useCallback(
+    (kind: ExecutionContextKind): void => {
+      const s = state.current;
+      if (!s.buckets.get(draftKey(s.owner))?.contexts.some((entry) => entry.kind === kind)) return;
+      update((d) => ({ ...d, contexts: d.contexts.filter((entry) => entry.kind !== kind) }));
+    },
+    [update],
+  );
+  const setContexts = useCallback(
+    (contexts: readonly ExecutionContext[]): void => {
+      const validated = contexts.length === 0 ? [] : executionContextsSchema.parse(contexts);
+      update((d) => ({ ...d, contexts: validated }));
     },
     [update],
   );
@@ -370,6 +403,9 @@ export function useComposerDraft(options: {
     addFile,
     removeFile,
     setFiles,
+    addContext,
+    removeContext,
+    setContexts,
     rootChanged,
     resetLiteral,
     markLiteral,

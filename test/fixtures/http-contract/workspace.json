@@ -43,7 +43,7 @@
           {
             "id": "00000000-0000-4000-8000-000000000004",
             "title": "未命名会话",
-            "lastSequence": 17,
+            "lastSequence": 18,
             "lastMessage": {
               "role": "user",
               "content": [

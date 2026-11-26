@@ -3,8 +3,14 @@ import {
   type AgentExecutionInput,
   type SessionEventStore,
   type CapturedFileContext,
+  type CapturedWorkspaceContext,
 } from '@weave/session';
-import { fileAttachmentSummarySchema, type FileReference } from '@weave/protocol';
+import {
+  executionContextSummarySchema,
+  fileAttachmentSummarySchema,
+  type ExecutionContext,
+  type FileReference,
+} from '@weave/protocol';
 import { z } from 'zod';
 import { agentRuntimeEventSchema, type AgentRunner } from './agent-types.js';
 
@@ -69,6 +75,7 @@ export const agentExecutionSnapshotSchema = agentExecutionSummarySchema
     input: agentExecutionInputSchema,
     effectiveSettings: agentExecutionEffectiveSettingsSchema.optional(),
     fileAttachments: z.array(fileAttachmentSummarySchema).min(1).max(8).readonly().optional(),
+    contextAttachments: z.array(executionContextSummarySchema).min(1).max(2).readonly().optional(),
     events: z.array(agentRuntimeEventSchema).readonly(),
   })
   .strict();
@@ -196,6 +203,7 @@ export interface AgentExecutionServiceOptions {
     input: AgentExecutionInput,
   ) => Promise<AgentExecutionInput>;
   readonly captureFiles?: CaptureFiles;
+  readonly captureContexts?: CaptureContexts;
 }
 
 export interface CaptureFilesOptions {
@@ -207,6 +215,16 @@ export type CaptureFiles = (
   files: readonly FileReference[],
   options: CaptureFilesOptions,
 ) => Promise<CapturedFileContext>;
+
+export interface CaptureContextsOptions {
+  readonly signal: AbortSignal;
+}
+/** Core host authority: external requests name context kinds only, never this bundle. */
+export type CaptureContexts = (
+  sessionId: string,
+  contexts: readonly ExecutionContext[],
+  options: CaptureContextsOptions,
+) => Promise<CapturedWorkspaceContext>;
 
 export type AgentExecutionErrorCode =
   | 'execution-not-found'
@@ -227,6 +245,9 @@ export type AgentExecutionErrorCode =
   | 'execution-file-changed'
   | 'execution-file-capture-timeout'
   | 'execution-file-capture-failed'
+  | 'execution-context-unavailable'
+  | 'execution-context-git-unavailable'
+  | 'execution-context-capture-failed'
   | 'execution-invalid-input';
 export class AgentExecutionError extends Error {
   readonly code: AgentExecutionErrorCode;

@@ -3,7 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createInMemoryProjectStore, type ProjectStore } from '@weave/workspace';
-import { createFileContextCapture } from '../src/agent-file-context.js';
+import {
+  createFileContextCapture,
+  createWorkspaceContextCapture,
+} from '../src/agent-file-context.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -105,6 +108,74 @@ describe('trusted project file capture composition', () => {
     ).catch((value: unknown) => value);
     expect(error).toMatchObject({ code: 'execution-file-capture-failed' });
     expect(String(error)).not.toContain(f.root);
+    await f.projects.close();
+  });
+});
+
+describe('trusted project context capture composition', () => {
+  it('captures the project tree under the one owning project', async () => {
+    const f = await setup();
+    const result = await createWorkspaceContextCapture(f.projects)(
+      's',
+      [{ kind: 'project-tree' }],
+      options(),
+    );
+    expect(result.projectId).toBe(f.project.id);
+    expect(result.snapshots).toHaveLength(1);
+    expect(result.snapshots[0]).toMatchObject({ kind: 'project-tree', content: 'a.txt' });
+    await f.projects.close();
+  });
+
+  it('rejects unattached and folderless sessions with the stable unavailable code', async () => {
+    const f = await setup();
+    const capture = createWorkspaceContextCapture(f.projects);
+    await expect(capture('foreign', [{ kind: 'project-tree' }], options())).rejects.toMatchObject({
+      code: 'execution-context-unavailable',
+    });
+    const noFolder = await f.projects.createProject({ name: 'No folder', folderName: 'none' });
+    await f.projects.attachSession(noFolder.id, 'no-folder');
+    await expect(capture('no-folder', [{ kind: 'project-tree' }], options())).rejects.toMatchObject(
+      { code: 'execution-context-unavailable' },
+    );
+    await f.projects.close();
+  });
+
+  it('reports a non-Git project as the stable Git-unavailable code', async () => {
+    const f = await setup();
+    await expect(
+      createWorkspaceContextCapture(f.projects)('s', [{ kind: 'git-changes' }], options()),
+    ).rejects.toMatchObject({ code: 'execution-context-git-unavailable' });
+    await f.projects.close();
+  });
+
+  it('maps an aborted capture to the shared timeout code and hides host paths', async () => {
+    const f = await setup();
+    const controller = new AbortController();
+    controller.abort(new DOMException('Deadline', 'TimeoutError'));
+    const error = await createWorkspaceContextCapture(f.projects)('s', [{ kind: 'project-tree' }], {
+      signal: controller.signal,
+    }).catch((reason: unknown) => reason);
+    expect(error).toMatchObject({ code: 'execution-file-capture-timeout' });
+    expect(String((error as Error).message)).not.toContain(f.root);
+    await f.projects.close();
+  });
+
+  it('rejects ownership changes observed after capture', async () => {
+    const f = await setup();
+    let reads = 0;
+    const projects: ProjectStore = {
+      ...f.projects,
+      listProjects: async () => {
+        reads++;
+        return [{ ...f.project, ...(reads > 1 ? { folderPath: join(f.root, 'changed') } : {}) }];
+      },
+      listSessionRefs: async () => [
+        { projectId: f.project.id, sessionId: 's', createdAt: f.project.createdAt },
+      ],
+    };
+    await expect(
+      createWorkspaceContextCapture(projects)('s', [{ kind: 'project-tree' }], options()),
+    ).rejects.toMatchObject({ code: 'execution-context-unavailable' });
     await f.projects.close();
   });
 });

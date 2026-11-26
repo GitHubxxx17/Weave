@@ -326,9 +326,13 @@ bounded rooted capture helper and the core `captureFiles` admission port; Server
 resolves authoritative Project/Session membership and composes that port. Exact
 request replay precedes capture, and queue promotion never rereads accepted files.
 The Composer “添加上下文” menu's “当前文件” item adds the file open in the file
-panel to these same refs; “Git 变更” and “项目目录” stay disabled until a
-[separate design](../superpowers/specs/2026-11-24-composer-context-attachments-design.md)
-adds frozen contexts.
+panel to these same refs. “Git 变更” and “项目目录” use the
+[composer context design](../superpowers/specs/2026-11-24-composer-context-attachments-design.md):
+the execution input names `contexts` kinds only, and Runtime captures Git status
+and diff (no shell, no external diff or textconv, `.env` diffs omitted, 128 KiB)
+or the ignore-aware file list (2000 entries or 64 KiB) inside the same 5 second
+acceptance budget. Session stores the frozen text in the optional
+`execution.accepted.workspaceContext`, so replay never rereads the workspace.
 
 The Runner validates the durable claimed execution and exact input inside Turn
 admission before starting any captured request, then renders saved file content
