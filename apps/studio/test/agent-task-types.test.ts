@@ -14,6 +14,7 @@ const view = {
   childTurnId: '00000000-0000-4000-8000-000000000004',
   title: 'Review',
   access: 'read-only',
+  permissionMode: 'ask',
   acceptedAt: '2026-11-23T00:00:00.000Z',
   status: 'preparing',
   resultKind: 'none',

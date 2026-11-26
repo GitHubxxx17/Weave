@@ -27,6 +27,12 @@ const reasonLabels: Record<NonNullable<AgentTaskView['reason']>, string> = {
   shutdown: '运行时已关闭',
 };
 
+const permissionLabels: Record<AgentTaskView['permissionMode'], string> = {
+  ask: '常规',
+  trust: '信任',
+  yolo: '完全访问',
+};
+
 export function isSettledTask(task: AgentTaskView): boolean {
   return ['completed', 'failed', 'cancelled', 'interrupted'].includes(task.status);
 }
@@ -128,6 +134,7 @@ export function AgentTaskPanel({
                   </div>
                   <div className="task-item-meta">
                     <span>{task.access === 'workspace' ? '共享工作区' : '只读'}</span>
+                    <span>权限：{permissionLabels[task.permissionMode]}</span>
                     <span>{elapsed(task.acceptedAt, now, task.settledAt)}</span>
                     {task.pendingApprovalCount > 0 ? (
                       <strong>待审批 {task.pendingApprovalCount}</strong>
@@ -139,6 +146,13 @@ export function AgentTaskPanel({
                       {task.previewTruncated ? ' …' : ''}
                     </p>
                   )}
+                  {task.permissionMode === 'yolo' ? (
+                    <p className="task-item-note task-item-warning" role="note">
+                      <CircleAlert aria-hidden="true" />
+                      完全访问：该子任务继承父回合权限，
+                      {task.access === 'workspace' ? '写入和命令都不经审批' : '操作不经审批'}
+                    </p>
+                  ) : null}
                   {task.reason === undefined ? null : (
                     <p className="task-item-note">
                       <CircleAlert aria-hidden="true" />

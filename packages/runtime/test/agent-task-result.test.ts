@@ -17,6 +17,7 @@ function task(preview: string): AgentTaskView {
     childTurnId,
     title: 'Review 中文 😀',
     access: 'read-only',
+    permissionMode: 'ask',
     acceptedAt: '2026-11-23T00:00:00.000Z',
     status: 'completed',
     resultKind: 'final-answer',

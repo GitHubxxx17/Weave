@@ -195,6 +195,7 @@ function makeView(
     childTurnId,
     title,
     access,
+    permissionMode: acceptance.payload.settings.permissionMode,
     acceptedAt: acceptance.occurredAt,
     status,
     resultKind: execution?.resultKind ?? 'none',
