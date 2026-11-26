@@ -201,8 +201,8 @@ pnpm --filter @weave/studio dev
 ```
 
 Open `http://127.0.0.1:5173`. Vite serves the React Studio and proxies
-`/agent/*`, `/approvals`, `/projects`, `/sessions`, `/settings`, `/plugins`,
-`/commands`, and `/mcp` to
+`/memory`, `/approvals`, `/plugins`, `/mcp`, `/commands`, `/projects`,
+`/sessions`, and `/settings` to
 `http://127.0.0.1:4317`, so the browser can call the local Server without a
 separate CORS setup. The Server `dev` script builds the TypeScript packages
 first and then starts `dist/main.js`.
@@ -211,10 +211,12 @@ first and then starts `dist/main.js`.
 
 After `pnpm --filter @weave/studio build`, the Server can host Studio itself on
 the same origin as the API. Set `WEAVE_STUDIO_DIRECTORY` to
-`apps/studio/dist` (Desktop does this automatically):
+the absolute path of `apps/studio/dist` (Desktop does this automatically).
+`pnpm --filter` runs inside `apps/server`, so a relative path would resolve
+against that directory and fail at startup. Run from the repository root:
 
 ```bash
-WEAVE_STUDIO_DIRECTORY=apps/studio/dist pnpm --filter @weave/server dev
+WEAVE_STUDIO_DIRECTORY="$PWD/apps/studio/dist" pnpm --filter @weave/server dev
 ```
 
 By default the Server listens on `127.0.0.1` only. To open Weave from another
