@@ -117,14 +117,12 @@ import {
   commandPickerListId,
 } from '../features/commands/command-picker-list.js';
 import { useCommandPicker } from '../features/commands/use-command-picker.js';
-import { createProviderApi, ProviderApiError } from '../features/providers/provider-api.js';
 import {
   customProviderPresetId,
-  findModelPresetId,
   findProviderPreset,
   providerPresets,
 } from '../features/providers/provider-presets.js';
-import type { ProviderDescriptor, ProviderSettings } from '../features/providers/provider-types.js';
+import type { ProviderDescriptor } from '../features/providers/provider-types.js';
 import { createWorkspaceApi } from '../features/workspace/workspace-api.js';
 import type {
   SessionDetail,
@@ -132,7 +130,6 @@ import type {
   TurnUsage,
 } from '../features/workspace/workspace-types.js';
 import {
-  fallbackProviderSettings,
   permissionOptions,
   reasoningEffortOptions,
   statusLabels,
@@ -161,7 +158,6 @@ import {
   type OpenMenu,
   type PendingImage,
   type ProductView,
-  type ProviderFormState,
   type RunStatus,
   type SessionRunHandle,
   type SessionRunState,
@@ -170,9 +166,9 @@ import {
   type TaskTranscriptTarget,
   type ToolActivity,
 } from './app-types.js';
-import { FormSelect, parseProviderNumberField } from './form-select.js';
+import { FormSelect } from './form-select.js';
+import { useProviderSettings } from './use-provider-settings.js';
 
-const providerApi = createProviderApi();
 const workspaceApi = createWorkspaceApi();
 
 /** Studio's first local Agent workspace, combining chat state and stream events. */
@@ -231,15 +227,6 @@ function StudioApp(): ReactElement {
   const shellRef = useRef<HTMLElement>(null);
   const chatColumnRef = useRef<HTMLElement>(null);
   const [permissionMode, setPermissionMode] = useState<'ask' | 'trust' | 'yolo'>('ask');
-  const [reasoningEffort, setReasoningEffort] = useState('medium');
-  const [providerSettings, setProviderSettings] =
-    useState<ProviderSettings>(fallbackProviderSettings);
-  const [selectedProviderId, setSelectedProviderId] = useState(
-    fallbackProviderSettings.defaultProvider,
-  );
-  const [selectedModel, setSelectedModel] = useState(
-    fallbackProviderSettings.providers[0]?.defaultModel ?? '',
-  );
   const [viewerFilePath, setViewerFilePath] = useState<string | null>(null);
   // Whether the active project can supply Git changes; read when the context menu opens.
   const [gitChangesAvailability, setGitChangesAvailability] = useState<{
@@ -247,12 +234,29 @@ function StudioApp(): ReactElement {
     readonly state: 'available' | 'unavailable' | 'unknown';
   } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [providerForm, setProviderForm] = useState<ProviderFormState | null>(null);
-  const [providerFormError, setProviderFormError] = useState<string | null>(null);
-  const [providerMutation, setProviderMutation] = useState<
-    'idle' | 'saving' | 'deleting' | 'defaulting'
-  >('idle');
-  const [providerToDelete, setProviderToDelete] = useState<ProviderDescriptor | null>(null);
+  const {
+    providerSettings,
+    selectedProviderId,
+    setSelectedProviderId,
+    selectedModel,
+    setSelectedModel,
+    selectedProvider,
+    reasoningEffort,
+    setReasoningEffort,
+    providerForm,
+    providerFormError,
+    providerMutation,
+    providerToDelete,
+    setProviderToDelete,
+    openProviderForm,
+    closeProviderForm,
+    updateProviderForm,
+    chooseProviderPreset,
+    chooseModelPreset,
+    saveProvider,
+    setDefaultProvider,
+    deleteProvider,
+  } = useProviderSettings({ onNotice: setNotice });
   const [editingSession, setEditingSession] = useState<{
     readonly projectId: string;
     readonly sessionId: string;
@@ -414,9 +418,6 @@ function StudioApp(): ReactElement {
   useEffect(() => {
     if (composerDraft.rootChanged) setNotice('项目文件夹已变化，请重新添加文件');
   }, [composerDraft.rootChanged]);
-  const selectedProvider =
-    providerSettings.providers.find((provider) => provider.id === selectedProviderId) ??
-    providerSettings.providers[0];
   const messages = activeSession?.messages ?? [];
   const approvals = useApprovals(!isLoadingWorkspace);
   function taskForApproval(approval: ApprovalRequest): AgentTaskView | undefined {
@@ -575,24 +576,6 @@ function StudioApp(): ReactElement {
     }))
     .filter((project) => project.sessions.length > 0);
 
-  function applyProviderSettings(settings: ProviderSettings): void {
-    setProviderSettings(settings);
-    const nextProvider =
-      settings.providers.find((provider) => provider.id === selectedProviderId) ??
-      settings.providers.find((provider) => provider.id === settings.defaultProvider) ??
-      settings.providers[0];
-    if (nextProvider !== undefined) {
-      setSelectedProviderId(nextProvider.id);
-      setSelectedModel(nextProvider.defaultModel ?? '');
-    }
-  }
-
-  async function refreshProviderSettings(): Promise<ProviderSettings> {
-    const settings = await providerApi.listProviders();
-    applyProviderSettings(settings);
-    return settings;
-  }
-
   useEffect(() => {
     let disposed = false;
 
@@ -669,43 +652,6 @@ function StudioApp(): ReactElement {
       disposed = true;
     };
   }, [workspaceLoadKey]);
-
-  useEffect(() => {
-    let disposed = false;
-
-    async function loadProviders(): Promise<void> {
-      try {
-        const settings = await providerApi.listProviders();
-        if (disposed || settings.providers.length === 0) {
-          return;
-        }
-
-        const [firstProvider] = settings.providers;
-        const defaultProvider =
-          settings.providers.find((provider) => provider.id === settings.defaultProvider) ??
-          firstProvider;
-        if (defaultProvider === undefined) {
-          return;
-        }
-        setProviderSettings(settings);
-        setSelectedProviderId(defaultProvider.id);
-        setSelectedModel(defaultProvider.defaultModel ?? '');
-      } catch (error: unknown) {
-        if (!disposed) {
-          setNotice(
-            error instanceof ProviderApiError && error.code === 'provider-api-network'
-              ? '无法连接到本地服务，当前使用本地模型'
-              : 'Provider 配置加载失败，当前使用本地模型',
-          );
-        }
-      }
-    }
-
-    void loadProviders();
-    return () => {
-      disposed = true;
-    };
-  }, []);
 
   useEffect(() => {
     function handleEscape(event: KeyboardEvent): void {
@@ -2436,233 +2382,6 @@ function StudioApp(): ReactElement {
     setOpenMenu(null);
     setNotice(null);
     if (view === 'marketplace') void pluginStore.refresh().catch(() => undefined);
-  }
-
-  function openProviderForm(provider?: ProviderDescriptor): void {
-    setProviderFormError(null);
-    const providerPreset = provider === undefined ? undefined : findProviderPreset(provider.id);
-    setProviderForm(
-      provider === undefined
-        ? {
-            mode: 'create',
-            editingId: null,
-            providerPresetId: '',
-            modelPresetId: customProviderPresetId,
-            id: '',
-            label: '',
-            baseUrl: '',
-            apiKey: '',
-            defaultModel: '',
-            makeDefault: providerSettings.providers.length === 0,
-            clearApiKey: false,
-            contextWindowTokens: '',
-            temperature: '',
-            maxTokens: '',
-          }
-        : {
-            mode: 'edit',
-            editingId: provider.id,
-            providerPresetId: providerPreset?.id ?? customProviderPresetId,
-            modelPresetId: findModelPresetId(providerPreset, provider.defaultModel ?? ''),
-            id: provider.id,
-            label: provider.label,
-            baseUrl: provider.baseUrl ?? '',
-            apiKey: '',
-            defaultModel: provider.defaultModel ?? '',
-            makeDefault: provider.id === providerSettings.defaultProvider,
-            clearApiKey: false,
-            contextWindowTokens:
-              provider.contextWindowTokens === undefined
-                ? ''
-                : String(provider.contextWindowTokens),
-            temperature: provider.temperature === undefined ? '' : String(provider.temperature),
-            maxTokens: provider.maxTokens === undefined ? '' : String(provider.maxTokens),
-          },
-    );
-  }
-
-  function closeProviderForm(): void {
-    if (providerMutation === 'saving') {
-      return;
-    }
-    setProviderForm(null);
-    setProviderFormError(null);
-  }
-
-  function updateProviderForm<K extends keyof ProviderFormState>(
-    key: K,
-    value: ProviderFormState[K],
-  ): void {
-    setProviderForm((current) => (current === null ? current : { ...current, [key]: value }));
-  }
-
-  function chooseProviderPreset(presetId: string): void {
-    setProviderForm((current) => {
-      if (current === null) {
-        return current;
-      }
-
-      if (presetId === customProviderPresetId) {
-        return {
-          ...current,
-          providerPresetId: customProviderPresetId,
-          modelPresetId: customProviderPresetId,
-          id: current.mode === 'create' ? '' : current.id,
-          label: current.mode === 'create' ? '' : current.label,
-          baseUrl: current.mode === 'create' ? '' : current.baseUrl,
-          defaultModel: current.mode === 'create' ? '' : current.defaultModel,
-        };
-      }
-
-      const preset = findProviderPreset(presetId);
-      if (preset === undefined) {
-        return current;
-      }
-
-      return {
-        ...current,
-        providerPresetId: preset.id,
-        modelPresetId: preset.models[0] ?? customProviderPresetId,
-        id: current.mode === 'create' ? preset.id : current.id,
-        label: preset.label,
-        baseUrl: preset.baseUrl,
-        defaultModel: preset.models[0] ?? '',
-      };
-    });
-  }
-
-  function chooseModelPreset(modelPresetId: string): void {
-    setProviderForm((current) => {
-      if (current === null) {
-        return current;
-      }
-
-      return {
-        ...current,
-        modelPresetId,
-        defaultModel: modelPresetId === customProviderPresetId ? '' : modelPresetId,
-      };
-    });
-  }
-
-  function providerErrorMessage(error: unknown): string {
-    if (!(error instanceof ProviderApiError)) {
-      return 'Provider 配置暂时不可用，请稍后重试';
-    }
-    switch (error.code) {
-      case 'provider-settings-secret-unavailable':
-        return '系统密钥存储不可用，请在桌面端重试';
-      case 'provider-settings-duplicate':
-        return 'Provider ID 已存在，请换一个 ID';
-      case 'provider-settings-protected':
-        return '这个 Provider 由系统或插件管理，不能从此处修改';
-      case 'provider-settings-provider-invalid':
-        return 'Provider 客户端创建失败，请检查地址和配置';
-      case 'provider-settings-api-key-required':
-        return '修改了 API 地址，请重新填写 API Key';
-      case 'provider-api-network':
-        return '无法连接到本地服务，请确认后端已经启动';
-      default:
-        return error.message;
-    }
-  }
-
-  async function saveProvider(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    const form = providerForm;
-    if (form === null) {
-      return;
-    }
-    if (
-      form.id.trim() === '' ||
-      form.label.trim() === '' ||
-      form.baseUrl.trim() === '' ||
-      form.defaultModel.trim() === '' ||
-      (form.mode === 'create' && form.apiKey.trim() === '')
-    ) {
-      setProviderFormError('请填写完整的 Provider 信息');
-      return;
-    }
-
-    const temperature = parseProviderNumberField(form.temperature, 'temperature');
-    const maxTokens = parseProviderNumberField(form.maxTokens, 'positiveInt');
-    const contextWindowTokens = parseProviderNumberField(form.contextWindowTokens, 'positiveInt');
-    if (!temperature.ok || !maxTokens.ok || !contextWindowTokens.ok) {
-      setProviderFormError('采样参数格式不对：温度 0–2，最大输出 token 与上下文窗口须为正整数');
-      return;
-    }
-
-    setProviderMutation('saving');
-    setProviderFormError(null);
-    try {
-      if (form.mode === 'create') {
-        await providerApi.createProvider({
-          id: form.id.trim(),
-          label: form.label.trim(),
-          type: 'openai-compatible',
-          baseUrl: form.baseUrl.trim(),
-          apiKey: form.apiKey,
-          defaultModel: form.defaultModel.trim(),
-          makeDefault: form.makeDefault,
-          ...(contextWindowTokens.value === undefined
-            ? {}
-            : { contextWindowTokens: contextWindowTokens.value }),
-          ...(temperature.value === undefined ? {} : { temperature: temperature.value }),
-          ...(maxTokens.value === undefined ? {} : { maxTokens: maxTokens.value }),
-        });
-      } else if (form.editingId !== null) {
-        await providerApi.updateProvider(form.editingId, {
-          label: form.label.trim(),
-          baseUrl: form.baseUrl.trim(),
-          apiKey: form.apiKey,
-          defaultModel: form.defaultModel.trim(),
-          makeDefault: form.makeDefault,
-          contextWindowTokens: contextWindowTokens.value ?? null,
-          temperature: temperature.value ?? null,
-          maxTokens: maxTokens.value ?? null,
-          ...(form.clearApiKey ? { clearApiKey: true } : {}),
-        });
-      }
-      await refreshProviderSettings();
-      setProviderForm(null);
-      setNotice('Provider 已保存');
-    } catch (error: unknown) {
-      setProviderFormError(providerErrorMessage(error));
-    } finally {
-      setProviderMutation('idle');
-    }
-  }
-
-  async function setDefaultProvider(providerId: string): Promise<void> {
-    setProviderMutation('defaulting');
-    setNotice(null);
-    try {
-      const settings = await providerApi.setDefaultProvider(providerId);
-      applyProviderSettings(settings);
-      setNotice('默认 Provider 已更新');
-    } catch (error: unknown) {
-      setNotice(providerErrorMessage(error));
-    } finally {
-      setProviderMutation('idle');
-    }
-  }
-
-  async function deleteProvider(): Promise<void> {
-    const provider = providerToDelete;
-    if (provider === null) {
-      return;
-    }
-    setProviderMutation('deleting');
-    try {
-      await providerApi.deleteProvider(provider.id);
-      await refreshProviderSettings();
-      setProviderToDelete(null);
-      setNotice('Provider 已删除');
-    } catch (error: unknown) {
-      setNotice(providerErrorMessage(error));
-    } finally {
-      setProviderMutation('idle');
-    }
   }
 
   function toggleMenu(menu: Exclude<OpenMenu, null>): void {
