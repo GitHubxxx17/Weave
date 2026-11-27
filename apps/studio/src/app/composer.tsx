@@ -453,10 +453,10 @@ export function Composer({
                           <Check className="menu-check" aria-hidden="true" />
                         ) : gitChangesAvailability?.projectId === activeProjectId &&
                           gitChangesAvailability.state === 'unavailable' ? (
-                          <small>需要有提交的 Git 仓库</small>
+                          <small className="menu-hint">需要有提交的 Git 仓库</small>
                         ) : gitChangesAvailability?.projectId === activeProjectId &&
                           gitChangesAvailability.state === 'unknown' ? (
-                          <small>无法检查 Git 状态</small>
+                          <small className="menu-hint">无法检查 Git 状态</small>
                         ) : null}
                       </button>
                       <button
