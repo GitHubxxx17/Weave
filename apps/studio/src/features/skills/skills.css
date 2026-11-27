@@ -27,7 +27,7 @@
 }
 .skill-picker button {
   cursor: pointer;
-  border: 1px solid #8885;
+  border: 1px solid var(--skill-border);
   border-radius: 6px;
   background: transparent;
   color: inherit;
@@ -37,13 +37,13 @@
   width: 100%;
   box-sizing: border-box;
   padding: 8px;
-  border: 1px solid #8885;
+  border: 1px solid var(--skill-border);
   border-radius: 6px;
   background: transparent;
   color: inherit;
 }
 .skill-picker-list article {
-  border-bottom: 1px solid #8883;
+  border-bottom: 1px solid var(--skill-divider);
   padding: 12px 0;
 }
 .skill-picker-list p {
@@ -59,11 +59,11 @@
 .skill-source {
   padding: 2px 6px;
   border-radius: 4px;
-  background: #8882;
+  background: var(--skill-source-bg);
   font-size: 11px;
 }
 .skill-preview {
-  border-top: 1px solid #8884;
+  border-top: 1px solid var(--skill-border-faint);
   margin-top: 12px;
   padding-top: 12px;
 }
@@ -81,7 +81,7 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  border: 1px solid #8884;
+  border: 1px solid var(--skill-border-faint);
   border-radius: 8px;
   padding: 3px 7px;
   font-size: 12px;
