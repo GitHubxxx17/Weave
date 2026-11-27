@@ -633,6 +633,11 @@ is a separate authority subset: `read-only` permits only definitions whose
 the parent's allowed tools. Both child modes exclude task orchestration tools;
 Runner model visibility and Pipeline execution enforce the captured subset.
 
+Studio's Settings → 运行权限 page lets the user pick the default mode for new Sessions
+(`ask` or `trust` only; `yolo` is never a default) and describes what each mode asks
+about. A Session that recorded its own mode keeps it. The sensitive-path text on that
+page is static and mirrors `sensitive-paths.ts`.
+
 After a valid text terminal `finish`, the Runner appends the complete assistant
 message (when non-empty), the completed Step, and the completed Turn in one
 batch, then yields `completed`.

@@ -864,6 +864,138 @@ body:has(.panel-resizer-active) .studio-shell {
   font-weight: 500;
 }
 
+.permission-settings-view {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+}
+
+.permission-settings-section {
+  display: grid;
+  gap: 10px;
+}
+
+.permission-settings-view .permission-settings-section h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.82rem;
+}
+
+.permission-settings-view .permission-settings-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.permission-settings-choices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.permission-settings-choice {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  color: var(--ink);
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.permission-settings-choice strong {
+  font-size: 0.76rem;
+}
+
+.permission-settings-choice span {
+  color: var(--muted);
+  font-size: 0.66rem;
+}
+
+.permission-settings-choice:hover {
+  border-color: var(--line-strong);
+}
+
+.permission-settings-choice[aria-checked='true'] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.permission-settings-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.permission-settings-card {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  padding: 13px 15px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.permission-settings-card-danger {
+  border-color: var(--danger-button-border);
+}
+
+.permission-settings-card h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.78rem;
+}
+
+.permission-settings-card h4 {
+  margin: 4px 0 0;
+  color: var(--ink-soft);
+  font-size: 0.66rem;
+}
+
+.permission-settings-card ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 16px;
+  color: var(--ink-soft);
+  font-size: 0.66rem;
+  line-height: 1.5;
+}
+
+.permission-settings-sensitive {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.permission-settings-sensitive li {
+  display: grid;
+  gap: 4px;
+  padding: 11px 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.permission-settings-sensitive strong {
+  color: var(--ink);
+  font-size: 0.74rem;
+}
+
+.permission-settings-sensitive code {
+  color: var(--ink-soft);
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.66rem;
+  overflow-wrap: anywhere;
+}
+
 .appearance-settings-view {
   display: grid;
   align-content: start;

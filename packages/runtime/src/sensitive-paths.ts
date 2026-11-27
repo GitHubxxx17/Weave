@@ -8,6 +8,9 @@ import { isSecretFile } from './secret-files.js';
  *
  * Paths are Workspace-relative with `/` separators. Matching is case
  * insensitive and happens after `.` and `..` segments are normalized.
+ *
+ * Studio shows these categories as static text: when you change this list, also
+ * update `apps/studio/src/app/permission-settings-view.tsx`.
  */
 
 /** Directory prefixes: every file below them is sensitive. */

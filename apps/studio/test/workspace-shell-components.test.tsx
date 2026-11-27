@@ -69,12 +69,12 @@ describe('WorkspaceNav', () => {
 });
 
 describe('SettingsSidebar', () => {
-  it('lists the settings categories, with unfinished ones disabled', () => {
+  it('lists the settings categories and enables every one', () => {
     render(<SettingsSidebar />);
     expect(screen.getByRole('button', { name: '模型服务' })).toBeTruthy();
-    expect((screen.getByRole('button', { name: /运行权限/ }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
+    for (const name of [/运行权限/, /界面外观/]) {
+      expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(false);
+    }
   });
 });
 
