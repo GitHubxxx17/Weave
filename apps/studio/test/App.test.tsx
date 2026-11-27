@@ -4561,6 +4561,7 @@ describe('Studio Agent Chat', () => {
       name: /Git 变更/,
     })) as HTMLButtonElement;
     await waitFor(() => expect(git.textContent).toContain('无法检查 Git 状态'));
+    expect(git.querySelector('small')?.className).toBe('menu-hint');
     expect(git.disabled).toBe(true);
     expect((screen.getByRole('menuitem', { name: /项目目录/ }) as HTMLButtonElement).disabled).toBe(
       false,
@@ -5694,6 +5695,7 @@ describe('explicit project file context', () => {
     fireEvent.click(screen.getByRole('button', { name: '添加内容' }));
     const git = (await screen.findByRole('menuitem', { name: /Git 变更/ })) as HTMLButtonElement;
     await waitFor(() => expect(git.textContent).toContain('需要有提交的 Git 仓库'));
+    expect(git.querySelector('small')?.className).toBe('menu-hint');
     expect(git.disabled).toBe(true);
     expect(git.title).toContain('不是 Git 仓库');
   });
