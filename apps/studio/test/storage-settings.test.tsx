@@ -76,7 +76,7 @@ describe('SettingsSidebar', () => {
 
   it('keeps unfinished categories disabled', () => {
     render(<SettingsSidebar activeCategory="providers" onSelectCategory={vi.fn()} />);
-    for (const name of [/运行权限/, /界面外观/]) {
+    for (const name of [/运行权限/]) {
       const button = screen.getByRole('button', { name }) as HTMLButtonElement;
       expect(button.disabled).toBe(true);
       expect(button.textContent).toContain('即将推出');

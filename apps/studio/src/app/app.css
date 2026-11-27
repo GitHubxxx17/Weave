@@ -1,4 +1,5 @@
 :root {
+  color-scheme: light;
   color: #1f2430;
   background: #f7f8fc;
   font-family: Inter, 'PingFang SC', 'Microsoft YaHei', 'Avenir Next', 'Segoe UI', sans-serif;
@@ -200,8 +201,237 @@
   --skill-source-bg: #8882;
   --skill-border-faint: #8884;
 
+  /* 界面外观页的主题预览块：两套主题下取值相同，使"浅色"卡片在深色界面里仍显示浅色 */
+  --theme-preview-light-bg: #f7f8fc;
+  --theme-preview-light-surface: #ffffff;
+  --theme-preview-light-line: #e7e9f1;
+  --theme-preview-light-text: #a0a7b8;
+  --theme-preview-light-accent: #635bff;
+  --theme-preview-dark-bg: #12141b;
+  --theme-preview-dark-surface: #1b1e29;
+  --theme-preview-dark-line: #2b3042;
+  --theme-preview-dark-text: #7f879b;
+  --theme-preview-dark-accent: #8a84ff;
+
   /* Lets <details> content transition its height to and from `auto`. */
   interpolate-size: allow-keywords;
+}
+
+/*
+ * 深色主题：覆盖 :root 中的全部颜色变量（test/color-tokens.test.ts 保证一一对应）。
+ * 由 <html data-theme="dark"> 触发，写入方是 src/features/settings/theme.ts。
+ */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  color: #e8eaf2;
+  background: #12141b;
+  --ink: #e8eaf2;
+  --ink-soft: #b7bdcd;
+  --muted: #9199ae;
+  --subtle: #7f879b;
+  --line: #2b3042;
+  --line-strong: #3b4258;
+  --surface: #1b1e29;
+  --surface-soft: #171a23;
+  --surface-muted: #232736;
+  --nav: #161922;
+  --nav-hover: #272b40;
+  --accent: #8a84ff;
+  --accent-dark: #aaa5ff;
+  --accent-soft: #2a2852;
+  --success: #34c08f;
+  --warning: #e0a24a;
+  --danger: #ee7482;
+  --shadow-popover: 0 14px 36px rgb(0 0 0 / 50%);
+  --scrollbar-thumb: rgb(255 255 255 / 18%);
+  --scrollbar-thumb-hover: rgb(255 255 255 / 34%);
+
+  /* 页面与导航底色 */
+  --app-bg: #12141b;
+  --nav-text: #9aa2b6;
+  --surface-hover: #252938;
+  --rail-bg: #151820;
+  --panel-bg: #171a22;
+  --text-body: #d5d9e3;
+  --user-message-bg: #252a3c;
+
+  /* 填充底色上的文字与预览画布 */
+  --text-on-accent: #14162b;
+  --text-on-overlay: #ffffff;
+  --preview-frame-bg: #ffffff;
+
+  /* 强调色衍生（边框、聚焦环） */
+  --accent-border-soft: #3d3a7a;
+  --field-focus-border-strong: #6f69e8;
+  --field-focus-border: #6c66e0;
+  --field-hover-border: #5d58c4;
+  --field-hover-bg: #1f2233;
+  --folder-hover-border: #5a56b8;
+  --folder-selected-bg: #212440;
+  --search-border: #5f5ac8;
+  --chip-border: #3f3c80;
+  --chip-action-text: #a29dff;
+  --provider-focus-bg: #1e2133;
+  --provider-focus-border: #4a4794;
+  --focus-outline-color: rgb(138 132 255 / 45%);
+  --focus-ring-composer-color: rgb(138 132 255 / 18%);
+  --focus-ring-color: rgb(138 132 255 / 16%);
+  --focus-ring-search-color: rgb(138 132 255 / 14%);
+  --accent-hover-bg: rgb(138 132 255 / 16%);
+
+  /* 警告与错误语义色 */
+  --warning-surface: #2c2415;
+  --warning-border: #5c4724;
+  --warning-chip-bg: #3a2d16;
+  --warning-soft: #2a2316;
+  --success-soft: #153027;
+  --danger-soft: #321b21;
+  --danger-faint: #261a1d;
+  --danger-ghost-bg: #2e1b20;
+  --danger-ghost-border: #5a2f37;
+  --danger-text: #f08a96;
+  --danger-button-bg: #301c21;
+  --danger-button-border: #64333c;
+  --danger-text-hover: #ffa3ad;
+  --danger-button-bg-hover: #3d2128;
+  --danger-button-border-hover: #7c3f4a;
+  --danger-vivid: #f07878;
+  --plugin-danger-text: #f08a96;
+  --plugin-danger-bg: #341d23;
+
+  /* 差异视图 */
+  --diff-added-text: #5ed6a8;
+  --diff-added-bg: rgb(52 192 143 / 16%);
+  --diff-removed-text: #f28b97;
+  --diff-removed-bg: rgb(238 116 130 / 16%);
+
+  /* 状态标签 */
+  --status-called-text: #aab3ae;
+  --status-called-bg: #2a2f2d;
+  --status-executing-text: #e4b366;
+  --status-executing-bg: #352b17;
+  --status-completed-text: #6fd6b4;
+  --status-completed-bg: #17332c;
+  --status-failed-text: #f29aa4;
+  --status-failed-bg: #3a1f25;
+
+  /* 图表与终端 */
+  --chart-orange: #f0a24b;
+  --chart-gray: #9aa3b8;
+  --chart-slate: #8b93a3;
+  --chart-violet: #a78bfa;
+  --chart-teal: #2dd4bf;
+  --chart-red: #f07878;
+  --terminal-bg: #10131a;
+
+  /* 遮罩与浮层 */
+  --overlay-chip-bg: rgb(10 12 22 / 88%);
+  --overlay-backdrop: rgb(0 0 0 / 55%);
+  --overlay-backdrop-strong: rgb(5 6 12 / 88%);
+  --overlay-control-bg: rgb(255 255 255 / 12%);
+  --overlay-control-border: rgb(255 255 255 / 24%);
+  --overlay-control-bg-hover: rgb(255 255 255 / 22%);
+  --dialog-border-glass: rgb(255 255 255 / 10%);
+
+  /* 阴影颜色 */
+  --shadow-color-xs: rgb(0 0 0 / 20%);
+  --shadow-color-composer: rgb(0 0 0 / 25%);
+  --shadow-color-composer-focus: rgb(0 0 0 / 32%);
+  --shadow-color-card-hover: rgb(0 0 0 / 28%);
+  --shadow-color-toggle-active: rgb(0 0 0 / 30%);
+  --shadow-color-image: rgb(0 0 0 / 60%);
+  --shadow-color-dialog: rgb(0 0 0 / 55%);
+  --shadow-color-provider: rgb(0 0 0 / 22%);
+  --shadow-color-drawer: rgb(0 0 0 / 40%);
+  --shadow-color-file-mode: rgb(0 0 0 / 30%);
+
+  /* 通用面板（记忆页、检索页共用） */
+  --page-text: #e3e6ee;
+
+  /* 任务面板 */
+  --task-border: #2f3445;
+  --task-border-strong: #424a60;
+  --task-text-muted: #9aa3b5;
+  --task-warning-text: #f0b35a;
+  --task-text-secondary: #bcc3d1;
+  --task-stop-hover-text: #f87171;
+  --task-error-text: #f87171;
+
+  /* 记忆页 */
+  --memory-icon: #7fb095;
+  --memory-text-muted: #9aa1ae;
+  --memory-border-button: #343a47;
+  --memory-hover-bg: #232c28;
+  --memory-hover-border: #4d6a58;
+  --memory-focus-outline: #7fb095;
+  --memory-border-field: #353b47;
+  --memory-alert-text: #ee8a85;
+  --memory-access-bg: #1e2823;
+  --memory-access-border: #2f4036;
+  --memory-access-icon: #7fbb93;
+  --memory-access-text: #a2b3a7;
+  --memory-border: #2f3542;
+  --memory-list-bg: #181c22;
+  --memory-search-icon: #8f9892;
+  --memory-tag-filter-text: #a3aba5;
+  --memory-selected-bg: #25352b;
+  --memory-selected-border: #3f5a49;
+  --memory-list-text: #a8b1aa;
+  --memory-list-meta: #8f988f;
+  --memory-badge-bg: #272c38;
+  --memory-badge-text: #a2adc0;
+  --memory-badge-reviewed-text: #86c796;
+  --memory-badge-reviewed-bg: #1f3326;
+  --memory-detail-meta: #8f9890;
+  --memory-tag-bg: #262b33;
+  --memory-tag-text: #a5aea8;
+  --memory-provenance-border: #2a312d;
+  --memory-provenance-text: #939c94;
+  --memory-empty-text: #8f988f;
+  --memory-history-border: #2b332e;
+  --memory-history-rail: #36443a;
+  --memory-history-meta: #8e978f;
+  --memory-editor-hint: #939e95;
+  --memory-primary: #6fb28a;
+  --memory-confirm-border: #3a423d;
+  --memory-confirm-scrim: #000000a0;
+  --memory-confirm-shadow-color: #00000080;
+  --memory-confirm-text: #a0a8a1;
+  --memory-deleted-text: #939c94;
+
+  /* 检索页 */
+  --retrieval-icon: #78ad90;
+  --retrieval-border: #2e3532;
+  --retrieval-text-muted: #9ba3ab;
+  --retrieval-alert-text: #ee8a85;
+  --retrieval-border-field: #353d39;
+  --retrieval-hover-bg: #202b25;
+  --retrieval-primary: #6fb28a;
+  --retrieval-primary-hover: #84c39b;
+  --retrieval-focus-outline: #78ad90;
+  --retrieval-segmented-bg: #242a28;
+  --retrieval-egress-border: #c9973f;
+  --retrieval-egress-bg: #2b2414;
+  --retrieval-egress-text: #ecc888;
+  --retrieval-code-bg: #20252a;
+
+  /* 技能选择器（半透明灰，叠加在任意底色上，深浅色共用） */
+  --skill-border: #8885;
+  --skill-divider: #8883;
+  --skill-source-bg: #8882;
+  --skill-border-faint: #8884;
+
+  /* 界面外观页的主题预览块（与浅色相同） */
+  --theme-preview-light-bg: #f7f8fc;
+  --theme-preview-light-surface: #ffffff;
+  --theme-preview-light-line: #e7e9f1;
+  --theme-preview-light-text: #a0a7b8;
+  --theme-preview-light-accent: #635bff;
+  --theme-preview-dark-bg: #12141b;
+  --theme-preview-dark-surface: #1b1e29;
+  --theme-preview-dark-line: #2b3042;
+  --theme-preview-dark-text: #7f879b;
+  --theme-preview-dark-accent: #8a84ff;
 }
 
 /*
@@ -632,6 +862,116 @@ body:has(.panel-resizer-active) .studio-shell {
 .storage-settings-size-muted {
   color: var(--muted);
   font-weight: 500;
+}
+
+.appearance-settings-view {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.appearance-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+.appearance-option {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  color: var(--ink);
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.appearance-option:hover {
+  border-color: var(--field-hover-border);
+}
+
+.appearance-option:focus-visible {
+  outline: 2px solid var(--focus-outline-color);
+  outline-offset: 2px;
+}
+
+.appearance-option-selected,
+.appearance-option-selected:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.appearance-preview {
+  display: flex;
+  height: 84px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+
+.appearance-preview-half {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.appearance-preview-half::before {
+  position: absolute;
+  inset: 10px auto 10px 10px;
+  width: 22%;
+  background: var(--preview-surface);
+  border: 1px solid var(--preview-line);
+  border-radius: 4px;
+  content: '';
+}
+
+.appearance-preview-half::after {
+  position: absolute;
+  top: 14px;
+  right: 10px;
+  left: 36%;
+  height: 6px;
+  background: var(--preview-text);
+  border-radius: 3px;
+  box-shadow:
+    0 12px 0 0 var(--preview-text),
+    0 24px 0 -1px var(--preview-accent);
+  content: '';
+}
+
+.appearance-preview-light {
+  --preview-surface: var(--theme-preview-light-surface);
+  --preview-line: var(--theme-preview-light-line);
+  --preview-text: var(--theme-preview-light-text);
+  --preview-accent: var(--theme-preview-light-accent);
+
+  background: var(--theme-preview-light-bg);
+}
+
+.appearance-preview-dark {
+  --preview-surface: var(--theme-preview-dark-surface);
+  --preview-line: var(--theme-preview-dark-line);
+  --preview-text: var(--theme-preview-dark-text);
+  --preview-accent: var(--theme-preview-dark-accent);
+
+  background: var(--theme-preview-dark-bg);
+}
+
+.appearance-option-copy {
+  display: grid;
+  gap: 3px;
+}
+
+.appearance-option-copy strong {
+  font-size: 0.78rem;
+}
+
+.appearance-option-copy span {
+  color: var(--muted);
+  font-size: 0.66rem;
 }
 
 .settings-sidebar-label {
