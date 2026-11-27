@@ -82,6 +82,8 @@ import { Composer } from './composer.js';
 import { SessionRail } from './session-rail.js';
 import { TaskDisclosure } from './task-disclosure.js';
 import { SettingsSidebar } from './settings-sidebar.js';
+import type { SettingsCategoryId } from './settings-categories.js';
+import { StorageSettingsView } from './storage-settings-view.js';
 import { WorkspaceNav } from './workspace-nav.js';
 import { useMessageSubmission } from './use-message-submission.js';
 import { useSessionLifecycle } from './use-session-lifecycle.js';
@@ -132,6 +134,7 @@ function StudioApp(): ReactElement {
   const [activeView, setActiveView] = useState<ProductView>('studio');
   const [openMenu, setOpenMenu] = useState<OpenMenu>(null);
   const [isActivityPanelOpen, setIsActivityPanelOpen] = useState(true);
+  const [settingsCategory, setSettingsCategory] = useState<SettingsCategoryId>('providers');
   const [panelWidth, setPanelWidth] = useSidePanelWidth();
   const shellRef = useRef<HTMLElement>(null);
   const chatColumnRef = useRef<HTMLElement>(null);
@@ -853,7 +856,7 @@ function StudioApp(): ReactElement {
       <WorkspaceNav activeView={activeView} onSelectView={selectProductView} />
 
       {activeView === 'settings' ? (
-        <SettingsSidebar />
+        <SettingsSidebar activeCategory={settingsCategory} onSelectCategory={setSettingsCategory} />
       ) : (
         <SessionRail
           activeView={activeView}
@@ -1034,6 +1037,8 @@ function StudioApp(): ReactElement {
                 restoreSession={restoreSession}
                 setSessionToDelete={setSessionToDelete}
               />
+            ) : activeView === 'settings' && settingsCategory === 'storage' ? (
+              <StorageSettingsView />
             ) : activeView === 'settings' ? (
               <ProviderSettingsView
                 providerSettings={providerSettings}

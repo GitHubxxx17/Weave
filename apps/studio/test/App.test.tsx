@@ -288,6 +288,21 @@ function createWorkspaceFetchMock(
         headers: { 'content-type': 'application/json' },
       });
     }
+    if (requestPath === '/settings/storage' && method === 'GET') {
+      return Response.json({
+        dataDirectory: '/data/weave',
+        locations: [
+          {
+            id: 'database',
+            kind: 'file',
+            path: '/data/weave/weave.sqlite',
+            exists: true,
+            sizeBytes: 2048,
+            truncated: false,
+          },
+        ],
+      });
+    }
     if (requestPath === '/settings/providers') {
       if (currentProviderSettings === undefined) {
         return new Response(
@@ -4307,6 +4322,32 @@ describe('Studio Agent Chat', () => {
 
     expect(screen.getByText('DeepSeek')).toBeTruthy();
     expect(screen.queryByRole('menu', { name: '选择模型' })).toBeNull();
+  });
+
+  it('switches the settings page between Providers and data storage', async () => {
+    fetchMock = createWorkspaceFetchMock();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: '设置' }));
+    const settings = screen.getByRole('region', { name: '设置' });
+    expect(screen.getByRole('button', { name: '模型服务' }).getAttribute('aria-current')).toBe(
+      'page',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '数据存储' }));
+
+    expect(await within(settings).findByText('/data/weave/weave.sqlite')).toBeTruthy();
+    expect(within(settings).getByRole('heading', { name: '数据存储' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '数据存储' }).getAttribute('aria-current')).toBe(
+      'page',
+    );
+    expect(
+      screen.getByRole('button', { name: '模型服务' }).getAttribute('aria-current'),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '模型服务' }));
+    expect(within(settings).getByRole('heading', { name: '模型服务' })).toBeTruthy();
   });
 
   it('shows configured Providers in the settings view without exposing API keys', async () => {
