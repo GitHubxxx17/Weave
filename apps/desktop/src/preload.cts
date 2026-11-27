@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 const serverUrlArgumentPrefix = '--weave-server-url=';
 const windowChromeArgumentPrefix = '--weave-window-chrome=';
 const pickDirectoryChannel = 'weave:pick-directory';
+const openDataDirectoryChannel = 'weave:open-data-directory';
 const terminalChannels = {
   create: 'weave:terminal:create',
   input: 'weave:terminal:input',
@@ -41,6 +42,9 @@ contextBridge.exposeInMainWorld('weaveDesktop', {
     purpose === undefined
       ? ipcRenderer.invoke(pickDirectoryChannel)
       : ipcRenderer.invoke(pickDirectoryChannel, purpose),
+  /** Opens the configured Weave data directory in the system file manager; takes no path. */
+  openDataDirectory: (): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(openDataDirectoryChannel),
   /** User-driven terminal controlled from the Studio renderer. */
   terminal: {
     create: (options: {

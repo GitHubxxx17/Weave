@@ -506,9 +506,132 @@ body:has(.panel-resizer-active) .studio-shell {
   height: 15px;
 }
 
+.settings-sidebar-search input {
+  min-width: 0;
+  flex: 1;
+  padding: 0;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font: inherit;
+}
+
+.settings-sidebar-search input::placeholder {
+  color: var(--subtle);
+}
+
+.settings-sidebar-search:focus-within {
+  border-color: var(--accent);
+}
+
 .settings-sidebar-nav {
   display: grid;
   gap: 3px;
+}
+
+.settings-sidebar-group {
+  display: grid;
+  gap: 3px;
+}
+
+.settings-sidebar-empty {
+  margin: 8px;
+  color: var(--subtle);
+  font-size: 0.68rem;
+}
+
+.storage-settings-view {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.storage-settings-view .product-view-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.storage-settings-view .secondary-button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
+.storage-settings-status {
+  margin: 0;
+  padding: 12px 14px;
+  color: var(--ink-soft);
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 0.72rem;
+}
+
+.storage-settings-status-error {
+  color: var(--danger);
+}
+
+.storage-settings-root,
+.storage-settings-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 15px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.storage-settings-root-copy,
+.storage-settings-item-copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.storage-settings-root-copy strong,
+.storage-settings-item-copy strong {
+  color: var(--ink);
+  font-size: 0.78rem;
+}
+
+.storage-settings-item-copy span {
+  color: var(--muted);
+  font-size: 0.66rem;
+}
+
+.storage-settings-path {
+  color: var(--ink-soft);
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.66rem;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.storage-settings-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.storage-settings-size {
+  flex: none;
+  color: var(--ink);
+  font-size: 0.74rem;
+  font-weight: 680;
+  font-variant-numeric: tabular-nums;
+}
+
+.storage-settings-size-muted {
+  color: var(--muted);
+  font-weight: 500;
 }
 
 .settings-sidebar-label {

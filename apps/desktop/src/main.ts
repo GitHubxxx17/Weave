@@ -6,6 +6,7 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  shell,
   type BrowserWindowConstructorOptions,
   type IpcMainInvokeEvent,
   type OpenDialogOptions,
@@ -157,7 +158,47 @@ export async function handlePickDirectory(
   return { path: folderPath, name: isPluginImport ? folderName || folderPath : folderName };
 }
 
-function registerDesktopIpc(studioOrigin: string): void {
+/** IPC channel used by the Preload `openDataDirectory()` bridge. */
+export const openDataDirectoryChannel = 'weave:open-data-directory';
+
+/** Result of `openDataDirectory()`; `error` is a plain message from the OS. */
+export interface OpenDataDirectoryResult {
+  readonly ok: boolean;
+  readonly error?: string;
+}
+
+/**
+ * Handles `openDataDirectory()` from the Studio Renderer.
+ *
+ * Opens the configured data directory in the system file manager. The Renderer
+ * supplies no path (any argument is refused), so it cannot open arbitrary locations.
+ */
+export async function handleOpenDataDirectory(
+  event: IpcMainInvokeEvent,
+  studioOrigin: string,
+  dataDirectory: string,
+  ...extraArgs: unknown[]
+): Promise<OpenDataDirectoryResult> {
+  if (!isTrustedSender(event, studioOrigin)) {
+    return { ok: false, error: '不受信任的请求来源' };
+  }
+  if (extraArgs.length > 0) {
+    return { ok: false, error: '该操作不接受参数' };
+  }
+  try {
+    // `shell.openPath` resolves to an empty string on success, otherwise an error message.
+    const message = await shell.openPath(dataDirectory);
+    return message === '' ? { ok: true } : { ok: false, error: message };
+  } catch (error: unknown) {
+    return { ok: false, error: getErrorMessage(error) };
+  }
+}
+
+function registerDesktopIpc(studioOrigin: string, dataDirectory: string): void {
+  ipcMain.removeHandler(openDataDirectoryChannel);
+  ipcMain.handle(openDataDirectoryChannel, (event, ...args: unknown[]) =>
+    handleOpenDataDirectory(event, studioOrigin, dataDirectory, ...args),
+  );
   ipcMain.removeHandler(pickDirectoryChannel);
   ipcMain.handle(pickDirectoryChannel, (event, ...pickerArgs: unknown[]) =>
     handlePickDirectory(event, studioOrigin, ...pickerArgs),
@@ -398,7 +439,7 @@ export async function startDesktopApplication(): Promise<void> {
     );
     const serverUrl = `http://127.0.0.1:${desktopServer.port}`;
     const target = resolveStudioTarget(config, serverUrl, desktopServer.accessToken);
-    registerDesktopIpc(target.origin);
+    registerDesktopIpc(target.origin, config.userDataDirectory);
     const window = createMainWindow(config, serverUrl, getWindowChrome(), {
       target,
       ...(missingStudio === undefined ? {} : { startupError: new Error(missingStudio) }),

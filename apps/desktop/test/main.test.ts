@@ -44,6 +44,7 @@ const mocks = vi.hoisted(() => {
       handle: vi.fn(),
       removeHandler: vi.fn(),
     },
+    shell: { openPath: vi.fn() },
     FakeBrowserWindow,
     startServer: vi.fn(),
   };
@@ -55,6 +56,7 @@ vi.mock('electron', () => ({
   dialog: mocks.dialog,
   ipcMain: mocks.ipcMain,
   safeStorage: mocks.safeStorage,
+  shell: mocks.shell,
 }));
 
 vi.mock('@weave/server/main', () => ({
@@ -66,6 +68,7 @@ const {
   createMainWindow,
   describeMissingStudio,
   getWindowChrome,
+  handleOpenDataDirectory,
   handlePickDirectory,
   registerSingleInstance,
   renderStartupError,
@@ -492,6 +495,93 @@ describe('desktop folder picker IPC', () => {
       handlePickDirectory(invokeEvent(trustedFrame), config.studioOrigin, ...args),
     ).resolves.toBeNull();
     expect(mocks.dialog.showOpenDialog).not.toHaveBeenCalled();
+  });
+});
+
+describe('desktop open data directory IPC', () => {
+  const trustedFrame = { url: 'http://127.0.0.1:5173/', origin: 'http://127.0.0.1:5173' };
+  const dataDirectory = '/tmp/weave-user-data';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function invokeEvent(senderFrame: { url: string; origin?: string } | null) {
+    return {
+      senderFrame,
+      sender: { getURL: () => senderFrame?.url ?? '', mainFrame: senderFrame },
+    } as never;
+  }
+
+  it('opens only the configured data directory for a trusted sender', async () => {
+    mocks.shell.openPath.mockResolvedValue('');
+
+    await expect(
+      handleOpenDataDirectory(invokeEvent(trustedFrame), config.studioOrigin, dataDirectory),
+    ).resolves.toEqual({ ok: true });
+    expect(mocks.shell.openPath).toHaveBeenCalledExactlyOnceWith(dataDirectory);
+  });
+
+  it('refuses a renderer-supplied path', async () => {
+    const result = await handleOpenDataDirectory(
+      invokeEvent(trustedFrame),
+      config.studioOrigin,
+      dataDirectory,
+      '/etc',
+    );
+    expect(result.ok).toBe(false);
+    expect(mocks.shell.openPath).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { frame: { ...trustedFrame, url: 'https://evil.example/', origin: 'https://evil.example' } },
+    { frame: { ...trustedFrame, origin: 'null' } },
+    { frame: { url: trustedFrame.url } },
+    { frame: null },
+  ])('rejects an untrusted sender without opening anything', async ({ frame }) => {
+    const result = await handleOpenDataDirectory(
+      invokeEvent(frame),
+      config.studioOrigin,
+      dataDirectory,
+    );
+    expect(result.ok).toBe(false);
+    expect(mocks.shell.openPath).not.toHaveBeenCalled();
+  });
+
+  it('returns the OS error message when opening fails', async () => {
+    mocks.shell.openPath.mockResolvedValue('Failed to open path');
+    await expect(
+      handleOpenDataDirectory(invokeEvent(trustedFrame), config.studioOrigin, dataDirectory),
+    ).resolves.toEqual({ ok: false, error: 'Failed to open path' });
+  });
+
+  it('returns an error when openPath throws', async () => {
+    mocks.shell.openPath.mockRejectedValue(new Error('boom'));
+    await expect(
+      handleOpenDataDirectory(invokeEvent(trustedFrame), config.studioOrigin, dataDirectory),
+    ).resolves.toEqual({ ok: false, error: 'boom' });
+  });
+
+  it('exposes a preload bridge that sends no arguments', async () => {
+    const contextBridge = { exposeInMainWorld: vi.fn<(name: string, bridge: unknown) => void>() };
+    const ipcRenderer = {
+      invoke: vi.fn<(...args: string[]) => Promise<unknown>>().mockResolvedValue({ ok: true }),
+    };
+    const source = readFileSync(new URL('../src/preload.cts', import.meta.url), 'utf8');
+    const { outputText } = ts.transpileModule(source, {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+      fileName: 'preload.cts',
+    });
+    runInNewContext(outputText, {
+      exports: {},
+      require: () => ({ contextBridge, ipcRenderer }),
+      process: { argv: ['--weave-server-url=http%3A%2F%2F127.0.0.1%3A46321'] },
+    });
+    const bridge = contextBridge.exposeInMainWorld.mock.calls[0]?.[1] as {
+      openDataDirectory: (...args: unknown[]) => Promise<unknown>;
+    };
+    await bridge.openDataDirectory('/etc');
+    expect(ipcRenderer.invoke.mock.calls).toEqual([['weave:open-data-directory']]);
   });
 });
 

@@ -34,6 +34,7 @@ import type { WeavePlugin } from '@weave/plugin';
 import { createSqliteProjectStore, type ProjectStore } from '@weave/workspace';
 import { z } from 'zod';
 import { resolveSkillsDirectory } from './skill-path.js';
+import { createStorageConfig } from './storage-api.js';
 import { createSkillCatalogService } from './skill-catalog.js';
 import { createApp, type AppOptions } from './app.js';
 import { createAgentTaskWorkspaceBindings } from './agent-task-workspace.js';
@@ -515,6 +516,11 @@ export async function startServer(
       agentTaskObserver,
       projectStore: projects,
       projectFolderAuthority,
+      storage: await createStorageConfig({
+        databaseFile,
+        pluginsDirectory,
+        skillsDirectory: resolveSkillsDirectory({ ...options, databaseFile }),
+      }),
       sessionService,
       memoryService: memory.service,
       retrievalService: retrieval.service,
