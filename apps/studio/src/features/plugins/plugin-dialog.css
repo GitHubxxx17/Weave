@@ -5,7 +5,7 @@
   display: grid;
   place-items: center;
   padding: 16px;
-  background: rgb(28 32 43 / 34%);
+  background: var(--overlay-backdrop);
 }
 
 .plugin-dialog {
@@ -71,7 +71,7 @@
 .plugin-dialog-actions button:last-child {
   background: var(--accent);
   border-color: var(--accent);
-  color: white;
+  color: var(--text-on-accent);
 }
 .plugin-dialog-actions button:disabled {
   cursor: not-allowed;

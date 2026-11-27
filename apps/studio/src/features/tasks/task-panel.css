@@ -3,8 +3,8 @@
   flex-direction: column;
   gap: 14px;
   padding: 18px;
-  border-top: 1px solid var(--border-subtle, #e5e7eb);
-  background: var(--surface, #fff);
+  border-top: 1px solid var(--task-border);
+  background: var(--surface);
 }
 .task-disclosure {
   border-bottom: 1px solid var(--line);
@@ -49,7 +49,7 @@
   grid-template-columns: 20px 1fr auto;
   gap: 10px;
   padding: 11px;
-  border: 1px solid var(--border-subtle, #e5e7eb);
+  border: 1px solid var(--task-border);
   border-radius: 7px;
 }
 .task-item + .task-item::before {
@@ -61,7 +61,7 @@
   content: '';
 }
 .task-item-marker {
-  color: var(--accent, #2563eb);
+  color: var(--accent);
   padding-top: 2px;
 }
 .task-item-marker svg {
@@ -97,7 +97,7 @@
 }
 .task-item-status {
   font-size: 11px;
-  color: var(--text-muted, #6b7280);
+  color: var(--task-text-muted);
 }
 .task-item-meta {
   display: flex;
@@ -105,17 +105,17 @@
   gap: 8px;
   margin-top: 4px;
   font-size: 11px;
-  color: var(--text-muted, #6b7280);
+  color: var(--task-text-muted);
 }
 .task-item-meta strong {
-  color: #b45309;
+  color: var(--task-warning-text);
   font-weight: 600;
 }
 .task-item-preview {
   margin: 7px 0 0;
   font-size: 12px;
   line-height: 1.45;
-  color: var(--text-secondary, #4b5563);
+  color: var(--task-text-secondary);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -125,11 +125,11 @@
   gap: 5px;
   margin: 7px 0 0;
   font-size: 11px;
-  color: #b45309;
+  color: var(--task-warning-text);
 }
 .task-item-warning {
   font-weight: 600;
-  color: var(--danger, #b91c1c);
+  color: var(--danger);
 }
 .task-item-note svg {
   width: 14px;
@@ -138,7 +138,7 @@
   margin-top: 7px;
   border: 0;
   background: none;
-  color: var(--accent, #2563eb);
+  color: var(--accent);
   padding: 0;
   font-size: 12px;
   cursor: pointer;
@@ -147,12 +147,12 @@
   align-self: start;
   border: 0;
   background: none;
-  color: var(--text-muted, #6b7280);
+  color: var(--task-text-muted);
   padding: 3px;
   cursor: pointer;
 }
 .task-stop-button:hover {
-  color: #dc2626;
+  color: var(--task-stop-hover-text);
 }
 .task-stop-button:disabled {
   opacity: 0.55;
@@ -171,12 +171,12 @@
 }
 .task-empty {
   margin: 0;
-  color: var(--text-muted, #6b7280);
+  color: var(--task-text-muted);
   font-size: 12px;
 }
 .task-panel-error {
   margin: 0;
-  color: #b91c1c;
+  color: var(--task-error-text);
   font-size: 12px;
 }
 .task-stop-all,
@@ -185,8 +185,8 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  border: 1px solid var(--border-subtle, #e5e7eb);
-  background: var(--surface-muted, #f9fafb);
+  border: 1px solid var(--task-border);
+  background: var(--surface-muted);
   border-radius: 6px;
   padding: 8px 10px;
   font-size: 12px;
@@ -199,7 +199,7 @@
   display: flex;
   flex-direction: column;
   gap: 7px;
-  border-top: 1px solid var(--border-subtle, #e5e7eb);
+  border-top: 1px solid var(--task-border);
   padding-top: 14px;
 }
 .task-delegate label {
@@ -208,7 +208,7 @@
 }
 .task-delegate textarea {
   resize: vertical;
-  border: 1px solid var(--border-subtle, #d1d5db);
+  border: 1px solid var(--task-border-strong);
   border-radius: 6px;
   padding: 8px;
   font: inherit;
@@ -221,7 +221,7 @@
   gap: 8px;
 }
 .task-delegate-row select {
-  border: 1px solid var(--border-subtle, #d1d5db);
+  border: 1px solid var(--task-border-strong);
   border-radius: 5px;
   padding: 6px;
   font: inherit;
@@ -231,8 +231,8 @@
   margin-left: auto;
   border: 0;
   border-radius: 6px;
-  background: var(--accent, #2563eb);
-  color: #fff;
+  background: var(--accent);
+  color: var(--text-on-accent);
   padding: 7px 10px;
   font-size: 12px;
   cursor: pointer;
@@ -243,7 +243,7 @@
 }
 .task-delegate p {
   margin: 0;
-  color: var(--text-muted, #6b7280);
+  color: var(--task-text-muted);
   font-size: 11px;
   line-height: 1.4;
 }
