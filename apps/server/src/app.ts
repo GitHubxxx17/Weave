@@ -30,6 +30,7 @@ import { registerFileUndoRoutes } from './file-undo-api.js';
 import { registerFileRoutes, type FileAppOptions } from './file-api.js';
 import { registerPluginRoutes, type PluginAppOptions } from './plugin-api.js';
 import { registerMcpRoutes, type McpAppOptions } from './mcp-api.js';
+import { registerStorageRoutes, type StorageAppOptions } from './storage-api.js';
 import {
   registerPluginMarketplaceRoutes,
   type PluginMarketplaceAppOptions,
@@ -64,6 +65,7 @@ export interface AppOptions
     ProviderAppOptions,
     SkillAppOptions,
     PanelAppOptions,
+    StorageAppOptions,
     MemoryAppOptions {
   readonly retrievalService?: RetrievalRouteOptions['service'];
   readonly retrievalEmbedding?: RetrievalRouteOptions['embedding'];
@@ -158,6 +160,7 @@ export function createApp(runtime: Runtime, options?: AppOptions): Hono {
   registerAgentTaskRoutes(app, options ?? {});
   registerSkillRoutes(app, options ?? {});
   registerProviderRoutes(app, options ?? {});
+  registerStorageRoutes(app, options ?? {});
   registerPluginRoutes(app, options ?? {});
   registerPanelRoutes(app, options ?? {});
   registerPluginMarketplaceRoutes(app, options ?? {});

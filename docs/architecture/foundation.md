@@ -544,6 +544,15 @@ Renderer crash kills the window's ptys through `disposeSessions()`; the Desktop
 app also holds a single-instance lock. On Linux, `safeStorage` reporting the
 `basic_text` backend is treated as unavailable for Provider API Keys.
 
+The settings page lists where this data lives: `GET /settings/storage` returns
+the Server's real storage locations (main database, memory and retrieval
+sidecars, marketplace sources, plugin and Skill directories) with existence and
+size. It is read-only and answers only loopback peers (`403 storage-local-only`
+otherwise), because the response contains absolute local paths. The Desktop
+Preload adds `openDataDirectory()` (`weave:open-data-directory`), which opens
+only the configured `userDataDirectory` and accepts no path from the Renderer.
+See `docs/superpowers/specs/2026-11-27-studio-settings-design.md`.
+
 The old `apps/server/.weave/` directory is not automatically deleted or
 migrated. It is a legacy local runtime artifact; migration requires a separate
 backup, confirmation, copy, and rollback flow.

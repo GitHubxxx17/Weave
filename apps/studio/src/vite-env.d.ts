@@ -27,6 +27,8 @@ interface WeaveDesktopBridge {
   readonly pickDirectory?: (
     purpose?: 'project' | 'plugin-import',
   ) => Promise<{ readonly path: string; readonly name: string } | null>;
+  /** Opens the Weave data directory in the system file manager; absent in browser mode. */
+  readonly openDataDirectory?: () => Promise<{ readonly ok: boolean; readonly error?: string }>;
   /** User-driven terminal; absent in browser mode and older shells. */
   readonly terminal?: WeaveTerminalBridge;
 }
