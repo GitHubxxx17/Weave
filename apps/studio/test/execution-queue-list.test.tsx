@@ -55,3 +55,29 @@ it('exposes exact queue rows, count and independent copy/move/cancel actions', (
   expect(copy).toHaveBeenCalledWith('b');
   expect(screen.getAllByText(/1 张图片.*2 个技能/)).toHaveLength(2);
 });
+it('renders nothing for an empty queue without an error', () => {
+  const { container } = render(
+    <ExecutionQueueList
+      state={{ ...state, queued: [] }}
+      pending={false}
+      onCancel={vi.fn()}
+      onMove={vi.fn()}
+      onCopy={vi.fn()}
+    />,
+  );
+  expect(container.innerHTML).toBe('');
+  expect(screen.queryByRole('region', { name: '待执行消息' })).toBeNull();
+});
+it('keeps an empty queue visible while it reports an error', () => {
+  render(
+    <ExecutionQueueList
+      state={{ ...state, queued: [], error: { code: 'queue-full', message: '队列已满' } }}
+      pending={false}
+      onCancel={vi.fn()}
+      onMove={vi.fn()}
+      onCopy={vi.fn()}
+    />,
+  );
+  expect(screen.getByText('待执行 0/10')).toBeTruthy();
+  expect(screen.getByRole('alert').textContent).toBe('队列已满');
+});

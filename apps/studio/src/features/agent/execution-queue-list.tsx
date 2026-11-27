@@ -1,7 +1,12 @@
 import type { ReactElement } from 'react';
 import type { AgentExecutionQueueSnapshot } from './agent-execution-types.js';
 
-/** Queue rows describe future prompts; only claimed executions join conversation history. */
+/**
+ * Queue rows describe future prompts; only claimed executions join conversation history.
+ *
+ * Renders nothing while the queue is empty and has no error, so an idle or
+ * single-run Session does not show a "0/10" strip above the Composer.
+ */
 export function ExecutionQueueList({
   state,
   pending,
@@ -14,7 +19,8 @@ export function ExecutionQueueList({
   readonly onCancel: (executionId: string) => void;
   readonly onMove: (executionId: string) => void;
   readonly onCopy: (executionId: string) => void;
-}): ReactElement {
+}): ReactElement | null {
+  if (state.queued.length === 0 && state.error === undefined) return null;
   return (
     <section className="execution-queue" aria-label="待执行消息">
       <div className="execution-queue-heading">
