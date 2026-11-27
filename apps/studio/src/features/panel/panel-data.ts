@@ -78,12 +78,22 @@ export function splitPath(path: string): { readonly name: string; readonly direc
     : { name: trimmed.slice(index + 1), directory: trimmed.slice(0, index) };
 }
 
+/** Built-in file tools listed in the Files panel; `edit_file` counts as a write. */
+const fileTools: Readonly<
+  Record<string, { readonly operation: FileEntry['operation']; readonly done: string }>
+> = {
+  read_file: { operation: '读取', done: '已读取' },
+  write_file: { operation: '写入', done: '已写入' },
+  edit_file: { operation: '写入', done: '已编辑' },
+};
+
 /** Latest read or write of each path in the Session, newest first. */
 export function collectFiles(messages: readonly OverviewMessage[]): FileEntry[] {
   const byPath = new Map<string, FileEntry>();
   for (const message of messages) {
     for (const tool of message.tools) {
-      if (tool.name !== 'read_file' && tool.name !== 'write_file') {
+      const kind = Object.hasOwn(fileTools, tool.name) ? fileTools[tool.name] : undefined;
+      if (kind === undefined) {
         continue;
       }
       const path = toolPath(tool);
@@ -93,9 +103,7 @@ export function collectFiles(messages: readonly OverviewMessage[]): FileEntry[] 
       const rejected = tool.result?.includes('tool-approval-rejected') === true;
       const state =
         tool.status === 'completed'
-          ? tool.name === 'read_file'
-            ? '已读取'
-            : '已写入'
+          ? kind.done
           : tool.status === 'failed'
             ? rejected
               ? '已拒绝'
@@ -104,7 +112,7 @@ export function collectFiles(messages: readonly OverviewMessage[]): FileEntry[] 
       byPath.delete(path);
       byPath.set(path, {
         path,
-        operation: tool.name === 'read_file' ? '读取' : '写入',
+        operation: kind.operation,
         state,
         ok: tool.status === 'completed',
         messageId: message.id,
