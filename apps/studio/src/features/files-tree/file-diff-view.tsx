@@ -4,6 +4,7 @@ import { generateDiffFile } from '@git-diff-view/file';
 import { getDiffViewHighlighter } from '@git-diff-view/shiki';
 import '@git-diff-view/react/styles/diff-view-pure.css';
 
+import { useResolvedTheme } from '../settings/use-resolved-theme.js';
 import { fetchFileDiff, type FileDiff } from './file-diff-api.js';
 import { languageForPath } from './highlight.js';
 
@@ -54,6 +55,8 @@ async function prepareDiff(diff: FileDiff, signal?: AbortSignal): Promise<Prepar
 }
 
 export function FileDiffView({ projectId, path }: FileDiffViewProps): ReactElement {
+  // The diff library styles itself from this prop, not from CSS variables.
+  const theme = useResolvedTheme();
   const requestEpoch = useRef(0);
   const ownerRef = useRef({ projectId, path, epoch: 0 });
   if (ownerRef.current.projectId !== projectId || ownerRef.current.path !== path)
@@ -131,7 +134,7 @@ export function FileDiffView({ projectId, path }: FileDiffViewProps): ReactEleme
           diffFile={prepared.diffFile}
           registerHighlighter={prepared.highlighter}
           diffViewMode={DiffModeEnum.Unified}
-          diffViewTheme="light"
+          diffViewTheme={theme}
           diffViewHighlight
           diffViewWrap
           diffViewFontSize={12}
@@ -153,6 +156,7 @@ export function CapturedFileDiffView({
   readonly newContent: string;
   readonly existedBefore: boolean;
 }): ReactElement {
+  const theme = useResolvedTheme();
   const [prepared, setPrepared] = useState<Prepared | null>(null);
   const [error, setError] = useState('');
   useEffect(() => {
@@ -184,7 +188,7 @@ export function CapturedFileDiffView({
         diffFile={prepared.diffFile}
         registerHighlighter={prepared.highlighter}
         diffViewMode={DiffModeEnum.Unified}
-        diffViewTheme="light"
+        diffViewTheme={theme}
         diffViewHighlight
         diffViewWrap
         diffViewFontSize={12}

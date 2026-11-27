@@ -15,8 +15,12 @@ vi.mock('../src/features/files-tree/file-diff-api.js', () => ({
 
 vi.mock('@git-diff-view/react', () => ({
   DiffModeEnum: { SplitGitHub: 1, SplitGitLab: 2, Split: 3, Unified: 4 },
-  DiffView: (props: { diffViewMode: number }) => (
-    <div data-testid="diff-view" data-mode={String(props.diffViewMode)} />
+  DiffView: (props: { diffViewMode: number; diffViewTheme: string }) => (
+    <div
+      data-testid="diff-view"
+      data-mode={String(props.diffViewMode)}
+      data-theme={props.diffViewTheme}
+    />
   ),
 }));
 
@@ -30,7 +34,7 @@ vi.mock('@git-diff-view/shiki', () => ({
   getDiffViewHighlighter: mocks.getDiffViewHighlighter,
 }));
 
-import { FileDiffView } from '../src/features/files-tree/file-diff-view.js';
+import { CapturedFileDiffView, FileDiffView } from '../src/features/files-tree/file-diff-view.js';
 
 /** A DiffFile stub whose build steps are inert no-ops. */
 function fakeDiffFile() {
@@ -46,6 +50,7 @@ function fakeDiffFile() {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  delete document.documentElement.dataset.theme;
 });
 
 describe('FileDiffView', () => {
@@ -124,6 +129,42 @@ describe('FileDiffView', () => {
     expect(await screen.findByText('该文件无未提交改动。')).toBeTruthy();
     expect(screen.queryByTestId('diff-view')).toBeNull();
     expect(mocks.generateDiffFile).not.toHaveBeenCalled();
+  });
+
+  it('follows the resolved page theme and switches when it changes', async () => {
+    document.documentElement.dataset.theme = 'dark';
+    mocks.fetchFileDiff.mockResolvedValue({
+      path: 'src/b.ts',
+      oldContent: 'a\n',
+      newContent: 'b\n',
+      changed: true,
+      tracked: true,
+    });
+    mocks.generateDiffFile.mockReturnValue(fakeDiffFile());
+    mocks.getDiffViewHighlighter.mockResolvedValue({ name: 'shiki', type: 'class' });
+
+    render(<FileDiffView projectId="p1" path="src/b.ts" />);
+
+    const diffView = await screen.findByTestId('diff-view');
+    expect(diffView.getAttribute('data-theme')).toBe('dark');
+    // MutationObserver callbacks run as microtasks.
+    await act(async () => {
+      document.documentElement.dataset.theme = 'light';
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId('diff-view').getAttribute('data-theme')).toBe('light');
+  });
+
+  it('renders captured turn diffs in the resolved page theme', async () => {
+    document.documentElement.dataset.theme = 'dark';
+    mocks.generateDiffFile.mockReturnValue(fakeDiffFile());
+    mocks.getDiffViewHighlighter.mockResolvedValue({ name: 'shiki', type: 'class' });
+
+    render(
+      <CapturedFileDiffView path="README.md" oldContent="a\n" newContent="b\n" existedBefore />,
+    );
+
+    expect((await screen.findByTestId('diff-view')).getAttribute('data-theme')).toBe('dark');
   });
 
   it('surfaces a fetch error', async () => {
