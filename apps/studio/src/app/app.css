@@ -3351,6 +3351,23 @@ body:has(.panel-resizer-active) {
   color: var(--accent);
 }
 
+/* Composer "+" menu: one entry point for images, files, contexts and skills. */
+.composer-add-menu {
+  min-width: 236px;
+}
+
+.composer-add-menu [role='group'] {
+  display: grid;
+  gap: 2px;
+}
+
+.popup-menu .menu-hint {
+  margin-left: auto;
+  padding-left: 12px;
+  color: var(--subtle);
+  white-space: nowrap;
+}
+
 .dialog-backdrop {
   position: fixed;
   z-index: 60;

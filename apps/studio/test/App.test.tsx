@@ -543,6 +543,12 @@ async function renderApp(): Promise<void> {
   await waitFor(() => expect(screen.getByRole('region', { name: '智能对话' })).toBeTruthy());
 }
 
+/** Opens the composer "+" menu and chooses one of its entries. */
+function chooseComposerAdd(item: '选择技能' | '添加项目文件' | '添加图片'): void {
+  fireEvent.click(screen.getByRole('button', { name: '添加内容' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: item }));
+}
+
 function openDisclosure(details: HTMLDetailsElement): void {
   details.open = true;
   fireEvent(details, new Event('toggle'));
@@ -4548,8 +4554,8 @@ describe('Studio Agent Chat', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: /信任/ }));
     expect(screen.getByText('信任')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: '添加上下文' }));
-    expect(screen.getByRole('menu', { name: '添加上下文' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '添加内容' }));
+    expect(screen.getByRole('menu', { name: '添加内容' })).toBeTruthy();
     // Without a readable availability answer Git changes stays disabled; the tree needs only a project.
     const git = (await screen.findByRole('menuitem', {
       name: /Git 变更/,
@@ -4860,7 +4866,7 @@ describe('Session Skills', () => {
       handlers.onEvent({ type: 'completed', turnId: 'skill-turn' });
     });
     await renderApp();
-    fireEvent.click(screen.getByRole('button', { name: '选择技能' }));
+    chooseComposerAdd('选择技能');
     const picker = await screen.findByRole('dialog', { name: '技能' });
     await within(picker).findByText(planningSkill.description);
     fireEvent.click(within(picker).getByRole('button', { name: '预览 weave-planning' }));
@@ -4891,7 +4897,7 @@ describe('Session Skills', () => {
       handlers.onEvent({ type: 'completed', turnId: `snapshot-${n}` });
     });
     await renderApp();
-    fireEvent.click(screen.getByRole('button', { name: '选择技能' }));
+    chooseComposerAdd('选择技能');
     const picker = await screen.findByRole('dialog', { name: '技能' });
     fireEvent.click(await within(picker).findByRole('checkbox', { name: /weave-planning/ }));
     fireEvent.click(within(picker).getByRole('button', { name: '关闭技能' }));
@@ -4906,7 +4912,7 @@ describe('Session Skills', () => {
     fireEvent.change(screen.getByRole('slider'), { target: { value: '2' } });
     fireEvent.click(screen.getByRole('button', { name: '模型与强度' }));
     fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '下一轮草稿' } });
-    fireEvent.click(screen.getByRole('button', { name: '选择技能' }));
+    chooseComposerAdd('选择技能');
     const next = await screen.findByRole('dialog', { name: '技能' });
     fireEvent.click(await within(next).findByRole('checkbox', { name: /review-code/ }));
     fireEvent.click(within(next).getByRole('button', { name: '关闭技能' }));
@@ -5024,7 +5030,7 @@ it('preserves unaccepted Skill picks when the Server rejects the submission', as
   );
   streamAgentRunMock.mockRejectedValue(new AgentStreamError('skill-source-changed', '技能已变化'));
   await renderApp();
-  fireEvent.click(screen.getByRole('button', { name: '选择技能' }));
+  chooseComposerAdd('选择技能');
   const picker = await screen.findByRole('dialog', { name: '技能' });
   fireEvent.click(await within(picker).findByRole('checkbox', { name: /weave-planning/ }));
   fireEvent.click(within(picker).getByRole('button', { name: '关闭技能' }));
@@ -5049,13 +5055,13 @@ it('leaves next-turn Skill selections intact when delayed transport acceptance b
       }),
   );
   await renderApp();
-  fireEvent.click(screen.getByRole('button', { name: '选择技能' }));
+  chooseComposerAdd('选择技能');
   let picker = await screen.findByRole('dialog', { name: '技能' });
   fireEvent.click(await within(picker).findByRole('checkbox', { name: /weave-planning/ }));
   fireEvent.click(within(picker).getByRole('button', { name: '关闭技能' }));
   fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '第一轮快照' } });
   fireEvent.click(screen.getByRole('button', { name: '发送' }));
-  fireEvent.click(screen.getByRole('button', { name: '选择技能' }));
+  chooseComposerAdd('选择技能');
   picker = await screen.findByRole('dialog', { name: '技能' });
   fireEvent.click(await within(picker).findByRole('checkbox', { name: /review-code/ }));
   fireEvent.click(within(picker).getByRole('button', { name: '关闭技能' }));
@@ -5123,7 +5129,7 @@ it('keeps requested and failed Skill facts on the exact user card after a pre-mo
     });
   });
   await renderApp();
-  fireEvent.click(screen.getByRole('button', { name: '选择技能' }));
+  chooseComposerAdd('选择技能');
   const picker = await screen.findByRole('dialog', { name: '技能' });
   fireEvent.click(await within(picker).findByRole('checkbox', { name: /weave-planning/ }));
   fireEvent.click(within(picker).getByRole('button', { name: '关闭技能' }));
@@ -5304,7 +5310,7 @@ describe('declarative panel App integration', () => {
       target: { files: [new File(['hello'], 'panel.png', { type: 'image/png' })] },
     });
     await screen.findByAltText('panel.png');
-    fireEvent.click(screen.getByRole('button', { name: '选择技能' }));
+    chooseComposerAdd('选择技能');
     const picker = await screen.findByRole('dialog', { name: '技能' });
     fireEvent.click(await within(picker).findByRole('checkbox', { name: /weave-planning/ }));
     fireEvent.click(within(picker).getByRole('button', { name: '关闭技能' }));
@@ -5624,7 +5630,7 @@ describe('explicit project file context', () => {
       new AgentStreamError('execution-file-capture-timeout', '文件读取超时，请重试'),
     );
     await renderApp();
-    fireEvent.click(screen.getByRole('button', { name: '添加项目文件' }));
+    chooseComposerAdd('添加项目文件');
     fireEvent.click(await screen.findByRole('option', { name: 'a.ts' }));
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     await screen.findByText('文件读取超时，请重试。草稿已保留。');
@@ -5646,20 +5652,20 @@ describe('explicit project file context', () => {
     availabilityRoute({ available: true });
     streamAgentRunMock.mockResolvedValue(undefined);
     await renderApp();
-    fireEvent.click(screen.getByRole('button', { name: '添加上下文' }));
+    fireEvent.click(screen.getByRole('button', { name: '添加内容' }));
     const git = (await screen.findByRole('menuitem', { name: /Git 变更/ })) as HTMLButtonElement;
     await waitFor(() => expect(git.disabled).toBe(false));
     fireEvent.click(git);
-    fireEvent.click(screen.getByRole('button', { name: '添加上下文' }));
+    fireEvent.click(screen.getByRole('button', { name: '添加内容' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: /项目目录/ }));
     expect(screen.getByRole('button', { name: '移除Git 变更' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '移除项目目录' })).toBeTruthy();
     // A chosen kind cannot be added twice.
-    fireEvent.click(screen.getByRole('button', { name: '添加上下文' }));
+    fireEvent.click(screen.getByRole('button', { name: '添加内容' }));
     expect((screen.getByRole('menuitem', { name: /项目目录/ }) as HTMLButtonElement).disabled).toBe(
       true,
     );
-    fireEvent.click(screen.getByRole('button', { name: '添加上下文' }));
+    fireEvent.click(screen.getByRole('button', { name: '添加内容' }));
     fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: 'review' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     await waitFor(() => expect(streamAgentRunMock).toHaveBeenCalledOnce());
@@ -5674,7 +5680,7 @@ describe('explicit project file context', () => {
     availabilityRoute({ available: true });
     streamAgentRunMock.mockResolvedValue(undefined);
     await renderApp();
-    fireEvent.click(screen.getByRole('button', { name: '添加上下文' }));
+    fireEvent.click(screen.getByRole('button', { name: '添加内容' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: /项目目录/ }));
     fireEvent.click(screen.getByRole('button', { name: '移除项目目录' }));
     fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: 'plain' } });
@@ -5685,7 +5691,7 @@ describe('explicit project file context', () => {
   it('disables Git changes with a reason when the project has no commits', async () => {
     availabilityRoute({ available: false, reason: 'git-unavailable' });
     await renderApp();
-    fireEvent.click(screen.getByRole('button', { name: '添加上下文' }));
+    fireEvent.click(screen.getByRole('button', { name: '添加内容' }));
     const git = (await screen.findByRole('menuitem', { name: /Git 变更/ })) as HTMLButtonElement;
     await waitFor(() => expect(git.textContent).toContain('需要有提交的 Git 仓库'));
     expect(git.disabled).toBe(true);
@@ -5697,7 +5703,7 @@ describe('explicit project file context', () => {
       new AgentStreamError('execution-context-git-unavailable', 'unavailable'),
     );
     await renderApp();
-    fireEvent.click(screen.getByRole('button', { name: '添加上下文' }));
+    fireEvent.click(screen.getByRole('button', { name: '添加内容' }));
     const git = (await screen.findByRole('menuitem', { name: /Git 变更/ })) as HTMLButtonElement;
     await waitFor(() => expect(git.disabled).toBe(false));
     fireEvent.click(git);
@@ -5711,7 +5717,7 @@ describe('explicit project file context', () => {
     fileRoutes();
     await renderApp();
     const input = screen.getByLabelText('发送消息');
-    fireEvent.click(screen.getByRole('button', { name: '添加项目文件' }));
+    chooseComposerAdd('添加项目文件');
     fireEvent.select(input);
     await screen.findByRole('option', { name: 'a.ts' });
     fireEvent.compositionStart(input);
@@ -5740,15 +5746,15 @@ describe('explicit project file context', () => {
     });
     fileRoutes();
     await renderApp();
-    fireEvent.click(screen.getByRole('button', { name: '选择技能' }));
+    chooseComposerAdd('选择技能');
     await screen.findByRole('dialog', { name: '技能' });
     fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: '/' } });
     await screen.findByRole('listbox', { name: '斜杠命令' });
     expect(screen.queryByRole('dialog', { name: '技能' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: '添加项目文件' }));
+    chooseComposerAdd('添加项目文件');
     await screen.findByRole('listbox', { name: '项目文件候选' });
     expect(screen.queryByRole('listbox', { name: '斜杠命令' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: '选择技能' }));
+    chooseComposerAdd('选择技能');
     await screen.findByRole('dialog', { name: '技能' });
     expect(screen.queryByRole('listbox', { name: '项目文件候选' })).toBeNull();
   });
@@ -5813,7 +5819,7 @@ describe('explicit project file context', () => {
     fireEvent.click(screen.getByRole('tab', { name: '文件' }));
     fireEvent.click(await screen.findByRole('treeitem', { name: 'a.ts' }));
     await screen.findByRole('button', { name: '添加到消息 a.ts' });
-    fireEvent.click(screen.getByRole('button', { name: '添加上下文' }));
+    fireEvent.click(screen.getByRole('button', { name: '添加内容' }));
     fireEvent.click(screen.getByRole('menuitem', { name: '当前文件' }));
     expect(screen.getAllByRole('button', { name: '移除文件 a.ts' })).toHaveLength(1);
     fireEvent.change(screen.getByLabelText('发送消息'), { target: { value: 'see file' } });
@@ -5906,7 +5912,7 @@ describe('explicit project file context', () => {
         return base(input, init);
       });
       await renderApp();
-      fireEvent.click(screen.getByRole('button', { name: '添加项目文件' }));
+      chooseComposerAdd('添加项目文件');
       await screen.findByRole('option', { name: 'a.ts' });
       fireEvent.click(screen.getByRole('option', { name: 'a.ts' }));
       expect(screen.getByRole('button', { name: '移除文件 a.ts' })).toBeTruthy();

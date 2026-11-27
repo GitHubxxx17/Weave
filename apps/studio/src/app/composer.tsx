@@ -347,27 +347,13 @@ export function Composer({
           ) : null}
           <div className="composer-toolbar">
             <div className="composer-tools">
-              <button
-                className="composer-tool-button"
-                type="button"
-                aria-label="选择技能"
-                title={activeSessionId === '' ? '请先新建会话以选择技能' : '为本轮选择技能'}
-                disabled={activeSessionId === ''}
-                aria-expanded={sessionSkills.open}
-                onClick={() => {
-                  filePicker.close();
-                  commandPicker.close();
-                  if (sessionSkills.open) sessionSkills.close();
-                  else sessionSkills.show();
-                }}
-              >
-                <Sparkles aria-hidden="true" />
-              </button>
               <div className={`menu-anchor${openMenu === 'context' ? ' menu-anchor-open' : ''}`}>
                 <button
                   className="composer-tool-button"
                   type="button"
-                  aria-label="添加上下文"
+                  aria-label="添加内容"
+                  title="添加图片、项目文件、上下文或技能"
+                  aria-haspopup="menu"
                   aria-expanded={openMenu === 'context'}
                   onClick={() => toggleMenu('context')}
                 >
@@ -375,78 +361,146 @@ export function Composer({
                 </button>
                 {openMenu === 'context' ? (
                   <div
-                    className="popup-menu popup-menu-composer"
+                    className="popup-menu popup-menu-composer composer-add-menu"
                     role="menu"
-                    aria-label="添加上下文"
+                    aria-label="添加内容"
                   >
                     <button
                       type="button"
                       role="menuitem"
-                      disabled={
-                        viewerFilePath === null ||
-                        composerDraft.draft.files.length >= 8 ||
-                        composerDraft.draft.files.some((file) => file.path === viewerFilePath)
-                      }
-                      title={viewerFilePath ?? '先在文件面板打开文件'}
-                      onClick={addViewerFileContext}
+                      aria-label="添加图片"
+                      onClick={() => {
+                        setOpenMenu(null);
+                        imageInputRef.current?.click();
+                      }}
+                    >
+                      <span className="menu-icon">
+                        <ImagePlus aria-hidden="true" />
+                      </span>
+                      添加图片
+                      <small className="menu-hint" aria-hidden="true">
+                        也可粘贴
+                      </small>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      aria-label="添加项目文件"
+                      onClick={() => {
+                        setOpenMenu(null);
+                        commandPicker.close();
+                        sessionSkills.close();
+                        filePicker.openFromButton();
+                      }}
                     >
                       <span className="menu-icon">
                         <Files aria-hidden="true" />
                       </span>
-                      当前文件
-                      {viewerFilePath !== null &&
-                      composerDraft.draft.files.some((file) => file.path === viewerFilePath) ? (
-                        <Check className="menu-check" aria-hidden="true" />
-                      ) : null}
+                      添加项目文件
+                      <small className="menu-hint" aria-hidden="true">
+                        输入 @
+                      </small>
                     </button>
+                    <div className="menu-divider" role="separator" />
+                    <div role="group" aria-label="上下文">
+                      <p className="menu-section-label" aria-hidden="true">
+                        上下文
+                      </p>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={
+                          viewerFilePath === null ||
+                          composerDraft.draft.files.length >= 8 ||
+                          composerDraft.draft.files.some((file) => file.path === viewerFilePath)
+                        }
+                        title={viewerFilePath ?? '先在文件面板打开文件'}
+                        onClick={addViewerFileContext}
+                      >
+                        <span className="menu-icon">
+                          <Files aria-hidden="true" />
+                        </span>
+                        当前文件
+                        {viewerFilePath !== null &&
+                        composerDraft.draft.files.some((file) => file.path === viewerFilePath) ? (
+                          <Check className="menu-check" aria-hidden="true" />
+                        ) : null}
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={
+                          gitChangesAvailability?.projectId !== activeProjectId ||
+                          gitChangesAvailability.state !== 'available' ||
+                          composerDraft.draft.contexts.some(({ kind }) => kind === 'git-changes')
+                        }
+                        title={
+                          gitChangesAvailability?.projectId === activeProjectId &&
+                          gitChangesAvailability.state === 'unavailable'
+                            ? '项目不是 Git 仓库，或还没有任何提交'
+                            : gitChangesAvailability?.projectId === activeProjectId &&
+                                gitChangesAvailability.state === 'unknown'
+                              ? '无法检查 Git 状态'
+                              : undefined
+                        }
+                        onClick={() => addComposerContext('git-changes')}
+                      >
+                        <span className="menu-icon">
+                          <GitBranch aria-hidden="true" />
+                        </span>
+                        Git 变更
+                        {composerDraft.draft.contexts.some(({ kind }) => kind === 'git-changes') ? (
+                          <Check className="menu-check" aria-hidden="true" />
+                        ) : gitChangesAvailability?.projectId === activeProjectId &&
+                          gitChangesAvailability.state === 'unavailable' ? (
+                          <small>需要有提交的 Git 仓库</small>
+                        ) : gitChangesAvailability?.projectId === activeProjectId &&
+                          gitChangesAvailability.state === 'unknown' ? (
+                          <small>无法检查 Git 状态</small>
+                        ) : null}
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={
+                          activeProjectId === '' ||
+                          composerDraft.draft.contexts.some(({ kind }) => kind === 'project-tree')
+                        }
+                        onClick={() => addComposerContext('project-tree')}
+                      >
+                        <span className="menu-icon">
+                          <FolderOpen aria-hidden="true" />
+                        </span>
+                        项目目录
+                        {composerDraft.draft.contexts.some(
+                          ({ kind }) => kind === 'project-tree',
+                        ) ? (
+                          <Check className="menu-check" aria-hidden="true" />
+                        ) : null}
+                      </button>
+                    </div>
+                    <div className="menu-divider" role="separator" />
                     <button
                       type="button"
                       role="menuitem"
-                      disabled={
-                        gitChangesAvailability?.projectId !== activeProjectId ||
-                        gitChangesAvailability.state !== 'available' ||
-                        composerDraft.draft.contexts.some(({ kind }) => kind === 'git-changes')
-                      }
-                      title={
-                        gitChangesAvailability?.projectId === activeProjectId &&
-                        gitChangesAvailability.state === 'unavailable'
-                          ? '项目不是 Git 仓库，或还没有任何提交'
-                          : gitChangesAvailability?.projectId === activeProjectId &&
-                              gitChangesAvailability.state === 'unknown'
-                            ? '无法检查 Git 状态'
-                            : undefined
-                      }
-                      onClick={() => addComposerContext('git-changes')}
+                      aria-label="选择技能"
+                      disabled={activeSessionId === ''}
+                      title={activeSessionId === '' ? '请先新建会话以选择技能' : '为本轮选择技能'}
+                      onClick={() => {
+                        setOpenMenu(null);
+                        filePicker.close();
+                        commandPicker.close();
+                        sessionSkills.show();
+                      }}
                     >
                       <span className="menu-icon">
-                        <GitBranch aria-hidden="true" />
+                        <Sparkles aria-hidden="true" />
                       </span>
-                      Git 变更
-                      {composerDraft.draft.contexts.some(({ kind }) => kind === 'git-changes') ? (
-                        <Check className="menu-check" aria-hidden="true" />
-                      ) : gitChangesAvailability?.projectId === activeProjectId &&
-                        gitChangesAvailability.state === 'unavailable' ? (
-                        <small>需要有提交的 Git 仓库</small>
-                      ) : gitChangesAvailability?.projectId === activeProjectId &&
-                        gitChangesAvailability.state === 'unknown' ? (
-                        <small>无法检查 Git 状态</small>
-                      ) : null}
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      disabled={
-                        activeProjectId === '' ||
-                        composerDraft.draft.contexts.some(({ kind }) => kind === 'project-tree')
-                      }
-                      onClick={() => addComposerContext('project-tree')}
-                    >
-                      <span className="menu-icon">
-                        <FolderOpen aria-hidden="true" />
-                      </span>
-                      项目目录
-                      {composerDraft.draft.contexts.some(({ kind }) => kind === 'project-tree') ? (
-                        <Check className="menu-check" aria-hidden="true" />
+                      选择技能
+                      {activeSessionId === '' ? (
+                        <small className="menu-hint" aria-hidden="true">
+                          请先新建会话
+                        </small>
                       ) : null}
                     </button>
                   </div>
@@ -491,26 +545,6 @@ export function Composer({
                   </div>
                 ) : null}
               </div>
-              <button
-                className="composer-tool-button"
-                type="button"
-                aria-label="添加项目文件"
-                onClick={() => {
-                  commandPicker.close();
-                  sessionSkills.close();
-                  filePicker.openFromButton();
-                }}
-              >
-                <Files aria-hidden="true" />
-              </button>
-              <button
-                className="composer-tool-button"
-                type="button"
-                aria-label="添加图片"
-                onClick={() => imageInputRef.current?.click()}
-              >
-                <ImagePlus aria-hidden="true" />
-              </button>
               <input
                 className="sr-only"
                 ref={imageInputRef}

@@ -238,4 +238,80 @@ describe('Composer', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Provider 一' }));
     expect(props.chooseProvider).toHaveBeenCalledWith(props.providerSettings.providers[0]);
   });
+
+  it('keeps one add button and the permission mode as the only left-hand tools', () => {
+    const toggleMenu = vi.fn();
+    render(<Composer {...composerProps({ toggleMenu })} />);
+    fireEvent.click(screen.getByRole('button', { name: '添加内容' }));
+    expect(toggleMenu).toHaveBeenCalledWith('context');
+    for (const name of ['选择技能', '添加项目文件', '添加图片', '添加上下文'])
+      expect(screen.queryByRole('button', { name })).toBeNull();
+    expect(screen.getByRole('button', { name: /常规/ })).toBeTruthy();
+  });
+
+  it('routes every entry of the add menu', () => {
+    const setOpenMenu = vi.fn();
+    const filePicker = {
+      open: false,
+      buttonMode: false,
+      items: [],
+      close: vi.fn(),
+      openFromButton: vi.fn(),
+      updateSelection: vi.fn(),
+    };
+    const commandPicker = { open: false, items: [], activeIndex: 0, close: vi.fn() };
+    const sessionSkills = {
+      open: false,
+      draft: { selected: [], revision: 0 },
+      catalogState: { catalog: undefined, loading: false, error: undefined },
+      close: vi.fn(),
+      show: vi.fn(),
+    };
+    const addComposerContext = vi.fn();
+    render(
+      <Composer
+        {...composerProps({
+          openMenu: 'context',
+          setOpenMenu,
+          filePicker: filePicker as never,
+          commandPicker: commandPicker as never,
+          sessionSkills: sessionSkills as never,
+          addComposerContext,
+        })}
+      />,
+    );
+    const menu = screen.getByRole('menu', { name: '添加内容' });
+    expect(
+      screen
+        .getAllByRole('menuitem')
+        .map((item) => item.getAttribute('aria-label') ?? item.textContent),
+    ).toEqual(['添加图片', '添加项目文件', '当前文件', 'Git 变更', '项目目录', '选择技能']);
+    expect(menu.textContent).toContain('也可粘贴');
+    expect(menu.textContent).toContain('输入 @');
+
+    // The hidden file input is attached through the ref, so spy on the real element.
+    const imageClick = vi.spyOn(screen.getByLabelText('选择图片文件'), 'click');
+    fireEvent.click(screen.getByRole('menuitem', { name: '添加图片' }));
+    expect(imageClick).toHaveBeenCalledTimes(1);
+    expect(setOpenMenu).toHaveBeenLastCalledWith(null);
+
+    fireEvent.click(screen.getByRole('menuitem', { name: '添加项目文件' }));
+    expect(filePicker.openFromButton).toHaveBeenCalledTimes(1);
+    expect(commandPicker.close).toHaveBeenCalled();
+    expect(sessionSkills.close).toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('menuitem', { name: '项目目录' }));
+    expect(addComposerContext).toHaveBeenCalledWith('project-tree');
+
+    fireEvent.click(screen.getByRole('menuitem', { name: '选择技能' }));
+    expect(sessionSkills.show).toHaveBeenCalledTimes(1);
+    expect(filePicker.close).toHaveBeenCalled();
+  });
+
+  it('disables choosing skills until a session exists', () => {
+    render(<Composer {...composerProps({ openMenu: 'context', activeSessionId: '' })} />);
+    const skills = screen.getByRole('menuitem', { name: '选择技能' }) as HTMLButtonElement;
+    expect(skills.disabled).toBe(true);
+    expect(skills.textContent).toContain('请先新建会话');
+  });
 });
