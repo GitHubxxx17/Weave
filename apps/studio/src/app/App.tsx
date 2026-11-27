@@ -83,6 +83,7 @@ import { SessionRail } from './session-rail.js';
 import { TaskDisclosure } from './task-disclosure.js';
 import { SettingsSidebar } from './settings-sidebar.js';
 import type { SettingsCategoryId } from './settings-categories.js';
+import { PermissionSettingsView } from './permission-settings-view.js';
 import { StorageSettingsView } from './storage-settings-view.js';
 import { WorkspaceNav } from './workspace-nav.js';
 import { useMessageSubmission } from './use-message-submission.js';
@@ -1037,6 +1038,8 @@ function StudioApp(): ReactElement {
                 restoreSession={restoreSession}
                 setSessionToDelete={setSessionToDelete}
               />
+            ) : activeView === 'settings' && settingsCategory === 'permissions' ? (
+              <PermissionSettingsView />
             ) : activeView === 'settings' && settingsCategory === 'storage' ? (
               <StorageSettingsView />
             ) : activeView === 'settings' ? (
