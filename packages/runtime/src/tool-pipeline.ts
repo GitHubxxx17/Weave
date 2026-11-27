@@ -607,7 +607,10 @@ export function createToolPipeline(options: ToolPipelineOptions): ToolPipeline {
               request.permissionMode ?? 'ask',
               approval.operation,
               inputResult.data,
-            ))
+            ) ||
+            (request.permissionMode === 'trust' &&
+              approval.asksInTrust !== undefined &&
+              (await approval.asksInTrust(inputResult.data, { ...context }))))
         ) {
           const approvalBroker = options.approvalBroker;
           if (approvalBroker === undefined) {

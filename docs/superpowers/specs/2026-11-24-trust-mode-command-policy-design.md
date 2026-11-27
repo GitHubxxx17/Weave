@@ -12,7 +12,7 @@
 
 已知风险：模型的判断可能被它读到的内容诱导（例如文件内容或 MCP 结果声称某命令安全），因此黑名单这道底线必须保留，且不随模型声明放宽。ask 与 yolo 模式的行为不变。
 
-本轮不做：用户级"以后允许此前缀"、对 `.git/hooks`、`package.json` 脚本等敏感路径写入的单独处理。
+本轮不做：用户级"以后允许此前缀"。敏感路径写入的处理见文末「敏感路径写入审批」。
 
 ## 补充设计（实现定稿）
 
@@ -142,5 +142,25 @@ trust 模式下只有命中白名单的命令自动执行，其他一律审批�
 2. 缺少 `command` 字段时是否改为询问。
 3. 是否提供用户级"允许此前缀"，以及它的持久化位置与撤销方式。
 4. 是否值得引入 shell 解析依赖，Windows 与 PowerShell 如何处理。
-5. `workspace.write_file` 与 `workspace.edit_file` 在 trust 模式下始终自动，是否需要对敏感路径（如 `.git/hooks`、`package.json` 的脚本字段）另行处理，本提案不覆盖。
+5. ~~`workspace.write_file` 与 `workspace.edit_file` 在 trust 模式下始终自动，是否需要对敏感路径另行处理。~~ 已处理：见文末「敏感路径写入审批」。
 6. 是否需要先收集真实命令数据再定白名单。
+
+## 敏感路径写入审批（已实现）
+
+trust 模式下，`write_file` 与 `edit_file` 的目标命中下列规则时需要审批；`ask` 模式本来全部审批，`yolo` 模式不审批，均不变。规则在 `packages/runtime/src/sensitive-paths.ts`（`isSensitiveWritePath`），runtime 与测试共用。
+
+判断方式：路径取工作区相对路径，统一为 `/` 分隔，规范化 `.` 与 `..`，大小写不敏感。无法规范化的路径（绝对路径、越出工作区）按敏感处理。
+
+| 类别 | 规则 | 危险原因 |
+| --- | --- | --- |
+| Git 内部 | `.git/` 下任何文件 | 钩子（`.git/hooks`）在提交、检出时自动执行；`config` 可指定外部命令 |
+| 钩子工具 | `.husky/**`、`.githooks/**`、`.pre-commit-config.yaml`、`lefthook.yml` | 这些文件被当作 Git 钩子运行 |
+| CI | `.github/workflows/**`、`.github/actions/**`、`.gitlab-ci.yml`、`.circleci/**`、`azure-pipelines.yml`、`Jenkinsfile`、`.buildkite/**` | 在远端 runner 上带仓库密钥执行 |
+| 包管理与构建 | 任意层级的 `package.json`、`.npmrc`、`.yarnrc`、`.yarnrc.yml`、`pnpm-workspace.yaml`、`Makefile`、`justfile` | 生命周期脚本、registry 与构建脚本在安装或构建时执行 |
+| 环境与编辑器 | `.envrc`、`.vscode/tasks.json`、`.vscode/launch.json`、`.vscode/settings.json`、`.devcontainer/**` | 进入目录或打开项目时自动执行命令 |
+| 密钥 | `.env`、`.env.*`（任意层级，与 `isSecretFile` 一致） | 存放密钥，改写可能泄露或替换凭据 |
+
+- 未加入 `.weave/` 规则：仓库内没有该目录约定。
+- 符号链接：`write_file`、`edit_file` 会写穿符号链接（与读取共用 `resolveExistingTarget`）。因此工具的 `approval.asksInTrust` 同时判断输入路径与真实路径；文件尚不存在时用最深的已有祖先目录的真实路径加剩余段判断；其他解析失败按需要审批处理。指向悬空链接的写入本来就会失败。
+- 审批摘要在命中时带 `askReason: sensitive-path`（`write_file` 与 `edit_file`）。Studio 卡片展开后显示"询问原因：写入敏感文件（会影响命令执行、CI 或密钥）"。
+- `classifyApprovalRisk` 对输入路径做词法判断；绝对路径与符号链接由 `ToolApprovalRequirement.asksInTrust`（异步，Tool Pipeline 仅在 trust 模式调用）补充。

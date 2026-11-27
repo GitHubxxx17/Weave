@@ -206,6 +206,7 @@ export type {
   WorkspaceFileSnapshotHook,
 } from './workspace-file-types.js';
 export { createWorkspaceFileTools } from './workspace-file-tools.js';
+export { isSensitiveWritePath, type SensitivePathReason } from './sensitive-paths.js';
 export { captureWorkspaceFiles } from './workspace-file-capture.js';
 export {
   captureWorkspaceContexts,

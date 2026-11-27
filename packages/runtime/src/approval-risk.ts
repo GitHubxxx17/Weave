@@ -1,4 +1,9 @@
+import { isSensitiveWritePath } from './sensitive-paths.js';
 import type { ToolPermissionMode } from './tool-types.js';
+
+function isAbsolutePath(value: string): boolean {
+  return /^([/\\]|[A-Za-z]:[/\\])/.test(value);
+}
 
 /** Approval outcome the pipeline applies to one protected tool call. */
 export type ApprovalRiskDecision = 'auto' | 'ask';
@@ -130,7 +135,10 @@ export function classifyApprovalRisk(operation: string, input: unknown): Approva
     return commandAskReason(readStringField(input, 'command'), risk) === null ? 'auto' : 'ask';
   }
   if (operation === 'workspace.write_file' || operation === 'workspace.edit_file') {
-    return 'auto';
+    // Lexical check on the path the model typed. Absolute paths and symbolic
+    // links are resolved against the Workspace by the tool's `asksInTrust`.
+    const target = readStringField(input, 'path');
+    return !isAbsolutePath(target) && isSensitiveWritePath(target) ? 'ask' : 'auto';
   }
   // Unknown protected operations stay conservative.
   return 'ask';

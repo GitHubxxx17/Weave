@@ -57,6 +57,14 @@ export interface ToolApprovalRequirement<TInput = unknown> {
   readonly appliesTo?:
     ((input: TInput, context: ToolExecutionContext) => boolean | Promise<boolean>) | undefined;
   /**
+   * Optional per-call check for `trust` mode. When it returns `true` the call
+   * asks for Approval even though the mode-level classification would run it
+   * directly (for example a write whose real target is a sensitive file). It
+   * is not consulted in `ask` mode (already asks) or `yolo` mode (never asks).
+   */
+  readonly asksInTrust?:
+    ((input: TInput, context: ToolExecutionContext) => boolean | Promise<boolean>) | undefined;
+  /**
    * Converts validated input into safe, user-facing approval metadata.
    *
    * It may inspect the filesystem through `context` (for example to build a
@@ -163,6 +171,9 @@ export const toolDefinitionSchema = z
         operation: nonEmptyStringSchema,
         risk: approvalRiskSchema,
         appliesTo: z
+          .custom<(...args: never[]) => unknown>((value) => typeof value === 'function')
+          .optional(),
+        asksInTrust: z
           .custom<(...args: never[]) => unknown>((value) => typeof value === 'function')
           .optional(),
         summarize: z.custom<(...args: never[]) => unknown>((value) => typeof value === 'function'),

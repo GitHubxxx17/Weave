@@ -37,6 +37,7 @@ import {
   type TextEditPlan,
 } from './workspace-text.js';
 import { isSecretFile } from './secret-files.js';
+import { isSensitiveWritePath } from './sensitive-paths.js';
 import { runCapturedWrite } from './workspace-write-capture.js';
 import type { ToolDefinition, ToolExecutionContext } from './tool-types.js';
 
@@ -152,6 +153,90 @@ async function readsSecretFile(
       ).includes(error.code)
     );
   }
+}
+
+/**
+ * Real Workspace-relative path a write to `candidate` would modify: symbolic
+ * links are followed, and a file that does not exist yet is placed below the
+ * real path of its deepest existing ancestor.
+ */
+async function resolveWriteDestination(
+  root: string,
+  candidate: ResolvedWorkspacePath,
+): Promise<string> {
+  const missing: string[] = [];
+  let current = candidate.absolutePath;
+  for (;;) {
+    try {
+      const real = await realpath(current);
+      return toPosixPath(path.relative(root, path.join(real, ...missing)));
+    } catch (error: unknown) {
+      const code = isNodeFileError(error) ? (error as NodeJS.ErrnoException).code : undefined;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+        throw error;
+      }
+      // A dangling symbolic link cannot be judged by its target.
+      if (
+        await lstat(current).then(
+          () => true,
+          () => false,
+        )
+      ) {
+        throw error;
+      }
+      const parent = path.dirname(current);
+      if (parent === current) {
+        throw error;
+      }
+      missing.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+/**
+ * Whether a write or edit of `inputPath` hits a sensitive file in `trust` mode.
+ * The typed path and the real path behind any symbolic link are both checked.
+ * A path outside the Workspace is left to the write itself, which fails;
+ * any other resolution failure asks.
+ */
+async function writesSensitiveFile(
+  inputPath: string,
+  context: ToolExecutionContext,
+  options: WorkspaceFileToolOptions,
+): Promise<boolean> {
+  try {
+    const workspace = await resolvePolicy(options, context);
+    const candidate = resolveLexicalPath(workspace, inputPath, 'write');
+    if (isSensitiveWritePath(toPosixPath(candidate.relativePath))) {
+      return true;
+    }
+    const root = await resolveRealRoot(workspace.root);
+    const destination = await resolveWriteDestination(root, candidate);
+    return isSensitiveWritePath(destination);
+  } catch (error: unknown) {
+    return !(
+      error instanceof WorkspaceFileError &&
+      (
+        [
+          'workspace-file-unavailable',
+          'workspace-file-outside-root',
+          'workspace-file-invalid-input',
+        ] as readonly string[]
+      ).includes(error.code)
+    );
+  }
+}
+
+/** Summary field that tells the user why a write asks for Approval. */
+async function sensitiveReason(
+  inputPath: string,
+  context: ToolExecutionContext,
+  options: WorkspaceFileToolOptions,
+): Promise<{ askReason?: 'sensitive-path' }> {
+  return (await writesSensitiveFile(inputPath, context, options))
+    ? { askReason: 'sensitive-path' }
+    : {};
 }
 
 async function readWorkspaceFile(
@@ -514,7 +599,8 @@ export function createWorkspaceFileTools(options: WorkspaceFileToolOptions): Wor
       'Create a new UTF-8 text file inside the project folder; missing parent directories ' +
       'are created. To replace an existing file entirely pass overwrite: true, but prefer ' +
       'edit_file for changes to existing files. Depending on the session permission mode, ' +
-      'the user may be asked to approve the write.',
+      'the user may be asked to approve the write.' +
+      ' Writing a sensitive file (.git/, git hook and CI configuration, package.json, Makefile, .env and similar files that affect command execution, CI or secrets) always waits for user approval unless the run is in yolo mode.',
     parameters: {
       type: 'object',
       properties: {
@@ -529,6 +615,7 @@ export function createWorkspaceFileTools(options: WorkspaceFileToolOptions): Wor
     approval: {
       operation: 'workspace.write_file',
       risk: 'high',
+      asksInTrust: (input, context) => writesSensitiveFile(input.path, context, normalizedOptions),
       summarize: async (input, context) => {
         const plan = await planWrite(input, context, normalizedOptions);
         return {
@@ -541,6 +628,7 @@ export function createWorkspaceFileTools(options: WorkspaceFileToolOptions): Wor
             ...(plan.previousBytes === undefined ? {} : { previousBytes: plan.previousBytes }),
             ...(plan.previousLines === undefined ? {} : { previousLines: plan.previousLines }),
             createdDirectories: plan.createdDirectories,
+            ...(await sensitiveReason(input.path, context, normalizedOptions)),
           },
         };
       },
@@ -563,7 +651,8 @@ export function createWorkspaceFileTools(options: WorkspaceFileToolOptions): Wor
       'Replace exact text in an existing file inside the project folder. oldText must match ' +
       'the file verbatim, including indentation and line breaks, and must occur once unless ' +
       'replaceAll is true; copy it from read_file output. Depending on the session permission mode, ' +
-      'the user may be asked to approve the edit; the approval shows the diff.',
+      'the user may be asked to approve the edit; the approval shows the diff.' +
+      ' Editing a sensitive file (.git/, git hook and CI configuration, package.json, Makefile, .env and similar files that affect command execution, CI or secrets) always waits for user approval unless the run is in yolo mode.',
     parameters: {
       type: 'object',
       properties: {
@@ -579,6 +668,7 @@ export function createWorkspaceFileTools(options: WorkspaceFileToolOptions): Wor
     approval: {
       operation: 'workspace.edit_file',
       risk: 'medium',
+      asksInTrust: (input, context) => writesSensitiveFile(input.path, context, normalizedOptions),
       summarize: async (input, context) => {
         const { plan } = await planEdit(input, context, normalizedOptions);
         return {
@@ -590,6 +680,7 @@ export function createWorkspaceFileTools(options: WorkspaceFileToolOptions): Wor
             linesRemoved: plan.linesRemoved,
             diff: plan.diff,
             diffTruncated: plan.diffTruncated,
+            ...(await sensitiveReason(input.path, context, normalizedOptions)),
           },
         };
       },

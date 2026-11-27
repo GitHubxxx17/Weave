@@ -349,6 +349,32 @@ describe('ApprovalPanel', () => {
     expect(text).toContain('询问原因：命中危险命令名单');
   });
 
+  it('shows why a write or edit of a sensitive file asks', () => {
+    const sensitiveEdit: ApprovalRequest = {
+      ...pendingEdit,
+      inputSummary: { ...(pendingEdit.inputSummary as object), askReason: 'sensitive-path' },
+    };
+    const sensitiveWrite: ApprovalRequest = {
+      ...pendingWrite,
+      approvalId: 'approval-5',
+      toolCallId: 'call-5',
+      inputSummary: {
+        path: '.husky/pre-commit',
+        bytes: 10,
+        overwrite: false,
+        askReason: 'sensitive-path',
+      },
+    };
+    render(<ApprovalPanel pending={[sensitiveEdit, sensitiveWrite]} onDecide={vi.fn()} />);
+    for (const button of screen.getAllByRole('button', { name: '展开' })) {
+      fireEvent.click(button);
+    }
+
+    expect(screen.getAllByText('询问原因：写入敏感文件（会影响命令执行、CI 或密钥）')).toHaveLength(
+      2,
+    );
+  });
+
   it('shows the diff of an edit with added and removed lines marked', () => {
     render(<ApprovalPanel pending={[pendingEdit]} onDecide={vi.fn()} />);
 
