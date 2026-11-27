@@ -68,7 +68,7 @@ function cssFindings(file: string, text: string): Finding[] {
   let inRoot = false;
   lines.forEach((raw, index) => {
     const line = raw;
-    if (file === tokenFile && /^:root\s*\{/.test(line)) {
+    if (file === tokenFile && /^:root(?:\[data-theme='dark'\])?\s*\{/.test(line)) {
       inRoot = true;
       return;
     }
@@ -147,6 +147,18 @@ function collectFindings(): Finding[] {
   return findings;
 }
 
+/** 取出以 opener 开头的顶层块里的 `--name: value` 定义。 */
+function blockVariables(css: string, opener: RegExp): Map<string, string> {
+  const start = opener.exec(css);
+  const variables = new Map<string, string>();
+  if (!start) return variables;
+  const end = css.indexOf('\n}', start.index);
+  for (const match of css.slice(start.index, end).matchAll(/^\s+(--[\w-]+)\s*:\s*([^;]+);/gm)) {
+    variables.set(match[1] ?? '', (match[2] ?? '').trim());
+  }
+  return variables;
+}
+
 describe('Studio 颜色变量', () => {
   it(':root 变量定义块之外没有颜色字面量', () => {
     const unexpected = collectFindings().filter(
@@ -177,6 +189,15 @@ describe('Studio 颜色变量', () => {
       .filter(([, text]) => /^\s*--[\w-]+\s*:/m.test(blankComments(text)))
       .map(([file]) => file);
     expect(offenders).toEqual([]);
+  });
+
+  it(":root[data-theme='dark'] 覆盖浅色定义的每一个变量，且没有多余变量", () => {
+    const css = blankComments(sourceFiles.get(tokenFile) ?? '');
+    const light = blockVariables(css, /^:root\s*\{/m);
+    const dark = blockVariables(css, /^:root\[data-theme='dark'\]\s*\{/m);
+    expect(light.size).toBeGreaterThan(150);
+    expect([...light.keys()].filter((name) => !dark.has(name))).toEqual([]);
+    expect([...dark.keys()].filter((name) => !light.has(name))).toEqual([]);
   });
 
   it('扫描确实覆盖到了样式与脚本文件', () => {

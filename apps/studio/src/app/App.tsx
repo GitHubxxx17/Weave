@@ -85,6 +85,7 @@ import { SettingsSidebar } from './settings-sidebar.js';
 import type { SettingsCategoryId } from './settings-categories.js';
 import { PermissionSettingsView } from './permission-settings-view.js';
 import { StorageSettingsView } from './storage-settings-view.js';
+import { AppearanceSettingsView } from './appearance-settings-view.js';
 import { WorkspaceNav } from './workspace-nav.js';
 import { useMessageSubmission } from './use-message-submission.js';
 import { useSessionLifecycle } from './use-session-lifecycle.js';
@@ -1042,6 +1043,8 @@ function StudioApp(): ReactElement {
               <PermissionSettingsView />
             ) : activeView === 'settings' && settingsCategory === 'storage' ? (
               <StorageSettingsView />
+            ) : activeView === 'settings' && settingsCategory === 'appearance' ? (
+              <AppearanceSettingsView />
             ) : activeView === 'settings' ? (
               <ProviderSettingsView
                 providerSettings={providerSettings}

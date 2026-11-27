@@ -74,12 +74,12 @@ describe('SettingsSidebar', () => {
     expect(onSelect).toHaveBeenCalledWith('storage');
   });
 
-  it('keeps unfinished categories disabled', () => {
+  it('enables every category now that none is unfinished', () => {
     render(<SettingsSidebar activeCategory="providers" onSelectCategory={vi.fn()} />);
-    for (const name of [/界面外观/]) {
+    for (const name of [/运行权限/, /界面外观/]) {
       const button = screen.getByRole('button', { name }) as HTMLButtonElement;
-      expect(button.disabled).toBe(true);
-      expect(button.textContent).toContain('即将推出');
+      expect(button.disabled).toBe(false);
+      expect(button.textContent).not.toContain('即将推出');
     }
   });
 

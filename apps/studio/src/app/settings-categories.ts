@@ -47,7 +47,7 @@ export const settingsCategories: readonly SettingsCategory[] = [
     id: 'appearance',
     label: '界面外观',
     group: '系统',
-    available: false,
+    available: true,
     keywords: ['外观', '主题', '颜色', '深色', '字体'],
   },
 ];

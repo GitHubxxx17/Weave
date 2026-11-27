@@ -553,6 +553,13 @@ Preload adds `openDataDirectory()` (`weave:open-data-directory`), which opens
 only the configured `userDataDirectory` and accepts no path from the Renderer.
 See `docs/superpowers/specs/2026-11-27-studio-settings-design.md`.
 
+Studio colors are CSS variables defined once in `apps/studio/src/app/app.css`.
+The Appearance settings page stores a theme preference (system, light or dark)
+in `localStorage`; `<html data-theme>` selects the `:root` or
+`:root[data-theme='dark']` value set. Desktop does not yet sync its window
+background or `nativeTheme`. See
+`docs/superpowers/specs/2026-11-27-studio-color-tokens-design.md`.
+
 The old `apps/server/.weave/` directory is not automatically deleted or
 migrated. It is a legacy local runtime artifact; migration requires a separate
 backup, confirmation, copy, and rollback flow.

@@ -115,7 +115,7 @@
 
 ### 4.1 分类状态
 
-`App.tsx` 持有 `settingsCategory`（默认 `providers`），传给 `SettingsSidebar`（受控：`activeCategory`、`onSelectCategory`）。当前分类按钮带 `aria-current="page"`。`providers`、`permissions` 与 `storage` 可用，`appearance` 禁用并显示"即将推出"。搜索词是侧栏内部状态；筛选只影响侧栏列表，不改变当前内容页。无匹配时显示"没有匹配的设置"。
+`App.tsx` 持有 `settingsCategory`（默认 `providers`），传给 `SettingsSidebar`（受控：`activeCategory`、`onSelectCategory`）。当前分类按钮带 `aria-current="page"`。`providers`、`permissions`、`storage` 与 `appearance` 均可用。搜索词是侧栏内部状态；筛选只影响侧栏列表，不改变当前内容页。无匹配时显示"没有匹配的设置"。
 
 数据存储页放在 `apps/studio/src/app/storage-settings-view.tsx`，请求封装在 `features/settings/storage-api.ts`（手写 Zod schema 镜像响应，Studio 不导入 `@weave/*`）。样式只使用 `app.css` `:root` 已有的 CSS 变量，不写新的颜色字面量。
 
@@ -127,7 +127,7 @@
 - 其他失败（网络、5xx、响应格式不符）：显示错误信息；"刷新"按钮可重新读取。
 - 有 Desktop 桥（`window.weaveDesktop?.openDataDirectory` 存在）时显示"打开数据目录"；失败时显示错误信息。浏览器模式不显示该按钮，页面其余功能不变。
 
-## 4.3 运行权限（`permissions`，已实现于 `feat/studio-settings-permissions`）
+### 4.3 运行权限（`permissions`，已实现于 `feat/studio-settings-permissions`）
 
 视图在 `apps/studio/src/app/permission-settings-view.tsx`，`App.tsx` 仅按 `settingsCategory === 'permissions'` 渲染。分类关键词：权限、审批、命令、信任、默认、模式、完全访问、敏感、密钥、白名单。
 
@@ -155,6 +155,19 @@
 
 样式只用 `app.css` `:root` 变量。
 
+### 4.4 界面外观
+
+`appearance` 页（`apps/studio/src/app/appearance-settings-view.tsx`）提供"跟随系统 / 浅色 / 深色"三选一，用 `role="radiogroup"` 加三个 `role="radio"` 的卡片按钮，选中项 `aria-checked="true"`。每张卡片带一个小预览块（跟随系统为左浅右深的拼合块），预览块颜色来自 `--theme-preview-*` 变量，两套主题下取值相同，因此"浅色"卡片在深色界面里仍显示浅色。选中立即生效。
+
+偏好逻辑在 `features/settings/theme.ts`：
+
+- 存储：`localStorage['weave.studio.theme.v1']`，取值 `system | light | dark`，Zod 校验，缺失或非法值回退 `system`。
+- 应用：解析结果写到 `<html data-theme>` 与 `style.colorScheme`；配色见 `2026-11-27-studio-color-tokens-design.md`。
+- `startThemeSync(root)` 在 `main.tsx` 渲染 React 之前同步调用（与 `applyWindowChrome` 同位置），避免首屏闪烁；同时监听 `matchMedia('(prefers-color-scheme: dark)')`（仅偏好为"跟随系统"时生效）与 `storage` 事件（多窗口同步），返回的函数移除全部监听。
+- 设置页通过 `subscribeThemePreference` 在其他窗口修改后更新选中项。
+
+不做：Desktop 窗口 `backgroundColor`（`apps/desktop/src/main.ts` 写死 `#f7f8fc`）与 `nativeTheme` 同步。深色下启动瞬间窗口可能先闪浅色，记为后续项。字体、字号、密度等其他外观选项也不在本期。
+
 ## 5. 测试
 
 - Server（`apps/server/test/storage-api.test.ts`）：用临时数据目录核对字段、SQLite 附属文件计入、不存在的位置、符号链接不跟随、条目上限触发 `truncated`、位置级错误不使请求失败；回环 IPv4、IPv6、IPv4 映射放行，非回环和无法取得地址返回 403。
@@ -164,5 +177,5 @@
 
 ## 6. 未决与后续
 
-- 后续 PR：界面外观（含主题）。
+- 界面外观后续：Desktop 窗口背景色与 `nativeTheme` 同步（避免深色启动闪浅色）；字体、密度等选项。
 - 清理、迁移、修改存储位置需要单独的备份、确认与回滚设计，不在本期。

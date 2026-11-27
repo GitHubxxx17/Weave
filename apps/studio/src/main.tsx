@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 
 import { App } from './app/App.js';
 import { applyWindowChrome } from './features/runtime/runtime-bridge.js';
+import { startThemeSync } from './features/settings/theme.js';
 import '@xterm/xterm/css/xterm.css';
 import './app/app.css';
 
@@ -13,6 +14,7 @@ if (rootElement === null) {
 }
 
 applyWindowChrome(document.documentElement);
+startThemeSync(document.documentElement);
 
 createRoot(rootElement).render(
   <StrictMode>
