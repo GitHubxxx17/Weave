@@ -15,7 +15,7 @@
 | 分类     | 分组 | 状态                       |
 | -------- | ---- | -------------------------- |
 | 模型服务 | 配置 | 已有，本 PR 接入分类切换   |
-| 运行权限 | 配置 | 后续 PR，本期禁用          |
+| 运行权限 | 配置 | 已实现（见 4.3）           |
 | 数据存储 | 系统 | 本 PR，只读                |
 | 界面外观 | 系统 | 后续 PR（含主题），本期禁用 |
 
@@ -115,7 +115,7 @@
 
 ### 4.1 分类状态
 
-`App.tsx` 持有 `settingsCategory`（默认 `providers`），传给 `SettingsSidebar`（受控：`activeCategory`、`onSelectCategory`）。当前分类按钮带 `aria-current="page"`。`providers` 与 `storage` 可用，`permissions`、`appearance` 禁用并显示"即将推出"。搜索词是侧栏内部状态；筛选只影响侧栏列表，不改变当前内容页。无匹配时显示"没有匹配的设置"。
+`App.tsx` 持有 `settingsCategory`（默认 `providers`），传给 `SettingsSidebar`（受控：`activeCategory`、`onSelectCategory`）。当前分类按钮带 `aria-current="page"`。`providers`、`permissions` 与 `storage` 可用，`appearance` 禁用并显示"即将推出"。搜索词是侧栏内部状态；筛选只影响侧栏列表，不改变当前内容页。无匹配时显示"没有匹配的设置"。
 
 数据存储页放在 `apps/studio/src/app/storage-settings-view.tsx`，请求封装在 `features/settings/storage-api.ts`（手写 Zod schema 镜像响应，Studio 不导入 `@weave/*`）。样式只使用 `app.css` `:root` 已有的 CSS 变量，不写新的颜色字面量。
 
@@ -127,13 +127,42 @@
 - 其他失败（网络、5xx、响应格式不符）：显示错误信息；"刷新"按钮可重新读取。
 - 有 Desktop 桥（`window.weaveDesktop?.openDataDirectory` 存在）时显示"打开数据目录"；失败时显示错误信息。浏览器模式不显示该按钮，页面其余功能不变。
 
+## 4.3 运行权限（`permissions`，已实现于 `feat/studio-settings-permissions`）
+
+视图在 `apps/studio/src/app/permission-settings-view.tsx`，`App.tsx` 仅按 `settingsCategory === 'permissions'` 渲染。分类关键词：权限、审批、命令、信任、默认、模式、完全访问、敏感、密钥、白名单。
+
+**新会话默认模式**
+
+- 页面提供"常规"和"信任"两个选项；"完全访问"不能设为默认，页面用一句话说明原因：避免新会话在用户不知情时跳过所有确认。
+- 存储：`localStorage` 键 `weave.studio.defaultPermissionMode.v1`，读取用 Zod（`defaultPermissionModeSchema = z.enum(['ask','trust'])`）校验；缺失、非法值、`yolo` 一律回退 `ask`。
+- 生效规则（`composer-preferences.ts`）：会话自己记过模式（`weave.studio.permissionMode.v1:<sessionId>`，发送消息时写入）就用会话的；没记过的会话，包括新会话和还没有会话时的草稿，用默认值。已记过模式的会话不受修改默认值影响。
+- 这改写了原约束"权限模式永不全局"：原意是新会话不会继承 `yolo`，现在由"默认值只能是 `ask`/`trust`"保证。`yolo` 仍然只能在每个会话里手动选。
+- 不做：服务端保存默认模式、修改 runtime 审批规则。
+
+**模式说明（静态文案，以 runtime 代码为准）**
+
+| 模式 | 直接执行 | 需要确认 |
+| ---- | -------- | -------- |
+| 常规 | 读取、搜索普通文件 | 写入/修改文件、运行命令、读取 `.env`/`.env.*` |
+| 信任 | 项目内普通文件读写；白名单命令；模型声明低风险的其他命令 | 危险命令名单；非白名单命令且声明高风险或未声明；读取密钥文件；写入敏感文件（含经绝对路径或符号链接落到敏感文件） |
+| 完全访问 | 全部 | 无（工作区策略强制要求的确认除外） |
+
+与最初设想的差异：信任模式下，不在白名单的命令只有"模型声明低风险"才直接执行，声明高风险或没声明风险都要确认；白名单命令若带管道、重定向、命令串联或指向项目外的参数，同样退回到按模型声明风险判断；敏感文件判断按实际落点，经绝对路径或符号链接写入也会命中（`asksInTrust`）。项目目录以外的写入由工作区策略直接拒绝，不属于确认范围。依据：`approval-risk.ts` 的 `commandAskReason`、`isAllowListedCommand`，`workspace-file-tools.ts` 的 `readsSecretFile`、`writesSensitiveFile`。
+
+**敏感写入路径类别**：Git 内部与钩子、CI 配置、包管理与构建脚本、自动执行的环境与编辑器配置、密钥文件。
+
+> 同步约定：Studio 不能导入 `@weave/*`，这些文案是静态的。修改 `packages/runtime/src/sensitive-paths.ts`、`approval-risk.ts`（白名单、危险命令名单）时，要同步更新 `permission-settings-view.tsx`。`sensitive-paths.ts` 顶部注释已指向该文件。
+
+样式只用 `app.css` `:root` 变量。
+
 ## 5. 测试
 
 - Server（`apps/server/test/storage-api.test.ts`）：用临时数据目录核对字段、SQLite 附属文件计入、不存在的位置、符号链接不跟随、条目上限触发 `truncated`、位置级错误不使请求失败；回环 IPv4、IPv6、IPv4 映射放行，非回环和无法取得地址返回 403。
 - Desktop（`apps/desktop/test/main.test.ts`）：发送方校验、只打开配置目录、拒绝参数、错误返回、Preload 不传参数。
+- Studio（`permission-settings.test.tsx`、`composer-preferences.test.ts`）：默认模式读写与校验、会话与默认值的生效规则、页面选项与文案。
 - Studio（`storage-settings.test.tsx`、`App.test.tsx`）：分类切换与 `aria-current`、搜索筛选与空结果、存储页各状态、Desktop 按钮仅在有桥时出现。
 
 ## 6. 未决与后续
 
-- 后续 PR：运行权限、界面外观（含主题）。
+- 后续 PR：界面外观（含主题）。
 - 清理、迁移、修改存储位置需要单独的备份、确认与回滚设计，不在本期。

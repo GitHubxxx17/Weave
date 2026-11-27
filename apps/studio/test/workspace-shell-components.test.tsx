@@ -72,7 +72,7 @@ describe('SettingsSidebar', () => {
   it('lists the settings categories, with unfinished ones disabled', () => {
     render(<SettingsSidebar />);
     expect(screen.getByRole('button', { name: '模型服务' })).toBeTruthy();
-    expect((screen.getByRole('button', { name: /运行权限/ }) as HTMLButtonElement).disabled).toBe(
+    expect((screen.getByRole('button', { name: /界面外观/ }) as HTMLButtonElement).disabled).toBe(
       true,
     );
   });

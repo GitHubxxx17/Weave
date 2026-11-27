@@ -4,8 +4,11 @@ import { z } from 'zod';
 /**
  * Remembers composer choices across reloads.
  * - Reasoning effort is remembered per Provider + model.
- * - Permission mode is remembered per Session only. It is never global, so a
- *   new Session always starts at the safest mode instead of inheriting "yolo".
+ * - Permission mode is remembered per Session. A Session that never recorded
+ *   one (a new Session, or the draft before a Session exists) starts at the
+ *   default mode from Settings. That default is only "ask" or "trust": "yolo"
+ *   can never be the default, so a new Session never skips every Approval
+ *   without the user choosing it there.
  * Stored values are validated; anything invalid falls back to the default.
  */
 export const permissionModeSchema = z.enum(['ask', 'trust', 'yolo']);
@@ -13,11 +16,16 @@ export type PermissionMode = z.infer<typeof permissionModeSchema>;
 export const reasoningEffortSchema = z.enum(['low', 'medium', 'high']);
 export type ReasoningEffort = z.infer<typeof reasoningEffortSchema>;
 
-export const defaultPermissionMode: PermissionMode = 'ask';
+/** Modes that may be the default for new Sessions; "yolo" is deliberately excluded. */
+export const defaultPermissionModeSchema = z.enum(['ask', 'trust']);
+export type DefaultPermissionMode = z.infer<typeof defaultPermissionModeSchema>;
+
+export const defaultPermissionMode: DefaultPermissionMode = 'ask';
 export const defaultReasoningEffort: ReasoningEffort = 'medium';
 
 const permissionKey = (sessionId: string): string =>
   `weave.studio.permissionMode.v1:${encodeURIComponent(sessionId)}`;
+const defaultPermissionKey = 'weave.studio.defaultPermissionMode.v1';
 const reasoningKey = (provider: string, model: string): string =>
   `weave.studio.reasoningEffort.v1:${encodeURIComponent(provider)}:${encodeURIComponent(model)}`;
 
@@ -36,10 +44,24 @@ function writeItem(key: string, value: string): void {
   }
 }
 
-export function readPermissionMode(sessionId: string): PermissionMode {
-  if (sessionId === '') return defaultPermissionMode;
-  const parsed = permissionModeSchema.safeParse(readItem(permissionKey(sessionId)));
+/** Default mode for new Sessions. Invalid values, including "yolo", fall back to "ask". */
+export function readDefaultPermissionMode(): DefaultPermissionMode {
+  const parsed = defaultPermissionModeSchema.safeParse(readItem(defaultPermissionKey));
   return parsed.success ? parsed.data : defaultPermissionMode;
+}
+export function writeDefaultPermissionMode(mode: DefaultPermissionMode): void {
+  const parsed = defaultPermissionModeSchema.safeParse(mode);
+  if (parsed.success) writeItem(defaultPermissionKey, parsed.data);
+}
+/** The mode a Session recorded itself, or `undefined` when it never recorded one. */
+export function readRecordedPermissionMode(sessionId: string): PermissionMode | undefined {
+  if (sessionId === '') return undefined;
+  const parsed = permissionModeSchema.safeParse(readItem(permissionKey(sessionId)));
+  return parsed.success ? parsed.data : undefined;
+}
+/** A recorded Session mode wins; otherwise the Settings default applies. */
+export function readPermissionMode(sessionId: string): PermissionMode {
+  return readRecordedPermissionMode(sessionId) ?? readDefaultPermissionMode();
 }
 export function writePermissionMode(sessionId: string, mode: PermissionMode): void {
   if (sessionId !== '') writeItem(permissionKey(sessionId), mode);
