@@ -92,6 +92,8 @@ function diffLineClass(line: string): string {
   return 'approval-diff-line';
 }
 
+const sensitiveAskText = '询问原因：写入敏感文件（会影响命令执行、CI 或密钥）';
+
 /** Pretty JSON of a summary from an unknown tool; `undefined` when it is empty. */
 function formatGenericSummary(inputSummary: unknown): string | undefined {
   if (inputSummary === undefined || inputSummary === null) {
@@ -146,6 +148,7 @@ function renderDetails(approval: ApprovalRequest): ReactElement | null {
           <code>{edit.path}</code> · 替换 {edit.replacements} 处 · 新增 {edit.linesAdded} 行，删除{' '}
           {edit.linesRemoved} 行
         </p>
+        {edit.askReason === undefined ? null : <p className="approval-meta">{sensitiveAskText}</p>}
         <pre className="approval-code approval-diff" tabIndex={0}>
           {edit.diff.split('\n').map((line, index) => (
             <span key={index} className={diffLineClass(line)}>
@@ -172,6 +175,9 @@ function renderDetails(approval: ApprovalRequest): ReactElement | null {
     }
     if (write.createdDirectories !== undefined && write.createdDirectories.length > 0) {
       facts.push(`会新建目录 ${write.createdDirectories.join('、')}`);
+    }
+    if (write.askReason !== undefined) {
+      facts.push(sensitiveAskText);
     }
     return (
       <ul className="approval-facts">

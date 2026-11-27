@@ -605,8 +605,9 @@ describe('Workspace File Tools with a per-Session resolver', () => {
       code: 'ENOENT',
     });
     // The read resolves its Workspace twice: once for the secret-file check, once to read.
-    // The write resolves its Workspace twice: once for the Approval summary, once to write.
-    expect(seenSessions).toEqual(['session-b', 'session-b', 'session-a', 'session-a']);
+    // The write resolves its Workspace three times: twice for the Approval summary (plan and
+    // sensitive-path reason), once to write.
+    expect(seenSessions).toEqual(['session-b', 'session-b', 'session-a', 'session-a', 'session-a']);
   });
 
   it('fails with workspace-file-unavailable when the Session has no Workspace', async () => {

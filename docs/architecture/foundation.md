@@ -783,7 +783,11 @@ consistent with every other Runtime tool. The design is in
   request was pending fails instead of being overwritten.
 - `write_file` declares a high-risk `workspace.write_file` Approval whose
   summary carries path, size, line count, overwrite state, the size of the file
-  it replaces, and the directories it will create, never the content.
+  it replaces, and the directories it will create, never the content. In
+  `trust` mode `write_file` and `edit_file` still ask for sensitive targets
+  (`.git/`, hook and CI configuration, `package.json`, `.env` and similar,
+  judged on the real path behind symbolic links) and add `askReason:
+'sensitive-path'` to the summary.
 - `run_command` declares a high-risk `shell.run_command` Approval for every
   call. It runs `$SHELL -c` (PowerShell on Windows) in a directory inside the
   Workspace with stdin closed, merges and trims output to its first 4 KB and

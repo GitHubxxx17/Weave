@@ -469,6 +469,7 @@ describe('Default Agent instructions', () => {
       '本轮可用的工具：list_dir、glob、grep、read_file、edit_file、write_file、run_command、recall。',
     );
     expect(trust).toContain('当前是"信任"模式');
+    expect(trust).toContain('写入敏感文件');
 
     const yolo = await instructions({ sessionId: 'session-1', permissionMode: 'yolo' });
     expect(yolo).toContain('当前是"完全访问"模式');

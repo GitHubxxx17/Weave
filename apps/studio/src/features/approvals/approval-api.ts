@@ -185,6 +185,8 @@ export interface WriteFileApprovalSummary {
   readonly previousLines?: number | undefined;
   /** Directories the write creates, relative to the project folder. */
   readonly createdDirectories?: readonly string[] | undefined;
+  /** Set when the write asks because its target is a sensitive file. */
+  readonly askReason?: 'sensitive-path' | undefined;
 }
 
 const writeFileSummarySchema = z.object({
@@ -195,6 +197,7 @@ const writeFileSummarySchema = z.object({
   previousBytes: z.number().optional(),
   previousLines: z.number().optional(),
   createdDirectories: z.array(z.string()).optional(),
+  askReason: z.literal('sensitive-path').optional(),
 });
 
 export function readWriteFileSummary(
@@ -247,6 +250,8 @@ export interface EditFileApprovalSummary {
   /** Unified diff of the change, capped by the Server. */
   readonly diff: string;
   readonly diffTruncated: boolean;
+  /** Set when the edit asks because its target is a sensitive file. */
+  readonly askReason?: 'sensitive-path' | undefined;
 }
 
 const editFileSummarySchema = z.object({
@@ -256,6 +261,7 @@ const editFileSummarySchema = z.object({
   linesRemoved: z.number(),
   diff: z.string(),
   diffTruncated: z.boolean(),
+  askReason: z.literal('sensitive-path').optional(),
 });
 
 export function readEditFileSummary(
