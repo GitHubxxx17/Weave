@@ -47,6 +47,8 @@ const mocks = vi.hoisted(() => {
     shell: { openPath: vi.fn() },
     FakeBrowserWindow,
     startServer: vi.fn(),
+    readDesktopState: vi.fn(async () => ({ version: 1 })),
+    writeDesktopState: vi.fn(async () => ({ version: 1 })),
   };
 });
 
@@ -57,6 +59,11 @@ vi.mock('electron', () => ({
   ipcMain: mocks.ipcMain,
   safeStorage: mocks.safeStorage,
   shell: mocks.shell,
+}));
+
+vi.mock('../src/desktop-state.js', () => ({
+  readDesktopState: mocks.readDesktopState,
+  writeDesktopState: mocks.writeDesktopState,
 }));
 
 vi.mock('@weave/server/main', () => ({
@@ -70,6 +77,7 @@ const {
   getWindowChrome,
   handleOpenDataDirectory,
   handlePickDirectory,
+  isAddressInUseError,
   registerSingleInstance,
   renderStartupError,
   resolveStudioTarget,
@@ -100,6 +108,8 @@ const providerSecretCodec = {
 describe('desktop main process', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.readDesktopState.mockResolvedValue({ version: 1 });
+    mocks.writeDesktopState.mockResolvedValue({ version: 1 });
     mocks.FakeBrowserWindow.instances.length = 0;
   });
 
@@ -120,6 +130,68 @@ describe('desktop main process', () => {
     });
     expect(result.port).toBe(46321);
     expect(result.stop).toBe(stop);
+  });
+
+  it('records the port of the first start and starts on it later', async () => {
+    mocks.startServer.mockResolvedValueOnce({ port: 46321, stop: vi.fn() });
+    await startDesktopServer(hostedConfig, providerSecretCodec);
+    expect(mocks.startServer.mock.lastCall?.[0]).toBe(0);
+    expect(mocks.writeDesktopState).toHaveBeenCalledWith('/tmp/weave-user-data', {
+      serverPort: 46321,
+    });
+
+    mocks.writeDesktopState.mockClear();
+    mocks.readDesktopState.mockResolvedValue({ version: 1, serverPort: 46321 });
+    mocks.startServer.mockResolvedValueOnce({ port: 46321, stop: vi.fn() });
+    await startDesktopServer(hostedConfig, providerSecretCodec);
+    expect(mocks.startServer.mock.lastCall?.[0]).toBe(46321);
+    expect(mocks.writeDesktopState).not.toHaveBeenCalled();
+  });
+
+  it('starts on a random port once when the recorded port is in use, then records the new port', async () => {
+    mocks.readDesktopState.mockResolvedValue({ version: 1, serverPort: 46321 });
+    const inUse = Object.assign(new Error('listen EADDRINUSE'), { code: 'EADDRINUSE' });
+    mocks.startServer
+      .mockRejectedValueOnce(new AggregateError([inUse, new Error('cleanup failed')], 'start'))
+      .mockResolvedValueOnce({ port: 51234, stop: vi.fn() });
+
+    const server = await startDesktopServer(hostedConfig, providerSecretCodec);
+
+    expect(mocks.startServer.mock.calls.map(([port]) => port)).toEqual([46321, 0]);
+    expect(server.port).toBe(51234);
+    expect(mocks.writeDesktopState).toHaveBeenCalledWith('/tmp/weave-user-data', {
+      serverPort: 51234,
+    });
+  });
+
+  it('does not retry on other start errors', async () => {
+    mocks.readDesktopState.mockResolvedValue({ version: 1, serverPort: 46321 });
+    const failure = new Error('database is locked');
+    mocks.startServer.mockRejectedValueOnce(failure);
+
+    await expect(startDesktopServer(hostedConfig, providerSecretCodec)).rejects.toBe(failure);
+    expect(mocks.startServer).toHaveBeenCalledTimes(1);
+    expect(mocks.writeDesktopState).not.toHaveBeenCalled();
+  });
+
+  it('still starts when the port cannot be recorded', async () => {
+    mocks.startServer.mockResolvedValueOnce({ port: 46321, stop: vi.fn() });
+    mocks.writeDesktopState.mockRejectedValueOnce(new Error('read-only'));
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await expect(startDesktopServer(hostedConfig, providerSecretCodec)).resolves.toMatchObject({
+      port: 46321,
+    });
+    errorLog.mockRestore();
+  });
+
+  it('finds EADDRINUSE through cause and AggregateError chains only', () => {
+    const inUse = Object.assign(new Error('x'), { code: 'EADDRINUSE' });
+    expect(isAddressInUseError(inUse)).toBe(true);
+    expect(isAddressInUseError(new Error('wrap', { cause: inUse }))).toBe(true);
+    expect(isAddressInUseError(new AggregateError([new Error('a'), inUse]))).toBe(true);
+    expect(isAddressInUseError(new Error('EADDRINUSE in text only'))).toBe(false);
+    expect(isAddressInUseError('EADDRINUSE')).toBe(false);
+    expect(isAddressInUseError(undefined)).toBe(false);
   });
 
   it.each(['/tmp/custom-plugins', './custom/../plugins', ''])(

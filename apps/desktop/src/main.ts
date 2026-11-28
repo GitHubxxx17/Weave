@@ -14,6 +14,7 @@ import {
 import { startServer } from '@weave/server/main';
 import { z } from 'zod';
 import { createDesktopConfig, type DesktopConfig } from './desktop-config.js';
+import { readDesktopState, writeDesktopState } from './desktop-state.js';
 import { createElectronProviderSecretCodec } from './provider-secret-codec.js';
 import { isTrustedSender } from './sender-origin.js';
 import { registerTerminalHost, type TerminalHost } from './terminal.js';
@@ -354,12 +355,69 @@ export function registerSingleInstance(getWindow: () => BrowserWindow | undefine
   return true;
 }
 
+/**
+ * True when `error` or anything in its `cause` / `errors` chain is an
+ * `EADDRINUSE` failure. `startServer` may wrap the listen error in an
+ * `AggregateError` when cleanup also fails.
+ */
+export function isAddressInUseError(error: unknown, depth = 0): boolean {
+  if (depth > 8 || typeof error !== 'object' || error === null) {
+    return false;
+  }
+  const { code, cause, errors } = error as { code?: unknown; cause?: unknown; errors?: unknown };
+  if (code === 'EADDRINUSE') {
+    return true;
+  }
+  if (isAddressInUseError(cause, depth + 1)) {
+    return true;
+  }
+  return Array.isArray(errors) && errors.some((item) => isAddressInUseError(item, depth + 1));
+}
+
+/**
+ * Starts the embedded Server on the port recorded by the previous run, so the
+ * Studio origin (and the localStorage bound to it) survives a restart. When
+ * that port is taken the Server starts on a random port once, and the new port
+ * is recorded. Other startup errors are not retried.
+ */
 export async function startDesktopServer(
   config: DesktopConfig,
   providerSecretCodec: ProviderSecretCodec,
   hostStudio = true,
 ): Promise<{ port: number; stop: () => Promise<void>; accessToken?: string | undefined }> {
-  const server = await startServer(0, {
+  const { serverPort } = await readDesktopState(config.userDataDirectory);
+  const start = (port: number) =>
+    startEmbeddedServer(config, providerSecretCodec, hostStudio, port);
+  let server: Awaited<ReturnType<typeof start>>;
+  if (serverPort === undefined) {
+    server = await start(0);
+  } else {
+    try {
+      server = await start(serverPort);
+    } catch (error: unknown) {
+      if (!isAddressInUseError(error)) {
+        throw error;
+      }
+      server = await start(0);
+    }
+  }
+  if (server.port !== serverPort) {
+    await writeDesktopState(config.userDataDirectory, { serverPort: server.port }).catch(
+      (error: unknown) => {
+        console.error('Weave Desktop could not record the server port:', getErrorMessage(error));
+      },
+    );
+  }
+  return server;
+}
+
+async function startEmbeddedServer(
+  config: DesktopConfig,
+  providerSecretCodec: ProviderSecretCodec,
+  hostStudio: boolean,
+  port: number,
+): Promise<{ port: number; stop: () => Promise<void>; accessToken?: string | undefined }> {
+  const server = await startServer(port, {
     databaseFile: config.databaseFile,
     dataDirectory: config.userDataDirectory,
     pluginsDirectory: config.pluginsDirectory,
