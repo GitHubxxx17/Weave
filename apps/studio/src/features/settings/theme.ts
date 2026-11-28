@@ -66,10 +66,20 @@ function notify(preference: ThemePreference): void {
   for (const listener of listeners) listener(preference);
 }
 
+/** Desktop 里把偏好（而不是解析结果）交给主进程，浏览器模式没有该桥。 */
+function syncDesktopTheme(preference: ThemePreference): void {
+  try {
+    globalThis.window?.weaveDesktop?.setTheme?.(preference);
+  } catch {
+    // 桥不可用不影响页面主题。
+  }
+}
+
 /** 保存偏好并立即应用到根元素。 */
 export function setThemePreference(root: HTMLElement, preference: ThemePreference): void {
   writeThemePreference(preference);
   applyTheme(root, preference);
+  syncDesktopTheme(preference);
   notify(preference);
 }
 
@@ -80,7 +90,9 @@ export function setThemePreference(root: HTMLElement, preference: ThemePreferenc
  * 返回的函数会移除全部监听。
  */
 export function startThemeSync(root: HTMLElement): () => void {
-  applyTheme(root, readThemePreference());
+  const initial = readThemePreference();
+  applyTheme(root, initial);
+  syncDesktopTheme(initial);
 
   const media = globalThis.window?.matchMedia?.(darkQuery);
   const onSystemChange = (): void => {
@@ -93,6 +105,7 @@ export function startThemeSync(root: HTMLElement): () => void {
     if (event.key !== null && event.key !== themeStorageKey) return;
     const preference = readThemePreference();
     applyTheme(root, preference);
+    syncDesktopTheme(preference);
     notify(preference);
   };
   globalThis.window?.addEventListener('storage', onStorage);

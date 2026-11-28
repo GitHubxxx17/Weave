@@ -43,6 +43,15 @@
 - `WEAVE_STUDIO_URL`（页面源由 Vite 决定，本就稳定）与 `--host` / `WEAVE_HOST`（访问令牌每次启动重新生成，首次加载仍通过 `?token=` 换取 Cookie）走同一逻辑，令牌与 Cookie 流程不变。
 - 为什么不用固定端口：固定端口在被其他程序占用时无法启动，也会让多个用户或多个实例互相冲突；记录加回退既保持稳定，又不会因占用而失败。为什么不用自定义协议：Server 托管 Studio 并按回环 Origin 放行 API，自定义协议需要重做同源、CORS 与 Cookie 方案（见上文方案 A），改动远大于本问题。
 
+### 窗口背景与原生外观跟随主题
+
+- 问题：窗口 `backgroundColor` 写死浅色，深色主题下启动和刷新时先闪浅色；`nativeTheme.themeSource` 不跟随 Studio 主题，系统原生部件（标题栏、右键菜单、文件选择框）不随用户在设置页选的浅色/深色变化。
+- Preload 契约：`window.weaveDesktop.setTheme(preference: 'system' | 'light' | 'dark'): void`，内部 `ipcRenderer.send('weave:set-theme', preference)`。传的是偏好而不是解析结果，所以选"跟随系统"时由 Electron 自己跟随系统。浏览器模式没有该桥。
+- IPC 通道 `weave:set-theme`（单向，`ipcMain.on`）：先用 `isTrustedSender` 校验发送方，再用 Zod 校验参数（恰好一个 `system | light | dark`）；任一失败都直接丢弃，不设置任何东西。通过后：设置 `nativeTheme.themeSource`；把所有未销毁窗口的 `backgroundColor` 设为解析后主题的底色；把偏好写入 `desktop-state.json` 的 `theme` 字段（可选字段，缺失或非法时按"没有记录"处理，写入失败只记录日志）。
+- 启动：先读状态文件里的 `theme`（没有则 `system`），设置 `nativeTheme.themeSource`，再按 `nativeTheme.shouldUseDarkColors` 选择新窗口的 `backgroundColor`；新窗口因此不会先闪浅色。监听 `nativeTheme` 的 `updated` 事件，更新所有窗口底色（偏好为跟随系统时，系统切换深浅色即跟随）。
+- 底色常量与 Studio `--app-bg` 一致：浅色 `#f7f8fc`，深色 `#12141b`，定义在 `apps/desktop/src/theme.ts`。desktop 测试读取 `apps/studio/src/app/app.css` 文本，解析 `:root` 与 `:root[data-theme='dark']` 的 `--app-bg` 并断言一致（读文件，不做跨包 import）。
+- 限制：首次启动（没有状态文件）时偏好视为"跟随系统"；若 localStorage 里是别的偏好，第一次页面加载后 Studio 会调用 `setTheme` 同步，之后启动即使用记录。
+
 ### `--host` 与访问令牌
 
 - Server CLI 支持 `--host <地址>` / `--host=<地址>`，也读环境变量 `WEAVE_HOST`，默认 `127.0.0.1`。Desktop 从 `process.argv` 和 `WEAVE_HOST` 读取同名设置并传给 `startServer({ host })`；Desktop 窗口始终通过 `127.0.0.1` 访问自己的 Server。

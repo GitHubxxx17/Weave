@@ -559,8 +559,11 @@ See `docs/superpowers/specs/2026-11-27-studio-settings-design.md`.
 Studio colors are CSS variables defined once in `apps/studio/src/app/app.css`.
 The Appearance settings page stores a theme preference (system, light or dark)
 in `localStorage`; `<html data-theme>` selects the `:root` or
-`:root[data-theme='dark']` value set. Desktop does not yet sync its window
-background or `nativeTheme`. See
+`:root[data-theme='dark']` value set. In Desktop, Studio forwards the
+preference (not the resolved theme) through the Preload `setTheme()` bridge
+(`weave:set-theme`); Main sets `nativeTheme.themeSource`, updates window
+background colors, and records `theme` in `desktop-state.json` so the next
+launch starts with the right background. See
 `docs/superpowers/specs/2026-11-27-studio-color-tokens-design.md`.
 
 The old `apps/server/.weave/` directory is not automatically deleted or

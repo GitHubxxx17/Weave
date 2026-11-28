@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { themePreferenceSchema } from './theme.js';
 
 /** File name inside the Desktop user data directory. */
 export const desktopStateFileName = 'desktop-state.json';
@@ -14,6 +15,8 @@ export const desktopStateSchema = z.object({
   version: z.literal(1),
   /** Port of the embedded Server last used, kept so the Studio origin stays stable. */
   serverPort: z.number().int().min(1024).max(65535).optional(),
+  /** Theme preference last reported by Studio, so the first window already has the right background. */
+  theme: themePreferenceSchema.optional(),
 });
 
 export type DesktopState = z.infer<typeof desktopStateSchema>;
