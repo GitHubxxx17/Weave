@@ -275,6 +275,10 @@ describe('desktop theme sync', () => {
     expect(mocks.nativeTheme.themeSource).toBe('system');
     listener(eventFrom(`${origin}/`), 'dark');
     expect(mocks.nativeTheme.themeSource).toBe('dark');
+    // The handler records the preference in the background; wait before the directory is removed.
+    await vi.waitFor(async () => {
+      expect((await readDesktopState(directory)).theme).toBe('dark');
+    });
   });
 });
 

@@ -184,11 +184,10 @@ describe('主题对比度（WCAG）', () => {
     expect(failures.map(describePair)).toEqual([]);
   });
 
-  it('浅色：只计算与记录，不达标的配对不失败（本 PR 不改浅色，见设计文档后续项）', () => {
+  it('浅色：全部配对达到要求（正文 4.5、次要文字 3、强调按钮 4.5）', () => {
     const results = evaluate(light);
     expect(results.every(({ ratio }) => Number.isFinite(ratio) && ratio >= 1)).toBe(true);
     const failures = results.filter(({ pair, ratio }) => ratio < minimum[pair.level]);
-    // 数量只用于提示：新增浅色配对导致更多不达标时在设计文档里补记。
-    expect(failures.length).toBeLessThan(pairs.length);
+    expect(failures.map(describePair)).toEqual([]);
   });
 });

@@ -49,7 +49,7 @@
 | `--ink` | `#1f2430` |
 | `--ink-soft` | `#50586b` |
 | `--muted` | `#778095` |
-| `--subtle` | `#a0a7b8` |
+| `--subtle` | `#848da3` |
 | `--line` | `#e7e9f1` |
 | `--line-strong` | `#d8dce8` |
 | `--surface` | `#ffffff` |
@@ -60,7 +60,7 @@
 | `--accent` | `#635bff` |
 | `--accent-dark` | `#5148e5` |
 | `--accent-soft` | `#efefff` |
-| `--success` | `#18a174` |
+| `--success` | `#179c70` |
 | `--warning` | `#b87519` |
 | `--danger` | `#cf5362` |
 | `--shadow-popover` | `0 14px 36px rgb(35 42 72 / 14%)` |
@@ -143,7 +143,7 @@
 
 | 变量 | 浅色值 |
 | --- | --- |
-| `--status-called-text` | `#68716c` |
+| `--status-called-text` | `#636b66` |
 | `--status-called-bg` | `#e9ece8` |
 | `--status-executing-text` | `#8d5e18` |
 | `--status-executing-bg` | `#f8edd9` |
@@ -231,15 +231,15 @@
 | `--memory-tag-filter-text` | `#717972` |
 | `--memory-selected-bg` | `#eaf1eb` |
 | `--memory-selected-border` | `#cbd9ce` |
-| `--memory-list-text` | `#6e776f` |
+| `--memory-list-text` | `#656d66` |
 | `--memory-list-meta` | `#7d857e` |
 | `--memory-badge-bg` | `#edf0f4` |
-| `--memory-badge-text` | `#687384` |
+| `--memory-badge-text` | `#626c7c` |
 | `--memory-badge-reviewed-text` | `#436e50` |
 | `--memory-badge-reviewed-bg` | `#e7f0e7` |
 | `--memory-detail-meta` | `#7d847e` |
 | `--memory-tag-bg` | `#f3f4f4` |
-| `--memory-tag-text` | `#6c756f` |
+| `--memory-tag-text` | `#68706a` |
 | `--memory-provenance-border` | `#edf0ed` |
 | `--memory-provenance-text` | `#7b847c` |
 | `--memory-empty-text` | `#8a938b` |
@@ -308,7 +308,7 @@
 | `--ink` | `#1f2430` | `#e8eaf2` |
 | `--ink-soft` | `#50586b` | `#b7bdcd` |
 | `--muted` | `#778095` | `#9199ae` |
-| `--subtle` | `#a0a7b8` | `#7f879b` |
+| `--subtle` | `#848da3` | `#7f879b` |
 | `--line` | `#e7e9f1` | `#2b3042` |
 | `--line-strong` | `#d8dce8` | `#3b4258` |
 | `--surface` | `#ffffff` | `#1b1e29` |
@@ -319,7 +319,7 @@
 | `--accent` | `#635bff` | `#8a84ff` |
 | `--accent-dark` | `#5148e5` | `#aaa5ff` |
 | `--accent-soft` | `#efefff` | `#2a2852` |
-| `--success` | `#18a174` | `#34c08f` |
+| `--success` | `#179c70` | `#34c08f` |
 | `--warning` | `#b87519` | `#e0a24a` |
 | `--danger` | `#cf5362` | `#ee7482` |
 | `--shadow-popover` | `0 14px 36px rgb(35 42 72 / 14%)` | `0 14px 36px rgb(0 0 0 / 50%)` |
@@ -372,7 +372,7 @@
 | `--diff-added-bg` | `rgb(24 161 116 / 10%)` | `rgb(52 192 143 / 16%)` |
 | `--diff-removed-text` | `#b23a4a` | `#f28b97` |
 | `--diff-removed-bg` | `rgb(207 83 98 / 10%)` | `rgb(238 116 130 / 16%)` |
-| `--status-called-text` | `#68716c` | `#aab3ae` |
+| `--status-called-text` | `#636b66` | `#aab3ae` |
 | `--status-called-bg` | `#e9ece8` | `#2a2f2d` |
 | `--status-executing-text` | `#8d5e18` | `#e4b366` |
 | `--status-executing-bg` | `#f8edd9` | `#352b17` |
@@ -423,15 +423,15 @@
 | `--memory-tag-filter-text` | `#717972` | `#a3aba5` |
 | `--memory-selected-bg` | `#eaf1eb` | `#25352b` |
 | `--memory-selected-border` | `#cbd9ce` | `#3f5a49` |
-| `--memory-list-text` | `#6e776f` | `#a8b1aa` |
+| `--memory-list-text` | `#656d66` | `#a8b1aa` |
 | `--memory-list-meta` | `#7d857e` | `#8f988f` |
 | `--memory-badge-bg` | `#edf0f4` | `#272c38` |
-| `--memory-badge-text` | `#687384` | `#a2adc0` |
+| `--memory-badge-text` | `#626c7c` | `#a2adc0` |
 | `--memory-badge-reviewed-text` | `#436e50` | `#86c796` |
 | `--memory-badge-reviewed-bg` | `#e7f0e7` | `#1f3326` |
 | `--memory-detail-meta` | `#7d847e` | `#8f9890` |
 | `--memory-tag-bg` | `#f3f4f4` | `#262b33` |
-| `--memory-tag-text` | `#6c756f` | `#a5aea8` |
+| `--memory-tag-text` | `#68706a` | `#a5aea8` |
 | `--memory-provenance-border` | `#edf0ed` | `#2a312d` |
 | `--memory-provenance-text` | `#7b847c` | `#939c94` |
 | `--memory-empty-text` | `#8a938b` | `#8f988f` |
@@ -464,7 +464,7 @@
 
 ### 对比度
 
-测试 `apps/studio/test/theme-contrast.test.ts` 解析 `app.css` 的两组变量，按 WCAG 2.x 相对亮度公式计算下列配对。要求：正文类 ≥4.5，次要文字（`--muted`、`--subtle` 及各页面的弱化文字）≥3，强调按钮文字与底色 ≥4.5。半透明底色（差异高亮、浮层）先叠到 `--surface` 上再计算。深色任一配对不达标则测试失败；浅色只计算、不失败（本 PR 不改浅色）。
+测试 `apps/studio/test/theme-contrast.test.ts` 解析 `app.css` 的两组变量，按 WCAG 2.x 相对亮度公式计算下列配对。要求：正文类 ≥4.5，次要文字（`--muted`、`--subtle` 及各页面的弱化文字）≥3，强调按钮文字与底色 ≥4.5。半透明底色（差异高亮、浮层）先叠到 `--surface` 上再计算。深色和浅色任一配对不达标都会使测试失败。
 
 
 | 文字 | 底色 | 要求 | 浅色 | 深色 |
@@ -484,8 +484,8 @@
 | `--muted` | `--surface` | 次要 ≥3 | 3.96 | 5.83 |
 | `--muted` | `--app-bg` | 次要 ≥3 | 3.73 | 6.46 |
 | `--muted` | `--surface-soft` | 次要 ≥3 | 3.76 | 6.10 |
-| `--subtle` | `--surface` | 次要 ≥3 | 2.41 ⚠ | 4.62 |
-| `--subtle` | `--app-bg` | 次要 ≥3 | 2.27 ⚠ | 5.12 |
+| `--subtle` | `--surface` | 次要 ≥3 | 3.32 | 4.62 |
+| `--subtle` | `--app-bg` | 次要 ≥3 | 3.13 | 5.12 |
 | `--text-on-accent` | `--accent` | 按钮 ≥4.5 | 4.70 | 5.79 |
 | `--text-on-accent` | `--accent-dark` | 按钮 ≥4.5 | 6.16 | 8.08 |
 | `--text-on-accent` | `--retrieval-primary` | 按钮 ≥4.5 | 7.64 | 7.13 |
@@ -504,11 +504,11 @@
 | `--danger` | `--surface` | 次要 ≥3 | 4.14 | 5.90 |
 | `--warning` | `--warning-surface` | 次要 ≥3 | 3.55 | 6.89 |
 | `--warning` | `--surface` | 次要 ≥3 | 3.75 | 7.46 |
-| `--success` | `--surface` | 次要 ≥3 | 3.29 | 7.18 |
-| `--success` | `--success-soft` | 次要 ≥3 | 2.95 ⚠ | 6.12 |
+| `--success` | `--surface` | 次要 ≥3 | 3.49 | 7.18 |
+| `--success` | `--success-soft` | 次要 ≥3 | 3.13 | 6.12 |
 | `--diff-added-text` | `--diff-added-bg` | 正文 ≥4.5 | 4.82 | 6.93 |
 | `--diff-removed-text` | `--diff-removed-bg` | 正文 ≥4.5 | 5.15 | 5.54 |
-| `--status-called-text` | `--status-called-bg` | 正文 ≥4.5 | 4.23 ⚠ | 6.33 |
+| `--status-called-text` | `--status-called-bg` | 正文 ≥4.5 | 4.61 | 6.33 |
 | `--status-executing-text` | `--status-executing-bg` | 正文 ≥4.5 | 4.83 | 7.25 |
 | `--status-completed-text` | `--status-completed-bg` | 正文 ≥4.5 | 5.24 | 7.73 |
 | `--status-failed-text` | `--status-failed-bg` | 正文 ≥4.5 | 4.84 | 7.08 |
@@ -517,12 +517,12 @@
 | `--task-warning-text` | `--surface` | 正文 ≥4.5 | 5.02 | 8.94 |
 | `--task-error-text` | `--surface` | 正文 ≥4.5 | 6.47 | 6.00 |
 | `--memory-text-muted` | `--surface` | 次要 ≥3 | 4.61 | 6.39 |
-| `--memory-list-text` | `--memory-list-bg` | 正文 ≥4.5 | 4.47 ⚠ | 7.76 |
+| `--memory-list-text` | `--memory-list-bg` | 正文 ≥4.5 | 5.15 | 7.76 |
 | `--memory-list-meta` | `--memory-list-bg` | 次要 ≥3 | 3.66 | 5.75 |
-| `--memory-list-text` | `--memory-selected-bg` | 正文 ≥4.5 | 4.03 ⚠ | 5.88 |
-| `--memory-badge-text` | `--memory-badge-bg` | 正文 ≥4.5 | 4.20 ⚠ | 6.17 |
+| `--memory-list-text` | `--memory-selected-bg` | 正文 ≥4.5 | 4.65 | 5.88 |
+| `--memory-badge-text` | `--memory-badge-bg` | 正文 ≥4.5 | 4.64 | 6.17 |
 | `--memory-badge-reviewed-text` | `--memory-badge-reviewed-bg` | 正文 ≥4.5 | 5.03 | 6.81 |
-| `--memory-tag-text` | `--memory-tag-bg` | 正文 ≥4.5 | 4.32 ⚠ | 6.25 |
+| `--memory-tag-text` | `--memory-tag-bg` | 正文 ≥4.5 | 4.63 | 6.25 |
 | `--memory-access-text` | `--memory-access-bg` | 正文 ≥4.5 | 4.57 | 6.90 |
 | `--memory-detail-meta` | `--surface` | 次要 ≥3 | 3.84 | 5.59 |
 | `--memory-empty-text` | `--surface` | 次要 ≥3 | 3.17 | 5.58 |
@@ -534,22 +534,27 @@
 | `--retrieval-egress-text` | `--retrieval-egress-bg` | 正文 ≥4.5 | 7.73 | 9.66 |
 | `--page-text` | `--retrieval-code-bg` | 正文 ≥4.5 | 13.65 | 12.37 |
 
-结果：深色全部配对达标；浅色标 ⚠ 的配对低于要求，列为后续项。
+结果：深色、浅色全部配对达标。
 
+浅色对比度修正（已处理）：原先不达标的 8 个配对通过调深文字色的明度（保持色相）解决，不改底色、不改深色块。
 
-浅色不达标的配对（后续项，不在本 PR 修改）：
+| 变量 | 旧值 | 新值 | 原对比度 → 现对比度 |
+| --- | --- | --- | --- |
+| `--subtle` | `#a0a7b8` | `#848da3` | 2.41 → 3.32（`--surface`），2.27 → 3.13（`--app-bg`） |
+| `--success` | `#18a174` | `#179c70` | 2.95 → 3.13（`--success-soft`） |
+| `--status-called-text` | `#68716c` | `#636b66` | 4.23 → 4.61 |
+| `--memory-list-text` | `#6e776f` | `#656d66` | 4.47 → 5.15（`--memory-list-bg`），4.03 → 4.65（`--memory-selected-bg`） |
+| `--memory-badge-text` | `#687384` | `#626c7c` | 4.20 → 4.64 |
+| `--memory-tag-text` | `#6c756f` | `#68706a` | 4.32 → 4.63 |
 
-- `--subtle` / `--surface`：2.41，要求 3
-- `--subtle` / `--app-bg`：2.27，要求 3
-- `--success` / `--success-soft`：2.95，要求 3
-- `--status-called-text` / `--status-called-bg`：4.23，要求 4.5
-- `--memory-list-text` / `--memory-list-bg`：4.47，要求 4.5
-- `--memory-list-text` / `--memory-selected-bg`：4.03，要求 4.5
-- `--memory-badge-text` / `--memory-badge-bg`：4.20，要求 4.5
-- `--memory-tag-text` / `--memory-tag-bg`：4.32，要求 4.5
+`--subtle` 和 `--success` 除文字外也用于少量图标、状态点和图表色块，一并变深，幅度小，不拆分变量。
 
 ### 后续项
 
+<<<<<<< HEAD
 - 浅色不达标的配对（见上）。
 - Desktop：已处理。窗口底色与 `nativeTheme` 跟随主题偏好，契约见 `2026-11-24-desktop-studio-distribution-design.md` 的「窗口背景与原生外观跟随主题」。窗口底色常量取自本文的 `--app-bg`（浅色 `#f7f8fc`，深色 `#12141b`），desktop 测试读取 `app.css` 校验两者一致，修改 `--app-bg` 时必须同步 `apps/desktop/src/theme.ts`。
+=======
+- Desktop：窗口 `backgroundColor` 在 `apps/desktop/src/main.ts` 写死为 `#f7f8fc`，深色下启动瞬间可能先闪浅色；`nativeTheme` 也未同步。
+>>>>>>> origin/main
 - 终端主题仍是写死的深色，没有随主题变化。
