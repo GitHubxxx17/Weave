@@ -498,10 +498,13 @@ shape, and returns `200` only when the Runtime is running; otherwise it returns
 `503`.
 
 The desktop composition root is `apps/desktop`. Electron Main calls
-`startServer(0, { databaseFile, dataDirectory, studioDirectory, providerSecretCodec })`, so the operating system
+`startServer(<recorded port or 0>, { databaseFile, dataDirectory, studioDirectory, providerSecretCodec })`, so the operating system
 chooses an available local port and the Server itself hosts the built Studio
 (`apps/studio/dist`) on the same origin; the window loads
-`http://127.0.0.1:<port>/`. `WEAVE_STUDIO_URL` still points the window at a
+`http://127.0.0.1:<port>/`. Desktop records the port in
+`<userData>/desktop-state.json` and starts on it next time, so the Studio origin
+(and the localStorage bound to it) survives restarts; if that port is taken it
+falls back to a random port once and records the new one. `WEAVE_STUDIO_URL` still points the window at a
 development Vite server, in which case `studioOrigin` allows that exact origin
 through CORS. The Renderer never opens SQLite or reads an API Key. Its
 Workspace, Provider, and Agent clients use the same `runtimeApiUrl()` helper in
