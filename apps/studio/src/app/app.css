@@ -8,7 +8,7 @@
   --ink: #1f2430;
   --ink-soft: #50586b;
   --muted: #778095;
-  --subtle: #a0a7b8;
+  --subtle: #848da3;
   --line: #e7e9f1;
   --line-strong: #d8dce8;
   --surface: #ffffff;
@@ -19,7 +19,7 @@
   --accent: #635bff;
   --accent-dark: #5148e5;
   --accent-soft: #efefff;
-  --success: #18a174;
+  --success: #179c70;
   --warning: #b87519;
   --danger: #cf5362;
   --shadow-popover: 0 14px 36px rgb(35 42 72 / 14%);
@@ -86,7 +86,7 @@
   --diff-removed-bg: rgb(207 83 98 / 10%);
 
   /* 状态标签 */
-  --status-called-text: #68716c;
+  --status-called-text: #636b66;
   --status-called-bg: #e9ece8;
   --status-executing-text: #8d5e18;
   --status-executing-bg: #f8edd9;
@@ -156,15 +156,15 @@
   --memory-tag-filter-text: #717972;
   --memory-selected-bg: #eaf1eb;
   --memory-selected-border: #cbd9ce;
-  --memory-list-text: #6e776f;
+  --memory-list-text: #656d66;
   --memory-list-meta: #7d857e;
   --memory-badge-bg: #edf0f4;
-  --memory-badge-text: #687384;
+  --memory-badge-text: #626c7c;
   --memory-badge-reviewed-text: #436e50;
   --memory-badge-reviewed-bg: #e7f0e7;
   --memory-detail-meta: #7d847e;
   --memory-tag-bg: #f3f4f4;
-  --memory-tag-text: #6c756f;
+  --memory-tag-text: #68706a;
   --memory-provenance-border: #edf0ed;
   --memory-provenance-text: #7b847c;
   --memory-empty-text: #8a938b;
