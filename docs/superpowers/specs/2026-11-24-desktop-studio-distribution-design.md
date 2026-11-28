@@ -35,6 +35,14 @@
 - 未设置 `WEAVE_STUDIO_URL` 且找不到 `index.html` 时，窗口显示启动错误页，说明缺少的路径和构建命令；不加载任何页面。
 - 预加载桥（终端与文件夹选择器）：`isTrustedSender` 要求同时满足：`senderFrame.origin` 与其 URL 的 origin 等于信任 origin；`senderFrame` 就是 `event.sender.mainFrame`（拒绝子 frame）；`event.sender.getURL()` 的 origin 也等于信任 origin。缺少 `sender` 时拒绝。
 
+### Studio 源的稳定性
+
+- 原因：Studio 的本地设置（主题 `weave.studio.theme.v1`、权限模式、推理强度、面板布局与宽度、预览地址等）存在 localStorage，而 localStorage 按源（协议、主机、端口）隔离。Server 用端口 `0` 启动时每次得到不同端口，窗口的源随之变化，重启后所有设置回到默认值。
+- 做法：Desktop 在 `<userData>/desktop-state.json` 记录上次实际使用的 Server 端口（`{ "version": 1, "serverPort": 1024–65535 }`，Zod 校验，临时文件加 `rename` 写入）。启动时先用记录的端口调用 `startServer`；成功后把实际端口写回。文件不存在、无法读取、JSON 非法或校验失败都当作"没有记录"，不会阻止启动；未知字段读取时忽略，下次写入不保留。
+- 端口被占用：`startServer` 以 `EADDRINUSE` 失败时（从 `cause` 与 `AggregateError.errors` 链中识别；`startServer` 失败时已释放数据库等资源）改用端口 `0` 再启动一次，并记录新端口。这一次启动因源变化，设置回到默认值；之后稳定在新端口。其他错误不重试，照常抛出。
+- `WEAVE_STUDIO_URL`（页面源由 Vite 决定，本就稳定）与 `--host` / `WEAVE_HOST`（访问令牌每次启动重新生成，首次加载仍通过 `?token=` 换取 Cookie）走同一逻辑，令牌与 Cookie 流程不变。
+- 为什么不用固定端口：固定端口在被其他程序占用时无法启动，也会让多个用户或多个实例互相冲突；记录加回退既保持稳定，又不会因占用而失败。为什么不用自定义协议：Server 托管 Studio 并按回环 Origin 放行 API，自定义协议需要重做同源、CORS 与 Cookie 方案（见上文方案 A），改动远大于本问题。
+
 ### `--host` 与访问令牌
 
 - Server CLI 支持 `--host <地址>` / `--host=<地址>`，也读环境变量 `WEAVE_HOST`，默认 `127.0.0.1`。Desktop 从 `process.argv` 和 `WEAVE_HOST` 读取同名设置并传给 `startServer({ host })`；Desktop 窗口始终通过 `127.0.0.1` 访问自己的 Server。
