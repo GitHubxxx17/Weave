@@ -4,6 +4,7 @@ const serverUrlArgumentPrefix = '--weave-server-url=';
 const windowChromeArgumentPrefix = '--weave-window-chrome=';
 const pickDirectoryChannel = 'weave:pick-directory';
 const openDataDirectoryChannel = 'weave:open-data-directory';
+const setThemeChannel = 'weave:set-theme';
 const terminalChannels = {
   create: 'weave:terminal:create',
   input: 'weave:terminal:input',
@@ -45,6 +46,10 @@ contextBridge.exposeInMainWorld('weaveDesktop', {
   /** Opens the configured Weave data directory in the system file manager; takes no path. */
   openDataDirectory: (): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(openDataDirectoryChannel),
+  /** Tells Desktop the theme preference so native parts and the window background follow it. */
+  setTheme: (preference: 'system' | 'light' | 'dark'): void => {
+    ipcRenderer.send(setThemeChannel, preference);
+  },
   /** User-driven terminal controlled from the Studio renderer. */
   terminal: {
     create: (options: {

@@ -6,8 +6,10 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  nativeTheme,
   shell,
   type BrowserWindowConstructorOptions,
+  type IpcMainEvent,
   type IpcMainInvokeEvent,
   type OpenDialogOptions,
 } from 'electron';
@@ -17,6 +19,7 @@ import { createDesktopConfig, type DesktopConfig } from './desktop-config.js';
 import { readDesktopState, writeDesktopState } from './desktop-state.js';
 import { createElectronProviderSecretCodec } from './provider-secret-codec.js';
 import { isTrustedSender } from './sender-origin.js';
+import { getBackgroundColor, setThemeChannel, themePreferenceSchema } from './theme.js';
 import { registerTerminalHost, type TerminalHost } from './terminal.js';
 import type { ProviderSecretCodec } from '@weave/server';
 
@@ -77,8 +80,26 @@ export function describeMissingStudio(config: DesktopConfig): string | undefined
 const serverUrlArgumentPrefix = '--weave-server-url=';
 const windowChromeArgumentPrefix = '--weave-window-chrome=';
 
-/** Matches the Studio page background so the window never flashes white. */
-const studioBackgroundColor = '#f7f8fc';
+/** Matches the Studio page background (`--app-bg`) of the current theme so the window never flashes. */
+export function getWindowBackgroundColor(): string {
+  return getBackgroundColor(nativeTheme.shouldUseDarkColors);
+}
+
+/** Repaints every open window's background with the current theme's color. */
+export function applyWindowBackgrounds(): void {
+  const color = getWindowBackgroundColor();
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) {
+      window.setBackgroundColor(color);
+    }
+  }
+}
+
+/** Applies the theme preference recorded by the previous run; no record means follow the system. */
+export async function applyStoredTheme(userDataDirectory: string): Promise<void> {
+  const { theme } = await readDesktopState(userDataDirectory);
+  nativeTheme.themeSource = theme ?? 'system';
+}
 
 /**
  * How the desktop window draws its title bar. The Renderer reads the value
@@ -195,11 +216,45 @@ export async function handleOpenDataDirectory(
   }
 }
 
+const setThemeArgsSchema = z.tuple([themePreferenceSchema]);
+
+/**
+ * Handles `setTheme(preference)` from the Studio Renderer.
+ *
+ * Untrusted senders and invalid arguments are dropped silently. Otherwise the
+ * native appearance follows the preference, window backgrounds are repainted
+ * and the preference is recorded for the next launch.
+ */
+export async function handleSetTheme(
+  event: IpcMainEvent,
+  studioOrigin: string,
+  userDataDirectory: string,
+  ...args: unknown[]
+): Promise<void> {
+  if (!isTrustedSender(event, studioOrigin)) {
+    return;
+  }
+  const parsed = setThemeArgsSchema.safeParse(args);
+  if (!parsed.success) {
+    return;
+  }
+  const [theme] = parsed.data;
+  nativeTheme.themeSource = theme;
+  applyWindowBackgrounds();
+  await writeDesktopState(userDataDirectory, { theme }).catch((error: unknown) => {
+    console.error('Weave Desktop could not record the theme:', getErrorMessage(error));
+  });
+}
+
 function registerDesktopIpc(studioOrigin: string, dataDirectory: string): void {
   ipcMain.removeHandler(openDataDirectoryChannel);
   ipcMain.handle(openDataDirectoryChannel, (event, ...args: unknown[]) =>
     handleOpenDataDirectory(event, studioOrigin, dataDirectory, ...args),
   );
+  ipcMain.removeAllListeners(setThemeChannel);
+  ipcMain.on(setThemeChannel, (event, ...args: unknown[]) => {
+    void handleSetTheme(event, studioOrigin, dataDirectory, ...args);
+  });
   ipcMain.removeHandler(pickDirectoryChannel);
   ipcMain.handle(pickDirectoryChannel, (event, ...pickerArgs: unknown[]) =>
     handlePickDirectory(event, studioOrigin, ...pickerArgs),
@@ -271,7 +326,7 @@ export function createMainWindow(
 ): BrowserWindow {
   const target = options.target ?? resolveStudioTarget(config, serverUrl);
   const window = new BrowserWindow({
-    backgroundColor: studioBackgroundColor,
+    backgroundColor: getWindowBackgroundColor(),
     ...getWindowChromeOptions(chrome),
     webPreferences: {
       contextIsolation: true,
@@ -490,6 +545,8 @@ export async function startDesktopApplication(): Promise<void> {
       argv: process.argv.slice(1),
     });
     const missingStudio = describeMissingStudio(config);
+    await applyStoredTheme(config.userDataDirectory);
+    nativeTheme.on('updated', applyWindowBackgrounds);
     desktopServer = await startDesktopServer(
       config,
       createElectronProviderSecretCodec(),

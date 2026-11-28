@@ -165,6 +165,7 @@
 - 应用：解析结果写到 `<html data-theme>` 与 `style.colorScheme`；配色见 `2026-11-27-studio-color-tokens-design.md`。
 - `startThemeSync(root)` 在 `main.tsx` 渲染 React 之前同步调用（与 `applyWindowChrome` 同位置），避免首屏闪烁；同时监听 `matchMedia('(prefers-color-scheme: dark)')`（仅偏好为"跟随系统"时生效）与 `storage` 事件（多窗口同步），返回的函数移除全部监听。
 - 设置页通过 `subscribeThemePreference` 在其他窗口修改后更新选中项。
+- Desktop 同步：存在 `window.weaveDesktop?.setTheme` 时，`startThemeSync` 初次应用、`setThemePreference`、`storage` 事件同步三处都调用它，传入**偏好**（`system | light | dark`）而不是解析结果；浏览器模式没有该桥，行为不变。Desktop 据此设置 `nativeTheme.themeSource` 并更新窗口底色，契约见 `2026-11-24-desktop-studio-distribution-design.md`。
 
 不做：Desktop 窗口 `backgroundColor`（`apps/desktop/src/main.ts` 写死 `#f7f8fc`）与 `nativeTheme` 同步。深色下启动瞬间窗口可能先闪浅色，记为后续项。字体、字号、密度等其他外观选项也不在本期。
 

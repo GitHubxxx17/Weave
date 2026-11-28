@@ -551,5 +551,5 @@
 
 ### 后续项
 
-- Desktop：窗口 `backgroundColor` 在 `apps/desktop/src/main.ts` 写死为 `#f7f8fc`，深色下启动瞬间可能先闪浅色；`nativeTheme` 也未同步。
+- Desktop：已处理。窗口底色与 `nativeTheme` 跟随主题偏好，契约见 `2026-11-24-desktop-studio-distribution-design.md` 的「窗口背景与原生外观跟随主题」。窗口底色常量取自本文的 `--app-bg`（浅色 `#f7f8fc`，深色 `#12141b`），desktop 测试读取 `app.css` 校验两者一致，修改 `--app-bg` 时必须同步 `apps/desktop/src/theme.ts`。
 - 终端主题仍是写死的深色，没有随主题变化。

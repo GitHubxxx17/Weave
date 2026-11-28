@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => {
       setWindowOpenHandler: vi.fn(),
     };
     readonly isDestroyed = vi.fn(() => false);
+    readonly setBackgroundColor = vi.fn();
     readonly loadURL = vi.fn(async () => undefined);
 
     constructor(readonly options: unknown) {
@@ -42,7 +43,14 @@ const mocks = vi.hoisted(() => {
     },
     ipcMain: {
       handle: vi.fn(),
+      on: vi.fn(),
+      removeAllListeners: vi.fn(),
       removeHandler: vi.fn(),
+    },
+    nativeTheme: {
+      themeSource: 'system' as 'system' | 'light' | 'dark',
+      shouldUseDarkColors: false,
+      on: vi.fn(),
     },
     shell: { openPath: vi.fn() },
     FakeBrowserWindow,
@@ -53,10 +61,14 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock('electron', () => ({
-  BrowserWindow: Object.assign(mocks.FakeBrowserWindow, { fromWebContents: vi.fn(() => null) }),
+  BrowserWindow: Object.assign(mocks.FakeBrowserWindow, {
+    fromWebContents: vi.fn(() => null),
+    getAllWindows: vi.fn(() => mocks.FakeBrowserWindow.instances),
+  }),
   app: mocks.app,
   dialog: mocks.dialog,
   ipcMain: mocks.ipcMain,
+  nativeTheme: mocks.nativeTheme,
   safeStorage: mocks.safeStorage,
   shell: mocks.shell,
 }));
@@ -110,6 +122,8 @@ describe('desktop main process', () => {
     vi.clearAllMocks();
     mocks.readDesktopState.mockResolvedValue({ version: 1 });
     mocks.writeDesktopState.mockResolvedValue({ version: 1 });
+    mocks.nativeTheme.themeSource = 'system';
+    mocks.nativeTheme.shouldUseDarkColors = false;
     mocks.FakeBrowserWindow.instances.length = 0;
   });
 
